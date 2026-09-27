@@ -25,14 +25,6 @@ jobs:
     environment: play-testing
     env:
       POCKETPI_CLOSED_TRACK: ${{ vars.POCKETPI_CLOSED_TRACK }}
-      POCKETPI_UPLOAD_KEYSTORE_B64: ${{ secrets.POCKETPI_UPLOAD_KEYSTORE_B64 }}
-      POCKETPI_UPLOAD_STORE_PASSWORD: ${{ secrets.POCKETPI_UPLOAD_STORE_PASSWORD }}
-      POCKETPI_UPLOAD_KEY_ALIAS: ${{ secrets.POCKETPI_UPLOAD_KEY_ALIAS }}
-      POCKETPI_UPLOAD_KEY_PASSWORD: ${{ secrets.POCKETPI_UPLOAD_KEY_PASSWORD }}
-      PI_REMOTE_FIREBASE_API_KEY: ${{ secrets.PI_REMOTE_FIREBASE_API_KEY }}
-      PI_REMOTE_FIREBASE_APP_ID: ${{ secrets.PI_REMOTE_FIREBASE_APP_ID }}
-      PI_REMOTE_FIREBASE_PROJECT_ID: ${{ secrets.PI_REMOTE_FIREBASE_PROJECT_ID }}
-      PI_REMOTE_FIREBASE_GCM_SENDER_ID: ${{ secrets.PI_REMOTE_FIREBASE_GCM_SENDER_ID }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,11 +45,7 @@ jobs:
           PLAY_SERVICE_ACCOUNT: ${{ vars.GCP_PLAY_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
-          for name in WIF_PROVIDER PLAY_SERVICE_ACCOUNT POCKETPI_CLOSED_TRACK \
-            POCKETPI_UPLOAD_KEYSTORE_B64 POCKETPI_UPLOAD_STORE_PASSWORD \
-            POCKETPI_UPLOAD_KEY_ALIAS POCKETPI_UPLOAD_KEY_PASSWORD \
-            PI_REMOTE_FIREBASE_API_KEY PI_REMOTE_FIREBASE_APP_ID \
-            PI_REMOTE_FIREBASE_PROJECT_ID PI_REMOTE_FIREBASE_GCM_SENDER_ID; do
+          for name in WIF_PROVIDER PLAY_SERVICE_ACCOUNT POCKETPI_CLOSED_TRACK; do
             test -n "${!name:-}" || { echo "Missing release setting: $name"; exit 1; }
           done
           python3 scripts/release/play_release.py validate-track
@@ -105,21 +93,33 @@ jobs:
           test -d "$ANDROID_HOME/build-tools/37.0.0" || {
             echo 'Android build-tools 37.0.0 did not install'; exit 1;
           }
-      - name: Restore the existing Play upload key
-        run: |
-          set -euo pipefail
-          POCKETPI_UPLOAD_KEYSTORE="$RUNNER_TEMP/pocketpi-upload.jks"
-          printf '%s' "$POCKETPI_UPLOAD_KEYSTORE_B64" | base64 --decode > "$POCKETPI_UPLOAD_KEYSTORE"
-          test -s "$POCKETPI_UPLOAD_KEYSTORE"
-          chmod 600 "$POCKETPI_UPLOAD_KEYSTORE"
-          echo "POCKETPI_UPLOAD_KEYSTORE=$POCKETPI_UPLOAD_KEYSTORE" >> "$GITHUB_ENV"
-      - name: Build signed Play bundle
+      - name: Build and verify signed Play bundle
         env:
           VERSION_CODE: ${{ steps.version.outputs.code }}
           VERSION_NAME: ${{ steps.version.outputs.name }}
+          POCKETPI_UPLOAD_KEYSTORE_B64: ${{ secrets.POCKETPI_UPLOAD_KEYSTORE_B64 }}
+          POCKETPI_UPLOAD_STORE_PASSWORD: ${{ secrets.POCKETPI_UPLOAD_STORE_PASSWORD }}
+          POCKETPI_UPLOAD_KEY_ALIAS: ${{ secrets.POCKETPI_UPLOAD_KEY_ALIAS }}
+          POCKETPI_UPLOAD_KEY_PASSWORD: ${{ secrets.POCKETPI_UPLOAD_KEY_PASSWORD }}
+          PI_REMOTE_FIREBASE_API_KEY: ${{ secrets.PI_REMOTE_FIREBASE_API_KEY }}
+          PI_REMOTE_FIREBASE_APP_ID: ${{ secrets.PI_REMOTE_FIREBASE_APP_ID }}
+          PI_REMOTE_FIREBASE_PROJECT_ID: ${{ secrets.PI_REMOTE_FIREBASE_PROJECT_ID }}
+          PI_REMOTE_FIREBASE_GCM_SENDER_ID: ${{ secrets.PI_REMOTE_FIREBASE_GCM_SENDER_ID }}
         run: |
           set -euo pipefail
-          ./gradlew bundleRelease \
+          for name in POCKETPI_UPLOAD_KEYSTORE_B64 POCKETPI_UPLOAD_STORE_PASSWORD \
+            POCKETPI_UPLOAD_KEY_ALIAS POCKETPI_UPLOAD_KEY_PASSWORD \
+            PI_REMOTE_FIREBASE_API_KEY PI_REMOTE_FIREBASE_APP_ID \
+            PI_REMOTE_FIREBASE_PROJECT_ID PI_REMOTE_FIREBASE_GCM_SENDER_ID; do
+            test -n "${!name:-}" || { echo "Missing release setting: $name"; exit 1; }
+          done
+          umask 077
+          POCKETPI_UPLOAD_KEYSTORE="$RUNNER_TEMP/pocketpi-upload.jks"
+          trap 'rm -f -- "$POCKETPI_UPLOAD_KEYSTORE"' EXIT
+          printf '%s' "$POCKETPI_UPLOAD_KEYSTORE_B64" | base64 --decode > "$POCKETPI_UPLOAD_KEYSTORE"
+          test -s "$POCKETPI_UPLOAD_KEYSTORE"
+          export POCKETPI_UPLOAD_KEYSTORE
+          ./gradlew --no-daemon bundleRelease \
             "-PPOCKETPI_VERSION_CODE=$VERSION_CODE" \
             "-PPOCKETPI_VERSION_NAME=$VERSION_NAME"
           bundle='build/outputs/bundle/release/pocketpi-release.aab'
