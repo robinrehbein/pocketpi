@@ -31,11 +31,13 @@ jobs:
           packages: ""
       - name: Verify Android command-line tools 23.0
         run: |
-          command -v sdkmanager || { echo "FATAL - Android command-line tools 23.0 did not install"; exit 1; }
-          test "$(sdkmanager --version)" = "23.0" || { echo "FATAL - expected Android command-line tools 23.0"; exit 1; }
+          tools_dir="$ANDROID_HOME/cmdline-tools/16111833"
+          test -x "$tools_dir/bin/sdkmanager" || { echo "FATAL - Android command-line tools executable did not install"; exit 1; }
+          test -f "$tools_dir/source.properties" || { echo "FATAL - Android command-line tools package metadata is missing"; exit 1; }
+          grep -Fxq 'Pkg.Revision=23.0' "$tools_dir/source.properties" || { echo "FATAL - expected Android command-line tools package 23.0"; exit 1; }
       - name: Install SDK platform 37
         run: |
-          sdkmanager --install "platforms;android-37.0" "build-tools;37.0.0"
+          "$ANDROID_HOME/cmdline-tools/16111833/bin/sdkmanager" --install "platforms;android-37.0" "build-tools;37.0.0"
           test -d "$ANDROID_HOME/platforms/android-37.0" || { echo "FATAL - platforms;android-37.0 did not install"; exit 1; }
           test -d "$ANDROID_HOME/build-tools/37.0.0" || { echo "FATAL - build-tools;37.0.0 did not install"; exit 1; }
       - name: English and German resource parity
