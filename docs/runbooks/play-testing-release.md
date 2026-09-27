@@ -6,9 +6,10 @@ custom Closed Alpha track. The release workflow does not update production.
 
 ## First release setup
 
-1. Merge the standalone CI and release workflows into `main`. In GitHub, require the `PocketPi
-   checks` job from [Android CI](../../.github/workflows/ci.yml) before merging. CI runs resource
-   parity, unit tests, a debug build, lint, and API 36 instrumentation tests.
+1. Merge the standalone [Android CI](../../.github/workflows/ci.yml) workflow into `main`. In
+   GitHub, require its `PocketPi checks` job before merging. CI runs resource parity, unit tests,
+   a debug build, lint, and API 36 instrumentation tests. Wait to merge the release workflow until
+   the remaining setup below is complete.
 2. In the Google Cloud project that owns Play API access, enable the Google Play Android Developer
    API. Create a dedicated service account for PocketPi publishing. In Play Console, invite that
    account with access limited to this app and the permissions needed to view the app and release to
@@ -43,6 +44,9 @@ custom Closed Alpha track. The release workflow does not update production.
    countries, app-content declarations, and reviewer access ready. The first closed release may
    require Play review. A video showing a paired Mac can support the reviewer instructions, but
    its availability and Play's acceptance must be checked in the Console.
+6. Merge the [release workflow](../../.github/workflows/release.yml) into `main` only after these
+   prerequisites are ready. Its merge starts Android CI; a green run immediately starts the first
+   automated Play release.
 
 Before enabling the first automatic release, resolve the current setup gaps: locate the existing
 upload keystore; finish OIDC, the protected environment and its secrets; grant the dedicated service
@@ -54,8 +58,9 @@ been verified yet.
 
 ## Normal release
 
-1. Merge a PocketPi change into `main`. The [Android CI workflow](../../.github/workflows/ci.yml)
-   runs on the push. The [release workflow](../../.github/workflows/release.yml) starts only after
+1. Merge a change into `main`, including a documentation-only change. The [Android CI
+   workflow](../../.github/workflows/ci.yml) runs on the push. The [release
+   workflow](../../.github/workflows/release.yml) starts only after
    that CI run succeeds for the **current** `main` commit. A failed, stale, pull-request, or
    non-`main` run does not publish.
 2. The release job checks the protected environment, authenticates through OIDC, and calls
