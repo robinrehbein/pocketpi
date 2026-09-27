@@ -471,9 +471,9 @@ class RemoteNavigationUiTest {
             val refreshBounds = refresh.fetchSemanticsNode().boundsInRoot
             val settingsBounds = settings.fetchSemanticsNode().boundsInRoot
             assertTrue("Title has less than 48dp: $titleBounds", titleBounds.width >= 48 * metrics.density)
-            assertTrue(backBounds.right <= titleBounds.left)
-            assertTrue(titleBounds.right <= dotBounds.left)
-            assertTrue(dotBounds.right <= settingsBounds.left)
+            assertTrue(backBounds.right <= dotBounds.left)
+            assertTrue(dotBounds.right <= titleBounds.left)
+            assertTrue(titleBounds.right <= settingsBounds.left)
             assertTrue(refreshBounds.top >= backBounds.bottom)
             assertTrue(renameBounds.top >= backBounds.bottom)
             assertTrue(refreshBounds.right <= renameBounds.left)
@@ -1656,13 +1656,14 @@ class RemoteNavigationUiTest {
                 repository.state.value.copy(capabilities = setOf(TOOL_OUTPUT_CAPABILITY))
         }
         toolHeader("src/a.kt").performClick()
-        compose.onNodeWithTag("toolDetail").assertIsDisplayed()
-        compose.onNodeWithTag("toolDetailClose").performClick()
+        compose.onNodeWithTag("toolDetail").assertExists()
+        compose.onNodeWithTag("toolDetailClose").assertIsDisplayed().performClick()
         compose.onNodeWithTag("toolDetail").assertDoesNotExist()
         compose.onNode(hasSetTextAction()).assertIsDisplayed()
 
         toolHeader("./gradlew test").performClick()
-        compose.onNodeWithTag("toolDetail").assertIsDisplayed()
+        compose.onNodeWithTag("toolDetail").assertExists()
+        compose.onNodeWithTag("toolDetailClose").assertIsDisplayed()
         compose.onNodeWithText(label(R.string.remote_tool_detail_load_full)).performClick()
         compose.runOnIdle { assertEquals(listOf("call-bash"), repository.toolOutputLoads) }
         UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).pressBack()

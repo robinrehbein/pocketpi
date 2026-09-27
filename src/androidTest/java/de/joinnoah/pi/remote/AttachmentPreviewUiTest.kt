@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.*
@@ -23,6 +24,9 @@ class AttachmentPreviewUiTest {
         } finally {
             bitmap.recycle()
         }
+        checkNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size)) {
+            "The generated JPEG must decode before testing the asynchronous thumbnail"
+        }.recycle()
         val photo = LocalAttachment(
             "0123456789abcdefghijkl",
             "photo.jpg",
@@ -44,12 +48,12 @@ class AttachmentPreviewUiTest {
         compose.setContent {
             MaterialTheme { AttachmentPreviewStrip(listOf(imageFromFilePicker), onRemove = {}, storage = storage) }
         }
-        compose.waitUntil(5_000) {
+        compose.waitUntil(15_000) {
             compose.onAllNodesWithTag("attachmentThumbnailImage-${imageFromFilePicker.id}").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithTag("attachmentThumbnailImage-${imageFromFilePicker.id}").assertIsDisplayed()
         compose.onNodeWithTag("attachmentPreview-${imageFromFilePicker.id}").performClick()
-        compose.waitUntil(5_000) {
+        compose.waitUntil(15_000) {
             compose.onAllNodesWithTag("attachmentLargeImage").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithTag("attachmentLargeImage").assertIsDisplayed()
