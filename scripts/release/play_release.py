@@ -3,12 +3,15 @@
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
 PACKAGE_NAME = "de.joinnoah.pocketpi"
 INTERNAL_TRACK = "qa"
 MAX_VERSION_CODE = 2_100_000_000
+RESERVED_TRACKS = frozenset({INTERNAL_TRACK, "production", "beta", "alpha", "internal"})
+CUSTOM_TRACK_ID = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 
 
 def required_env(name):
@@ -18,11 +21,17 @@ def required_env(name):
     return value
 
 
-def closed_track():
-    track = required_env("POCKETPI_CLOSED_TRACK")
-    if track in (INTERNAL_TRACK, "production", "beta", "alpha", "internal"):
+def validate_closed_track(track):
+    # Form-factor tracks use a colon (for example wear:production). Only a
+    # plain custom closed-test identifier may reach the release update loop.
+    if (not CUSTOM_TRACK_ID.fullmatch(track) or track in RESERVED_TRACKS
+            or "production" in track):
         raise ValueError("POCKETPI_CLOSED_TRACK must be the exact custom closed-test track ID")
     return track
+
+
+def closed_track():
+    return validate_closed_track(required_env("POCKETPI_CLOSED_TRACK"))
 
 
 def release_version_codes(tracks, bundles, apks):
@@ -36,6 +45,7 @@ def release_version_codes(tracks, bundles, apks):
 
 
 def track_map(tracks, closed):
+    validate_closed_track(closed)
     by_name = {track["track"]: track for track in tracks}
     for name in (INTERNAL_TRACK, closed):
         if name not in by_name:
@@ -140,11 +150,15 @@ def main():
     parser = argparse.ArgumentParser()
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("prepare")
+    subcommands.add_parser("validate-track")
     publish_command = subcommands.add_parser("publish")
     publish_command.add_argument("--version-code", type=int, required=True)
     publish_command.add_argument("--bundle", type=Path, required=True)
     args = parser.parse_args()
     closed = closed_track()
+    if args.command == "validate-track":
+        print(closed)
+        return
     service = play_api()
     if args.command == "prepare":
         print(prepare(service, closed))

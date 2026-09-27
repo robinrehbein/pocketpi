@@ -32,9 +32,15 @@ def service_with_snapshot(version=22):
 
 class PlayReleaseTests(unittest.TestCase):
     def test_closed_track_requires_exact_custom_id(self):
-        with patch.dict(os.environ, {"POCKETPI_CLOSED_TRACK": "production"}):
-            with self.assertRaises(ValueError):
-                play_release.closed_track()
+        invalid = (
+            "production", "wear:production", "automotive:production", "tv:production",
+            "qa", "alpha", "beta", "internal", "Production", "wear:alpha",
+            "closed/alpha", "closed alpha", "closed-alpha\nproduction", "",
+        )
+        for track in invalid:
+            with self.subTest(track=track), patch.dict(os.environ, {"POCKETPI_CLOSED_TRACK": track}):
+                with self.assertRaises(ValueError):
+                    play_release.closed_track()
         with patch.dict(os.environ, {"POCKETPI_CLOSED_TRACK": "closed-alpha-id"}):
             self.assertEqual(play_release.closed_track(), "closed-alpha-id")
 

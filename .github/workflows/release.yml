@@ -60,7 +60,7 @@ jobs:
             PI_REMOTE_FIREBASE_PROJECT_ID PI_REMOTE_FIREBASE_GCM_SENDER_ID; do
             test -n "${!name:-}" || { echo "Missing release setting: $name"; exit 1; }
           done
-          test "$POCKETPI_CLOSED_TRACK" != production || exit 1
+          python3 scripts/release/play_release.py validate-track
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -124,7 +124,7 @@ jobs:
             "-PPOCKETPI_VERSION_NAME=$VERSION_NAME"
           bundle='build/outputs/bundle/release/pocketpi-release.aab'
           test -s "$bundle"
-          jarsigner -verify "$bundle" > /dev/null
+          python scripts/release/verify_bundle.py "$bundle"
       - id: publish_auth
         name: Refresh the Play API access token
         uses: google-github-actions/auth@v3
