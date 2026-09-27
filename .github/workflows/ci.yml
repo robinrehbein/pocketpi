@@ -1,0 +1,62 @@
+name: Android CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: PocketPi checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Set up Android command-line tools 23.0
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: "16111833"
+          packages: ""
+      - name: Verify Android command-line tools 23.0
+        run: |
+          command -v sdkmanager || { echo "FATAL - Android command-line tools 23.0 did not install"; exit 1; }
+          test "$(sdkmanager --version)" = "23.0" || { echo "FATAL - expected Android command-line tools 23.0"; exit 1; }
+      - name: Install SDK platform 37
+        run: |
+          sdkmanager --install "platforms;android-37.0" "build-tools;37.0.0"
+          test -d "$ANDROID_HOME/platforms/android-37.0" || { echo "FATAL - platforms;android-37.0 did not install"; exit 1; }
+          test -d "$ANDROID_HOME/build-tools/37.0.0" || { echo "FATAL - build-tools;37.0.0 did not install"; exit 1; }
+      - name: English and German resource parity
+        run: python3 scripts/i18n-check.py .
+      - name: Unit tests and debug APK
+        run: ./gradlew testDebugUnitTest assembleDebug
+      - name: Android Lint
+        run: ./gradlew lintDebug
+      - name: Enable emulator acceleration
+        run: |
+          test -e /dev/kvm
+          sudo chmod 666 /dev/kvm
+      - name: Navigation and restoration instrumentation tests
+        run: ./gradlew pixel2Api36DebugAndroidTest
+      - name: Upload Android verification reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocketpi-verification
+          path: |
+            build/reports/
+            build/test-results/
+            build/outputs/androidTest-results/
+          if-no-files-found: ignore
