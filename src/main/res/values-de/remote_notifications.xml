@@ -1,0 +1,19 @@
+<resources>
+    <string name="remote_notification_channel">Sitzungen</string>
+    <string name="remote_notification_channel_help">Wenn pi fertig ist oder eine Antwort braucht</string>
+    <string name="remote_notification_approve">Freigeben</string>
+    <string name="remote_notification_answer">Antworten</string>
+    <string name="remote_notification_open_action">Öffnen</string>
+    <string name="remote_notification_reply">Antworten</string>
+    <string name="remote_notification_reply_hint">Deine Antwort</string>
+    <string name="remote_notification_plan">pi möchte mit einem Plan starten</string>
+    <string name="remote_notification_questionnaire">pi hat ein paar Fragen</string>
+    <string name="remote_notification_local_required">Braucht eine Antwort am Mac</string>
+    <string name="remote_notification_sending">Antwort wird gesendet …</string>
+    <string name="remote_notification_sent">Antwort gesendet</string>
+    <string name="remote_notification_already_answered">Diese Frage wurde schon beantwortet oder geschlossen.</string>
+    <string name="remote_notification_failed">Antwort nicht gesendet. Öffne die Sitzung, um es erneut zu versuchen.</string>
+    <string name="remote_notification_empty_reply">Die Antwort war leer und wurde nicht gesendet.</string>
+    <string name="remote_notification_sync_channel">Hintergrundabfragen</string>
+    <string name="remote_notification_checking">Frage wird vom Mac gelesen …</string>
+</resources>

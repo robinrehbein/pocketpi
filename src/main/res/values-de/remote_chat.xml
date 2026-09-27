@@ -1,0 +1,6 @@
+<resources>
+    <string name="remote_tool_read">Datei lesen</string>
+    <string name="remote_tool_edit">Datei bearbeiten</string>
+    <string name="remote_tool_write">Datei schreiben</string>
+    <string name="remote_tool_bash">Befehl ausführen</string>
+</resources>

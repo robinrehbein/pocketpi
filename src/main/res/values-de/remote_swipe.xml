@@ -1,0 +1,9 @@
+<resources>
+    <string name="remote_swipe_title">Wischgesten</string>
+    <string name="remote_swipe_help">Gilt für die Sitzungsliste. Schließen fragt immer nach; der Verlauf bleibt auf dem Mac.</string>
+    <string name="remote_swipe_end_to_start">Nach links wischen</string>
+    <string name="remote_swipe_start_to_end">Nach rechts wischen</string>
+    <string name="remote_swipe_action_close">Schließen</string>
+    <string name="remote_swipe_action_rename">Umbenennen</string>
+    <string name="remote_swipe_action_none">Aus</string>
+</resources>

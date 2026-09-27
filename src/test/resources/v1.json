@@ -1,0 +1,46 @@
+{
+  "v": 1,
+  "secret": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8",
+  "context": {
+    "v": 1,
+    "type": "hello",
+    "mode": "device",
+    "routeId": "AAECAwQFBgcICQoLDA0ODw",
+    "keyId": "EBESExQVFhcYGRobHB0eHw",
+    "connectionId": "ICEiIyQlJicoKSorLC0uLw",
+    "clientNonce": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+    "serverNonce": "YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8"
+  },
+  "keys": {
+    "c2h": "sOhoq7M_GbJWOOlUqEikhS37rve5hBzzw0HUy2eX3vQ",
+    "h2c": "3hxxWtQxprHRj80Yh-sLve6bX2lW-3wxDyKEFxiuoNw"
+  },
+  "vectors": {
+    "c2h": {
+      "seq": 0,
+      "iv": "AAAAAAAAAAAAAAAA",
+      "aad": "[\"pi-remote\",1,\"device\",\"AAECAwQFBgcICQoLDA0ODw\",\"EBESExQVFhcYGRobHB0eHw\",\"ICEiIyQlJicoKSorLC0uLw\",\"QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8\",\"YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8\",\"c2h\",0]",
+      "plaintext": "{\"type\":\"session.prompt\",\"requestId\":\"request-ä\",\"sessionId\":\"session-1\",\"text\":\"Grüße 👋\\n日本語\"}",
+      "ciphertext": "53qcUgv_JH3XPTNxLA1HcsOdz6Z03eMp069A82TCnM3DOt_0m0yOqEfvsiJzEs1XhLPMUeu3grZtpkHfmgr989yQcxTcOKJv_59eLYszWMAKlP30wP278zOwuFbYouxa-S1GDaBAhGP_jLPRTCepx_7DJsNnxAxUtSMT"
+    },
+    "h2c": {
+      "seq": 0,
+      "iv": "AAAAAAAAAAAAAAAA",
+      "aad": "[\"pi-remote\",1,\"device\",\"AAECAwQFBgcICQoLDA0ODw\",\"EBESExQVFhcYGRobHB0eHw\",\"ICEiIyQlJicoKSorLC0uLw\",\"QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8\",\"YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8\",\"h2c\",0]",
+      "plaintext": "{\"type\":\"device.authenticated\",\"hostName\":\"Jörgs Mac 日本語\"}",
+      "ciphertext": "uRguu6gFPS5RxPoDMPlbDZswNYCk9nWwIsjIWDzXiicpJ8a3M0z6cujRxPMEONiVAxkBkHaDbDVeQj4zVwqwxdNXqDfyQY9ZmMe3Oc1bNRaD"
+    }
+  },
+  "qr": {
+    "now": 1730000000000,
+    "value": {
+      "v": 1,
+      "relay": "https://relay.example",
+      "routeId": "AAECAwQFBgcICQoLDA0ODw",
+      "pairId": "EBESExQVFhcYGRobHB0eHw",
+      "secret": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8",
+      "expiresAt": 1730000120000
+    },
+    "text": "pi-remote://pair#eyJ2IjoxLCJyZWxheSI6Imh0dHBzOi8vcmVsYXkuZXhhbXBsZSIsInJvdXRlSWQiOiJBQUVDQXdRRkJnY0lDUW9MREEwT0R3IiwicGFpcklkIjoiRUJFU0V4UVZGaGNZR1JvYkhCMGVIdyIsInNlY3JldCI6Im9LR2lvNlNscHFlb3FhcXJySzJ1cjdDeHNyTzB0YmEzdUxtNnU3eTl2cjgiLCJleHBpcmVzQXQiOjE3MzAwMDAxMjAwMDB9"
+  }
+}

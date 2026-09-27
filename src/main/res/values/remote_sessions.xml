@@ -1,0 +1,7 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <plurals name="remote_sessions_subagent_count">
+        <item quantity="one">%d subagent</item>
+        <item quantity="other">%d subagents</item>
+    </plurals>
+</resources>

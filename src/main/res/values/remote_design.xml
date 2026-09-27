@@ -1,0 +1,15 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <string name="remote_design_pi_mark">π</string>
+    <string name="remote_design_not_connected">Not connected</string>
+    <string name="remote_design_filter_sessions">Filter sessions</string>
+    <string name="remote_design_filter_offline_description">Hide sessions that cannot be reached</string>
+    <string name="remote_design_reset">Reset</string>
+    <string name="remote_design_done">Done</string>
+    <string name="remote_design_filter_active_count">%1$d active filter</string>
+    <string name="remote_design_camera_permission_title">Allow camera access</string>
+    <string name="remote_design_pair_input_hint">Paste code</string>
+    <string name="remote_design_thinking_help">Off shows only the thinking status. On shows thinking text when the host provides it. Hidden or redacted reasoning cannot be shown.</string>
+    <string name="remote_design_show_thinking">Show thinking</string>
+    <string name="remote_design_appearance_help">Choose the app’s color mode</string>
+</resources>

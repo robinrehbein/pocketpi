@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tool call detail screen and diff view. English fallback for all unsupported locales. -->
+    <string name="remote_tool_detail_close">Close tool details</string>
+    <string name="remote_tool_detail_path">Path</string>
+    <string name="remote_tool_detail_command">Command</string>
+    <string name="remote_tool_detail_content">Content</string>
+    <string name="remote_tool_detail_offset">Starts at line %1$s</string>
+    <string name="remote_tool_detail_limit">Reads at most %1$s lines</string>
+    <string name="remote_tool_detail_no_arguments">No arguments</string>
+    <string name="remote_tool_detail_arguments_truncated">The host shortened these arguments, so they are shown as raw text.</string>
+    <string name="remote_tool_detail_change">Change %1$d</string>
+    <string name="remote_tool_detail_before">Before</string>
+    <string name="remote_tool_detail_after">After</string>
+    <string name="remote_tool_detail_arguments_show_all">Show all lines</string>
+    <string name="remote_tool_detail_arguments_show_less">Show fewer lines</string>
+    <string name="remote_tool_detail_diff">Diff</string>
+    <string name="remote_tool_detail_diff_from_host">From the patch pi wrote</string>
+    <string name="remote_tool_detail_diff_from_arguments">From the edit arguments, without line numbers</string>
+    <string name="remote_tool_detail_diff_truncated">This diff is shortened.</string>
+    <string name="remote_tool_detail_diff_summary">Lines added: %1$d, removed: %2$d</string>
+    <plurals name="remote_tool_detail_more_lines">
+        <item quantity="one">%d more line</item>
+        <item quantity="other">%d more lines</item>
+    </plurals>
+    <string name="remote_tool_detail_no_output">No output</string>
+    <string name="remote_tool_detail_search">Search output</string>
+    <string name="remote_tool_detail_search_count">%1$d of %2$d</string>
+    <string name="remote_tool_detail_search_count_capped">%1$d of %2$d+</string>
+    <string name="remote_tool_detail_search_none">No matches</string>
+    <string name="remote_tool_detail_search_previous">Previous match</string>
+    <string name="remote_tool_detail_search_next">Next match</string>
+    <string name="remote_tool_detail_copy">Copy output</string>
+    <string name="remote_tool_detail_copied">Output copied</string>
+    <string name="remote_tool_detail_copy_failed">The output is too large to copy.</string>
+    <string name="remote_tool_detail_load_full">Load full output</string>
+    <string name="remote_tool_detail_loading">Loading full output: %1$s</string>
+    <string name="remote_tool_detail_loading_progress">Loading full output: %1$s of %2$s</string>
+    <string name="remote_tool_detail_cancel_load">Cancel loading</string>
+    <string name="remote_tool_detail_retry">Retry</string>
+    <string name="remote_tool_detail_failure_unsupported">This host or pi extension cannot send the full output. Reload the pi remote extension or update the host.</string>
+    <string name="remote_tool_detail_failure_not_found">The full output is not saved yet. Try again once the tool has finished.</string>
+    <string name="remote_tool_detail_failure_offline">The host is offline. Try again once it is back.</string>
+    <string name="remote_tool_detail_failure_failed">The full output could not be loaded.</string>
+    <string name="remote_tool_detail_full_loaded">Showing the full output</string>
+    <string name="remote_tool_detail_capped">The output was longer than 1 MiB and is cut off there.</string>
+    <string name="remote_tool_detail_ask_fix">Ask pi to fix</string>
+</resources>

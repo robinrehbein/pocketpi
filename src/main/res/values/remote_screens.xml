@@ -1,0 +1,19 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <string name="remote_error_close">Close</string>
+    <string name="remote_error_retry">Try again</string>
+    <plurals name="remote_sessions_count">
+        <item quantity="one">Session · %d</item>
+        <item quantity="other">Sessions · %d</item>
+    </plurals>
+    <string name="remote_disconnect_title">Disconnect from %1$s?</string>
+    <string name="remote_disconnect_title_generic">Disconnect from this computer?</string>
+    <string name="remote_disconnect_body">The pairing stays saved. You can reconnect from the computer list at any time.</string>
+    <string name="remote_paste_from_clipboard">Paste from clipboard</string>
+    <string name="remote_thinking_off">Off</string>
+    <string name="remote_thinking_minimal">Minimal</string>
+    <string name="remote_thinking_low">Low</string>
+    <string name="remote_thinking_medium">Medium</string>
+    <string name="remote_thinking_high">High</string>
+    <string name="remote_thinking_xhigh">Extra high</string>
+</resources>

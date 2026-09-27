@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_tool_detail_close">Werkzeugdetails schließen</string>
+    <string name="remote_tool_detail_path">Pfad</string>
+    <string name="remote_tool_detail_command">Befehl</string>
+    <string name="remote_tool_detail_content">Inhalt</string>
+    <string name="remote_tool_detail_offset">Beginnt bei Zeile %1$s</string>
+    <string name="remote_tool_detail_limit">Liest höchstens %1$s Zeilen</string>
+    <string name="remote_tool_detail_no_arguments">Keine Argumente</string>
+    <string name="remote_tool_detail_arguments_truncated">Der Host hat diese Argumente gekürzt, daher werden sie als Rohtext angezeigt.</string>
+    <string name="remote_tool_detail_change">Änderung %1$d</string>
+    <string name="remote_tool_detail_before">Vorher</string>
+    <string name="remote_tool_detail_after">Nachher</string>
+    <string name="remote_tool_detail_arguments_show_all">Alle Zeilen anzeigen</string>
+    <string name="remote_tool_detail_arguments_show_less">Weniger Zeilen anzeigen</string>
+    <string name="remote_tool_detail_diff">Diff</string>
+    <string name="remote_tool_detail_diff_from_host">Aus dem Patch von pi</string>
+    <string name="remote_tool_detail_diff_from_arguments">Aus den Bearbeitungsargumenten, ohne Zeilennummern</string>
+    <string name="remote_tool_detail_diff_truncated">Dieser Diff ist gekürzt.</string>
+    <string name="remote_tool_detail_diff_summary">Zeilen hinzugefügt: %1$d, entfernt: %2$d</string>
+    <plurals name="remote_tool_detail_more_lines">
+        <item quantity="one">%d weitere Zeile</item>
+        <item quantity="other">%d weitere Zeilen</item>
+    </plurals>
+    <string name="remote_tool_detail_no_output">Keine Ausgabe</string>
+    <string name="remote_tool_detail_search">Ausgabe durchsuchen</string>
+    <string name="remote_tool_detail_search_count">%1$d von %2$d</string>
+    <string name="remote_tool_detail_search_count_capped">%1$d von %2$d+</string>
+    <string name="remote_tool_detail_search_none">Keine Treffer</string>
+    <string name="remote_tool_detail_search_previous">Vorheriger Treffer</string>
+    <string name="remote_tool_detail_search_next">Nächster Treffer</string>
+    <string name="remote_tool_detail_copy">Ausgabe kopieren</string>
+    <string name="remote_tool_detail_copied">Ausgabe kopiert</string>
+    <string name="remote_tool_detail_copy_failed">Die Ausgabe ist zu groß zum Kopieren.</string>
+    <string name="remote_tool_detail_load_full">Vollständige Ausgabe laden</string>
+    <string name="remote_tool_detail_loading">Vollständige Ausgabe wird geladen: %1$s</string>
+    <string name="remote_tool_detail_loading_progress">Vollständige Ausgabe wird geladen: %1$s von %2$s</string>
+    <string name="remote_tool_detail_cancel_load">Laden abbrechen</string>
+    <string name="remote_tool_detail_retry">Erneut versuchen</string>
+    <string name="remote_tool_detail_failure_unsupported">Dieser Host oder die pi-Erweiterung kann die vollständige Ausgabe nicht senden. Lade die pi-Remote-Erweiterung neu oder aktualisiere den Host.</string>
+    <string name="remote_tool_detail_failure_not_found">Die vollständige Ausgabe ist noch nicht gespeichert. Versuche es erneut, sobald das Werkzeug fertig ist.</string>
+    <string name="remote_tool_detail_failure_offline">Der Host ist offline. Versuche es erneut, sobald er wieder da ist.</string>
+    <string name="remote_tool_detail_failure_failed">Die vollständige Ausgabe konnte nicht geladen werden.</string>
+    <string name="remote_tool_detail_full_loaded">Vollständige Ausgabe wird angezeigt</string>
+    <string name="remote_tool_detail_capped">Die Ausgabe war länger als 1 MiB und ist dort abgeschnitten.</string>
+    <string name="remote_tool_detail_ask_fix">pi um Korrektur bitten</string>
+</resources>

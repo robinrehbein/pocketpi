@@ -1,0 +1,14 @@
+<resources>
+    <string name="remote_design_pi_mark">π</string>
+    <string name="remote_design_not_connected">Nicht verbunden</string>
+    <string name="remote_design_filter_sessions">Sitzungen filtern</string>
+    <string name="remote_design_filter_offline_description">Nicht erreichbare Sitzungen ausblenden</string>
+    <string name="remote_design_reset">Zurücksetzen</string>
+    <string name="remote_design_done">Fertig</string>
+    <string name="remote_design_filter_active_count">%1$d aktiver Filter</string>
+    <string name="remote_design_camera_permission_title">Kamerazugriff erlauben</string>
+    <string name="remote_design_pair_input_hint">Code einfügen</string>
+    <string name="remote_design_thinking_help">Aus zeigt nur den Status der Gedanken an. Ein zeigt den Text der Gedanken an, wenn der Host ihn übermittelt. Verborgene oder geschwärzte Gedanken bleiben unsichtbar.</string>
+    <string name="remote_design_show_thinking">Anzeige von Gedanken</string>
+    <string name="remote_design_appearance_help">Wähle den Farbmodus der App</string>
+</resources>

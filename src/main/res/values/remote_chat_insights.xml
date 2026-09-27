@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Chat insights: ask to fix, child sessions and aborting a subagent. English fallback for all unsupported locales. -->
+    <string name="remote_insights_ask_fix_prompt">This tool call failed. Look at the error, find the cause and fix it.</string>
+    <string name="remote_insights_child_not_found">The subagent session is not available yet. Try again in a moment.</string>
+    <string name="remote_insights_abort_child_title">Stop subagent?</string>
+    <string name="remote_insights_abort_child_body">This stops “%1$s”. Work it has not finished yet is lost.</string>
+    <string name="remote_insights_abort_child_confirm">Stop subagent</string>
+</resources>

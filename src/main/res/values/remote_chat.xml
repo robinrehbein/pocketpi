@@ -1,0 +1,7 @@
+<resources>
+    <!-- Readable titles for common tool cards in the chat history. -->
+    <string name="remote_tool_read">Read file</string>
+    <string name="remote_tool_edit">Edit file</string>
+    <string name="remote_tool_write">Write file</string>
+    <string name="remote_tool_bash">Run command</string>
+</resources>

@@ -1,0 +1,44 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <plurals name="remote_panel_files_touched">
+        <item quantity="one">%d file touched</item>
+        <item quantity="other">%d files touched</item>
+    </plurals>
+    <plurals name="remote_panel_file_uses">
+        <item quantity="one">Used %d time</item>
+        <item quantity="other">Used %d times</item>
+    </plurals>
+    <string name="remote_panel_files_title">Files in this chat</string>
+    <string name="remote_panel_files_changed">Changed</string>
+    <string name="remote_panel_files_read">Read</string>
+    <plurals name="remote_panel_subagents_running">
+        <item quantity="one">%d subagent running</item>
+        <item quantity="other">%d subagents running</item>
+    </plurals>
+    <plurals name="remote_panel_subagents_queued">
+        <item quantity="one">%d subagent queued</item>
+        <item quantity="other">%d subagents queued</item>
+    </plurals>
+    <string name="remote_panel_subagents_expand">Show subagents</string>
+    <string name="remote_panel_subagents_collapse">Hide subagents</string>
+    <string name="remote_panel_subagent_abort">Stop subagent</string>
+    <string name="remote_panel_timeline">Chat timeline</string>
+    <string name="remote_panel_jump_error">Jump to last error</string>
+    <string name="remote_panel_jump_question">Jump to last question</string>
+    <string name="remote_panel_jump_edit">Jump to last edit</string>
+    <string name="remote_panel_jump_plan">Jump to last plan</string>
+    <string name="remote_panel_errors_filter">Errors (%d)</string>
+    <string name="remote_panel_compacting">Compacting context…</string>
+    <string name="remote_panel_compaction_manual">Started manually</string>
+    <string name="remote_panel_compaction_threshold">Automatic, the context is nearly full</string>
+    <string name="remote_panel_compaction_overflow">Recovering from a context overflow</string>
+    <string name="remote_panel_child_picker_title">Open subagent chat</string>
+    <string name="remote_panel_child_picker_hint">This subagent could not be matched to one chat. Pick the right one.</string>
+    <string name="remote_panel_usage_title">Session totals</string>
+    <string name="remote_panel_usage_input">Input tokens</string>
+    <string name="remote_panel_usage_output">Output tokens</string>
+    <string name="remote_panel_usage_cache_read">Cache read</string>
+    <string name="remote_panel_usage_cache_write">Cache write</string>
+    <string name="remote_panel_usage_total">Total tokens</string>
+    <string name="remote_panel_usage_cost">Cost</string>
+</resources>

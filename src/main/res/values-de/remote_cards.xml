@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_card_open_tool">Werkzeugdetails öffnen</string>
+    <string name="remote_card_open_subagent">Unteragent-Sitzung öffnen</string>
+    <string name="remote_card_diff_counts">+%1$d −%2$d</string>
+    <string name="remote_card_usage">↑ %1$s · ↓ %2$s</string>
+    <string name="remote_card_usage_cost">↑ %1$s · ↓ %2$s · %3$s</string>
+    <string name="remote_card_usage_description">Eingabe-Tokens: %1$s, Ausgabe-Tokens: %2$s</string>
+    <string name="remote_card_usage_cost_description">Eingabe-Tokens: %1$s, Ausgabe-Tokens: %2$s, Kosten: %3$s</string>
+    <plurals name="remote_card_agent_turns">
+        <item quantity="one">%d Runde</item>
+        <item quantity="other">%d Runden</item>
+    </plurals>
+    <string name="remote_card_agent_usage">%1$s · %2$s Tokens · %3$s</string>
+    <string name="remote_card_agent_usage_description">%1$s, Tokens: %2$s, Kosten: %3$s</string>
+</resources>

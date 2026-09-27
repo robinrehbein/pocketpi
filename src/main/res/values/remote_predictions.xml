@@ -1,0 +1,14 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <string name="remote_prediction_fix_tests">Fix the failing tests</string>
+    <string name="remote_prediction_fix_error">Fix the error and try again</string>
+    <string name="remote_prediction_implement_plan">Implement the plan</string>
+    <string name="remote_prediction_run_tests">Run the tests and fix failures</string>
+    <string name="remote_prediction_prepare_pr">Prepare a PR</string>
+    <string name="remote_prediction_use">Use suggestion</string>
+    <string name="remote_prediction_announce">Suggestion: %1$s</string>
+    <string name="remote_prediction_setting">Prompt suggestions</string>
+    <string name="remote_prediction_setting_help">Suggests a next prompt in the empty composer. Double tap the field to use it. Suggestions come from the conversation and your own frequent prompts, which stay encrypted on this device.</string>
+    <string name="remote_prediction_show">Show suggestions</string>
+    <string name="remote_prediction_clear">Clear prompt history</string>
+</resources>

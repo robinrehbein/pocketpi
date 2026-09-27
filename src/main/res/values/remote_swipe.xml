@@ -1,0 +1,10 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <string name="remote_swipe_title">Swipe gestures</string>
+    <string name="remote_swipe_help">Applies to the session list. Closing always asks first; the history stays on the Mac.</string>
+    <string name="remote_swipe_end_to_start">Swipe left</string>
+    <string name="remote_swipe_start_to_end">Swipe right</string>
+    <string name="remote_swipe_action_close">Close</string>
+    <string name="remote_swipe_action_rename">Rename</string>
+    <string name="remote_swipe_action_none">Off</string>
+</resources>

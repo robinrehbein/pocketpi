@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_fork_action">Ab dieser Nachricht zurückspulen</string>
+    <string name="remote_fork_retry">Ab hier wiederholen</string>
+    <string name="remote_fork_edit">Bearbeiten und neu senden</string>
+    <string name="remote_fork_stop_first">Erst stoppen</string>
+    <string name="remote_fork_retry_title">Ab hier wiederholen?</string>
+    <string name="remote_fork_edit_title">Bearbeiten und neu senden?</string>
+    <string name="remote_fork_retry_message">Ein neuer Chat beginnt vor dieser Nachricht und sendet sie erneut. Dieser Chat bleibt unverändert. Dateien auf dem Mac werden nicht zurückgesetzt.</string>
+    <string name="remote_fork_edit_message">Ein neuer Chat beginnt vor dieser Nachricht, die Nachricht steht im Eingabefeld. Dieser Chat bleibt unverändert. Dateien auf dem Mac werden nicht zurückgesetzt.</string>
+    <string name="remote_fork_confirm">Neuen Chat starten</string>
+    <string name="remote_fork_cancel">Abbrechen</string>
+    <string name="remote_fork_busy">Stoppe den Chat, bevor du ihn zurückspulst.</string>
+    <string name="remote_fork_resend_failed">Der neue Chat wurde gestartet, aber die Nachricht konnte nicht erneut gesendet werden. Sende sie über das Eingabefeld.</string>
+    <string name="remote_fork_attachments_dropped">Anhänge werden nicht übernommen. Füge sie bei Bedarf erneut hinzu.</string>
+    <string name="remote_fork_resend_uncertain">Der neue Chat wurde gestartet, aber der Host konnte nicht bestätigen, ob die Nachricht erneut gesendet wurde. Warte auf die Antwort, bevor du etwas sendest.</string>
+</resources>

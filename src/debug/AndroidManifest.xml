@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name="de.joinnoah.pi.remote.NavigationTestActivity"
+            android:exported="false" android:enableOnBackInvokedCallback="true" />
+    </application>
+</manifest>

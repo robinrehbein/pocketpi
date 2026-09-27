@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_fork_action">Rewind from this message</string>
+    <string name="remote_fork_retry">Retry from here</string>
+    <string name="remote_fork_edit">Edit and resend</string>
+    <string name="remote_fork_stop_first">Stop first</string>
+    <string name="remote_fork_retry_title">Retry from here?</string>
+    <string name="remote_fork_edit_title">Edit and resend?</string>
+    <string name="remote_fork_retry_message">A new chat starts before this message and sends it again. This chat stays as it is. Files on the Mac are not rewound.</string>
+    <string name="remote_fork_edit_message">A new chat starts before this message with the message in the composer. This chat stays as it is. Files on the Mac are not rewound.</string>
+    <string name="remote_fork_confirm">Start new chat</string>
+    <string name="remote_fork_cancel">Cancel</string>
+    <string name="remote_fork_busy">Stop the chat before rewinding it.</string>
+    <string name="remote_fork_resend_failed">The new chat started, but the message could not be sent again. Send it from the composer.</string>
+    <string name="remote_fork_attachments_dropped">Attachments are not carried over. Add them again if you need them.</string>
+    <string name="remote_fork_resend_uncertain">The new chat started, but the host could not confirm whether the message was sent again. Wait for the reply before sending anything.</string>
+</resources>

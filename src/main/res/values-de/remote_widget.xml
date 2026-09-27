@@ -1,0 +1,17 @@
+<resources>
+    <string name="remote_widget_name">PocketPi-Sitzungen</string>
+    <string name="remote_widget_description">Sitzungen, die auf dich warten oder laufen</string>
+    <plurals name="remote_widget_waiting">
+        <item quantity="one">%1$d Sitzung wartet auf dich</item>
+        <item quantity="other">%1$d Sitzungen warten auf dich</item>
+    </plurals>
+    <string name="remote_widget_none_waiting">Nichts wartet auf dich</string>
+    <string name="remote_widget_empty">Gerade laufen keine Sitzungen.</string>
+    <string name="remote_widget_not_paired">Nicht gekoppelt</string>
+    <string name="remote_widget_pair_hint">Öffne PocketPi, um es mit deinem Mac zu koppeln.</string>
+    <string name="remote_widget_state_waiting">Wartet auf dich</string>
+    <string name="remote_widget_state_running">Läuft</string>
+    <string name="remote_widget_row_detail">%1$s · %2$s</string>
+    <string name="remote_widget_untitled">Sitzung ohne Titel</string>
+    <string name="remote_shortcut_closed">Diese Sitzung ist geschlossen.</string>
+</resources>

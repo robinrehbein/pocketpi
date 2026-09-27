@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "valid": [
+    {
+      "name": "assistant",
+      "text": "[PocketPi quote v1]\n{\"messageId\":\"assistant-17\",\"role\":\"assistant\",\"author\":\"Claude Sonnet\",\"excerpt\":\"A useful answer.\"}\n[/PocketPi quote]\n\nCan you explain this?",
+      "quote": {
+        "messageId": "assistant-17",
+        "role": "assistant",
+        "author": "Claude Sonnet",
+        "excerpt": "A useful answer."
+      },
+      "body": "Can you explain this?"
+    },
+    {
+      "name": "unicode",
+      "text": "[PocketPi quote v1]\n{\"messageId\":\"native-uuid\",\"role\":\"user\",\"excerpt\":\"Grüße 😀\\nSecond line \\\"quoted\\\"\"}\n[/PocketPi quote]\n\nWeiter bitte.",
+      "quote": {
+        "messageId": "native-uuid",
+        "role": "user",
+        "excerpt": "Grüße 😀\nSecond line \"quoted\""
+      },
+      "body": "Weiter bitte."
+    },
+    {
+      "name": "tool",
+      "text": "[PocketPi quote v1]\n{\"messageId\":\"tool-call-1\",\"role\":\"tool\",\"author\":\"read\",\"excerpt\":\"file.txt:42\"}\n[/PocketPi quote]\n\nCheck that line.",
+      "quote": {
+        "messageId": "tool-call-1",
+        "role": "tool",
+        "author": "read",
+        "excerpt": "file.txt:42"
+      },
+      "body": "Check that line."
+    }
+  ],
+  "invalid": [
+    {
+      "name": "ordinary",
+      "text": "A normal message"
+    },
+    {
+      "name": "wrong-version",
+      "text": "[PocketPi quote v2]\n{\"messageId\":\"assistant-17\",\"role\":\"assistant\",\"author\":\"Claude Sonnet\",\"excerpt\":\"A useful answer.\"}\n[/PocketPi quote]\n\nCan you explain this?"
+    },
+    {
+      "name": "leading-text",
+      "text": "prefix [PocketPi quote v1]\n{\"messageId\":\"assistant-17\",\"role\":\"assistant\",\"author\":\"Claude Sonnet\",\"excerpt\":\"A useful answer.\"}\n[/PocketPi quote]\n\nCan you explain this?"
+    },
+    {
+      "name": "missing-close",
+      "text": "[PocketPi quote v1]\n{\"messageId\":\"assistant-17\",\"role\":\"assistant\",\"author\":\"Claude Sonnet\",\"excerpt\":\"A useful answer.\"}\n[/quote]\n\nCan you explain this?"
+    },
+    {
+      "name": "wrong-role",
+      "text": "[PocketPi quote v1]\n{\"messageId\":\"m\",\"role\":\"system\",\"excerpt\":\"text\"}\n[/PocketPi quote]\n\nbody"
+    },
+    {
+      "name": "unknown-field",
+      "text": "[PocketPi quote v1]\n{\"messageId\":\"m\",\"role\":\"user\",\"excerpt\":\"text\",\"trusted\":true}\n[/PocketPi quote]\n\nbody"
+    },
+    {
+      "name": "too-long-excerpt",
+      "text": "[PocketPi quote v1]\n{\"messageId\":\"m\",\"role\":\"user\",\"excerpt\":\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\"}\n[/PocketPi quote]\n\nbody"
+    },
+    {
+      "name": "invalid-json",
+      "text": "[PocketPi quote v1]\n{\"messageId\":\n[/PocketPi quote]\n\nbody"
+    },
+    {
+      "name": "crlf",
+      "text": "[PocketPi quote v1]\r\n{\"messageId\":\"assistant-17\",\"role\":\"assistant\",\"author\":\"Claude Sonnet\",\"excerpt\":\"A useful answer.\"}\r\n[/PocketPi quote]\r\n\r\nCan you explain this?"
+    }
+  ]
+}

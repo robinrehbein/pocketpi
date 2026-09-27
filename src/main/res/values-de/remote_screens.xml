@@ -1,0 +1,18 @@
+<resources>
+    <string name="remote_error_close">Schließen</string>
+    <string name="remote_error_retry">Erneut versuchen</string>
+    <plurals name="remote_sessions_count">
+        <item quantity="one">Sitzung · %d</item>
+        <item quantity="other">Sitzungen · %d</item>
+    </plurals>
+    <string name="remote_disconnect_title">Verbindung zu %1$s trennen?</string>
+    <string name="remote_disconnect_title_generic">Verbindung zu diesem Rechner trennen?</string>
+    <string name="remote_disconnect_body">Die Kopplung bleibt gespeichert. Du kannst dich jederzeit über die Rechnerliste wieder verbinden.</string>
+    <string name="remote_paste_from_clipboard">Aus Zwischenablage einfügen</string>
+    <string name="remote_thinking_off">Aus</string>
+    <string name="remote_thinking_minimal">Minimal</string>
+    <string name="remote_thinking_low">Niedrig</string>
+    <string name="remote_thinking_medium">Mittel</string>
+    <string name="remote_thinking_high">Hoch</string>
+    <string name="remote_thinking_xhigh">Sehr hoch</string>
+</resources>

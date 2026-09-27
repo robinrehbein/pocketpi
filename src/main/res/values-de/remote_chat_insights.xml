@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_insights_ask_fix_prompt">Dieser Werkzeugaufruf ist fehlgeschlagen. Sieh dir den Fehler an, finde die Ursache und behebe sie.</string>
+    <string name="remote_insights_child_not_found">Die Unteragent-Sitzung ist noch nicht verfügbar. Versuch es gleich noch einmal.</string>
+    <string name="remote_insights_abort_child_title">Unteragent stoppen?</string>
+    <string name="remote_insights_abort_child_body">Damit wird „%1$s“ gestoppt. Noch nicht abgeschlossene Arbeit geht verloren.</string>
+    <string name="remote_insights_abort_child_confirm">Unteragent stoppen</string>
+</resources>

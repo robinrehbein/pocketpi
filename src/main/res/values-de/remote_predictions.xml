@@ -1,0 +1,13 @@
+<resources>
+    <string name="remote_prediction_fix_tests">Behebe die fehlschlagenden Tests</string>
+    <string name="remote_prediction_fix_error">Behebe den Fehler und versuch es erneut</string>
+    <string name="remote_prediction_implement_plan">Setze den Plan um</string>
+    <string name="remote_prediction_run_tests">Führe die Tests aus und behebe Fehler</string>
+    <string name="remote_prediction_prepare_pr">Bereite einen PR vor</string>
+    <string name="remote_prediction_use">Vorschlag übernehmen</string>
+    <string name="remote_prediction_announce">Vorschlag: %1$s</string>
+    <string name="remote_prediction_setting">Prompt-Vorschläge</string>
+    <string name="remote_prediction_setting_help">Schlägt im leeren Eingabefeld einen nächsten Prompt vor. Doppeltippe auf das Feld, um ihn zu übernehmen. Vorschläge kommen aus dem Gespräch und deinen häufigen Prompts, die verschlüsselt auf diesem Gerät bleiben.</string>
+    <string name="remote_prediction_show">Vorschläge anzeigen</string>
+    <string name="remote_prediction_clear">Prompt-Verlauf löschen</string>
+</resources>

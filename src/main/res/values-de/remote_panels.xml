@@ -1,0 +1,43 @@
+<resources>
+    <plurals name="remote_panel_files_touched">
+        <item quantity="one">%d Datei bearbeitet oder gelesen</item>
+        <item quantity="other">%d Dateien bearbeitet oder gelesen</item>
+    </plurals>
+    <plurals name="remote_panel_file_uses">
+        <item quantity="one">%d-mal verwendet</item>
+        <item quantity="other">%d-mal verwendet</item>
+    </plurals>
+    <string name="remote_panel_files_title">Dateien in diesem Chat</string>
+    <string name="remote_panel_files_changed">Geändert</string>
+    <string name="remote_panel_files_read">Gelesen</string>
+    <plurals name="remote_panel_subagents_running">
+        <item quantity="one">%d Unteragent läuft</item>
+        <item quantity="other">%d Unteragenten laufen</item>
+    </plurals>
+    <plurals name="remote_panel_subagents_queued">
+        <item quantity="one">%d Unteragent wartet</item>
+        <item quantity="other">%d Unteragenten warten</item>
+    </plurals>
+    <string name="remote_panel_subagents_expand">Unteragenten anzeigen</string>
+    <string name="remote_panel_subagents_collapse">Unteragenten ausblenden</string>
+    <string name="remote_panel_subagent_abort">Unteragent stoppen</string>
+    <string name="remote_panel_timeline">Chat-Zeitleiste</string>
+    <string name="remote_panel_jump_error">Zum letzten Fehler springen</string>
+    <string name="remote_panel_jump_question">Zur letzten Frage springen</string>
+    <string name="remote_panel_jump_edit">Zur letzten Änderung springen</string>
+    <string name="remote_panel_jump_plan">Zum letzten Plan springen</string>
+    <string name="remote_panel_errors_filter">Fehler (%d)</string>
+    <string name="remote_panel_compacting">Kontext wird verdichtet…</string>
+    <string name="remote_panel_compaction_manual">Manuell gestartet</string>
+    <string name="remote_panel_compaction_threshold">Automatisch, der Kontext ist fast voll</string>
+    <string name="remote_panel_compaction_overflow">Erholung von einem Kontextüberlauf</string>
+    <string name="remote_panel_child_picker_title">Unteragent-Chat öffnen</string>
+    <string name="remote_panel_child_picker_hint">Dieser Unteragent ließ sich keinem Chat eindeutig zuordnen. Wähle den richtigen aus.</string>
+    <string name="remote_panel_usage_title">Summe der Sitzung</string>
+    <string name="remote_panel_usage_input">Eingabe-Tokens</string>
+    <string name="remote_panel_usage_output">Ausgabe-Tokens</string>
+    <string name="remote_panel_usage_cache_read">Cache gelesen</string>
+    <string name="remote_panel_usage_cache_write">Cache geschrieben</string>
+    <string name="remote_panel_usage_total">Tokens gesamt</string>
+    <string name="remote_panel_usage_cost">Kosten</string>
+</resources>

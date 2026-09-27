@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "valid": [
+    {
+      "name": "unicode-file-and-quote",
+      "text": "[PocketPi attachments v1]\n[{\"id\":\"AAAAAAAAAAAAAAAAAAAAAA\",\"name\":\"Grüße 😀.txt\",\"kind\":\"file\",\"mimeType\":\"text/plain\",\"size\":0,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expiresAt\":604801000,\"path\":\"/fixture/attachments/content\"}]\n[/PocketPi attachments]\n\n[PocketPi quote v1]\n{\"messageId\":\"previous\",\"role\":\"assistant\",\"excerpt\":\"Earlier answer\"}\n[/PocketPi quote]\n\nRead the file.",
+      "attachments": [
+        {
+          "id": "AAAAAAAAAAAAAAAAAAAAAA",
+          "name": "Grüße 😀.txt",
+          "kind": "file",
+          "mimeType": "text/plain",
+          "size": 0,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expiresAt": 604801000,
+          "path": "/fixture/attachments/content"
+        }
+      ],
+      "body": "[PocketPi quote v1]\n{\"messageId\":\"previous\",\"role\":\"assistant\",\"excerpt\":\"Earlier answer\"}\n[/PocketPi quote]\n\nRead the file."
+    }
+  ],
+  "invalid": [
+    {
+      "name": "relative-path",
+      "text": "[PocketPi attachments v1]\n[{\"id\":\"AAAAAAAAAAAAAAAAAAAAAA\",\"name\":\"Grüße 😀.txt\",\"kind\":\"file\",\"mimeType\":\"text/plain\",\"size\":0,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expiresAt\":604801000,\"path\":\"relative/content\"}]\n[/PocketPi attachments]\n\n[PocketPi quote v1]\n{\"messageId\":\"previous\",\"role\":\"assistant\",\"excerpt\":\"Earlier answer\"}\n[/PocketPi quote]\n\nRead the file."
+    },
+    {
+      "name": "extra-field",
+      "text": "[PocketPi attachments v1]\n[{\"id\":\"AAAAAAAAAAAAAAAAAAAAAA\",\"name\":\"Grüße 😀.txt\",\"kind\":\"file\",\"mimeType\":\"text/plain\",\"size\":0,\"secret\":\"no\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expiresAt\":604801000,\"path\":\"/fixture/attachments/content\"}]\n[/PocketPi attachments]\n\n[PocketPi quote v1]\n{\"messageId\":\"previous\",\"role\":\"assistant\",\"excerpt\":\"Earlier answer\"}\n[/PocketPi quote]\n\nRead the file."
+    },
+    {
+      "name": "wrong-version",
+      "text": "[PocketPi attachments v2]\n[{\"id\":\"AAAAAAAAAAAAAAAAAAAAAA\",\"name\":\"Grüße 😀.txt\",\"kind\":\"file\",\"mimeType\":\"text/plain\",\"size\":0,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expiresAt\":604801000,\"path\":\"/fixture/attachments/content\"}]\n[/PocketPi attachments]\n\n[PocketPi quote v1]\n{\"messageId\":\"previous\",\"role\":\"assistant\",\"excerpt\":\"Earlier answer\"}\n[/PocketPi quote]\n\nRead the file."
+    }
+  ]
+}
