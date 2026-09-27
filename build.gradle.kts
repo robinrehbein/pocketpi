@@ -1,4 +1,7 @@
 import java.util.Properties
+import java.io.File
+import java.security.KeyStore
+import java.security.MessageDigest
 import org.gradle.api.DefaultTask
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.tasks.Input
@@ -12,6 +15,41 @@ abstract class ValidateReleasePushConfiguration : DefaultTask() {
         check(missingProperties.get().isEmpty()) {
             "PocketPi release requires these Firebase properties: " +
                 missingProperties.get().joinToString(", ")
+        }
+    }
+}
+
+abstract class ValidateUploadKey : DefaultTask() {
+    @get:Input abstract val storePath: org.gradle.api.provider.Property<String>
+    @get:org.gradle.api.tasks.Internal abstract val storePassword:
+        org.gradle.api.provider.Property<String>
+    @get:org.gradle.api.tasks.Internal abstract val keyAlias: org.gradle.api.provider.Property<String>
+    @get:org.gradle.api.tasks.Internal abstract val keyPassword:
+        org.gradle.api.provider.Property<String>
+
+    @TaskAction
+    fun validate() {
+        val entries = mapOf(
+            "POCKETPI_UPLOAD_KEYSTORE" to storePath.get(),
+            "POCKETPI_UPLOAD_STORE_PASSWORD" to storePassword.get(),
+            "POCKETPI_UPLOAD_KEY_ALIAS" to keyAlias.get(),
+            "POCKETPI_UPLOAD_KEY_PASSWORD" to keyPassword.get(),
+        )
+        val missing = entries.filterValues { it.isBlank() }.keys
+        check(missing.isEmpty()) { "PocketPi release signing is missing: ${missing.joinToString(", ")}" }
+        val file = File(storePath.get())
+        check(file.isFile) { "PocketPi upload keystore file does not exist" }
+        val store = KeyStore.getInstance(file, storePassword.get().toCharArray())
+        file.inputStream().use { store.load(it, storePassword.get().toCharArray()) }
+        check(store.isKeyEntry(keyAlias.get())) { "PocketPi upload key alias is not a private key entry" }
+        check(store.getKey(keyAlias.get(), keyPassword.get().toCharArray()) != null) {
+            "PocketPi upload key cannot be opened"
+        }
+        val fingerprint = MessageDigest.getInstance("SHA-256")
+            .digest(store.getCertificate(keyAlias.get()).encoded)
+            .joinToString(":") { "%02X".format(it) }
+        check(fingerprint == "06:0C:E8:05:BB:E7:36:AF:A7:30:F3:DF:F3:05:01:2A:62:2A:88:6A:EE:8E:E1:95:47:2D:87:1B:C9:B7:04:15") {
+            "PocketPi upload certificate does not match the existing Play upload key"
         }
     }
 }
@@ -54,8 +92,36 @@ val validateReleasePushConfiguration = tasks.register<ValidateReleasePushConfigu
     missingProperties.set(missingReleasePushProperties)
 }
 
+val uploadStorePath = remoteProperty("POCKETPI_UPLOAD_KEYSTORE")
+val uploadStorePassword =
+    remoteProperty("POCKETPI_UPLOAD_STORE_PASSWORD")
+val uploadKeyAlias = remoteProperty("POCKETPI_UPLOAD_KEY_ALIAS")
+val uploadKeyPassword =
+    remoteProperty("POCKETPI_UPLOAD_KEY_PASSWORD")
+val validateUploadKey = tasks.register<ValidateUploadKey>("validateUploadKey") {
+    group = "verification"
+    description = "Checks the release key and its existing Play upload certificate."
+    storePath.set(uploadStorePath)
+    storePassword.set(uploadStorePassword)
+    keyAlias.set(uploadKeyAlias)
+    keyPassword.set(uploadKeyPassword)
+}
+
+val requestedVersionCode = providers.gradleProperty("POCKETPI_VERSION_CODE").orNull
+val requestedVersionName = providers.gradleProperty("POCKETPI_VERSION_NAME").orNull
+check((requestedVersionCode == null) == (requestedVersionName == null)) {
+    "POCKETPI_VERSION_CODE and POCKETPI_VERSION_NAME must be supplied together"
+}
+val releaseVersionCode = requestedVersionCode?.toIntOrNull()
+check(requestedVersionCode == null || (releaseVersionCode != null && releaseVersionCode in 23..2100000000)) {
+    "POCKETPI_VERSION_CODE must be an integer between 23 and 2100000000"
+}
+check(requestedVersionName == null || requestedVersionName.matches(Regex("[0-9]+\\.[0-9]+\\.[0-9]+-ci\\.[0-9]+"))) {
+    "POCKETPI_VERSION_NAME must use the form 0.3.19-ci.23"
+}
+
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
-    dependsOn(validateReleasePushConfiguration)
+    dependsOn(validateReleasePushConfiguration, validateUploadKey)
 }
 
 android {
@@ -69,9 +135,27 @@ android {
         compose = true
         buildConfig = true
     }
+    signingConfigs {
+        create("pocketpiUpload") {
+            if (uploadStorePath.isNotBlank()) storeFile = rootProject.file(uploadStorePath)
+            if (uploadStorePassword.isNotBlank()) {
+                storePassword =
+                    uploadStorePassword
+            }
+            if (uploadKeyAlias.isNotBlank()) keyAlias = uploadKeyAlias
+            if (uploadKeyPassword.isNotBlank()) {
+                keyPassword =
+                    uploadKeyPassword
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (uploadStorePath.isNotBlank() && uploadStorePassword.isNotBlank() &&
+                uploadKeyAlias.isNotBlank() && uploadKeyPassword.isNotBlank()) {
+                signingConfig = signingConfigs.getByName("pocketpiUpload")
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -81,8 +165,8 @@ android {
         targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         applicationId = "de.joinnoah.pocketpi"
-        versionCode = 22
-        versionName = "0.3.19"
+        versionCode = releaseVersionCode ?: 22
+        versionName = requestedVersionName ?: "0.3.19"
         for (key in listOf("API_KEY", "APP_ID", "PROJECT_ID", "GCM_SENDER_ID")) {
             buildConfigField(
                 "String",
