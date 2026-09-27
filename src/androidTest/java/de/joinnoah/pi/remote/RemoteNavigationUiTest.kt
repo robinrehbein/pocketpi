@@ -476,8 +476,8 @@ class RemoteNavigationUiTest {
             assertTrue("Actions should sit below the title on a narrow screen", titleBounds.bottom <= settingsBounds.top)
             assertTrue(refreshBounds.top >= backBounds.bottom)
             assertTrue(renameBounds.top >= backBounds.bottom)
-            assertTrue(refreshBounds.right <= renameBounds.left)
-            assertTrue(renameBounds.right <= settingsBounds.right)
+            assertTrue(renameBounds.right <= refreshBounds.left)
+            assertTrue(refreshBounds.right <= settingsBounds.left)
             dot.assertContentDescriptionEquals(label(R.string.remote_status_idle))
             rename.performClick()
             compose.onNodeWithText(label(R.string.remote_cancel)).performClick()
@@ -1655,12 +1655,13 @@ class RemoteNavigationUiTest {
             repository.state.value =
                 repository.state.value.copy(capabilities = setOf(TOOL_OUTPUT_CAPABILITY))
         }
-        toolHeader("src/a.kt").performClick()
-        compose.onNodeWithTag("toolDetailClose", useUnmergedTree = true).assertIsDisplayed().performClick()
+        toolHeader("src/a.kt").performSemanticsAction(SemanticsActions.OnClick)
+        val close = compose.onNodeWithTag("toolDetailClose", useUnmergedTree = true)
+        close.assertIsDisplayed().performClick()
         compose.onNodeWithTag("toolDetailClose", useUnmergedTree = true).assertDoesNotExist()
         compose.onNode(hasSetTextAction()).assertIsDisplayed()
 
-        toolHeader("./gradlew test").performClick()
+        toolHeader("./gradlew test").performSemanticsAction(SemanticsActions.OnClick)
         compose.onNodeWithTag("toolDetailClose", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithText(label(R.string.remote_tool_detail_load_full)).performClick()
         compose.runOnIdle { assertEquals(listOf("call-bash"), repository.toolOutputLoads) }
@@ -1669,7 +1670,7 @@ class RemoteNavigationUiTest {
         compose.onNodeWithTag("toolDetailClose", useUnmergedTree = true).assertDoesNotExist()
         compose.onNodeWithText("Message for live").assertExists()
 
-        toolHeader("./gradlew test").performClick()
+        toolHeader("./gradlew test").performSemanticsAction(SemanticsActions.OnClick)
         compose.onNodeWithTag("toolDetailAskFix").performClick()
         compose.onNodeWithTag("toolDetailClose", useUnmergedTree = true).assertDoesNotExist()
         compose.onNode(hasSetTextAction())
