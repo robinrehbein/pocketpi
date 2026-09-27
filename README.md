@@ -180,3 +180,8 @@ Gradle root. The internal Kotlin namespace, pi extension directory and `/remote`
 retain their existing names.
 A previous debug installation under `de.joinnoah.pi.remote` is a separate app and does not share
 pairings or settings with PocketPi.
+
+## Play testing releases
+
+See the [Play testing release runbook](docs/runbooks/play-testing-release.md) for setup, automated
+Internal and Closed Alpha publishing, verification, and recovery.
