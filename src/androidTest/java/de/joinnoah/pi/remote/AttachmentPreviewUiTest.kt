@@ -49,14 +49,17 @@ class AttachmentPreviewUiTest {
             MaterialTheme { AttachmentPreviewStrip(listOf(imageFromFilePicker), onRemove = {}, storage = storage) }
         }
         compose.waitUntil(15_000) {
-            compose.onAllNodesWithTag("attachmentThumbnailImage-${imageFromFilePicker.id}").fetchSemanticsNodes().isNotEmpty()
+            compose.onAllNodesWithTag("attachmentThumbnailImage-${imageFromFilePicker.id}", useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithTag("attachmentThumbnailImage-${imageFromFilePicker.id}").assertIsDisplayed()
+        compose.onNodeWithTag("attachmentThumbnailImage-${imageFromFilePicker.id}", useUnmergedTree = true)
+            .assertIsDisplayed()
         compose.onNodeWithTag("attachmentPreview-${imageFromFilePicker.id}").performClick()
         compose.waitUntil(15_000) {
-            compose.onAllNodesWithTag("attachmentLargeImage").fetchSemanticsNodes().isNotEmpty()
+            compose.onAllNodesWithTag("attachmentLargeImage", useUnmergedTree = true)
+                .fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithTag("attachmentLargeImage").assertIsDisplayed()
+        compose.onNodeWithTag("attachmentLargeImage", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithTag("closeAttachmentPreview").performClick()
         compose.onNodeWithTag("attachmentLargePreview").assertDoesNotExist()
     }
