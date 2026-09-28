@@ -169,14 +169,7 @@ internal fun VoiceInput(
     val busy = state.status in setOf("running", "waiting")
     val canStop = state.connected && !state.loading && busy
     val canChooseBusyAction = busy && busyAction != null
-    val canSend =
-        state.connected &&
-            !state.loading &&
-            state.status == "idle" &&
-            !state.sending &&
-            !state.importingAttachments &&
-            !state.configurationChanging &&
-            (state.draft.isNotBlank() || state.attachments.isNotEmpty())
+    val canSend = canSendDraft(state)
     val listening = voiceState is VoiceInputState.Listening
     val finishing = voiceState is VoiceInputState.Finishing
     val swipeThreshold = with(androidx.compose.ui.platform.LocalDensity.current) { 16.dp.toPx() }

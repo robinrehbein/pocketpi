@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
@@ -25,6 +26,7 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -43,6 +45,8 @@ internal fun SessionListRow(
     childrenExpanded: Boolean = true,
     onToggleChildren: (() -> Unit)? = null,
     swipe: Pair<SwipeAction, SwipeAction> = SwipeAction.CLOSE to SwipeAction.RENAME,
+    /** The chat beside the list in the two-pane layout shows this session. */
+    selected: Boolean = false,
 ) {
     fun available(action: SwipeAction): SwipeAction =
         when (action) {
@@ -112,7 +116,16 @@ internal fun SessionListRow(
             Row(
                 modifier =
                     Modifier.fillMaxWidth()
+                        .then(
+                            if (selected)
+                                Modifier.background(
+                                    MaterialTheme.colorScheme.secondaryContainer,
+                                    RoundedCornerShape(16.dp),
+                                )
+                            else Modifier
+                        )
                         .semantics {
+                            if (selected) this.selected = true
                             contentDescription = rowDescription
                             if (item.continuesAsCopy) stateDescription = copyExplanation
                             customActions = buildList {
