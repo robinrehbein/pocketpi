@@ -129,7 +129,8 @@ internal fun RemoteScreen(
     val listPane = LocalListPane.current?.takeIf { key is RemoteNavKey.Sessions }
     val detailPane = LocalDetailPane.current && key is RemoteNavKey.Chat
     val sideInspector = key is RemoteNavKey.Chat && paneLayout.inspector != InspectorMode.OVERLAY
-    val hardwareKeyboard = hardwareKeyboardAttached()
+    // Hardware Enter and Ctrl+Enter only send in the two-pane layout; phones keep Enter as a newline.
+    val hardwareKeyboard = LocalHardwareKeyboard.current && paneLayout.twoPane
     var sessionQuery by rememberSaveable(key) { mutableStateOf("") }
     var collapsedSessionIds by rememberSaveable(key) { mutableStateOf(arrayListOf<String>()) }
     val collapsedIds = collapsedSessionIds.toSet()

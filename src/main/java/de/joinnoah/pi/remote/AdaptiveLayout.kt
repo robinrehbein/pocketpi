@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import android.content.res.Configuration
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -137,6 +138,9 @@ internal data class ListPane(val selectedSessionId: String?)
 
 internal val LocalListPane = staticCompositionLocalOf<ListPane?> { null }
 
+/** A hardware keyboard is attached; read once by [RemoteNavigation] and passed down. */
+internal val LocalHardwareKeyboard = staticCompositionLocalOf { false }
+
 /** True around the chat while it is the right pane of the two-pane layout. */
 internal val LocalDetailPane = staticCompositionLocalOf { false }
 
@@ -186,6 +190,8 @@ private data class ListDetailSceneKey(val routeId: String, val projectId: String
 internal class ListDetailSceneStrategy(
     private val layout: PaneLayout,
     private val state: TwoPaneState,
+    /** A new strategy per value, so the scene and its back preview follow the list. */
+    private val listCollapsed: Boolean = state.listCollapsed,
 ) : SceneStrategy<NavKey> {
     override fun SceneStrategyScope<NavKey>.calculateScene(
         entries: List<NavEntry<NavKey>>,
@@ -193,13 +199,19 @@ internal class ListDetailSceneStrategy(
         if (!layout.twoPane) return null
         val panes = listDetailPanes(entries.map { it.metadata[NAV_KEY_METADATA] }) ?: return null
         val sessions = entries[panes.list].metadata[NAV_KEY_METADATA] as RemoteNavKey.Sessions
+        val detail = panes.detail?.let(entries::get)
+        val collapsed = detail != null && listCollapsed
         return ListDetailScene(
             key = ListDetailSceneKey(sessions.routeId, sessions.projectId),
             list = entries[panes.list],
-            detail = panes.detail?.let(entries::get),
-            previousEntries = entries.dropLast(1),
+            detail = detail,
+            // Back with the list collapsed only expands it (see twoPaneBackStep): the chat stays.
+            // Navigation 3 can only preview a shorter stack, so this state offers no predictive
+            // preview at all; the scene's own back handler expands the list instead.
+            previousEntries = if (collapsed) emptyList() else entries.dropLast(1),
             layout = layout,
             state = state,
+            collapsed = collapsed,
         )
     }
 }
@@ -211,16 +223,20 @@ private data class ListDetailScene(
     override val previousEntries: List<NavEntry<NavKey>>,
     private val layout: PaneLayout,
     private val state: TwoPaneState,
+    private val collapsed: Boolean,
 ) : Scene<NavKey> {
-    override val entries: List<NavEntry<NavKey>> = listOfNotNull(list, detail)
+    override val entries: List<NavEntry<NavKey>> = if (collapsed) listOfNotNull(detail) else listOfNotNull(list, detail)
 
     private val selectedSessionId =
         (detail?.metadata?.get(NAV_KEY_METADATA) as? RemoteNavKey.Chat)?.sessionId
 
     override val content: @Composable () -> Unit = {
+        // Registered before the chat's own handlers, so an open tool detail or diff still closes
+        // first; without a predictive preview (see previousEntries).
+        BackHandler(enabled = collapsed) { state.listCollapsed = false }
         Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             // Only a shown chat can take the list's room; without one the list is all there is.
-            if (detail == null || !state.listCollapsed) {
+            if (!collapsed) {
                 Box(Modifier.width(layout.listWidth).fillMaxHeight().testTag("sessionListPane")) {
                     CompositionLocalProvider(LocalListPane provides ListPane(selectedSessionId)) {
                         list.Content()

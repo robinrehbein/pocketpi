@@ -139,4 +139,33 @@ class AdaptiveLayoutTest {
         assertFalse(state.listCollapsed)
         assertEquals(1, state.searchRequests)
     }
+
+    @Test
+    fun backPreviewWithACollapsedListKeepsTheChat() {
+        val keys = RemoteSelection("host", "project", "s1").keys()
+        val entries =
+            keys.map { key ->
+                androidx.navigation3.runtime.NavEntry<androidx.navigation3.runtime.NavKey>(
+                    key,
+                    key.toString(),
+                    if (key is RemoteNavKey.Sessions || key is RemoteNavKey.Chat) navKeyMetadata(key) else emptyMap(),
+                ) {}
+            }
+        fun scene(collapsed: Boolean) =
+            with(ListDetailSceneStrategy(paneLayout(900.dp), TwoPaneState(), collapsed)) {
+                androidx.navigation3.scene.SceneStrategyScope<androidx.navigation3.runtime.NavKey>().calculateScene(entries)
+            }!!
+        // Collapsed: no preview of a popped chat; the scene's back handler expands the list.
+        assertEquals(emptyList<Any>(), scene(collapsed = true).previousEntries)
+        assertEquals(listOf(entries[3]), scene(collapsed = true).entries)
+        assertEquals(entries.dropLast(1), scene(collapsed = false).previousEntries)
+        assertEquals(entries.takeLast(2), scene(collapsed = false).entries)
+        // Without a chat there is nothing to collapse: back leaves the sessions as usual.
+        val sessionsOnly =
+            with(ListDetailSceneStrategy(paneLayout(900.dp), TwoPaneState(), true)) {
+                androidx.navigation3.scene.SceneStrategyScope<androidx.navigation3.runtime.NavKey>()
+                    .calculateScene(entries.dropLast(1))
+            }!!
+        assertEquals(entries.dropLast(2), sessionsOnly.previousEntries)
+    }
 }

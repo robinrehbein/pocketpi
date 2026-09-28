@@ -14,10 +14,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusTarget
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
@@ -26,6 +22,8 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.ViewCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
@@ -478,38 +476,54 @@ internal fun RemoteNavigation(
         val twoPane = rememberSaveable(saver = TwoPaneState.Saver) { TwoPaneState() }
         val hardwareKeyboard = hardwareKeyboardAttached()
         val shortcuts = layout.twoPane && hardwareKeyboard
-        val rootFocus = remember { FocusRequester() }
-        LaunchedEffect(shortcuts) { if (shortcuts) runCatching { rootFocus.requestFocus() } }
+        val collapsed = twoPane.listCollapsed
         val sceneStrategies =
-            remember(layout, twoPane) {
+            remember(layout, twoPane, collapsed) {
                 if (layout.twoPane)
-                    listOf<SceneStrategy<NavKey>>(ListDetailSceneStrategy(layout, twoPane), SinglePaneSceneStrategy())
+                    listOf<SceneStrategy<NavKey>>(
+                        ListDetailSceneStrategy(layout, twoPane, collapsed),
+                        SinglePaneSceneStrategy(),
+                    )
                 else listOf<SceneStrategy<NavKey>>(SinglePaneSceneStrategy())
+            }
+        // Only a change of layout bucket rebuilds this; resize ticks within one keep it.
+        val onBack =
+            remember(layout, twoPane, navigator, stack) {
+                {
+                    when (twoPaneBackStep(layout, twoPane.listCollapsed, stack.lastOrNull())) {
+                        BackStep.EXPAND_LIST -> twoPane.listCollapsed = false
+                        BackStep.NAVIGATE -> navigator.back()
+                    }
+                }
+            }
+        // With nothing focused, Compose sees no key events at all; the window then reports them
+        // as unhandled. Shortcuts run from there without moving focus, so TalkBack's focus stays
+        // where it is, and an open dialog (its own window) keeps every key to itself.
+        val view = LocalView.current
+        if (shortcuts)
+            DisposableEffect(view, navigator, twoPane) {
+                val listener =
+                    ViewCompat.OnUnhandledKeyEventListenerCompat { _, event ->
+                        navigator.shortcut(KeyEvent(event), twoPane)
+                    }
+                ViewCompat.addOnUnhandledKeyEventListener(view, listener)
+                onDispose { ViewCompat.removeOnUnhandledKeyEventListener(view, listener) }
             }
         CompositionLocalProvider(
             LocalPaneLayout provides layout,
             LocalTwoPane provides twoPane.takeIf { layout.twoPane },
+            LocalHardwareKeyboard provides hardwareKeyboard,
         ) {
             Box(
-                if (shortcuts)
-                    Modifier.fillMaxSize()
-                        .onPreviewKeyEvent { navigator.shortcut(it, twoPane) }
-                        // Key events only reach a focused node: keep this one focused whenever
-                        // nothing inside it is, so the shortcuts work without tapping first.
-                        .onFocusChanged { if (!it.hasFocus) runCatching { rootFocus.requestFocus() } }
-                        .focusRequester(rootFocus)
-                        .focusTarget()
+                // While something in the layout has focus (the composer, the search field), the
+                // shortcuts run here, before that field sees the keys.
+                if (shortcuts) Modifier.fillMaxSize().onPreviewKeyEvent { navigator.shortcut(it, twoPane) }
                 else Modifier.fillMaxSize()
             ) {
                 RemoteNavDisplay(
                     stack,
                     navigator,
-                    onBack = {
-                        when (twoPaneBackStep(layout, twoPane.listCollapsed, stack.lastOrNull())) {
-                            BackStep.EXPAND_LIST -> twoPane.listCollapsed = false
-                            BackStep.NAVIGATE -> navigator.back()
-                        }
-                    },
+                    onBack,
                     sceneStrategies,
                     repository,
                     settings,

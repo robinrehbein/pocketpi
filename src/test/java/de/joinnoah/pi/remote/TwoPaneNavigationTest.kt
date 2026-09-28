@@ -15,6 +15,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.isSelected
@@ -209,6 +211,24 @@ class TwoPaneNavigationTest {
 
     @Test
     @Config(qualifiers = "w900dp-h1200dp")
+    fun collapsedBackClosesToolFirstThenExpandsThenLeavesTheChat() {
+        render()
+        compose.onNodeWithTag("toggleSessionList").performClick()
+        compose.waitForIdle()
+        openTool()
+        back()
+        compose.onNodeWithTag("toolDetail").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        assertChatShown()
+        back()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        assertChatShown()
+        back()
+        compose.onNodeWithTag("chatPlaceholder").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
     fun belowTheInspectorWidthToolDetailsCoverTheChatPane() {
         render()
         openTool()
@@ -365,5 +385,79 @@ class TwoPaneNavigationTest {
         compose.waitForIdle()
         assertEquals(count, repository.activations.size)
         assertTrue(repository.activations.none { it.first.sessionId == "s2" })
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun phoneWithHardwareKeyboardKeepsEnterAsANewline() {
+        render(hardwareKeyboard = true)
+        focusComposerAndType("hello")
+        compose.onNodeWithTag("composerField").performKeyInput { pressKey(Key.Enter) }
+        compose.waitForIdle()
+        assertEquals(0, repository.prompts)
+        assertEquals("hello\n", repository.state.value.draft)
+        // Ctrl+Enter does not send on a phone either.
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.Enter) } }
+        compose.waitForIdle()
+        assertEquals(0, repository.prompts)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun anOpenDialogKeepsTheShortcutsFromTheScreenBehind() {
+        repository.state.value =
+            repository.state.value.copy(
+                session = buildJsonObject {
+                    put("id", "s1")
+                    put("title", "First session")
+                    put("status", "idle")
+                    put("origin", "tui")
+                }
+            )
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("tuiInfo").performClick()
+        compose.waitForIdle()
+        val close = label(R.string.remote_tui_info_close)
+        compose.onNodeWithText(close).assertIsDisplayed()
+        val count = repository.activations.size
+        compose.onNodeWithText(close).performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.DirectionDown) } }
+        compose.waitForIdle()
+        assertEquals(count, repository.activations.size)
+        compose.onNodeWithText(close).assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun shortcutsNeverTakeFocusAlsoWithTouchExploration() {
+        val accessibility =
+            compose.activity.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+        org.robolectric.Shadows.shadowOf(accessibility).setTouchExplorationEnabled(true)
+        render(hardwareKeyboard = true)
+        compose.onNode(isFocused()).assertDoesNotExist()
+        // Leaving the composer does not pull focus back to the layout either.
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        compose.runOnUiThread { compose.activity.currentFocus?.clearFocus() }
+        compose.onNodeWithText("Second session").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionSearch").assertIsNotFocused()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun withNothingFocusedTheWindowStillRunsTheShortcuts() {
+        render(hardwareKeyboard = true)
+        compose.onNode(isFocused()).assertDoesNotExist()
+        val down = android.view.KeyEvent(0, 0, android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_DOWN, 0, android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_CTRL_LEFT_ON)
+        // Through the window's input pipeline, which reports keys nothing handled to the
+        // unhandled-key listeners, as a real Book Cover Keyboard press does.
+        compose.runOnUiThread {
+            val decor = compose.activity.window.decorView
+            val root = android.view.View::class.java.getMethod("getViewRootImpl").invoke(decor)!!
+            root.javaClass.getMethod("dispatchInputEvent", android.view.InputEvent::class.java).invoke(root, down)
+        }
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        compose.waitForIdle()
+        assertEquals(RemoteSelection("host", "project", "s2"), repository.activations.last().first)
     }
 }
