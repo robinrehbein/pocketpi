@@ -144,19 +144,23 @@ internal class RemoteNavigator(
             val canonical = repository.activate(key.selection(), mode)
             if (current != request) return@launch
             val chat = canonical.keys().lastOrNull() as? RemoteNavKey.Chat
-            // The restored chat's own session is gone (offline, or otherwise dropped by the host)
-            // and it had a parent stacked beneath it: land on that still-known parent, actually
-            // re-activated through the repository so its own selection and loaded state match,
-            // instead of dropping the whole stack to the sessions list underneath it.
+            // The restored chat's own session is gone (offline, or otherwise dropped by the host).
+            // Walk the stacked ancestors closest first, actually re-activating each through the
+            // repository directly (never through this function, which would reset invalidate()'s
+            // request and race a later navigation) so its own selection and loaded state match,
+            // and land on the first one that is still live. An ancestor that is itself gone is
+            // skipped in favor of the next one further out; only when none of them resolve does
+            // the whole stack collapse to the sessions list underneath it.
             if (mode == ActivationMode.RESTORE && chat == null && key is RemoteNavKey.Chat && topKey() == key) {
                 val ancestors = chatsBeneathTop()
-                val parentChat = ancestors.lastOrNull()
-                if (parentChat != null && parentChat.selection().keys().dropLast(1) == canonical.keys()) {
-                    setStack(sessionKeys(parentChat) + stacked(ancestors), keepSettings = true)
-                    val restored = repository.activate(parentChat.selection(), ActivationMode.RESTORE)
+                for (index in ancestors.indices.reversed()) {
+                    val candidate = ancestors[index]
+                    val restored = repository.activate(candidate.selection(), ActivationMode.RESTORE)
                     if (current != request) return@launch
-                    if (restored != parentChat.selection()) replace(restored)
-                    return@launch
+                    if (restored == candidate.selection()) {
+                        setStack(sessionKeys(candidate) + stacked(ancestors.subList(0, index + 1)), keepSettings = true)
+                        return@launch
+                    }
                 }
             }
             replace(canonical)
