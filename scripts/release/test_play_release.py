@@ -13,7 +13,7 @@ play_release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(play_release)
 
 
-def service_with_snapshot(version=22):
+def service_with_snapshot(version=1):
     service = MagicMock()
     edits = service.edits.return_value
     edits.insert.return_value.execute.return_value = {"id": "edit-1"}
@@ -31,6 +31,23 @@ def service_with_snapshot(version=22):
 
 
 class PlayReleaseTests(unittest.TestCase):
+    def test_new_play_app_uses_first_version_code(self):
+        self.assertEqual(play_release.PACKAGE_NAME, "de.robinrehbein.pocketpi")
+        service = service_with_snapshot()
+        edits = service.edits.return_value
+        edits.tracks.return_value.list.return_value.execute.return_value = {
+            "tracks": [
+                {"track": "qa", "releases": []},
+                {"track": "closed-alpha-id", "releases": []},
+            ]
+        }
+        edits.bundles.return_value.list.return_value.execute.return_value = {"bundles": []}
+        edits.apks.return_value.list.return_value.execute.return_value = {"apks": []}
+        self.assertEqual(play_release.prepare(service, "closed-alpha-id"), 1)
+        edits.tracks.return_value.list.assert_called_once_with(
+            packageName="de.robinrehbein.pocketpi", editId="edit-1"
+        )
+
     def test_closed_track_requires_exact_custom_id(self):
         invalid = (
             "production", "wear:production", "automotive:production", "tv:production",
@@ -65,18 +82,20 @@ class PlayReleaseTests(unittest.TestCase):
         edits.insert.return_value.execute.side_effect = [{"id": "edit-1"}, {"id": "edit-2"}]
         first = {
             "tracks": [
-                {"track": "qa", "releases": [{"versionCodes": ["22"]}]},
+                {"track": "qa", "releases": []},
                 {"track": "closed-alpha-id", "releases": []},
             ]
         }
         verified = {
             "tracks": [
-                {"track": "qa", "releases": [{"versionCodes": ["23"], "status": "completed"}]},
-                {"track": "closed-alpha-id", "releases": [{"versionCodes": ["23"], "status": "completed"}]},
+                {"track": "qa", "releases": [{"versionCodes": ["1"], "status": "completed"}]},
+                {"track": "closed-alpha-id", "releases": [{"versionCodes": ["1"], "status": "completed"}]},
             ]
         }
         edits.tracks.return_value.list.return_value.execute.side_effect = [first, verified]
-        edits.bundles.return_value.upload.return_value.execute.return_value = {"versionCode": 23}
+        edits.bundles.return_value.list.return_value.execute.return_value = {"bundles": []}
+        edits.bundles.return_value.upload.return_value.execute.return_value = {"versionCode": 1}
+        edits.apks.return_value.list.return_value.execute.return_value = {"apks": []}
         media = types.ModuleType("googleapiclient.http")
         media.MediaFileUpload = lambda *args, **kwargs: object()
         with tempfile.TemporaryDirectory() as directory:
@@ -84,7 +103,7 @@ class PlayReleaseTests(unittest.TestCase):
             bundle.write_bytes(b"signed-bundle-placeholder")
             with patch.dict(sys.modules, {"googleapiclient": types.ModuleType("googleapiclient"),
                                           "googleapiclient.http": media}):
-                play_release.publish(service, "closed-alpha-id", 23, bundle)
+                play_release.publish(service, "closed-alpha-id", 1, bundle)
         self.assertEqual(edits.tracks.return_value.update.call_count, 2)
         edits.commit.assert_called_once_with(
             packageName=play_release.PACKAGE_NAME,
@@ -93,7 +112,7 @@ class PlayReleaseTests(unittest.TestCase):
         )
 
     def test_version_collision_prevents_upload_and_commit(self):
-        service = service_with_snapshot(version=23)
+        service = service_with_snapshot(version=2)
         media = types.ModuleType("googleapiclient.http")
         media.MediaFileUpload = lambda *args, **kwargs: object()
         with tempfile.TemporaryDirectory() as directory:
@@ -102,7 +121,7 @@ class PlayReleaseTests(unittest.TestCase):
             with patch.dict(sys.modules, {"googleapiclient": types.ModuleType("googleapiclient"),
                                           "googleapiclient.http": media}):
                 with self.assertRaisesRegex(ValueError, "used since"):
-                    play_release.publish(service, "closed-alpha-id", 23, bundle)
+                    play_release.publish(service, "closed-alpha-id", 2, bundle)
         edits = service.edits.return_value
         edits.bundles.return_value.upload.assert_not_called()
         edits.commit.assert_not_called()

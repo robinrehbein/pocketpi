@@ -48,8 +48,8 @@ abstract class ValidateUploadKey : DefaultTask() {
         val fingerprint = MessageDigest.getInstance("SHA-256")
             .digest(store.getCertificate(keyAlias.get()).encoded)
             .joinToString(":") { "%02X".format(it) }
-        check(fingerprint == "06:0C:E8:05:BB:E7:36:AF:A7:30:F3:DF:F3:05:01:2A:62:2A:88:6A:EE:8E:E1:95:47:2D:87:1B:C9:B7:04:15") {
-            "PocketPi upload certificate does not match the existing Play upload key"
+        check(fingerprint == "E5:0A:EE:1E:63:41:FF:AE:CD:1E:FE:AE:0B:25:B3:64:B5:80:B2:01:1B:E4:3C:06:2F:0A:23:54:1D:72:83:B5") {
+            "PocketPi upload certificate does not match the new Play upload key"
         }
     }
 }
@@ -100,7 +100,7 @@ val uploadKeyPassword =
     remoteProperty("POCKETPI_UPLOAD_KEY_PASSWORD")
 val validateUploadKey = tasks.register<ValidateUploadKey>("validateUploadKey") {
     group = "verification"
-    description = "Checks the release key and its existing Play upload certificate."
+    description = "Checks the release key and its new Play upload certificate."
     storePath.set(uploadStorePath)
     storePassword.set(uploadStorePassword)
     keyAlias.set(uploadKeyAlias)
@@ -113,11 +113,11 @@ check((requestedVersionCode == null) == (requestedVersionName == null)) {
     "POCKETPI_VERSION_CODE and POCKETPI_VERSION_NAME must be supplied together"
 }
 val releaseVersionCode = requestedVersionCode?.toIntOrNull()
-check(requestedVersionCode == null || (releaseVersionCode != null && releaseVersionCode in 23..2100000000)) {
-    "POCKETPI_VERSION_CODE must be an integer between 23 and 2100000000"
+check(requestedVersionCode == null || (releaseVersionCode != null && releaseVersionCode in 1..2100000000)) {
+    "POCKETPI_VERSION_CODE must be an integer between 1 and 2100000000"
 }
 check(requestedVersionName == null || requestedVersionName.matches(Regex("[0-9]+\\.[0-9]+\\.[0-9]+-ci\\.[0-9]+"))) {
-    "POCKETPI_VERSION_NAME must use the form 0.3.19-ci.23"
+    "POCKETPI_VERSION_NAME must use the form 0.3.19-ci.1"
 }
 
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
@@ -164,8 +164,8 @@ android {
         minSdk = 26
         targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        applicationId = "de.joinnoah.pocketpi"
-        versionCode = releaseVersionCode ?: 22
+        applicationId = "de.robinrehbein.pocketpi"
+        versionCode = releaseVersionCode ?: 1
         versionName = requestedVersionName ?: "0.3.19"
         for (key in listOf("API_KEY", "APP_ID", "PROJECT_ID", "GCM_SENDER_ID")) {
             buildConfigField(

@@ -7,7 +7,7 @@ import re
 import sys
 from pathlib import Path
 
-PACKAGE_NAME = "de.joinnoah.pocketpi"
+PACKAGE_NAME = "de.robinrehbein.pocketpi"
 INTERNAL_TRACK = "qa"
 MAX_VERSION_CODE = 2_100_000_000
 RESERVED_TRACKS = frozenset({INTERNAL_TRACK, "production", "beta", "alpha", "internal"})
@@ -35,7 +35,7 @@ def closed_track():
 
 
 def release_version_codes(tracks, bundles, apks):
-    codes = [22]
+    codes = [0]
     for track in tracks:
         for release in track.get("releases", []):
             codes.extend(int(value) for value in release.get("versionCodes", []))
@@ -94,7 +94,7 @@ def publish(service, closed, version, bundle):
 
     if not bundle.is_file() or bundle.stat().st_size == 0:
         raise ValueError("Signed AAB is missing or empty")
-    if version < 23 or version > MAX_VERSION_CODE:
+    if version < 1 or version > MAX_VERSION_CODE:
         raise ValueError("Invalid versionCode")
     edit_id = new_edit(service)
     committed = False
