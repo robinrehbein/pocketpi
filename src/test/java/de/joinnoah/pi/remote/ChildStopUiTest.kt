@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import android.content.res.Configuration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -7,11 +8,14 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import java.util.Locale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -20,9 +24,10 @@ class ChildStopUiTest {
     @get:Rule val compose = createComposeRule()
 
     private var aborts = 0
+    private var questionAborts = 0
     private var childStops = 0
 
-    private fun render(child: Boolean) {
+    private fun render(child: Boolean, question: Boolean = false) {
         val session = Wire.objectOf("id" to "child", "origin" to "rpc", "status" to "running")
         val state =
             RemoteState(
@@ -31,8 +36,11 @@ class ChildStopUiTest {
                 session =
                     if (child) JsonObject(session + ("parentSessionId" to JsonPrimitive("parent")))
                     else session,
-                status = "running",
+                status = if (question) "waiting" else "running",
                 draft = "Check the tests",
+                questions =
+                    if (question) listOf(Wire.objectOf("id" to "q1", "kind" to "plan", "plan" to "Step one"))
+                    else emptyList(),
                 capabilities = setOf(SUBAGENT_CONTROL_CAPABILITY, STEER_CAPABILITY, FOLLOW_UP_CAPABILITY),
                 // A steer met a child that is not running: the composer offers a resume.
                 childControls = mapOf("child" to ChildControl(ChildControlPhase.NOT_RUNNING)),
@@ -46,6 +54,7 @@ class ChildStopUiTest {
                     onStop = { aborts++ },
                     onRemoveQuote = {},
                     onStopChild = { childStops++ },
+                    onAbort = { questionAborts++ },
                 )
             }
         }
@@ -66,5 +75,36 @@ class ChildStopUiTest {
         compose.onNodeWithTag("stopRun").performClick()
         assertEquals(1, aborts)
         assertEquals(0, childStops)
+    }
+
+    @Test
+    fun questionAbortInAChildAsksBeforeStoppingThroughTheParent() {
+        render(child = true, question = true)
+        compose.onNodeWithTag("abortRun").performClick()
+        compose.onNodeWithTag("confirmChildStop").assertIsDisplayed().performClick()
+        assertEquals(0, questionAborts)
+        assertEquals(0, aborts)
+        assertEquals(1, childStops)
+    }
+
+    @Test
+    fun questionAbortOutsideAChildStillAborts() {
+        render(child = false, question = true)
+        compose.onNodeWithTag("abortRun").performClick()
+        compose.onNodeWithTag("confirmChildStop").assertDoesNotExist()
+        assertEquals(1, questionAborts)
+        assertEquals(0, childStops)
+    }
+
+    @Test
+    fun parentOfflineStopNamesTheWayOut() {
+        val context = RuntimeEnvironment.getApplication()
+        val english = context.getString(R.string.remote_child_stop_parent_offline)
+        assertTrue(english, english.contains("subagent strip in the parent chat"))
+        val german =
+            context.createConfigurationContext(
+                Configuration(context.resources.configuration).apply { setLocale(Locale.GERMAN) }
+            ).getString(R.string.remote_child_stop_parent_offline)
+        assertTrue(german, german.contains("Subagenten-Leiste des übergeordneten Chats"))
     }
 }

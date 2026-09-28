@@ -94,8 +94,34 @@ internal fun ChatComposer(
     focusRequester: FocusRequester? = null,
 ) {
     val predictions = LocalPromptPredictions.current
+    val childControls = childControlsAvailable(state)
+    var confirmChildStop by remember(state.selection.sessionId) { mutableStateOf(false) }
+    // In a child the host can stop, Stop goes through the parent's subagent manager after a
+    // confirmation, also while the composer offers a resume or asks a question; elsewhere it
+    // aborts the run as before.
+    if (confirmChildStop)
+        AlertDialog(
+            onDismissRequest = { confirmChildStop = false },
+            title = { Text(stringResource(R.string.remote_child_stop_title)) },
+            text = { Text(stringResource(R.string.remote_child_stop_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmChildStop = false
+                        onStopChild()
+                    },
+                    modifier = Modifier.testTag("confirmChildStop"),
+                ) { Text(stringResource(R.string.remote_child_stop_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmChildStop = false }) {
+                    Text(stringResource(R.string.remote_child_stop_dismiss))
+                }
+            },
+        )
     if (state.questions.isNotEmpty()) {
-        QuestionComposer(state, onAbort) { questionId, answer ->
+        val abort: () -> Unit = if (childControls) ({ confirmChildStop = true }) else onAbort
+        QuestionComposer(state, abort) { questionId, answer ->
             val route = state.selection.routeId
             val session = state.selection.sessionId
             if (route != null && session != null && isPlanApproval(answer))
@@ -123,7 +149,6 @@ internal fun ChatComposer(
         else -> BusyComposerAction.FollowUp
     }
     val hasDraft = state.draft.isNotBlank() || state.attachments.isNotEmpty()
-    val childControls = childControlsAvailable(state)
     val childResume = offersChildResume(state)
     val control = childControl(state)
     val canQueue = state.connected && !state.loading && !state.sending &&
@@ -135,31 +160,8 @@ internal fun ChatComposer(
     val canResumeChild = childResume && state.connected && !state.loading && !state.sending &&
         !childBusy && state.draft.isNotBlank() && state.attachments.isEmpty() && state.quote == null &&
         !state.draft.trimStart().startsWith("/")
-    var confirmChildStop by remember(state.selection.sessionId) { mutableStateOf(false) }
-    // In a child the host can stop, Stop goes through the parent's subagent manager after a
-    // confirmation, also while the composer offers a resume; elsewhere it aborts the run as before.
     val stop: () -> Unit = if (childControls) ({ confirmChildStop = true }) else onStop
     val send: () -> Unit = if (childResume) onResumeChild else onSend
-    if (confirmChildStop)
-        AlertDialog(
-            onDismissRequest = { confirmChildStop = false },
-            title = { Text(stringResource(R.string.remote_child_stop_title)) },
-            text = { Text(stringResource(R.string.remote_child_stop_body)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        confirmChildStop = false
-                        onStopChild()
-                    },
-                    modifier = Modifier.testTag("confirmChildStop"),
-                ) { Text(stringResource(R.string.remote_child_stop_confirm)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmChildStop = false }) {
-                    Text(stringResource(R.string.remote_child_stop_dismiss))
-                }
-            },
-        )
     val showBusyAction = busyAction != null && hasDraft
     val voiceInput = rememberVoiceInputBinding(state.draft, onDraft, voiceEngine)
     // The draft text stays the source of truth; only the selection is local, so an accepted

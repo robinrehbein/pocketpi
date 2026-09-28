@@ -230,6 +230,9 @@
     <string name="remote_child_uncertain">The outcome is unknown. Check the session before you try again.</string>
     <string name="remote_child_unsupported">Reload the pi remote extension on the Mac to control subagents.</string>
     <string name="remote_child_parent_offline">The parent session is offline.</string>
+    <string name="remote_child_stop_parent_offline">The parent session is offline. Once it is back, you can stop this run from the subagent strip in the parent chat.</string>
+    <string name="remote_child_stop_not_running">Nothing was stopped: the subagent is no longer running.</string>
+    <string name="remote_child_stop_unavailable">Nothing was stopped: the parent session can no longer stop this subagent. Stop now ends only this run.</string>
     <string name="remote_child_stopped_run_only">Stopped this run only. The parent\'s pi remote extension is too old to record your stop, so the parent may restart the subagent. Reload the extension on the Mac.</string>
     <string name="remote_child_quote_unsupported">Quotes cannot be sent to a subagent. Remove the quote to resume it.</string>
     <string name="remote_child_command_unsupported">Commands cannot resume a subagent. Send a plain message instead.</string>

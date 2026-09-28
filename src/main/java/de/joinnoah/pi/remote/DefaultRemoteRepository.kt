@@ -2796,6 +2796,20 @@ class DefaultRemoteRepository(
 
     override fun stopChild() {
         val current = state.value
+        // The confirmation can outlive what it asked about: the child went idle, or its parent
+        // turned out too old, while the dialog was open. Say why nothing is stopped.
+        if (current.connected && !current.loading && isChildSession(current)) {
+            val notice =
+                when {
+                    !childControlsAvailable(current) -> R.string.remote_child_stop_unavailable
+                    current.status !in setOf("running", "waiting") -> R.string.remote_child_stop_not_running
+                    else -> null
+                }
+            if (notice != null) {
+                reportError(notice)
+                return
+            }
+        }
         if (!canControlChild(current) || current.status !in setOf("running", "waiting")) return
         val sessionId = checkNotNull(current.selection.sessionId)
         val previous = childControl(current)
@@ -2838,7 +2852,7 @@ class DefaultRemoteRepository(
                         // A plain abort would stop the run while the parent's manager, which is
                         // offline, may still restart the child: say so and leave the state.
                         "offline" -> {
-                            if (epoch == selectionEpoch) reportError(childControlError(e.code))
+                            if (epoch == selectionEpoch) reportError(R.string.remote_child_stop_parent_offline)
                             previous
                         }
                         // An old parent cannot stop the child; the child's own abort still stops
