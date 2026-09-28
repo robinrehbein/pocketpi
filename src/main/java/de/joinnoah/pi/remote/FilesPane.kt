@@ -357,12 +357,15 @@ private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Un
     val language = remember(file.path) { languageFor(file.path) }
     val colors = syntaxColors()
     val plain = remember(lines) { lines.map { AnnotatedString(it.take(MAX_CODE_LINE_CHARS)) } }
-    // Highlighting a large file takes a moment; the plain text shows meanwhile.
+    // Highlighting a large file takes a moment; the plain text shows meanwhile. The result names
+    // the lines it belongs to, so a newer page never shows an older page's highlighting.
     val highlighted by
-        produceState<List<AnnotatedString>?>(null, lines, language, colors) {
-            value = if (language == null) null else withContext(Dispatchers.Default) { highlightLines(lines, language, colors) }
+        produceState<Pair<List<String>, List<AnnotatedString>>?>(null, lines, language, colors) {
+            value =
+                if (language == null) null
+                else lines to withContext(Dispatchers.Default) { highlightLines(lines, language, colors) }
         }
-    val shown = highlighted?.takeIf { it.size == lines.size } ?: plain
+    val shown = highlighted?.takeIf { it.first === lines }?.second ?: plain
     val style = monoTextStyle()
     val contentWidth = rememberCodeContentWidth(lines, style)
     val charWidth = rememberMonoCharWidth(style)
