@@ -506,6 +506,20 @@ class ConversationPresentationTest {
     }
 
     @Test
+    fun usageShowsOnlyOnTheLastBubbleOfAMultiPartAssistantMessage() {
+        val usage = Wire.objectOf("input" to 1, "output" to 2, "cacheRead" to 3, "cacheWrite" to 4, "totalTokens" to 10)
+        val parts = JsonArray(listOf(
+            Wire.objectOf("type" to "text", "text" to "First"),
+            Wire.objectOf("type" to "text", "text" to "Second"),
+            Wire.objectOf("type" to "text", "text" to "Third"),
+        ))
+        val multiPart = message("assistant", extra = arrayOf("parts" to parts, "usage" to usage))
+        val bubbles = conversationItems(listOf(multiPart)).filterIsInstance<ConversationItem.Bubble>()
+        assertEquals(listOf("First", "Second", "Third"), bubbles.map { it.text })
+        assertEquals(listOf(null, null, MessageUsage(1, 2, 3, 4, 10, null)), bubbles.map { it.usage })
+    }
+
+    @Test
     fun usageIsIgnoredOffAssistantsAndWhenInvalid() {
         val usage = Wire.objectOf("input" to 1, "output" to 2, "cacheRead" to 3, "cacheWrite" to 4, "totalTokens" to 10)
         val user = conversationItems(listOf(message("u", "user", "hi", "usage" to usage))).single() as ConversationItem.Bubble

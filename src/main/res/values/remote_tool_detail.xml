@@ -32,10 +32,13 @@
     <string name="remote_tool_detail_search_next">Next match</string>
     <string name="remote_tool_detail_copy">Copy output</string>
     <string name="remote_tool_detail_copied">Output copied</string>
+    <string name="remote_tool_detail_copy_truncated">Copied, but the output was too large: only the first part was copied.</string>
     <string name="remote_tool_detail_copy_failed">The output is too large to copy.</string>
     <string name="remote_tool_detail_load_full">Load full output</string>
     <string name="remote_tool_detail_loading">Loading full output: %1$s</string>
     <string name="remote_tool_detail_loading_progress">Loading full output: %1$s of %2$s</string>
+    <string name="remote_tool_detail_loading_started">Loading full output started</string>
+    <string name="remote_tool_detail_loading_progress_percent">Loading full output: %1$d percent</string>
     <string name="remote_tool_detail_cancel_load">Cancel loading</string>
     <string name="remote_tool_detail_retry">Retry</string>
     <string name="remote_tool_detail_failure_unsupported">This host or pi extension cannot send the full output. Reload the pi remote extension or update the host.</string>

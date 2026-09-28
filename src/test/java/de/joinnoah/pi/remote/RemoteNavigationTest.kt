@@ -241,6 +241,22 @@ class RemoteNavigationTest {
     }
 
     @Test
+    fun `restore on an offline child falls back to its live parent chat`() = runTest {
+        val repository = NavigationFakeRepository()
+        val (stack, navigation) = onParent(repository)
+        navigation.openChild(parent, child)
+        runCurrent()
+        // The child's session went offline: the host drops it back to the project's session list.
+        repository.activation = { selection, mode ->
+            if (mode == ActivationMode.RESTORE && selection == child.selection()) RemoteSelection("host", "project")
+            else selection
+        }
+        navigation.restore()
+        runCurrent()
+        assertEquals(base + parent, stack)
+    }
+
+    @Test
     fun `open from the session list drops stacked chats`() = runTest {
         val repository = NavigationFakeRepository()
         val (stack, navigation) = onParent(repository)

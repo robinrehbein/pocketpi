@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -24,6 +25,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -302,30 +304,12 @@ internal fun SessionControls(
         }
     }
     if (showContext) ModalBottomSheet(onDismissRequest = { showContext = false }) {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = 24.dp).navigationBarsPadding(),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(stringResource(R.string.remote_context_title), style = MaterialTheme.typography.titleLarge)
-            if (!state.connected || CONTEXT_CAPABILITY !in state.capabilities ||
-                CONTEXT_CAPABILITY in state.unavailableCapabilities || usage == null) {
-                Text(stringResource(R.string.remote_context_unavailable))
-            } else {
-                Text(stringResource(R.string.remote_context_window, usage.contextWindow))
-                if (usage.usedTokens != null && usage.percent != null) {
-                    Text(stringResource(R.string.remote_context_used, usage.usedTokens, usage.percent.toInt()))
-                    Text(stringResource(R.string.remote_context_remaining,
-                        (usage.contextWindow - usage.usedTokens).coerceAtLeast(0)))
-                } else Text(stringResource(R.string.remote_context_unknown))
-                usage.totals?.let { UsageSummary(it) }
-            }
-            Text(
-                stringResource(R.string.remote_context_estimate),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-        }
+        ContextSheetBody(
+            usage = usage,
+            unavailable =
+                !state.connected || CONTEXT_CAPABILITY !in state.capabilities ||
+                    CONTEXT_CAPABILITY in state.unavailableCapabilities,
+        )
     }
     if (showAdvisor) AdvisorPickerSheet(
         advisor = sessionAdvisor,
@@ -436,6 +420,41 @@ internal fun SessionControls(
                     }
             }
         }
+}
+
+/**
+ * The context usage sheet's content. Scrollable and height-bounded, so a large font scale or a
+ * long usage breakdown never clips against the sheet's edge instead of scrolling.
+ */
+@Composable
+internal fun ContextSheetBody(usage: SessionContextUsage?, unavailable: Boolean) {
+    Column(
+        Modifier.fillMaxWidth()
+            .heightIn(max = 480.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .navigationBarsPadding()
+            .testTag("contextSheet"),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(stringResource(R.string.remote_context_title), style = MaterialTheme.typography.titleLarge)
+        if (unavailable || usage == null) {
+            Text(stringResource(R.string.remote_context_unavailable))
+        } else {
+            Text(stringResource(R.string.remote_context_window, usage.contextWindow))
+            if (usage.usedTokens != null && usage.percent != null) {
+                Text(stringResource(R.string.remote_context_used, usage.usedTokens, usage.percent.toInt()))
+                Text(stringResource(R.string.remote_context_remaining, (usage.contextWindow - usage.usedTokens).coerceAtLeast(0)))
+            } else Text(stringResource(R.string.remote_context_unknown))
+            usage.totals?.let { UsageSummary(it) }
+        }
+        Text(
+            stringResource(R.string.remote_context_estimate),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+    }
 }
 
 @Composable

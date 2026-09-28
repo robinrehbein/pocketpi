@@ -46,9 +46,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -300,6 +302,7 @@ private fun SubagentStripRow(
     val openable = entry.openable && entry.sessionId != null
     Row(
         Modifier.fillMaxWidth()
+            .heightIn(min = 48.dp)
             .then(if (openable) Modifier.clickable(role = Role.Button) { onOpen(entry) } else Modifier)
             .testTag("subagentStripEntry")
             .padding(start = 28.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
@@ -564,7 +567,7 @@ internal fun CompactionBanner(compaction: SessionCompaction?, nowMillis: Long) {
             else -> null
         }
     Surface(
-        modifier = Modifier.fillMaxWidth().testTag("compactionBanner"),
+        modifier = Modifier.fillMaxWidth().testTag("compactionBanner").semantics { liveRegion = LiveRegionMode.Polite },
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,

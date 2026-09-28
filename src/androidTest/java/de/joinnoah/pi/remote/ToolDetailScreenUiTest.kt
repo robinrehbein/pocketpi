@@ -68,10 +68,16 @@ class ToolDetailScreenUiTest {
                 )
             }
         }
+        // Rows are lazy items inside CodeBlock's bounded-height list: scroll each one into view
+        // rather than expecting every row to be composed up front.
+        fun rows(ancestorTag: String) = compose.onNode(hasTestTag("codeBlockRows") and hasAnyAncestor(hasTestTag(ancestorTag)))
+        rows("toolDetailEditBefore-0").performScrollToNode(hasText("old line 200"))
         compose.onNodeWithTag("toolDetailEditBefore-0").assert(hasAnyDescendant(hasText("old line 200")))
         compose.onNodeWithTag("toolDetailEditBefore-0").assert(!hasAnyDescendant(hasText("old line 201")))
         compose.onNodeWithTag("toolDetailArgumentsToggle").performScrollTo().performClick()
+        rows("toolDetailEditBefore-0").performScrollToNode(hasText("old line 400"))
         compose.onNodeWithTag("toolDetailEditBefore-0").assert(hasAnyDescendant(hasText("old line 400")))
+        rows("toolDetailEditAfter-0").performScrollToNode(hasText("new line 400"))
         compose.onNodeWithTag("toolDetailEditAfter-0").assert(hasAnyDescendant(hasText("new line 400")))
     }
 
