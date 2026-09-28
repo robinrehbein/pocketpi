@@ -34,6 +34,31 @@ class ConversationPresentationTest {
     }
 
     @Test
+    fun agentToolCallRendersAsSubagentCardWithChildSession() {
+        val call = Wire.objectOf("type" to "toolCall", "id" to "call", "name" to "Agent", "arguments" to "{}")
+        val assistant = message("assistant", "assistant", "", "parts" to JsonArray(listOf(call)))
+        val progress = Wire.objectOf("mode" to "single", "agents" to JsonArray(listOf(
+            Wire.objectOf("agent" to "explore", "state" to "running", "task" to "Find the router",
+                "sessionId" to "child-1", "activity" to "reading index.ts"),
+        )))
+        val result = message("tool-call", "tool", "Agent completed", "toolCallId" to "call",
+            "toolName" to "Agent", "subagentProgress" to progress, "state" to "complete")
+        val item = conversationItems(listOf(assistant, result)).single() as ConversationItem.Subagent
+        val agent = item.agents.single()
+        assertEquals("explore", agent.name)
+        assertEquals("running", agent.state)
+        assertEquals("Find the router", agent.task)
+        assertEquals("child-1", agent.sessionId)
+        assertEquals("reading index.ts", agent.activity)
+        val streaming = conversationItems(listOf(message("progress", "tool", "", "toolName" to "Agent",
+            "subagentProgress" to progress))).single() as ConversationItem.Subagent
+        assertEquals("child-1", streaming.agents.single().sessionId)
+        val generic = conversationItems(listOf(assistant, message("tool-call", "tool", "Agent failed",
+            "toolCallId" to "call", "toolName" to "Agent"))).single()
+        assertTrue(generic is ConversationItem.Activity)
+    }
+
+    @Test
     fun subagentCallUsesProgressAndKeepsCompletedMarkdownOutput() {
         val call = Wire.objectOf("type" to "toolCall", "id" to "call", "name" to "subagent", "arguments" to "private task")
         val assistant = message("assistant", "assistant", "", "parts" to JsonArray(listOf(call)))
@@ -419,6 +444,17 @@ class ConversationPresentationTest {
         val orphan = conversationItems(listOf(result)).single() as ConversationItem.Subagent
         assertEquals("toolu_subagent_01", orphan.toolCallId)
         assertEquals("msg-tool-subagent-1", orphan.outputMessageId)
+    }
+
+    @Test
+    fun agentCardFixtureRendersAsSubagentCard() {
+        val item = conversationItems(listOf(fixtureMessage("agent-card-progress"))).single() as ConversationItem.Subagent
+        val agent = item.agents.single()
+        assertEquals("explore", agent.name)
+        assertEquals("running", agent.state)
+        assertEquals("019a2f3d-0000-7000-8000-000000000002", agent.sessionId)
+        assertEquals("reading index.ts", agent.activity)
+        assertEquals("toolu_agent_01", item.toolCallId)
     }
 
     @Test

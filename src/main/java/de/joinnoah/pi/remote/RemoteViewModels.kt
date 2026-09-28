@@ -117,6 +117,10 @@ internal open class DestinationViewModel(
 
     fun steer() = active(repository::steer)
 
+    fun stopChild() = active(repository::stopChild)
+
+    fun resumeChild() = active { repository.resumeChild(repository.state.value.draft) }
+
     fun dismissFollowUp(requestId: String) = active { repository.dismissFollowUp(requestId) }
 
     fun abort() = active(repository::abort)
@@ -228,6 +232,18 @@ internal class ChatViewModel(
     }
 
     fun openChanges() = active(repository::openChanges)
+
+    fun refreshJobs() = active(repository::refreshJobs)
+
+    fun openJobs() = active(repository::openJobs)
+
+    fun closeJobs() = repository.closeJobs()
+
+    fun openJob(jobId: String) = active { repository.openJob(jobId) }
+
+    fun closeJob() = repository.closeJob()
+
+    fun stopJob(jobId: String) = active { repository.stopJob(jobId) }
 
     fun closeChanges() = repository.closeChanges()
 

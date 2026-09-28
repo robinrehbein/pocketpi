@@ -97,6 +97,9 @@ class DefaultRemoteRepository(
             STEER_CAPABILITY,
             FOLLOW_UP_CAPABILITY,
             TOOL_OUTPUT_CAPABILITY,
+            BACKGROUND_JOBS_CAPABILITY,
+            // The host advertises subagent control only on this route, never at authentication.
+            SUBAGENT_CONTROL_CAPABILITY,
             PROJECT_OPEN_CAPABILITY,
             SESSION_FORK_CAPABILITY,
             GIT_CAPABILITY,
@@ -809,6 +812,7 @@ class DefaultRemoteRepository(
                     questions = emptyList(),
                     capabilities = emptySet(),
                     unavailableCapabilities = emptySet(),
+                    childControlUnsupported = emptySet(),
                     configuration = null,
                     advisor = null,
                     advisorLoading = false,
@@ -847,6 +851,7 @@ class DefaultRemoteRepository(
         vararg fields: Pair<String, Any?>,
         draft: String? = null,
         requestId: String = Wire.random(),
+        onSent: (() -> Unit)? = null,
     ): JsonObject {
         checkEpoch(epoch)
         check(state.value.connected)
@@ -867,6 +872,8 @@ class DefaultRemoteRepository(
         )
         completions[id] = completion
         try {
+            // Set before sending: a send that throws may still have reached the host.
+            onSent?.invoke()
             transport.send(payload)
             val result =
                 withTimeoutOrNull(30000) { completion.await() }
@@ -917,6 +924,12 @@ class DefaultRemoteRepository(
                 }
                 "event" -> {
                     if (payload.text("kind") == "session.status") updateSessionStatus(payload)
+                    if (payload.text("kind") == "message.upsert" &&
+                        payload.text("sessionId") == state.value.selection.sessionId &&
+                        (payload["message"] as? JsonObject)?.let {
+                            it.optionalText("role") == "tool" && it.optionalText("toolName") in setOf("bash_bg", "bash_kill")
+                        } == true
+                    ) jobsController.refreshSoon()
                     if (payload.text("kind") == "advisor.status") {
                         val sessionId = payload.text("sessionId")
                         if (sessionId == state.value.selection.sessionId) {
@@ -971,7 +984,9 @@ class DefaultRemoteRepository(
                     if (timeline?.event(timelineEvent) == true && !resynchronizing) snapshotAsync()
                     publishTimeline()
                 }
-                "host.event" -> cloneEvent(payload)?.let(::applyCloneUpdate)
+                "host.event" ->
+                    cloneEvent(payload)?.let(::applyCloneUpdate)
+                        ?: jobEvent(payload)?.let(jobsController::onEvent)
                 else -> error("Unknown payload")
             }
         } catch (_: Exception) {
@@ -1047,8 +1062,14 @@ class DefaultRemoteRepository(
         val status = event.text("status")
         require(revision >= 0 && status in setOf("idle", "running", "waiting", "offline"))
         if (revision <= (sessionStatusRevisions[id] ?: -1L)) return
+        val known =
+            sessionStatusOverrides[id]
+                ?: state.value.sessions.firstOrNull { it.optionalText("id") == id }?.optionalText("status")
         sessionStatusRevisions[id] = revision
         sessionStatusOverrides[id] = status
+        if (status != known) dropStaleChildControl(id)
+        // Job events need a watch lease; a status change is the list's hint that jobs changed.
+        if (id == state.value.selection.sessionId) jobsController.refreshSoon()
         if (sessionStatusRevisions.size > 4096) {
             val oldest = sessionStatusRevisions.keys.first()
             sessionStatusRevisions.remove(oldest)
@@ -1098,6 +1119,7 @@ class DefaultRemoteRepository(
 
     private fun publishTimeline() {
         timeline?.let { t ->
+            if (t.status != state.value.status) state.value.selection.sessionId?.let(::dropStaleChildControl)
             update {
                 it.copy(
                     messages = t.messages,
@@ -1163,12 +1185,18 @@ class DefaultRemoteRepository(
             selection.sessionId?.let { drafts[DraftKey(checkNotNull(selection.routeId), it)] }
                 ?: StoredDraft()
         stopToolOutput()
+        val previous = state.value.selection
+        val sameSession = selection.sessionId != null && selection.routeId == previous.routeId &&
+            selection.sessionId == previous.sessionId
+        if (!sameSession) jobsController.stop()
         update {
             it.copy(
                 selection = selection,
                 compaction = null,
                 toolOutput = null,
                 changes = null,
+                // A reconnect keeps the open jobs view; the refresh after it watches again.
+                jobs = it.jobs?.takeIf { jobs -> sameSession && jobs.sessionId == selection.sessionId },
                 host = host,
                 projects = projects,
                 projectChats = cachedProjectChats
@@ -1204,6 +1232,7 @@ class DefaultRemoteRepository(
                 advisorChanging = false,
                 contextLoading = false,
                 unavailableCapabilities = emptySet(),
+                childControlUnsupported = emptySet(),
                 configurationLoading = false,
                 configurationChanging = false,
                 commands = emptyList(),
@@ -1263,6 +1292,7 @@ class DefaultRemoteRepository(
                         questions = emptyList(),
                         capabilities = emptySet(),
                         unavailableCapabilities = emptySet(),
+                        childControlUnsupported = emptySet(),
                         configuration = null,
                         contextUsage = null,
                         advisor = null,
@@ -1709,6 +1739,7 @@ class DefaultRemoteRepository(
                 questions = emptyList(),
                 capabilities = emptySet(),
                 unavailableCapabilities = emptySet(),
+                childControlUnsupported = emptySet(),
                 configuration = null,
                 advisor = null,
                 advisorLoading = false,
@@ -2496,6 +2527,10 @@ class DefaultRemoteRepository(
                 (current.draft.isBlank() && current.attachments.isEmpty())
         )
             return
+        if (queued && isChildSession(current) && current.attachments.isNotEmpty()) {
+            reportError(R.string.remote_child_attachments_unsupported)
+            return
+        }
         val key = currentDraftKey() ?: return
         val projectId = current.selection.projectId ?: return
         val command = commandName(current.draft)
@@ -2662,9 +2697,33 @@ class DefaultRemoteRepository(
                         }
                     persist()
                 }
-                if (epoch == selectionEpoch && storageFailure == null) {
+                if (
+                    queued && (e as? RemoteRequestException)?.code == "not_running" &&
+                        epoch == selectionEpoch
+                ) {
+                    // The child finished: the host did not take the input, so the draft stays
+                    // for a resume and no submission is left to reconcile.
+                    drafts[key]?.let {
+                        drafts[key] =
+                            it.copy(
+                                mutationId = null,
+                                submittedText = null,
+                                submittedQuote = null,
+                                submittedAttachments = emptyList(),
+                            )
+                        persist()
+                    }
+                    setChildControl(key.sessionId, ChildControl(ChildControlPhase.NOT_RUNNING))
+                    update { it.copy(uncertain = false) }
+                } else if (epoch == selectionEpoch && storageFailure == null) {
+                    val childCode =
+                        (e as? RemoteRequestException)?.code?.takeIf {
+                            queued && childControlsAvailable(current) && it in setOf("unsupported", "offline")
+                        }
+                    if (childCode == "unsupported") markChildControlUnsupported(key.sessionId)
                     reportError(
-                        if (current.attachments.isEmpty()) R.string.remote_request_error
+                        if (childCode != null) childControlError(childCode)
+                        else if (current.attachments.isEmpty()) R.string.remote_request_error
                         else if (
                             e.message == "unsupported" &&
                                 current.attachments.any { it.kind == "image" }
@@ -2710,6 +2769,225 @@ class DefaultRemoteRepository(
                 request("session.abort", epoch, "sessionId" to sessionId)
             } catch (_: CancellationException) {} catch (_: Exception) {
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
+            }
+        }
+    }
+
+    /** A status change outdates a reply-bound phase; STOPPING and RESUMING wait for their reply. */
+    private fun dropStaleChildControl(sessionId: String) {
+        val control = state.value.childControls[sessionId] ?: return
+        if (control.phase !in STALE_CHILD_CONTROL_PHASES) return
+        // The agent a resume started still names the next resume; only the outcome goes.
+        setChildControl(sessionId, control.agentId?.let { ChildControl(null, agentId = it) })
+    }
+
+    private fun setChildControl(sessionId: String, control: ChildControl?) = update {
+        it.copy(
+            childControls =
+                if (control == null) it.childControls - sessionId
+                else it.childControls + (sessionId to control)
+        )
+    }
+
+    private fun canControlChild(current: RemoteState): Boolean =
+        current.connected && !current.loading && activeHost?.routeId == current.selection.routeId &&
+            current.selection.sessionId != null && childControlsAvailable(current) &&
+            childControl(current)?.phase !in setOf(ChildControlPhase.STOPPING, ChildControlPhase.RESUMING)
+
+    override fun stopChild() {
+        val current = state.value
+        if (!canControlChild(current) || current.status !in setOf("running", "waiting")) return
+        val sessionId = checkNotNull(current.selection.sessionId)
+        val previous = childControl(current)
+        val epoch = selectionEpoch
+        setChildControl(sessionId, ChildControl(ChildControlPhase.STOPPING, agentId = previous?.agentId))
+        scope.launch {
+            var sent = false
+            val control =
+                try {
+                    val result =
+                        subagentControlResult(
+                            request(
+                                "session.subagent.stop",
+                                epoch,
+                                "sessionId" to sessionId,
+                                onSent = { sent = true },
+                            ),
+                            sessionId,
+                        )
+                    when (result.status) {
+                        "accepted" ->
+                            ChildControl(
+                                ChildControlPhase.STOPPED_BY_YOU,
+                                agentId = result.agentId ?: previous?.agentId,
+                            )
+                        "refused" ->
+                            ChildControl(ChildControlPhase.REFUSED, result.reason, previous?.agentId)
+                        "not_found" -> ChildControl(ChildControlPhase.NOT_FOUND)
+                        else -> uncertainChildControl(previous?.agentId)
+                    }
+                } catch (e: CancellationException) {
+                    setChildControl(
+                        sessionId,
+                        if (sent) ChildControl(ChildControlPhase.UNCERTAIN, agentId = previous?.agentId)
+                        else previous,
+                    )
+                    throw e
+                } catch (e: RemoteRequestException) {
+                    when (e.code) {
+                        // A plain abort would stop the run while the parent's manager, which is
+                        // offline, may still restart the child: say so and leave the state.
+                        "offline" -> {
+                            if (epoch == selectionEpoch) reportError(childControlError(e.code))
+                            previous
+                        }
+                        // An old parent cannot stop the child; the child's own abort still stops
+                        // this run, but the parent may restart the subagent.
+                        "unsupported" -> {
+                            markChildControlUnsupported(sessionId)
+                            val aborted =
+                                try {
+                                    request("session.abort", epoch, "sessionId" to sessionId)
+                                    true
+                                } catch (c: CancellationException) {
+                                    setChildControl(sessionId, previous)
+                                    throw c
+                                } catch (_: Exception) {
+                                    false
+                                }
+                            if (epoch == selectionEpoch)
+                                reportError(
+                                    if (aborted) R.string.remote_child_stopped_run_only
+                                    else childControlError(e.code)
+                                )
+                            previous
+                        }
+                        else -> childControlFailure(e, previous, epoch, sent)
+                    }
+                } catch (e: Exception) {
+                    childControlFailure(e, previous, epoch, sent)
+                }
+            setChildControl(sessionId, control)
+        }
+    }
+
+    override fun resumeChild(message: String) {
+        val current = state.value
+        if (offersChildResume(current)) {
+            val refusal =
+                when {
+                    current.attachments.isNotEmpty() -> R.string.remote_child_attachments_unsupported
+                    current.quote != null -> R.string.remote_child_quote_unsupported
+                    message.trimStart().startsWith("/") -> R.string.remote_child_command_unsupported
+                    message.toByteArray().size > CHILD_RESUME_MAX_BYTES -> R.string.remote_prompt_too_long
+                    else -> null
+                }
+            if (refusal != null) {
+                reportError(refusal)
+                return
+            }
+        }
+        if (
+            !canControlChild(current) || !offersChildResume(current) || current.sending ||
+                message.isBlank() || message.toByteArray().size > CHILD_RESUME_MAX_BYTES ||
+                current.attachments.isNotEmpty() || current.quote != null ||
+                message.trimStart().startsWith("/")
+        )
+            return
+        val sessionId = checkNotNull(current.selection.sessionId)
+        val key = currentDraftKey() ?: return
+        val previous = childControl(current)
+        val epoch = selectionEpoch
+        setChildControl(sessionId, ChildControl(ChildControlPhase.RESUMING, agentId = previous?.agentId))
+        scope.launch {
+            var sent = false
+            val control =
+                try {
+                    val result =
+                        subagentControlResult(
+                            request(
+                                "session.subagent.resume",
+                                epoch,
+                                "sessionId" to sessionId,
+                                "message" to message,
+                                // The agent an earlier resume started; a resume from disk renames it.
+                                *listOfNotNull(previous?.agentId?.let { "agentId" to it }).toTypedArray(),
+                                onSent = { sent = true },
+                            ),
+                            sessionId,
+                        )
+                    when (result.status) {
+                        "accepted" -> {
+                            // Only the sent text leaves the composer; newer typing stays.
+                            val latest = drafts[key]
+                            if (latest != null && latest.text == message) {
+                                drafts[key] = latest.copy(text = "")
+                                persist()
+                                if (epoch == selectionEpoch && currentDraftKey() == key)
+                                    update { it.copy(draft = "") }
+                            }
+                            refreshSessions()
+                            ChildControl(
+                                ChildControlPhase.RESUMED,
+                                agentId = result.agentId ?: previous?.agentId,
+                            )
+                        }
+                        "refused" ->
+                            ChildControl(ChildControlPhase.REFUSED, result.reason, previous?.agentId)
+                        "not_found" -> ChildControl(ChildControlPhase.NOT_FOUND)
+                        else -> uncertainChildControl(previous?.agentId)
+                    }
+                } catch (e: CancellationException) {
+                    setChildControl(
+                        sessionId,
+                        if (sent) ChildControl(ChildControlPhase.UNCERTAIN, agentId = previous?.agentId)
+                        else previous,
+                    )
+                    throw e
+                } catch (e: Exception) {
+                    if ((e as? RemoteRequestException)?.code == "unsupported")
+                        markChildControlUnsupported(sessionId)
+                    childControlFailure(e, previous, epoch, sent)
+                }
+            setChildControl(sessionId, control)
+        }
+    }
+
+    private fun markChildControlUnsupported(sessionId: String) = update {
+        it.copy(childControlUnsupported = it.childControlUnsupported + sessionId)
+    }
+
+    private fun childControlError(code: String?): Int =
+        when (code) {
+            "unsupported" -> R.string.remote_child_unsupported
+            "offline" -> R.string.remote_child_parent_offline
+            else -> R.string.remote_request_error
+        }
+
+    private fun uncertainChildControl(agentId: String? = null): ChildControl {
+        refreshSessions()
+        return ChildControl(ChildControlPhase.UNCERTAIN, agentId = agentId)
+    }
+
+    /**
+     * A stop or resume that failed. A host error code is definite, except `internal`, which the
+     * host also reports for a lost parent reply: the command may have run. Any other failure once
+     * the request left the phone (lost connection, timeout, malformed reply) is uncertain too;
+     * only a failure before sending leaves the previous state.
+     */
+    private fun childControlFailure(
+        e: Exception,
+        previous: ChildControl?,
+        epoch: Long,
+        sent: Boolean,
+    ): ChildControl? {
+        val code = (e as? RemoteRequestException)?.code
+        return when {
+            code == "internal" || (code == null && sent) -> uncertainChildControl(previous?.agentId)
+            code == "not_found" -> ChildControl(ChildControlPhase.NOT_FOUND)
+            else -> {
+                if (epoch == selectionEpoch) reportError(childControlError(code))
+                previous
             }
         }
     }
@@ -3218,6 +3496,63 @@ class DefaultRemoteRepository(
                 "locale" to if (Locale.getDefault().language == "de") "de" else "en",
             )
     }
+
+    // ---- Background jobs (session.background_jobs.v1) -------------------------------------
+
+    private fun requireJobs() {
+        val current = state.value
+        if (!current.connected) throw RemoteRequestException("offline")
+        // An older host closes the connection on a command it does not know.
+        if (!canUseBackgroundJobs(current)) throw RemoteRequestException("unsupported")
+    }
+
+    // Built on first use. Lazy does not make it safe to reach during construction: the delegate
+    // is assigned in declaration order like any other property.
+    private val jobsController by lazy {
+        BackgroundJobsController(
+            scope,
+            object : JobSource {
+                override suspend fun listJobs(sessionId: String): List<BackgroundJob> {
+                    requireJobs()
+                    return parseJobList(
+                        request("session.jobs.list", selectionEpoch, "sessionId" to sessionId),
+                        sessionId,
+                    )
+                }
+
+                override suspend fun watchJob(sessionId: String, jobId: String, since: Long?): JobChunk {
+                    requireJobs()
+                    val fields = listOfNotNull("sessionId" to sessionId, "jobId" to jobId, since?.let { "since" to it })
+                    return parseJobWatch(
+                        request("session.jobs.watch", selectionEpoch, *fields.toTypedArray()),
+                        sessionId,
+                        jobId,
+                        since,
+                    )
+                }
+
+                override suspend fun killJob(sessionId: String, jobId: String) {
+                    requireJobs()
+                    val result = request("session.jobs.kill", selectionEpoch, "sessionId" to sessionId, "jobId" to jobId)
+                    require(result.text("kind") == "accepted" && result.text("sessionId") == sessionId)
+                }
+            },
+            { state.value },
+            ::update,
+        )
+    }
+
+    override fun refreshJobs() = jobsController.refresh()
+
+    override fun openJobs() = jobsController.openList()
+
+    override fun closeJobs() = jobsController.closeList()
+
+    override fun openJob(jobId: String) = jobsController.openJob(jobId)
+
+    override fun closeJob() = jobsController.closeJob()
+
+    override fun stopJob(jobId: String) = jobsController.kill(jobId)
 
     // ---- Git changes (session.git.v1) ----------------------------------------------------
 

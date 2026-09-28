@@ -463,7 +463,8 @@ internal fun RemoteScreen(
                     RENAME_CAPABILITY in state.capabilities &&
                     state.session?.text("origin") in setOf("tui", "rpc") &&
                     state.status != "offline"
-            val hasTuiInfo = state.session?.optionalText("origin") == "tui"
+            val hasTuiInfo =
+                state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
             val headerColor = MaterialTheme.colorScheme.surfaceContainer
             val actionLayout =
                 chatActionLayout(
@@ -1317,6 +1318,8 @@ internal fun RemoteScreen(
                     onSend = model::prompt,
                     onFollowUp = model::followUp,
                     onSteer = model::steer,
+                    onStopChild = model::stopChild,
+                    onResumeChild = model::resumeChild,
                     onDismissFollowUp = model::dismissFollowUp,
                     onStop = model::abort,
                     onRemoveQuote = { model.quote(null) },
@@ -1338,6 +1341,8 @@ internal fun RemoteScreen(
                             model::setThinkingLevel,
                             model::refreshCommands,
                             model::selectCommand,
+                            refreshJobs = { chatModel?.refreshJobs() },
+                            openJobs = chatModel?.let { chat -> chat::openJobs },
                         )
                     },
                     onRemoveAttachment = model::removeAttachment,
@@ -1368,6 +1373,21 @@ internal fun RemoteScreen(
                     Modifier.fillMaxSize(),
                 )
             }
+            state.jobs
+                ?.takeIf {
+                    // Stays open through a reconnect, which clears the capabilities for a moment.
+                    it.listOpen && it.sessionId == state.selection.sessionId && chatModel != null
+                }
+                ?.let { jobs ->
+                    val chat = checkNotNull(chatModel)
+                    BackgroundJobsScreen(
+                        jobs,
+                        remember(chat) {
+                            JobsActions(chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs, chat::stopJob)
+                        },
+                        Modifier.fillMaxSize(),
+                    )
+                }
             openTool?.let { tool ->
                 val download = state.toolOutput?.takeIf { it.toolCallId == tool.toolCallId }
                 ToolDetailScreen(
