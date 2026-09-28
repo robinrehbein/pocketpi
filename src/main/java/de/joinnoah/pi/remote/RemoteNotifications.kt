@@ -19,7 +19,9 @@ import kotlinx.serialization.json.JsonObject
 
 /**
  * Builds and posts PocketPi's notifications: one per session, updated in place under a per-session
- * tag. Newer events for a session replace older ones, so no group is needed.
+ * tag. Newer events for a session replace older ones, so no group is needed. Subagent and
+ * background job notices use two more ids under the same tag, one for `*.done` and one for
+ * `*.stuck`, so a done notice never replaces an unrelated stuck one (or a question).
  */
 internal object RemoteNotifications {
     const val CHANNEL = "pi_remote"
@@ -31,7 +33,11 @@ internal object RemoteNotifications {
     const val EXTRA_QUESTION = "questionId"
     const val EXTRA_ANSWER = "answer"
     const val EXTRA_IS_REPLY = "isReply"
+    const val EXTRA_JOBS = "jobs"
+    const val EXTRA_JOB = "jobId"
     private const val NOTIFICATION_ID = 1
+    private const val DONE_ID = 2
+    private const val STUCK_ID = 3
 
     fun createChannel(context: Context) {
         val localized = localized(context)
@@ -83,10 +89,47 @@ internal object RemoteNotifications {
             base(context, payload.routeId, payload.sessionId)
                 .setContentTitle(localized.getString(R.string.remote_notification_complete))
                 .setContentText(localized.getString(R.string.remote_notification_open))
-                .setPublicVersion(publicVersion(context, R.string.remote_notification_complete))
+                .setPublicVersion(
+                    publicVersion(context, localized.getString(R.string.remote_notification_complete))
+                )
                 .build(),
         )
     }
+
+    /** A background subagent or job finished or stalled; the payload carries no text. */
+    fun postAttention(context: Context, payload: PushPayload) {
+        val localized = localized(context)
+        val title =
+            when (val value = attentionTitle(payload)) {
+                is AttentionTitle.Single -> localized.getString(value.id)
+                is AttentionTitle.Bundle ->
+                    localized.resources.getQuantityString(value.plural, value.count, value.count)
+            }
+        val target = notificationTarget(payload)
+        val notification =
+            base(context, payload.routeId, payload.sessionId)
+                .setContentIntent(openIntent(context, target))
+                .setContentTitle(title)
+                .setContentText(localized.getString(R.string.remote_notification_open))
+                // A status update about background work, not a chat message.
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setPublicVersion(publicVersion(context, title))
+                .build()
+        post(context, payload.routeId, payload.sessionId, notification, attentionId(payload.event))
+    }
+
+    /** `*.done` and `*.stuck` post under separate ids, so one never replaces the other. */
+    private fun attentionId(event: PushEvent): Int =
+        if (event == PushEvent.SUBAGENT_STUCK || event == PushEvent.JOB_STUCK) STUCK_ID else DONE_ID
+
+    /** Opens [target]'s session and, for a job notice, its background jobs. */
+    private fun openIntent(context: Context, target: NotificationTarget): PendingIntent =
+        PendingIntent.getActivity(
+            context,
+            0,
+            notificationIntent(context, target),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
 
     /** The question notification without its content, used when the question can't be read. */
     fun postGenericQuestion(context: Context, payload: PushPayload) {
@@ -98,7 +141,9 @@ internal object RemoteNotifications {
             base(context, payload.routeId, payload.sessionId)
                 .setContentTitle(localized.getString(R.string.remote_notification_question))
                 .setContentText(localized.getString(R.string.remote_notification_open))
-                .setPublicVersion(publicVersion(context, R.string.remote_notification_question))
+                .setPublicVersion(
+                    publicVersion(context, localized.getString(R.string.remote_notification_question))
+                )
                 .build(),
         )
     }
@@ -135,7 +180,9 @@ internal object RemoteNotifications {
                 .setContentTitle(title)
                 .setContentText(body)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-                .setPublicVersion(publicVersion(context, R.string.remote_notification_question))
+                .setPublicVersion(
+                    publicVersion(context, localized.getString(R.string.remote_notification_question))
+                )
         question.actions.take(3).forEachIndexed { index, action ->
             builder.addAction(action(context, localized, payload, question, index, action))
         }
@@ -238,8 +285,17 @@ internal object RemoteNotifications {
         } catch (_: Exception) {}
     }
 
+    /**
+     * Opening the session clears its own notification here, and on purpose also its subagent and
+     * background job done/stuck notices: once the session is open there is nothing left in them
+     * to see.
+     */
     fun cancel(context: Context, routeId: String, sessionId: String) {
-        NotificationManagerCompat.from(context).cancel(tag(routeId, sessionId), NOTIFICATION_ID)
+        val manager = NotificationManagerCompat.from(context)
+        val notificationTag = tag(routeId, sessionId)
+        manager.cancel(notificationTag, NOTIFICATION_ID)
+        manager.cancel(notificationTag, DONE_ID)
+        manager.cancel(notificationTag, STUCK_ID)
     }
 
     private fun post(
@@ -247,6 +303,7 @@ internal object RemoteNotifications {
         routeId: String,
         sessionId: String,
         notification: android.app.Notification,
+        id: Int = NOTIFICATION_ID,
     ) {
         if (
             Build.VERSION.SDK_INT >= 33 &&
@@ -256,7 +313,7 @@ internal object RemoteNotifications {
             return
         try {
             NotificationManagerCompat.from(context)
-                .notify(tag(routeId, sessionId), NOTIFICATION_ID, notification)
+                .notify(tag(routeId, sessionId), id, notification)
         } catch (_: SecurityException) {
             // Permission revoked between the check and the call.
         }
@@ -278,10 +335,10 @@ internal object RemoteNotifications {
             .setSilent(!alert)
 
     /** What a locked screen shows: never the question itself, and no actions. */
-    private fun publicVersion(context: Context, title: Int) =
+    private fun publicVersion(context: Context, title: CharSequence) =
         NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_remote)
-            .setContentTitle(localized(context).getString(title))
+            .setContentTitle(title)
             .setContentText(localized(context).getString(R.string.remote_notification_open))
             .build()
 
@@ -429,6 +486,23 @@ internal fun sessionIntent(context: Context, routeId: String, sessionId: String)
         )
         .putExtra(RemoteNotifications.EXTRA_ROUTE, routeId)
         .putExtra(RemoteNotifications.EXTRA_TARGET, sessionId)
+
+/**
+ * [sessionIntent] for a notification [target]. A jobs target gets its own data URI, so its
+ * PendingIntent never shares extras with the plain session one of the same session.
+ */
+internal fun notificationIntent(context: Context, target: NotificationTarget): Intent {
+    val intent = sessionIntent(context, target.routeId, target.sessionId)
+    if (!target.jobs) return intent
+    val data =
+        checkNotNull(intent.data).buildUpon().appendPath("jobs").apply {
+            target.jobId?.let(::appendPath)
+        }
+    return intent
+        .setData(data.build())
+        .putExtra(RemoteNotifications.EXTRA_JOBS, true)
+        .apply { target.jobId?.let { putExtra(RemoteNotifications.EXTRA_JOB, it) } }
+}
 
 /** Opens the app without choosing a session; reuses the running activity. */
 internal fun appIntent(context: Context): Intent =
