@@ -84,6 +84,30 @@ internal class NavigationFakeRepository : RemoteRepository {
         return folderOpen(routeId, path, confirmed != null)
     }
 
+    var filesOpens = 0
+    /** What [openFiles] shows; the session ID is filled in from the selection. */
+    var filesOnOpen: (String) -> FilesState = { FilesState(it, loading = false, listing = FileListing("")) }
+
+    override fun openFiles() {
+        filesOpens++
+        state.value = state.value.copy(files = filesOnOpen(checkNotNull(state.value.selection.sessionId)))
+    }
+
+    override fun closeFiles() {
+        state.value = state.value.copy(files = null)
+    }
+
+    override fun openFilesFile(path: String?) {
+        val files = state.value.files ?: return
+        state.value = state.value.copy(files = files.copy(file = path?.let { OpenFile(it, loading = false) }))
+    }
+
+    override fun selectFileLines(selection: LineSelection?) {
+        val files = state.value.files ?: return
+        val file = files.file ?: return
+        state.value = state.value.copy(files = files.copy(file = file.copy(selection = selection)))
+    }
+
     override fun importAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) {
         imports += Triple(selection, uris, photo)
     }
