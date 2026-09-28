@@ -3044,7 +3044,7 @@ class RemoteRepositoryTest {
             if (request.text("type") == "session.subagent.stop") answer else null
         }
         repository.stopChild()
-        assertEquals(ChildControlPhase.STOPPING, childControl(repository.state.value)?.phase)
+        assertEquals(ChildControl(ChildControlPhase.STOPPING), childControl(repository.state.value))
         runCurrent()
         val stop = transport.sent.single { it.text("type") == "session.subagent.stop" }
         assertEquals(setOf("type", "requestId", "sessionId"), stop.keys)
@@ -3061,10 +3061,56 @@ class RemoteRepositoryTest {
         transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 3, "kind" to "session.status", "status" to "running"))
         repository.stopChild()
+        assertEquals(ChildControl(ChildControlPhase.STOPPING, agentId = "a1"),
+            childControl(repository.state.value))
         runCurrent()
-        val refused = childControl(repository.state.value)
-        assertEquals(ChildControlPhase.REFUSED, refused?.phase)
-        assertEquals("Reviewer diff changed", refused?.reason)
+        // A refusal keeps the agent the accepted stop named.
+        assertEquals(ChildControl(ChildControlPhase.REFUSED, "Reviewer diff changed", "a1"),
+            childControl(repository.state.value))
+    }
+
+    @Test
+    fun stopConfirmedAfterTheChildWentIdleSaysNothingWasStopped() = runTest {
+        val transport = Transport()
+        val repository = childRepository(transport, "running")
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+            "revision" to 2, "kind" to "session.status", "status" to "idle"))
+        val sent = transport.sent.size
+        repository.stopChild()
+        runCurrent()
+        assertEquals(sent, transport.sent.size)
+        assertEquals(R.string.remote_child_stop_not_running, repository.state.value.error)
+        assertNull(childControl(repository.state.value))
+    }
+
+    @Test
+    fun stopConfirmedAfterTheChildWentOfflineSaysItIsOffline() = runTest {
+        val transport = Transport()
+        val repository = childRepository(transport, "running")
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+            "revision" to 2, "kind" to "session.status", "status" to "offline"))
+        val sent = transport.sent.size
+        repository.stopChild()
+        runCurrent()
+        assertEquals(sent, transport.sent.size)
+        assertEquals(R.string.remote_child_stop_child_offline, repository.state.value.error)
+    }
+
+    @Test
+    fun stopConfirmedAfterTheParentTurnedOutTooOldSaysNothingWasStopped() = runTest {
+        val transport = Transport()
+        val repository = childRepository(transport, "running")
+        // Another stop already met the old parent while this stop's dialog was still open.
+        transport.failure = { if (it.text("type") == "session.subagent.stop") "unsupported" else null }
+        repository.stopChild()
+        runCurrent()
+        assertFalse(childControlsAvailable(repository.state.value))
+        repository.dismissError()
+        val sent = transport.sent.size
+        repository.stopChild()
+        runCurrent()
+        assertEquals(sent, transport.sent.size)
+        assertEquals(R.string.remote_child_stop_unavailable, repository.state.value.error)
     }
 
     @Test
@@ -3219,7 +3265,8 @@ class RemoteRepositoryTest {
         runCurrent()
         assertEquals("session.subagent.stop", transport.sent.last().text("type"))
         assertTrue(transport.sent.none { it.text("type") == "session.abort" })
-        assertEquals(R.string.remote_child_parent_offline, repository.state.value.error)
+        // The message says nothing was stopped and to try again once the parent is back.
+        assertEquals(R.string.remote_child_stop_parent_offline, repository.state.value.error)
         assertNull(childControl(repository.state.value))
         assertTrue(childControlsAvailable(repository.state.value))
     }

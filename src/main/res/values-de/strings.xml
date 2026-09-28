@@ -232,6 +232,10 @@
     <string name="remote_child_uncertain">Ergebnis unbekannt. Prüfe die Sitzung, bevor du es erneut versuchst.</string>
     <string name="remote_child_unsupported">Lade die pi-Remote-Erweiterung auf dem Mac neu, um Subagenten zu steuern.</string>
     <string name="remote_child_parent_offline">Die übergeordnete Sitzung ist offline.</string>
+    <string name="remote_child_stop_parent_offline">Die übergeordnete Sitzung ist offline, daher wurde nichts gestoppt. Versuche es erneut, sobald sie wieder erreichbar ist.</string>
+    <string name="remote_child_stop_not_running">Es wurde nichts gestoppt: Der Subagent läuft nicht mehr.</string>
+    <string name="remote_child_stop_unavailable">Es wurde nichts gestoppt: Die übergeordnete Sitzung kann diesen Subagenten nicht mehr stoppen. Ab jetzt beendet Stoppen hier nur diesen Lauf.</string>
+    <string name="remote_child_stop_child_offline">Dieser Subagent ist offline, daher wurde nichts gestoppt.</string>
     <string name="remote_child_stopped_run_only">Nur dieser Lauf wurde gestoppt. Die pi-Remote-Erweiterung der übergeordneten Sitzung ist zu alt, um deinen Stopp zu vermerken, daher kann sie den Subagenten neu starten. Lade die Erweiterung auf dem Mac neu.</string>
     <string name="remote_child_quote_unsupported">Zitate können nicht an einen Subagenten gesendet werden. Entferne das Zitat, um ihn fortzusetzen.</string>
     <string name="remote_child_command_unsupported">Befehle können keinen Subagenten fortsetzen. Sende stattdessen eine normale Nachricht.</string>

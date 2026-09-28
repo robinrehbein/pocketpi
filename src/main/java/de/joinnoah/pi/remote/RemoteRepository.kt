@@ -83,7 +83,10 @@ data class RemoteState(
     val sending: Boolean = false,
     val uncertain: Boolean = false,
     val followUps: List<PendingFollowUp> = emptyList(),
-    /** Phone stops and resumes of subagent children, by child session ID. */
+    /**
+     * Phone stops and resumes of subagent children, by child session ID. Memory only on purpose:
+     * "stopped by you" describes this app run; after a restart the host's status is the truth.
+     */
     val childControls: Map<String, ChildControl> = emptyMap(),
     /**
      * Children whose parent answered `unsupported` to a phone control: its extension predates
