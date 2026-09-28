@@ -1185,6 +1185,12 @@ class RemoteNavigationUiTest {
         assertBadgeInsideViewport()
         val headerActions = compose.onNodeWithTag("headerActionsPill")
         val headerTop = headerActions.fetchSemanticsNode().boundsInRoot.top
+        assertEquals(
+            "Filter must end where the header actions pill ends",
+            headerActions.fetchSemanticsNode().boundsInRoot.right,
+            compose.onNodeWithTag("sessionsFilterPill").fetchSemanticsNode().boundsInRoot.right,
+            1f,
+        )
 
         compose.runOnIdle {
             repository.state.value = repository.state.value.copy(sessions = longSessions())
@@ -1687,7 +1693,7 @@ class RemoteNavigationUiTest {
         }
         compose.waitForIdle()
         assertFalse(toolHeader("src/a.kt").isDisplayed())
-        compose.onNodeWithTag("touchedFilesChip").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("touchedFilesSummary").assertIsDisplayed().performClick()
         compose.onNodeWithTag("touchedFilesSheet").assertIsDisplayed()
         compose.mainClock.autoAdvance = false
         try {

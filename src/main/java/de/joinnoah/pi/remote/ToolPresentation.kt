@@ -262,6 +262,42 @@ internal fun touchedFiles(items: List<ConversationItem>): TouchedFiles {
     return TouchedFiles(sorted(changed), sorted(read.filterKeys { it !in changed }))
 }
 
+/** Lines added and removed by the chat's edits, from the same diffs the edit cards show. */
+internal data class TouchedLineCounts(val added: Int, val removed: Int)
+
+/**
+ * Sums the diffs of the edits that did not fail; null when no edit has a diff. A `write` call
+ * carries no old text, so it counts as a touched file but not as lines.
+ */
+internal fun touchedLineCounts(items: List<ConversationItem>): TouchedLineCounts? {
+    var added = 0
+    var removed = 0
+    var any = false
+    for (item in items) {
+        if (item !is ConversationItem.Activity || item.state == "error") continue
+        val diff = toolDiff(item) ?: continue
+        added += diff.added
+        removed += diff.removed
+        any = true
+    }
+    return if (any) TouchedLineCounts(added, removed) else null
+}
+
+/** Git-style "+12" and "−4" (a real minus sign) for the touched-files summary. */
+internal fun addedLinesText(added: Int): String = "+$added"
+
+internal fun removedLinesText(removed: Int): String = "\u2212$removed"
+
+/** Where a tap on the touched-files summary goes. */
+internal enum class TouchedFilesTarget {
+    CHANGES,
+    SHEET,
+}
+
+/** The host's changes view when it offers one; otherwise the list of files the chat touched. */
+internal fun touchedFilesTarget(changesAvailable: Boolean): TouchedFilesTarget =
+    if (changesAvailable) TouchedFilesTarget.CHANGES else TouchedFilesTarget.SHEET
+
 // ---- Timeline and errors ------------------------------------------------------------------
 
 internal enum class TimelineMarkerKind {

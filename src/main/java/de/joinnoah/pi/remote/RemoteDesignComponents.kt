@@ -1,7 +1,9 @@
 package de.joinnoah.pi.remote
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -10,6 +12,7 @@ import androidx.compose.material.icons.filled.LaptopMac
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -21,6 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
@@ -98,42 +103,83 @@ internal fun SnapBackSwipeBox(
     )
 }
 
+/** What swiping a project row can do on the connected host. */
+internal enum class ProjectUnshare {
+    /** The host unshares projects: the swipe asks for confirmation. */
+    AVAILABLE,
+    /** Online, but the host predates `project.unshare.v1`: the swipe explains how to get it. */
+    NEEDS_HOST_UPDATE,
+    /** Offline or loading: the row has no swipe action. */
+    NONE,
+}
+
+internal fun projectUnshare(connected: Boolean, loading: Boolean, capabilities: Set<String>): ProjectUnshare =
+    when {
+        !connected || loading -> ProjectUnshare.NONE
+        PROJECT_UNSHARE_CAPABILITY in capabilities -> ProjectUnshare.AVAILABLE
+        else -> ProjectUnshare.NEEDS_HOST_UPDATE
+    }
+
 @Composable
 internal fun ProjectRow(
     projectId: String,
     name: String,
-    unshareEnabled: Boolean,
+    unshare: ProjectUnshare,
     onClick: () -> Unit,
     onUnshare: () -> Unit,
 ) {
+    val context = LocalContext.current
     val unshareLabel = stringResource(R.string.remote_project_unshare)
+    val updateHint = stringResource(R.string.remote_project_unshare_update_host)
+    val showUpdateHint = { Toast.makeText(context, updateHint, Toast.LENGTH_LONG).show() }
+    val action: (() -> Unit)? =
+        when (unshare) {
+            ProjectUnshare.AVAILABLE -> onUnshare
+            ProjectUnshare.NEEDS_HOST_UPDATE -> showUpdateHint
+            ProjectUnshare.NONE -> null
+        }
     SnapBackSwipeBox(
         enableStartToEnd = false,
-        enableEndToStart = unshareEnabled,
-        onSwipe = { direction -> if (direction == SwipeToDismissBoxValue.EndToStart) onUnshare() },
+        enableEndToStart = action != null,
+        onSwipe = { direction -> if (direction == SwipeToDismissBoxValue.EndToStart) action?.invoke() },
         background = { direction ->
             if (direction == SwipeToDismissBoxValue.EndToStart)
-                SwipeActionBackground(
-                    icon = Icons.Default.DeleteOutline,
-                    label = unshareLabel,
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                    atEnd = true,
-                )
+                if (unshare == ProjectUnshare.AVAILABLE)
+                    SwipeActionBackground(
+                        icon = Icons.Default.DeleteOutline,
+                        label = unshareLabel,
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        atEnd = true,
+                    )
+                else
+                    SwipeActionBackground(
+                        icon = Icons.Outlined.Info,
+                        label = unshareLabel,
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        atEnd = true,
+                    )
         },
     ) {
         Row(
             Modifier.fillMaxWidth()
                 .background(MaterialTheme.colorScheme.background)
                 .semantics {
-                    if (unshareEnabled) customActions = listOf(
+                    if (action != null) customActions = listOf(
                         CustomAccessibilityAction(unshareLabel) {
-                            onUnshare()
+                            action()
                             true
                         }
                     )
                 }
-                .clickable(onClick = onClick)
+                .combinedClickable(
+                    onClick = onClick,
+                    // Only an outdated host needs the long press: it is the one place a swipe
+                    // would otherwise do nothing visible.
+                    onLongClick = if (unshare == ProjectUnshare.NEEDS_HOST_UPDATE) showUpdateHint else null,
+                )
+                .testTag("projectRow-$projectId")
                 .padding(horizontal = 4.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

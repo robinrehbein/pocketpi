@@ -67,8 +67,10 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private data class AbortRunTarget(val sessionId: String, val questionIds: Set<String>)
 
@@ -87,6 +89,7 @@ private const val CHILD_REFRESH_INTERVAL_MILLIS = 5_000L
 private const val JUMP_HIGHLIGHT_MILLIS = 2_000L
 private const val COMPACTION_TICK_MILLIS = 30_000L
 private const val PRIVACY_POLICY_URL = "https://robinrehbein.de/privacy"
+private val LIST_TO_HEADER_END_SHIFT = 4.dp
 
 /** Errors a reload can plausibly fix; only these offer "Try again" on the error card. */
 private val RETRYABLE_ERRORS =
@@ -151,6 +154,11 @@ internal fun RemoteScreen(
     val chatKey = key as? RemoteNavKey.Chat
     val chatModel = model as? ChatViewModel
     val touched = remember(conversation) { touchedFiles(conversation) }
+    // Diffing every edit can take a moment in a long chat; keep it off the main thread.
+    val touchedLines by
+        produceState<TouchedLineCounts?>(null, conversation) {
+            value = withContext(Dispatchers.Default) { touchedLineCounts(conversation) }
+        }
     val errorCount = remember(conversation) { conversation.count(::isErrorItem) }
     val children =
         remember(chatKey, state.sessions, state.connected, state.loading) {
@@ -465,7 +473,7 @@ internal fun RemoteScreen(
                     state.status != "offline"
             val hasTuiInfo =
                 state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
-            val headerColor = MaterialTheme.colorScheme.surfaceContainer
+            val headerColor = floatingHeaderColor()
             val actionLayout =
                 chatActionLayout(
                     chatModel?.chatActions ?: DEFAULT_CHAT_ACTIONS,
@@ -562,7 +570,7 @@ internal fun RemoteScreen(
                             actionsControl()
                         }
                     }
-                    if (touched.total > 0 || errorCount > 0 || onlyErrorsShown)
+                    if (errorCount > 0 || onlyErrorsShown)
                         Row(
                             Modifier.fillMaxWidth()
                                 .padding(top = 8.dp)
@@ -571,7 +579,6 @@ internal fun RemoteScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            TouchedFilesChip(touched) { touchedSheet = true }
                             ErrorFilterChip(errorCount, onlyErrorsShown) {
                                 onlyErrorsShown = !onlyErrorsShown
                                 if (onlyErrorsShown) autoFollow = false
@@ -679,7 +686,7 @@ internal fun RemoteScreen(
         ) {
         // While the tool detail covers the chat, the chat below must not be reachable by TalkBack.
         val underlay = if (openTool != null) Modifier.clearAndSetSemantics {} else Modifier
-        val railShown = key is RemoteNavKey.Chat && markers.isNotEmpty() && listScrollable
+        val railShown = key is RemoteNavKey.Chat && timelineRailVisible(markers) && listScrollable
         LazyColumn(
             if (key is RemoteNavKey.Chat) Modifier.fillMaxSize().then(underlay)
             else Modifier.fillMaxSize(),
@@ -755,7 +762,9 @@ internal fun RemoteScreen(
                                             Text("1")
                                         }
                                 },
-                                modifier = Modifier.padding(end = 8.dp),
+                                // The list is inset 20dp and the header pills 16dp: shift the
+                                // filter so its end lines up with the actions pill above it.
+                                modifier = Modifier.offset(x = LIST_TO_HEADER_END_SHIFT),
                             ) {
                                 FloatingSurface(
                                     modifier = Modifier.testTag("sessionsFilterPill"),
@@ -1042,8 +1051,7 @@ internal fun RemoteScreen(
                                 ProjectRow(
                                     projectId = projectId,
                                     name = project.text("name"),
-                                    unshareEnabled = state.connected && !state.loading &&
-                                        PROJECT_UNSHARE_CAPABILITY in state.capabilities,
+                                    unshare = projectUnshare(state.connected, state.loading, state.capabilities),
                                     onClick = {
                                         navigator.open(RemoteNavKey.Sessions(key.routeId, projectId))
                                     },
@@ -1312,55 +1320,63 @@ internal fun RemoteScreen(
                     .then(underlay)
                     .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
             ) {
-                ChatComposer(
-                    state = state,
-                    onDraft = model::draft,
-                    onSend = model::prompt,
-                    onFollowUp = model::followUp,
-                    onSteer = model::steer,
-                    onStopChild = model::stopChild,
-                    onResumeChild = model::resumeChild,
-                    onDismissFollowUp = model::dismissFollowUp,
-                    onStop = model::abort,
-                    onRemoveQuote = { model.quote(null) },
-                    onAbort = {
-                        val sessionId = state.selection.sessionId
-                        val questionIds = state.questions.map { it.text("id") }.toSet()
-                        if (sessionId != null && questionIds.isNotEmpty())
-                            abortTarget = AbortRunTarget(sessionId, questionIds)
-                    },
-                    onAnswer = model::answer,
-                    suggestions = {
-                        SessionControls(
-                            state,
-                            model::refreshConfiguration,
-                            model::refreshContextUsage,
-                            model::refreshAdvisor,
-                            model::setAdvisor,
-                            model::setModel,
-                            model::setThinkingLevel,
-                            model::refreshCommands,
-                            model::selectCommand,
-                            refreshJobs = { chatModel?.refreshJobs() },
-                            openJobs = chatModel?.let { chat -> chat::openJobs },
-                        )
-                    },
-                    onRemoveAttachment = model::removeAttachment,
-                    onCancelAttachments = model::cancelAttachmentWork,
-                    onPickPhotos = {
-                        attachmentSelection = state.selection
-                        photoPicker.launch(
-                            androidx.activity.result.PickVisualMediaRequest(
-                                ActivityResultContracts.PickVisualMedia.ImageOnly
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TouchedFilesSummary(touched, touchedLines) {
+                        when (touchedFilesTarget(canViewChanges(state) && state.connected)) {
+                            TouchedFilesTarget.CHANGES -> chatModel?.openChanges()
+                            TouchedFilesTarget.SHEET -> touchedSheet = true
+                        }
+                    }
+                    ChatComposer(
+                        state = state,
+                        onDraft = model::draft,
+                        onSend = model::prompt,
+                        onFollowUp = model::followUp,
+                        onSteer = model::steer,
+                        onStopChild = model::stopChild,
+                        onResumeChild = model::resumeChild,
+                        onDismissFollowUp = model::dismissFollowUp,
+                        onStop = model::abort,
+                        onRemoveQuote = { model.quote(null) },
+                        onAbort = {
+                            val sessionId = state.selection.sessionId
+                            val questionIds = state.questions.map { it.text("id") }.toSet()
+                            if (sessionId != null && questionIds.isNotEmpty())
+                                abortTarget = AbortRunTarget(sessionId, questionIds)
+                        },
+                        onAnswer = model::answer,
+                        suggestions = {
+                            SessionControls(
+                                state,
+                                model::refreshConfiguration,
+                                model::refreshContextUsage,
+                                model::refreshAdvisor,
+                                model::setAdvisor,
+                                model::setModel,
+                                model::setThinkingLevel,
+                                model::refreshCommands,
+                                model::selectCommand,
+                                refreshJobs = { chatModel?.refreshJobs() },
+                                openJobs = chatModel?.let { chat -> chat::openJobs },
                             )
-                        )
-                    },
-                    onPickFiles = {
-                        attachmentSelection = state.selection
-                        filePicker.launch(arrayOf("*/*"))
-                    },
-                    focusRequester = composerFocus,
-                )
+                        },
+                        onRemoveAttachment = model::removeAttachment,
+                        onCancelAttachments = model::cancelAttachmentWork,
+                        onPickPhotos = {
+                            attachmentSelection = state.selection
+                            photoPicker.launch(
+                                androidx.activity.result.PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly
+                                )
+                            )
+                        },
+                        onPickFiles = {
+                            attachmentSelection = state.selection
+                            filePicker.launch(arrayOf("*/*"))
+                        },
+                        focusRequester = composerFocus,
+                    )
+                }
             }
             SnackbarHost(
                 snackbar,

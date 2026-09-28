@@ -21,6 +21,10 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.QuestionMark
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -31,7 +35,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -43,43 +49,72 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import java.util.Date
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 // Standalone chat panels. The chat screen decides where each one goes; every panel hides itself
 // when it has nothing to show.
 
 // ---- Touched files ------------------------------------------------------------------------
 
+/**
+ * Git-style summary beside the composer: how many files the chat touched and, when its edits
+ * carry diffs, the lines they added (green) and removed (red).
+ */
 @Composable
-internal fun TouchedFilesChip(files: TouchedFiles, onClick: () -> Unit) {
+internal fun TouchedFilesSummary(files: TouchedFiles, lines: TouchedLineCounts?, onClick: () -> Unit) {
     if (files.total == 0) return
     val description =
-        pluralStringResource(R.plurals.remote_panel_files_touched, files.total, files.total)
-    AssistChip(
-        onClick = onClick,
-        shape = CircleShape,
-        border = null,
-        colors =
-            AssistChipDefaults.assistChipColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                leadingIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            ),
-        leadingIcon = {
+        listOfNotNull(
+                pluralStringResource(R.plurals.remote_panel_files_touched, files.total, files.total),
+                lines?.let { pluralStringResource(R.plurals.remote_panel_lines_added, it.added, it.added) },
+                lines?.let { pluralStringResource(R.plurals.remote_panel_lines_removed, it.removed, it.removed) },
+            )
+            .joinToString(", ")
+    FloatingSurface(shape = CircleShape) {
+        Row(
+            Modifier.clickable(role = Role.Button, onClick = onClick)
+                .testTag("touchedFilesSummary")
+                .semantics { contentDescription = description }
+                .heightIn(min = 36.dp)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Icon(
                 Icons.Default.Description,
                 contentDescription = null,
-                modifier = Modifier.size(AssistChipDefaults.IconSize),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
             )
-        },
-        label = { Text(files.total.toString()) },
-        modifier = Modifier.testTag("touchedFilesChip").semantics { contentDescription = description },
-    )
+            Text(
+                pluralStringResource(R.plurals.remote_panel_files_count, files.total, files.total),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            if (lines != null) {
+                Text(
+                    addedLinesText(lines.added),
+                    style = MaterialTheme.typography.labelLarge.copy(fontFamily = FontFamily.Monospace),
+                    color = diffAddedContent(),
+                )
+                Text(
+                    removedLinesText(lines.removed),
+                    style = MaterialTheme.typography.labelLarge.copy(fontFamily = FontFamily.Monospace),
+                    color = diffRemovedContent(),
+                )
+            }
+        }
+    }
 }
 
 /** Keeps the start and the end of a long path and elides the middle. */
@@ -313,9 +348,46 @@ private val RAIL_INSET = 8.dp
 /** How far from a marker a tap on the rail still jumps to it. */
 private val RAIL_TAP_SLOP = 24.dp
 
+/** With fewer markers the rail says nothing a glance at the list would not. */
+internal const val MIN_TIMELINE_MARKERS = 2
+
+internal fun timelineRailVisible(markers: List<TimelineMarker>): Boolean = markers.size >= MIN_TIMELINE_MARKERS
+
 /** The marker closest to [fraction] (0..1 along the rail). */
 internal fun nearestMarker(markers: List<TimelineMarker>, fraction: Float): TimelineMarker? =
     markers.minByOrNull { abs(it.position - fraction) }
+
+internal fun timelineMarkerLabel(kind: TimelineMarkerKind): Int =
+    when (kind) {
+        TimelineMarkerKind.ERROR -> R.string.remote_panel_marker_error
+        TimelineMarkerKind.QUESTION -> R.string.remote_panel_marker_question
+        TimelineMarkerKind.EDIT -> R.string.remote_panel_marker_edit
+        TimelineMarkerKind.PLAN -> R.string.remote_panel_marker_plan
+    }
+
+private fun timelineMarkerIcon(kind: TimelineMarkerKind): ImageVector =
+    when (kind) {
+        TimelineMarkerKind.ERROR -> Icons.Default.Warning
+        TimelineMarkerKind.QUESTION -> Icons.Default.QuestionMark
+        TimelineMarkerKind.EDIT -> Icons.Default.Edit
+        TimelineMarkerKind.PLAN -> Icons.Default.Menu
+    }
+
+/** A marker's badge: the kind's icon on its colour, so the kinds differ by more than colour. */
+@Composable
+private fun TimelineMarkerBadge(kind: TimelineMarkerKind, modifier: Modifier = Modifier) {
+    val colors = MaterialTheme.colorScheme
+    val (container, content) =
+        when (kind) {
+            TimelineMarkerKind.ERROR -> colors.error to colors.onError
+            TimelineMarkerKind.QUESTION -> colors.tertiary to colors.onTertiary
+            TimelineMarkerKind.EDIT -> colors.primary to colors.onPrimary
+            TimelineMarkerKind.PLAN -> colors.secondary to colors.onSecondary
+        }
+    Box(modifier.size(16.dp).clip(CircleShape).background(container), contentAlignment = Alignment.Center) {
+        Icon(timelineMarkerIcon(kind), contentDescription = null, tint = content, modifier = Modifier.size(11.dp))
+    }
+}
 
 @Composable
 internal fun TimelineRail(
@@ -325,23 +397,16 @@ internal fun TimelineRail(
     scrollState: ScrollableState? = null,
     reverseLayout: Boolean = false,
 ) {
-    if (markers.isEmpty()) return
-    val colors = MaterialTheme.colorScheme
-    val trackColor = colors.outlineVariant
-    fun colorOf(kind: TimelineMarkerKind): Color =
-        when (kind) {
-            TimelineMarkerKind.ERROR -> colors.error
-            TimelineMarkerKind.QUESTION -> colors.tertiary
-            TimelineMarkerKind.EDIT -> colors.primary
-            TimelineMarkerKind.PLAN -> colors.secondary
-        }
-    val labels =
+    if (!timelineRailVisible(markers)) return
+    val trackColor = MaterialTheme.colorScheme.outlineVariant
+    val jumpLabels =
         mapOf(
             TimelineMarkerKind.ERROR to stringResource(R.string.remote_panel_jump_error),
             TimelineMarkerKind.QUESTION to stringResource(R.string.remote_panel_jump_question),
             TimelineMarkerKind.EDIT to stringResource(R.string.remote_panel_jump_edit),
             TimelineMarkerKind.PLAN to stringResource(R.string.remote_panel_jump_plan),
         )
+    val markerLabels = TimelineMarkerKind.entries.associateWith { stringResource(timelineMarkerLabel(it)) }
     val railDescription = stringResource(R.string.remote_panel_timeline)
     val latest = TimelineMarkerKind.entries.mapNotNull { kind -> markers.lastOrNull { it.kind == kind } }
     val currentMarkers by rememberUpdatedState(markers)
@@ -349,6 +414,8 @@ internal fun TimelineRail(
     val inset = with(LocalDensity.current) { RAIL_INSET.toPx() }
     val tapSlop = with(LocalDensity.current) { RAIL_TAP_SLOP.toPx() }
     val reverse = ScrollableDefaults.reverseDirection(LocalLayoutDirection.current, Orientation.Vertical, reverseLayout)
+    // Where a long press opened the legend, or null while it is closed.
+    var legendAt by remember { mutableStateOf<Float?>(null) }
     Box(
         modifier
             .width(48.dp)
@@ -357,43 +424,107 @@ internal fun TimelineRail(
                 contentDescription = railDescription
                 customActions =
                     latest.map { marker ->
-                        CustomAccessibilityAction(labels.getValue(marker.kind)) {
+                        CustomAccessibilityAction(jumpLabels.getValue(marker.kind)) {
                             currentJump(marker.itemId)
                             true
                         }
                     }
             }
-            // The rail lies over the list's right edge: a drag there scrolls the list, and only a
-            // tap close to a marker jumps to it.
+            // The rail lies over the list's right edge: a drag there scrolls the list, only a
+            // tap close to a marker jumps to it, and a long press explains the markers.
             .then(
                 if (scrollState != null)
                     Modifier.scrollable(scrollState, Orientation.Vertical, reverseDirection = reverse)
                 else Modifier
             )
             .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    val span = (size.height - 2 * inset).coerceAtLeast(0f)
-                    val fraction = if (span <= 0f) 0f else ((offset.y - inset) / span).coerceIn(0f, 1f)
-                    val marker = nearestMarker(currentMarkers, fraction) ?: return@detectTapGestures
-                    val y = inset + marker.position.coerceIn(0f, 1f) * span
-                    if (abs(offset.y - y) <= tapSlop) currentJump(marker.itemId)
-                }
+                detectTapGestures(
+                    onLongPress = { offset -> legendAt = offset.y },
+                    onTap = { offset ->
+                        val span = (size.height - 2 * inset).coerceAtLeast(0f)
+                        val fraction = if (span <= 0f) 0f else ((offset.y - inset) / span).coerceIn(0f, 1f)
+                        val marker = nearestMarker(currentMarkers, fraction) ?: return@detectTapGestures
+                        val y = inset + marker.position.coerceIn(0f, 1f) * span
+                        if (abs(offset.y - y) <= tapSlop) currentJump(marker.itemId)
+                    },
+                )
             },
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.width(12.dp).fillMaxHeight()) {
-            val span = size.height - 2 * inset
             val trackWidth = 2.dp.toPx()
             drawRoundRect(
                 trackColor,
                 topLeft = Offset((size.width - trackWidth) / 2, inset),
-                size = Size(trackWidth, span.coerceAtLeast(0f)),
+                size = Size(trackWidth, (size.height - 2 * inset).coerceAtLeast(0f)),
                 cornerRadius = CornerRadius(trackWidth / 2),
             )
-            val radius = 4.dp.toPx()
-            for (marker in markers) {
-                val y = inset + marker.position.coerceIn(0f, 1f) * span.coerceAtLeast(0f)
-                drawCircle(colorOf(marker.kind), radius, Offset(size.width / 2, y))
+        }
+        Layout(
+            content = {
+                for (marker in markers) {
+                    val label = markerLabels.getValue(marker.kind)
+                    TimelineMarkerBadge(
+                        marker.kind,
+                        Modifier.testTag("timelineMarker").semantics {
+                            contentDescription = label
+                            onClick(label = jumpLabels.getValue(marker.kind)) {
+                                currentJump(marker.itemId)
+                                true
+                            }
+                        },
+                    )
+                }
+            },
+            modifier = Modifier.matchParentSize(),
+        ) { measurables, constraints ->
+            val placeables = measurables.map { it.measure(Constraints()) }
+            layout(constraints.maxWidth, constraints.maxHeight) {
+                val span = (constraints.maxHeight - 2 * inset).coerceAtLeast(0f)
+                placeables.forEachIndexed { index, placeable ->
+                    val y = inset + markers[index].position.coerceIn(0f, 1f) * span
+                    placeable.place(
+                        (constraints.maxWidth - placeable.width) / 2,
+                        (y - placeable.height / 2f).roundToInt(),
+                    )
+                }
+            }
+        }
+        legendAt?.let { y ->
+            TimelineLegend(
+                offset = IntOffset(-with(LocalDensity.current) { 48.dp.roundToPx() }, y.roundToInt()),
+                labels = markerLabels,
+                onDismiss = { legendAt = null },
+            )
+        }
+    }
+}
+
+/** The four marker kinds, opened beside the rail by a long press. */
+@Composable
+private fun TimelineLegend(offset: IntOffset, labels: Map<TimelineMarkerKind, String>, onDismiss: () -> Unit) {
+    Popup(
+        alignment = Alignment.TopEnd,
+        offset = offset,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shadowElevation = 3.dp,
+            modifier = Modifier.testTag("timelineLegend").clickable(onClick = onDismiss),
+        ) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.remote_panel_timeline_legend),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                for (kind in TimelineMarkerKind.entries)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TimelineMarkerBadge(kind)
+                        Text(labels.getValue(kind), style = MaterialTheme.typography.bodyMedium)
+                    }
             }
         }
     }
