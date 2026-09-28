@@ -286,9 +286,10 @@ internal const val JOB_LINE_CHUNK_CHARS = 2_000
 private val ANSI_ESCAPE =
     Regex(
         // CSI; OSC; DCS, SOS, PM and APC strings; two-byte escapes such as ESC ( B, ESC = or ESC 7.
+        // A string without its terminator removes no more than the rest of its line.
         "\u001B\\[[0-?]*[ -/]*[@-~]" +
-            "|\u001B\\][^\u0007\u001B]*(?:\u0007|\u001B\\\\)?" +
-            "|\u001B[PX^_][^\u001B]*(?:\u001B\\\\)?" +
+            "|\u001B\\][^\u0007\u001B]*(?:\u0007|\u001B\\\\)|\u001B\\][^\u0007\u001B\n]*" +
+            "|\u001B[PX^_][^\u001B]*\u001B\\\\|\u001B[PX^_][^\u001B\n]*" +
             "|\u001B[ -/]*[0-~]"
     )
 
@@ -335,7 +336,10 @@ internal class JobOutputBuffer(private val limit: Int = MAX_JOB_OUTPUT_CHARS) {
     private var afterGap = false
     private var chars = 0L
 
-    /** [trim] dropped all of the open line, so its newline adds no empty line. */
+    /**
+     * [trim] dropped all of the open line, so its newline adds no empty line. The cut keeps
+     * [limit] chars of the line, so only a tiny [limit] such as the tests' 1 can reach this.
+     */
     private var openCut = false
 
     /** The absolute index of the first line in [lines]. */
@@ -353,10 +357,10 @@ internal class JobOutputBuffer(private val limit: Int = MAX_JOB_OUTPUT_CHARS) {
         trim()
     }
 
-    /** Shows an escape still held back as text, without its ESC byte, once no output follows. */
+    /** Shows an escape still held back as text, without its ESC bytes, once no output follows. */
     fun finish() {
         if (pending.isEmpty()) return
-        val rest = pending.substring(1)
+        val rest = pending.replace("\u001B", "")
         pending = ""
         addLines(rest)
         trim()
@@ -504,6 +508,7 @@ internal class BackgroundJobsController(
     private val renewMillis: Long = JOB_LEASE_RENEW_MILLIS,
 ) {
     private var listJob: Job? = null
+    private var listVersion = 0L
     private var watchJob: Job? = null
     private var watchVersion = 0L
     private var wake = Channel<Unit>(Channel.CONFLATED)
@@ -544,13 +549,17 @@ internal class BackgroundJobsController(
         ensure(sessionId)
         write(sessionId) { it.copy(loading = true) }
         listJob?.cancel()
+        val version = ++listVersion
         listJob = scope.launch {
             try {
                 val items = source.listJobs(sessionId)
+                if (version != listVersion) return@launch
                 write(sessionId) { it.withJobs(items).copy(loading = false, failure = null, unsupported = false) }
             } catch (e: Exception) {
                 // A request the repository cancelled, such as after a session change, counts as a failure.
                 if (e is CancellationException && !currentCoroutineContext().isActive) throw e
+                // A late answer to a replaced request leaves the newer one's state alone.
+                if (version != listVersion) return@launch
                 val reason = failure(e)
                 write(sessionId) {
                     it.copy(
@@ -1006,8 +1015,9 @@ private fun JobOutput(lines: List<JobOutputLine>, firstLine: Long) {
         }
     }
     LaunchedEffect(items.size, lines.lastOrNull()) {
-        // The largest offset shows the end of a last item taller than the screen.
-        if (follow && items.isNotEmpty()) listState.scrollToItem(items.lastIndex, Int.MAX_VALUE)
+        // A large offset shows the end of a last item taller than the screen; half of Int.MAX_VALUE
+        // keeps the offset math clear of overflow.
+        if (follow && items.isNotEmpty()) listState.scrollToItem(items.lastIndex, Int.MAX_VALUE / 2)
     }
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 12.dp).testTag("jobOutput"),
