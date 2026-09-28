@@ -3,6 +3,7 @@ package de.joinnoah.pi.remote
 import android.content.Context
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.longClick
@@ -142,6 +143,14 @@ class SessionSwipeTest {
         get() = ApplicationProvider.getApplicationContext<Context>()
             .getString(R.string.remote_project_unshare_update_host)
 
+    private val unshareLabel: String
+        get() = ApplicationProvider.getApplicationContext<Context>()
+            .getString(R.string.remote_project_unshare)
+
+    private val updateNeededLabel: String
+        get() = ApplicationProvider.getApplicationContext<Context>()
+            .getString(R.string.remote_project_unshare_update_needed)
+
     @Test
     fun projectUnshareFollowsConnectionAndCapability() {
         val capable = setOf(PROJECT_UNSHARE_CAPABILITY)
@@ -182,6 +191,17 @@ class SessionSwipeTest {
         assertEquals(0, unshared)
         compose.onNodeWithTag("projectRow-p1")
             .assert(SemanticsMatcher.keyNotDefined(SemanticsActions.CustomActions))
+    }
+
+    @Test
+    fun outdatedHostRowExposesTheUpdateLabelNotTheUnshareLabel() {
+        renderProject(ProjectUnshare.NEEDS_HOST_UPDATE)
+        compose.onNodeWithTag("projectRow-p1").assert(
+            SemanticsMatcher("has a \"$updateNeededLabel\" custom action") { node ->
+                val actions = node.config.getOrNull(SemanticsActions.CustomActions).orEmpty()
+                actions.any { it.label == updateNeededLabel } && actions.none { it.label == unshareLabel }
+            }
+        )
     }
 
     @Test

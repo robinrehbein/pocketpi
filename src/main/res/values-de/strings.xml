@@ -58,6 +58,7 @@
     <string name="remote_project_unshare">Projektfreigabe beenden</string>
     <string name="remote_project_unshare_confirmation">Die Freigabe von %1$s auf dem Mac beenden? Danach haben alle gekoppelten Geräte keinen Zugriff mehr auf dieses Projekt. Die Projektdateien bleiben auf dem Mac.</string>
     <string name="remote_project_unshare_update_host">Aktualisiere pi Remote auf dem Mac, um Projektfreigaben von hier aus zu beenden</string>
+    <string name="remote_project_unshare_update_needed">Update nötig</string>
     <string name="remote_new_session">Neue Sitzung</string>
     <string name="remote_rename_session">Sitzung umbenennen</string>
     <string name="remote_session_name">Sitzungsname</string>

@@ -16,13 +16,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.QuestionMark
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
@@ -86,7 +86,7 @@ internal fun TouchedFilesSummary(files: TouchedFiles, lines: TouchedLineCounts?,
             Modifier.clickable(role = Role.Button, onClick = onClick)
                 .testTag("touchedFilesSummary")
                 .semantics { contentDescription = description }
-                .heightIn(min = 36.dp)
+                .minimumInteractiveComponentSize()
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -370,7 +370,7 @@ private fun timelineMarkerIcon(kind: TimelineMarkerKind): ImageVector =
         TimelineMarkerKind.ERROR -> Icons.Default.Warning
         TimelineMarkerKind.QUESTION -> Icons.Default.QuestionMark
         TimelineMarkerKind.EDIT -> Icons.Default.Edit
-        TimelineMarkerKind.PLAN -> Icons.Default.Menu
+        TimelineMarkerKind.PLAN -> Icons.AutoMirrored.Filled.FormatListBulleted
     }
 
 /** A marker's badge: the kind's icon on its colour, so the kinds differ by more than colour. */

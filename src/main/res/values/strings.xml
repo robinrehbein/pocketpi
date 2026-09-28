@@ -58,6 +58,7 @@
     <string name="remote_project_unshare">Stop sharing project</string>
     <string name="remote_project_unshare_confirmation">Stop sharing %1$s from the Mac? This removes access for all paired devices. Project files stay on the Mac.</string>
     <string name="remote_project_unshare_update_host">Update pi Remote on the Mac to unshare projects from here</string>
+    <string name="remote_project_unshare_update_needed">Update needed</string>
     <string name="remote_new_session">New session</string>
     <string name="remote_rename_session">Rename session</string>
     <string name="remote_session_name">Session name</string>

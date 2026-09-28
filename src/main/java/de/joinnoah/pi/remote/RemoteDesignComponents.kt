@@ -130,6 +130,7 @@ internal fun ProjectRow(
 ) {
     val context = LocalContext.current
     val unshareLabel = stringResource(R.string.remote_project_unshare)
+    val updateNeededLabel = stringResource(R.string.remote_project_unshare_update_needed)
     val updateHint = stringResource(R.string.remote_project_unshare_update_host)
     val showUpdateHint = { Toast.makeText(context, updateHint, Toast.LENGTH_LONG).show() }
     val action: (() -> Unit)? =
@@ -138,6 +139,9 @@ internal fun ProjectRow(
             ProjectUnshare.NEEDS_HOST_UPDATE -> showUpdateHint
             ProjectUnshare.NONE -> null
         }
+    // NEEDS_HOST_UPDATE gets its own short label: the swipe only shows an update hint, not the
+    // unshare action, so both the revealed background and its TalkBack action must say so.
+    val swipeActionLabel = if (unshare == ProjectUnshare.NEEDS_HOST_UPDATE) updateNeededLabel else unshareLabel
     SnapBackSwipeBox(
         enableStartToEnd = false,
         enableEndToStart = action != null,
@@ -155,7 +159,7 @@ internal fun ProjectRow(
                 else
                     SwipeActionBackground(
                         icon = Icons.Outlined.Info,
-                        label = unshareLabel,
+                        label = updateNeededLabel,
                         containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         atEnd = true,
@@ -167,7 +171,7 @@ internal fun ProjectRow(
                 .background(MaterialTheme.colorScheme.background)
                 .semantics {
                     if (action != null) customActions = listOf(
-                        CustomAccessibilityAction(unshareLabel) {
+                        CustomAccessibilityAction(swipeActionLabel) {
                             action()
                             true
                         }
