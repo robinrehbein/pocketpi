@@ -241,6 +241,119 @@ class RemoteNavigationTest {
     }
 
     @Test
+    fun `restore on an offline child falls back to its live parent chat`() = runTest {
+        val repository = NavigationFakeRepository()
+        val (stack, navigation) = onParent(repository)
+        navigation.openChild(parent, child)
+        runCurrent()
+        // The child's session went offline: the host drops it back to the project's session list.
+        // The parent is still live and comes back unchanged when restored.
+        repository.activation = { selection, mode ->
+            if (mode == ActivationMode.RESTORE && selection == child.selection()) RemoteSelection("host", "project")
+            else selection
+        }
+        navigation.restore()
+        runCurrent()
+        assertEquals(base + parent, stack)
+        // The parent was actually re-activated through the repository, not just placed on the nav
+        // stack: its own selection is what the repository (and the parent's ChatViewModel) now see.
+        assertEquals(parent.selection(), repository.state.value.selection)
+        assertEquals(
+            listOf(child.selection(), parent.selection()),
+            repository.activations.takeLast(2).map { it.first },
+        )
+        assertEquals(ActivationMode.RESTORE, repository.activations.last().second)
+        // reconcile() sees the parent's own (unshortened) selection now, so it does not collapse
+        // the stack back to the sessions list on the next state emission.
+        navigation.reconcile(repository.state.value)
+        assertEquals(base + parent, stack)
+    }
+
+    @Test
+    fun `back into an offline parent falls back further to its own live parent`() = runTest {
+        val repository = NavigationFakeRepository()
+        val (stack, navigation) = onParent(repository)
+        val grandparent = RemoteNavKey.Chat("host", "project", "grandparent")
+        navigation.openChild(grandparent, parent)
+        runCurrent()
+        navigation.openChild(parent, child)
+        runCurrent()
+        assertEquals(base + grandparent + parent + child, stack)
+        // The parent (what Back lands on) is itself offline; the grandparent is still live.
+        repository.activation = { selection, mode ->
+            if (mode == ActivationMode.RESTORE && selection == parent.selection()) RemoteSelection("host", "project")
+            else selection
+        }
+        navigation.back()
+        runCurrent()
+        assertEquals(base + grandparent, stack)
+        assertEquals(grandparent.selection(), repository.state.value.selection)
+    }
+
+    @Test
+    fun `restore on two consecutive offline chats falls back to the nearest live ancestor`() = runTest {
+        val repository = NavigationFakeRepository()
+        val (stack, navigation) = onParent(repository)
+        val grandparent = RemoteNavKey.Chat("host", "project", "grandparent")
+        navigation.openChild(grandparent, parent)
+        runCurrent()
+        navigation.openChild(parent, child)
+        runCurrent()
+        assertEquals(base + grandparent + parent + child, stack)
+        // Both the child and its immediate parent are offline; only the grandparent is live.
+        val reduced = RemoteSelection("host", "project")
+        repository.activation = { selection, mode ->
+            when {
+                mode != ActivationMode.RESTORE -> selection
+                selection == child.selection() || selection == parent.selection() -> reduced
+                else -> selection
+            }
+        }
+        navigation.restore()
+        runCurrent()
+        assertEquals(base + grandparent, stack)
+        assertEquals(grandparent.selection(), repository.state.value.selection)
+        // Both offline ancestors were actually tried, closest first, before landing on the
+        // grandparent - never assumed live without asking the repository.
+        assertEquals(
+            listOf(child.selection(), parent.selection(), grandparent.selection()),
+            repository.activations.takeLast(3).map { it.first },
+        )
+        assertTrue(repository.activations.takeLast(3).all { it.second == ActivationMode.RESTORE })
+        navigation.reconcile(repository.state.value)
+        assertEquals(base + grandparent, stack)
+    }
+
+    @Test
+    fun `back through two consecutive offline chats falls back to the nearest live ancestor`() = runTest {
+        val repository = NavigationFakeRepository()
+        val (stack, navigation) = onParent(repository)
+        val grandparent = RemoteNavKey.Chat("host", "project", "grandparent")
+        val extra = RemoteNavKey.Chat("host", "project", "extra")
+        navigation.openChild(grandparent, parent)
+        runCurrent()
+        navigation.openChild(parent, child)
+        runCurrent()
+        navigation.openChild(child, extra)
+        runCurrent()
+        assertEquals(base + grandparent + parent + child + extra, stack)
+        // Back lands on the child, which is offline, and so is its own parent; the grandparent
+        // beneath both is still live.
+        val reduced = RemoteSelection("host", "project")
+        repository.activation = { selection, mode ->
+            when {
+                mode != ActivationMode.RESTORE -> selection
+                selection == child.selection() || selection == parent.selection() -> reduced
+                else -> selection
+            }
+        }
+        navigation.back()
+        runCurrent()
+        assertEquals(base + grandparent, stack)
+        assertEquals(grandparent.selection(), repository.state.value.selection)
+    }
+
+    @Test
     fun `open from the session list drops stacked chats`() = runTest {
         val repository = NavigationFakeRepository()
         val (stack, navigation) = onParent(repository)

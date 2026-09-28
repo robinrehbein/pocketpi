@@ -93,7 +93,11 @@ internal class NavigationFakeRepository : RemoteRepository {
         mode: ActivationMode,
     ): RemoteSelection {
         activations += selection to mode
-        return activation(selection, mode)
+        val result = activation(selection, mode)
+        // The real repository's every activate() branch calls select(...), which sets
+        // state.value.selection to the canonical result before returning it.
+        state.value = state.value.copy(selection = result)
+        return result
     }
 
     override suspend fun createSession(routeId: String, projectId: String) =

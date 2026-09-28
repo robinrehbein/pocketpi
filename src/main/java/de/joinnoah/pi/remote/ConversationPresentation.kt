@@ -340,6 +340,9 @@ internal fun conversationItems(
                 )
                 continue
             }
+            // Every bubble split off this message carries the same usage; only the last one keeps
+            // it so a multi-part reply does not repeat the token count on each of its bubbles.
+            val bubbleStart = size
             val attached = AttachmentCodec.decode(message.text("text"))
             val attachments =
                 (message["attachments"] as? JsonArray)?.mapNotNull {
@@ -465,6 +468,14 @@ internal fun conversationItems(
                             )
                         )
                     }
+                }
+            }
+            if (usage != null) {
+                val lastBubble = (bubbleStart until size).lastOrNull { this[it] is ConversationItem.Bubble }
+                for (i in bubbleStart until size) {
+                    val entry = this[i]
+                    if (i != lastBubble && entry is ConversationItem.Bubble && entry.usage != null)
+                        this[i] = entry.copy(usage = null)
                 }
             }
         }

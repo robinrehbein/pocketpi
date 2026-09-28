@@ -5,6 +5,7 @@ import android.text.format.Formatter
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -56,8 +59,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ClipEntry
@@ -68,6 +74,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -94,6 +101,9 @@ import kotlinx.serialization.json.longOrNull
 
 /** One displayed output row: [number] is the 1-based source line, null on a soft-split continuation. */
 internal data class OutputRow(val number: Int?, val text: String)
+
+/** What the "copy output" action ended in, shown next to the search bar. */
+internal enum class CopyOutcome { COPIED, TRUNCATED, FAILED }
 
 internal data class SearchMatch(val line: Int, val start: Int, val end: Int)
 
@@ -195,6 +205,27 @@ internal fun highlightedText(
     }
 }
 
+/**
+ * A clipboard payload well under the Binder transaction limit (~1 MiB shared by the whole
+ * transaction, not just this extra). A `String` marshals as UTF-16 (2 bytes per `char`), so
+ * 128 Ki chars is about 256 KiB and leaves headroom for the rest of the transaction.
+ */
+internal const val CLIPBOARD_MAX_CHARS = 128 * 1024
+
+/** How long typing must settle before the search result count is announced to TalkBack. */
+internal const val SEARCH_ANNOUNCE_DEBOUNCE_MILLIS = 600L
+
+/**
+ * [text] cut to at most [maxChars] UTF-16 `char`s, true when it was cut. The cut never lands
+ * inside a surrogate pair.
+ */
+internal fun clipboardSafeText(text: String, maxChars: Int = CLIPBOARD_MAX_CHARS): Pair<String, Boolean> {
+    if (text.length <= maxChars) return text to false
+    var end = maxChars.coerceAtLeast(0)
+    if (end > 0 && end < text.length && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) end--
+    return text.substring(0, end) to true
+}
+
 private val prettyJson = Json { prettyPrint = true }
 
 /** The arguments as indented JSON, or null when they are missing or not valid JSON. */
@@ -214,6 +245,13 @@ private const val MAX_ARGUMENT_ROWS = 2000
 
 /** Rows all argument blocks of one tool call share until the user asks to see all of them. */
 internal const val ARGUMENT_PREVIEW_ROWS = 200
+
+/**
+ * A code block's rows render in a bounded-height lazy list, so a large expanded block (up to
+ * [MAX_ARGUMENT_ROWS] rows) only composes what fits on screen instead of every row at once. Short
+ * blocks size to their content, exactly as a plain column would.
+ */
+private val CODE_BLOCK_MAX_HEIGHT = 420.dp
 
 /**
  * Row limits for consecutive blocks of [sizes] rows. Collapsed, the blocks share [budget] rows in
@@ -387,6 +425,13 @@ private fun ToolDetailContent(
 
 @Composable
 private fun ToolDetailTopBar(item: ConversationItem.Activity, onClose: () -> Unit) {
+    val titleFocus = remember { FocusRequester() }
+    // Moves TalkBack focus to the overlay's own title as it opens, instead of leaving it wherever
+    // it was on the screen behind.
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        runCatching { titleFocus.requestFocus() }
+    }
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(end = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -398,6 +443,7 @@ private fun ToolDetailTopBar(item: ConversationItem.Activity, onClose: () -> Uni
         Column(Modifier.weight(1f)) {
             Text(
                 item.summary.labelRes?.let { stringResource(it) } ?: item.name ?: stringResource(R.string.remote_tool),
+                modifier = Modifier.testTag("toolDetailTitle").focusRequester(titleFocus).focusable(),
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -447,8 +493,8 @@ private fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun Notice(text: String, color: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
-    Text(text, style = MaterialTheme.typography.labelSmall, color = color)
+private fun Notice(text: String, color: Color = MaterialTheme.colorScheme.onSurfaceVariant, modifier: Modifier = Modifier) {
+    Text(text, modifier, style = MaterialTheme.typography.labelSmall, color = color)
 }
 
 @Composable
@@ -459,7 +505,11 @@ private fun LabeledMono(label: String, value: String) {
     }
 }
 
-/** A small, non-lazy code block for argument values; each block scrolls sideways on its own. */
+/**
+ * A code block for argument values; each block scrolls sideways on its own. Rows are lazy items in
+ * a height-bounded list, so an expanded block of up to [MAX_ARGUMENT_ROWS] rows composes only what
+ * is visible instead of all of them at once.
+ */
 @Composable
 private fun CodeBlock(
     text: String,
@@ -479,11 +529,14 @@ private fun CodeBlock(
     val scroll = rememberScrollState()
     Surface(modifier.fillMaxWidth(), color = container, contentColor = content, shape = MaterialTheme.shapes.small) {
         Column(Modifier.padding(vertical = 6.dp)) {
-            for (row in shown) {
-                Row {
-                    if (numbered) LineNumber(row.number, numberWidth, style)
-                    Box(Modifier.weight(1f).horizontalScroll(scroll).padding(horizontal = 8.dp)) {
-                        Text(row.text, Modifier.width(width), style = style, softWrap = false, maxLines = 1)
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = CODE_BLOCK_MAX_HEIGHT).testTag("codeBlockRows")) {
+                items(shown.size, key = { it }, contentType = { "row" }) { index ->
+                    val row = shown[index]
+                    Row {
+                        if (numbered) LineNumber(row.number, numberWidth, style)
+                        Box(Modifier.weight(1f).horizontalScroll(scroll).padding(horizontal = 8.dp)) {
+                            Text(row.text, Modifier.width(width), style = style, softWrap = false, maxLines = 1)
+                        }
                     }
                 }
             }
@@ -584,8 +637,8 @@ private fun argumentsModel(item: ConversationItem.Activity): ArgumentsModel {
 @Composable
 private fun ArgumentsSection(item: ConversationItem.Activity, modifier: Modifier = Modifier) {
     val model = remember(item.arguments, item.argumentsTruncated, item.details, item.name) { argumentsModel(item) }
-    // Every argument row is composed eagerly inside one lazy item, so large arguments start as a
-    // bounded preview and the user opts into the rest.
+    // Large arguments start as a bounded preview (ARGUMENT_PREVIEW_ROWS shared across blocks) and
+    // the user opts into the rest; each code block then lays its own rows out lazily (CodeBlock).
     var expanded by rememberSaveable { mutableStateOf(false) }
     val sizes = remember(model) { model.blocks.flatMap { if (it is ArgumentBlock.Change) listOf(it.oldRows, it.newRows) else listOf(it.rows) } }
     val limits = remember(sizes, expanded) { argumentRowLimits(sizes, expanded) }
@@ -680,6 +733,16 @@ private fun EditDiffSection(diff: ToolDiff, limit: Int) {
 private fun formatBytes(context: android.content.Context, bytes: Long): String =
     Formatter.formatShortFileSize(context, bytes.coerceAtLeast(0))
 
+/**
+ * [loaded] of [total] bytes rounded down to the nearest 10%, or null when [total] is unknown (so
+ * the caller announces a one-off "started" instead). Used to throttle the accessible progress
+ * announcement to coarse steps instead of one per chunk.
+ */
+internal fun loadingProgressStep(loaded: Long, total: Long?): Int? {
+    if (total == null || total <= 0) return null
+    return ((loaded.toFloat() / total) * 10).toInt().coerceIn(0, 10) * 10
+}
+
 @Composable
 private fun OutputHeader(
     item: ConversationItem.Activity,
@@ -717,7 +780,7 @@ private fun LoadFullOutput(
 ) {
     val context = LocalContext.current
     Column(
-        Modifier.fillMaxWidth().testTag("toolDetailLoadFull").semantics { liveRegion = LiveRegionMode.Polite },
+        Modifier.fillMaxWidth().testTag("toolDetailLoadFull"),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         when {
@@ -734,6 +797,7 @@ private fun LoadFullOutput(
                         }
                     ),
                     MaterialTheme.colorScheme.error,
+                    Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 )
                 if (canRetry && download.failure != ToolOutputFailure.UNSUPPORTED)
                     OutlinedButton(onClick = onLoad) { Text(stringResource(R.string.remote_tool_detail_retry)) }
@@ -747,6 +811,8 @@ private fun LoadFullOutput(
                     )
                 else LinearProgressIndicator(Modifier.fillMaxWidth())
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Updates on every chunk: visible for sighted users, but deliberately outside
+                    // any live region so TalkBack is not asked to speak it that often.
                     Text(
                         if (total != null)
                             stringResource(
@@ -760,6 +826,14 @@ private fun LoadFullOutput(
                     )
                     TextButton(onClick = onCancel) { Text(stringResource(R.string.remote_tool_detail_cancel_load)) }
                 }
+                // A coarse announcement instead: only text that changes at 10% steps (or once, when
+                // the total size is unknown) reaches this live region, so TalkBack speaks progress
+                // occasionally rather than on every chunk.
+                val percentStep = loadingProgressStep(download.loadedBytes, total)
+                val coarseProgress =
+                    if (percentStep != null) stringResource(R.string.remote_tool_detail_loading_progress_percent, percentStep)
+                    else stringResource(R.string.remote_tool_detail_loading_started)
+                Spacer(Modifier.size(0.dp).semantics { liveRegion = LiveRegionMode.Polite; contentDescription = coarseProgress })
             }
         }
     }
@@ -778,12 +852,23 @@ private fun SearchBar(
 ) {
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
-    var copied by remember { mutableStateOf<Boolean?>(null) }
-    LaunchedEffect(copied) {
-        if (copied != null) {
+    var copyOutcome by remember { mutableStateOf<CopyOutcome?>(null) }
+    LaunchedEffect(copyOutcome) {
+        if (copyOutcome != null) {
             delay(2500)
-            copied = null
+            copyOutcome = null
         }
+    }
+    // Announced to TalkBack only after typing settles, not on every keystroke: the visible count
+    // below still updates immediately.
+    var announcedQuery by remember { mutableStateOf(query) }
+    var announcedMatches by remember { mutableStateOf(matches) }
+    var announcedCurrent by remember { mutableStateOf(current) }
+    LaunchedEffect(query, matches, current) {
+        delay(SEARCH_ANNOUNCE_DEBOUNCE_MILLIS)
+        announcedQuery = query
+        announcedMatches = matches
+        announcedCurrent = current
     }
     val copyLabel = stringResource(R.string.remote_tool_detail_copy)
     Surface(modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
@@ -807,11 +892,18 @@ private fun SearchBar(
                 IconButton(
                     onClick = {
                         scope.launch {
-                            copied =
+                            val (clipText, truncated) = clipboardSafeText(output)
+                            val success =
                                 runCatching {
-                                        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(copyLabel, output)))
+                                        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(copyLabel, clipText)))
                                     }
                                     .isSuccess
+                            copyOutcome =
+                                when {
+                                    !success -> CopyOutcome.FAILED
+                                    truncated -> CopyOutcome.TRUNCATED
+                                    else -> CopyOutcome.COPIED
+                                }
                         }
                     },
                     modifier = Modifier.testTag("toolDetailCopy"),
@@ -830,14 +922,37 @@ private fun SearchBar(
                         Modifier.testTag("toolDetailSearchCount"),
                         style = MaterialTheme.typography.labelSmall,
                     )
-                copied?.let {
+                // A separate, own live region: a copy outcome change never re-triggers the search
+                // announcement (and vice versa).
+                copyOutcome?.let {
                     Text(
-                        stringResource(if (it) R.string.remote_tool_detail_copied else R.string.remote_tool_detail_copy_failed),
-                        Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        stringResource(
+                            when (it) {
+                                CopyOutcome.COPIED -> R.string.remote_tool_detail_copied
+                                CopyOutcome.TRUNCATED -> R.string.remote_tool_detail_copy_truncated
+                                CopyOutcome.FAILED -> R.string.remote_tool_detail_copy_failed
+                            }
+                        ),
+                        Modifier.testTag("toolDetailCopyResult").semantics { liveRegion = LiveRegionMode.Polite },
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (it) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                        color = if (it == CopyOutcome.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+            if (announcedQuery.isNotEmpty()) {
+                val announcedText =
+                    when {
+                        announcedMatches == 0 -> stringResource(R.string.remote_tool_detail_search_none)
+                        announcedMatches >= 1000 ->
+                            stringResource(R.string.remote_tool_detail_search_count_capped, announcedCurrent + 1, announcedMatches)
+                        else -> stringResource(R.string.remote_tool_detail_search_count, announcedCurrent + 1, announcedMatches)
+                    }
+                Spacer(
+                    Modifier.size(0.dp).testTag("toolDetailSearchAnnouncement").semantics {
+                        liveRegion = LiveRegionMode.Polite
+                        contentDescription = announcedText
+                    }
+                )
             }
         }
     }

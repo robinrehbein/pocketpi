@@ -247,6 +247,13 @@ internal fun RemoteScreen(
     val leadingItems = remember { LeadingItems() }
     var jumpRequest by remember { mutableStateOf<JumpRequest?>(null) }
     var highlightedId by remember { mutableStateOf<String?>(null) }
+    val jumpFocus = remember { FocusRequester() }
+    LaunchedEffect(highlightedId) {
+        if (highlightedId == null) return@LaunchedEffect
+        // The target item was just recomposed into the tree: let it lay out before focusing it.
+        withFrameNanos { }
+        runCatching { jumpFocus.requestFocus() }
+    }
     val currentShownItems by rememberUpdatedState(shownItems)
     fun scrollToLatestItem() {
         autoFollow = true
@@ -1197,7 +1204,11 @@ internal fun RemoteScreen(
                         leadingItems.count = leading
                         items(shownItems, key = { it.id }) { item ->
                             val highlighted = item.id == highlightedId
-                            Box(if (highlighted) Modifier.testTag("jumpTarget") else Modifier) {
+                            Box(
+                                if (highlighted)
+                                    Modifier.testTag("jumpTarget").focusRequester(jumpFocus).focusable()
+                                else Modifier
+                            ) {
                                 ConversationMessage(
                                     item,
                                     thinkingDisplay,
