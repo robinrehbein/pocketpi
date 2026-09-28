@@ -12,6 +12,19 @@ From the repository root, with JDK 25 and the Android SDK configured:
 adb install build/outputs/apk/debug/pocketpi-debug.apk
 ```
 
+## Continuous integration
+
+[`Android CI`](.github/workflows/ci.yml) checks the exact head commit of each pull request
+into `main` and each commit pushed to `main`. The workflow uses JDK 25, Android SDK platform
+37 and build tools 37.0.0. It checks English and German resource keys, runs unit tests, builds
+the debug APK, runs Android Lint, and runs the managed API 36 emulator instrumentation tests.
+GitHub-hosted Linux must provide `/dev/kvm` for the emulator step. On failure, the workflow
+uploads available Gradle reports and test results as the `pocketpi-verification` artifact.
+
+Run the resource check locally with `python3 scripts/i18n-check.py .`. The checker uses only
+Python's standard library and reports keys missing from either locale. CI builds do not use
+release signing keys, Play credentials or Firebase release configuration.
+
 Start `/remote` in pi on the Mac, scan the QR code and approve the device on the Mac. You can also
 paste the complete pairing code. The code expires after two minutes. Projects must be shared by the
 Mac before they appear in the app. Historical sessions continue as copies through the host.
