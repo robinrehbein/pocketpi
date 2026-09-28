@@ -27,6 +27,13 @@ class RemoteMessagingService : FirebaseMessagingService() {
         val app = application as RemoteApplication
         if (!app.settings.state.value.pushEnabled) return
         if (!firstDelivery(payload.eventId)) return
+        if (payload.event.attention) {
+            // A child or shell says nothing about its session's state or questions.
+            if (!RemoteNotifications.canPost(this)) return
+            if (app.isShowing(payload.routeId, payload.sessionId)) return
+            RemoteNotifications.postAttention(this, payload)
+            return
+        }
         app.onPushEvent(payload)
         QuestionUpgrades.onEvent(applicationContext, payload)
         if (!RemoteNotifications.canPost(this)) return

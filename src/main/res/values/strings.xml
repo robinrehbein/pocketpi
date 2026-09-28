@@ -133,6 +133,18 @@
     <string name="remote_notification_denied">Notifications are off. You can enable them in Android settings.</string>
     <string name="remote_notification_complete">pi has finished</string>
     <string name="remote_notification_question">pi needs an answer</string>
+    <string name="remote_notification_subagent_done">Subagent finished</string>
+    <string name="remote_notification_subagent_stuck">Subagent needs attention</string>
+    <string name="remote_notification_job_done">Background shell finished</string>
+    <string name="remote_notification_job_stuck">Background shell looks stuck</string>
+    <plurals name="remote_notification_subagents_done">
+        <item quantity="one">%d subagent finished</item>
+        <item quantity="other">%d subagents finished</item>
+    </plurals>
+    <plurals name="remote_notification_jobs_done">
+        <item quantity="one">%d background shell finished</item>
+        <item quantity="other">%d background shells finished</item>
+    </plurals>
     <string name="remote_notification_open">Open the session to see its current state.</string>
     <string name="remote_appearance">Appearance</string>
     <string name="remote_theme_system">System</string>
