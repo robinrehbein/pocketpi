@@ -193,3 +193,42 @@ Gradle root. The internal Kotlin namespace, pi extension directory and `/remote`
 retain their existing names.
 A previous debug installation under `de.joinnoah.pi.remote` is a separate app and does not share
 pairings or settings with PocketPi.
+
+## Play testing releases
+
+`.github/workflows/release.yml` runs only after a successful `Android CI` push run on the current
+`main` commit. It builds one signed AAB, then submits it to Play Internal Testing (`qa`) and the
+configured Closed Alpha track in one Play edit. It stops if either track cannot accept the release.
+It never targets production. Play may still hold an accepted edit for app review; check the Play
+Console before telling testers that the update is available.
+
+Protect the `play-testing` GitHub environment so only `main` can use it. Set its variables
+`GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_PLAY_SERVICE_ACCOUNT`, and `POCKETPI_CLOSED_TRACK`. The last
+value must be the exact custom track identifier returned by the Play Developer API, not a display
+name. Set the Google Cloud workload identity provider's subject mapping to
+`google.subject=assertion.sub`, then restrict it with GitHub's OIDC claims:
+
+```text
+assertion.repository_id=='1391246149' && assertion.repository_owner_id=='4692134' && assertion.ref=='refs/heads/main' && assertion.environment=='play-testing'
+```
+
+The numeric IDs bind the provider to the current repository and owner even if their names change.
+Give its service account Workload Identity User access and grant that service account only PocketPi's Play Console
+testing-track release permissions. The workflow uses short-lived OIDC access tokens and has no
+service account JSON key.
+
+Set the environment secrets `POCKETPI_UPLOAD_KEYSTORE_B64`, `POCKETPI_UPLOAD_STORE_PASSWORD`,
+`POCKETPI_UPLOAD_KEY_ALIAS`, `POCKETPI_UPLOAD_KEY_PASSWORD`, and the four `PI_REMOTE_FIREBASE_*`
+values listed above. The keystore secret is the base64 encoding of the existing PocketPi upload
+keystore. `validateUploadKey` checks its private key and the upload certificate SHA-256 fingerprint
+`06:0C:E8:05:BB:E7:36:AF:A7:30:F3:DF:F3:05:01:2A:62:2A:88:6A:EE:8E:E1:95:47:2D:87:1B:C9:B7:04:15`.
+Do not generate a new signing key for an update. A local release build accepts the same signing
+values as environment variables or ignored `local.properties` entries.
+
+The release script reads every current Play bundle, APK and track version code, then uses the next
+integer. Gradle embeds it as `versionCode` and the workflow sets a visible name such as
+`0.3.19-ci.23`. The script checks the version again immediately before upload and fails if another
+publisher used it. It commits with `ERROR_IF_IN_REVIEW` so an existing Play review is not canceled.
+The Closed Alpha track must already exist and its app-content declarations, testers, countries and
+reviewer access must be ready in Play Console. A missing track or Play rejection stops the entire
+edit; it does not fall back to publishing only Internal Testing.

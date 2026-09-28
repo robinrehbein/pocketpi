@@ -1,0 +1,145 @@
+name: Publish PocketPi to Play testing
+
+on:
+  workflow_run:
+    workflows: ["Android CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: pocketpi-play-testing
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: play-testing
+    env:
+      POCKETPI_CLOSED_TRACK: ${{ vars.POCKETPI_CLOSED_TRACK }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Require CI success for the current main commit
+        env:
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          current="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test -n "$current" && test "$current" = "$CI_SHA" || {
+            echo 'The green CI run does not match current main'; exit 1;
+          }
+      - name: Require protected release configuration
+        env:
+          WIF_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          PLAY_SERVICE_ACCOUNT: ${{ vars.GCP_PLAY_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          for name in WIF_PROVIDER PLAY_SERVICE_ACCOUNT POCKETPI_CLOSED_TRACK; do
+            test -n "${!name:-}" || { echo "Missing release setting: $name"; exit 1; }
+          done
+          python3 scripts/release/play_release.py validate-track
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Play API client
+        run: python -m pip install 'google-api-python-client==2.150.0' 'google-auth==2.35.0'
+      - id: prepare_auth
+        name: Authenticate to the PocketPi Play service account
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_PLAY_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+          create_credentials_file: false
+      - id: version
+        name: Allocate the next Play version code
+        env:
+          GOOGLE_ACCESS_TOKEN: ${{ steps.prepare_auth.outputs.access_token }}
+        run: |
+          set -euo pipefail
+          version="$(python scripts/release/play_release.py prepare)"
+          [[ "$version" =~ ^[0-9]+$ ]] || exit 1
+          echo "code=$version" >> "$GITHUB_OUTPUT"
+          echo "name=0.3.19-ci.$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: "16111833"
+          packages: ""
+      - name: Install Android SDK 37
+        run: |
+          set -euo pipefail
+          command -v sdkmanager >/dev/null || { echo 'Android sdkmanager is missing from PATH'; exit 1; }
+          sdkmanager --install 'platforms;android-37.0' 'build-tools;37.0.0'
+          test -d "$ANDROID_HOME/platforms/android-37.0" || {
+            echo 'Android platform 37.0 did not install'; exit 1;
+          }
+          test -d "$ANDROID_HOME/build-tools/37.0.0" || {
+            echo 'Android build-tools 37.0.0 did not install'; exit 1;
+          }
+      - name: Build and verify signed Play bundle
+        env:
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+          POCKETPI_UPLOAD_KEYSTORE_B64: ${{ secrets.POCKETPI_UPLOAD_KEYSTORE_B64 }}
+          POCKETPI_UPLOAD_STORE_PASSWORD: ${{ secrets.POCKETPI_UPLOAD_STORE_PASSWORD }}
+          POCKETPI_UPLOAD_KEY_ALIAS: ${{ secrets.POCKETPI_UPLOAD_KEY_ALIAS }}
+          POCKETPI_UPLOAD_KEY_PASSWORD: ${{ secrets.POCKETPI_UPLOAD_KEY_PASSWORD }}
+          PI_REMOTE_FIREBASE_API_KEY: ${{ secrets.PI_REMOTE_FIREBASE_API_KEY }}
+          PI_REMOTE_FIREBASE_APP_ID: ${{ secrets.PI_REMOTE_FIREBASE_APP_ID }}
+          PI_REMOTE_FIREBASE_PROJECT_ID: ${{ secrets.PI_REMOTE_FIREBASE_PROJECT_ID }}
+          PI_REMOTE_FIREBASE_GCM_SENDER_ID: ${{ secrets.PI_REMOTE_FIREBASE_GCM_SENDER_ID }}
+        run: |
+          set -euo pipefail
+          for name in POCKETPI_UPLOAD_KEYSTORE_B64 POCKETPI_UPLOAD_STORE_PASSWORD \
+            POCKETPI_UPLOAD_KEY_ALIAS POCKETPI_UPLOAD_KEY_PASSWORD \
+            PI_REMOTE_FIREBASE_API_KEY PI_REMOTE_FIREBASE_APP_ID \
+            PI_REMOTE_FIREBASE_PROJECT_ID PI_REMOTE_FIREBASE_GCM_SENDER_ID; do
+            test -n "${!name:-}" || { echo "Missing release setting: $name"; exit 1; }
+          done
+          umask 077
+          POCKETPI_UPLOAD_KEYSTORE="$RUNNER_TEMP/pocketpi-upload.jks"
+          trap 'rm -f -- "$POCKETPI_UPLOAD_KEYSTORE"' EXIT
+          printf '%s' "$POCKETPI_UPLOAD_KEYSTORE_B64" | base64 --decode > "$POCKETPI_UPLOAD_KEYSTORE"
+          test -s "$POCKETPI_UPLOAD_KEYSTORE"
+          export POCKETPI_UPLOAD_KEYSTORE
+          ./gradlew --no-daemon bundleRelease \
+            "-PPOCKETPI_VERSION_CODE=$VERSION_CODE" \
+            "-PPOCKETPI_VERSION_NAME=$VERSION_NAME"
+          bundle='build/outputs/bundle/release/pocketpi-release.aab'
+          test -s "$bundle"
+          python scripts/release/verify_bundle.py "$bundle"
+      - id: publish_auth
+        name: Refresh the Play API access token
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_PLAY_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+          create_credentials_file: false
+      - name: Commit one Play edit for Internal and Closed Alpha
+        env:
+          GOOGLE_ACCESS_TOKEN: ${{ steps.publish_auth.outputs.access_token }}
+          VERSION_CODE: ${{ steps.version.outputs.code }}
+        run: |
+          set -euo pipefail
+          python scripts/release/play_release.py publish \
+            --version-code "$VERSION_CODE" \
+            --bundle build/outputs/bundle/release/pocketpi-release.aab
