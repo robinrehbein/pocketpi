@@ -117,8 +117,11 @@ internal fun SessionControls(
         if (state.connected && state.selection.sessionId != null) refreshContextUsage()
     }
     val jobsAvailable = canUseBackgroundJobs(state)
-    // Job events need a watch lease, so the chip's list is read on open and after reconnecting.
-    LaunchedEffect(state.selection.sessionId, state.connected, jobsAvailable) {
+    val jobsLeasable = canLeaseJobsList(state)
+    // Job events need a watch lease, so the chip's list is read on open, after reconnecting, and
+    // again the moment the host advertises the list-lease capability mid-connection (capabilities
+    // are merged in additively as later projects.list replies arrive).
+    LaunchedEffect(state.selection.sessionId, state.connected, jobsAvailable, jobsLeasable) {
         if (state.connected && jobsAvailable && openJobs != null) refreshJobs()
     }
     val visibleJobs = visibleJobs(state)

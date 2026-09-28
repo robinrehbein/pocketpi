@@ -267,6 +267,8 @@ class RemoteRepositoryTest {
 
     private fun Transport.jobsListRequests() = sent.filter { it.text("type") == "session.jobs.list" }
 
+    private fun JsonObject.hasLease() = "lease" in this && flag("lease")
+
     @Test
     fun aSessionStatusChangeRefreshesTheJobList() = runTest {
         val transport = Transport()
@@ -321,7 +323,7 @@ class RemoteRepositoryTest {
         runCurrent()
         val leased = leasedTransport.jobsListRequests()
         assertTrue(leased.isNotEmpty())
-        assertTrue(leased.all { it.flag("lease") })
+        assertTrue(leased.all { it.hasLease() })
     }
 
     @Test
@@ -332,7 +334,7 @@ class RemoteRepositoryTest {
         runCurrent()
         repository.refreshJobs()
         runCurrent()
-        fun leaseLists() = transport.jobsListRequests().count { it.flag("lease") }
+        fun leaseLists() = transport.jobsListRequests().count { it.hasLease() }
         val before = leaseLists()
 
         advanceTimeBy(JOBS_LIST_LEASE_RENEW_MILLIS - 1)
@@ -354,7 +356,7 @@ class RemoteRepositoryTest {
         runCurrent()
         repository.refreshJobs()
         runCurrent()
-        fun leaseLists() = transport.jobsListRequests().count { it.flag("lease") }
+        fun leaseLists() = transport.jobsListRequests().count { it.hasLease() }
         val before = leaseLists()
 
         // Closing the chat (no session selected) stops the renewal loop.
@@ -373,7 +375,7 @@ class RemoteRepositoryTest {
         runCurrent()
         repository.refreshJobs()
         runCurrent()
-        fun leaseLists() = transport.jobsListRequests().count { it.flag("lease") }
+        fun leaseLists() = transport.jobsListRequests().count { it.hasLease() }
         val before = leaseLists()
 
         repository.setForeground(false)
@@ -396,7 +398,7 @@ class RemoteRepositoryTest {
         runCurrent()
         repository.refreshJobs()
         runCurrent()
-        fun leaseLists() = transport.jobsListRequests().count { it.flag("lease") }
+        fun leaseLists() = transport.jobsListRequests().count { it.hasLease() }
         val before = leaseLists()
 
         transport.listener.failed(false, R.string.remote_connection_error)
@@ -406,6 +408,134 @@ class RemoteRepositoryTest {
         repository.refreshJobs()
         runCurrent()
         assertEquals(before + 1, leaseLists())
+    }
+
+    @Test
+    fun switchingSessionsScopesLeaseRenewalToTheNewSessionOnly() = runTest {
+        val transport = Transport()
+        val first = session(id = "session", origin = "tui")
+        val second = session(id = "other", origin = "tui")
+        val sessions = listOf(first, second)
+        transport.response = { request ->
+            when (request.text("type")) {
+                "projects.list" -> data("projects", listOf(project))
+                "sessions.list" -> data("sessions", sessions)
+                "sessions.open" ->
+                    Wire.objectOf(
+                        "kind" to "session",
+                        "session" to sessions.first { it.text("id") == request.text("sessionId") },
+                    )
+                "session.snapshot" ->
+                    Wire.objectOf(
+                        "kind" to "snapshot",
+                        "sessionId" to request.text("sessionId"),
+                        "revision" to 0,
+                        "status" to "idle",
+                        "messages" to JsonArray(emptyList()),
+                        "pendingQuestions" to JsonArray(emptyList()),
+                    )
+                else -> Wire.objectOf("kind" to "accepted")
+            }
+        }
+        transport.capabilities = setOf(BACKGROUND_JOBS_CAPABILITY, BACKGROUND_JOBS_LIST_LEASE_CAPABILITY)
+        val repository = repository(transport)
+
+        fun leaseListsFor(id: String) =
+            transport.jobsListRequests().count { it.hasLease() && it.text("sessionId") == id }
+
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.refreshJobs()
+        runCurrent()
+        assertTrue(leaseListsFor("session") > 0)
+
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        repository.refreshJobs()
+        runCurrent()
+        val firstAfterSwitch = leaseListsFor("session")
+        assertTrue(leaseListsFor("other") > 0)
+
+        advanceTimeBy(3 * JOBS_LIST_LEASE_RENEW_MILLIS)
+        runCurrent()
+        // The session left behind gets no more renewals; the newly selected one keeps renewing.
+        assertEquals(firstAfterSwitch, leaseListsFor("session"))
+        assertTrue(leaseListsFor("other") > 1)
+    }
+
+    @Test
+    fun aReconnectToAHostWithoutTheCapabilityStopsLeasingAndRestoresTheHeuristics() = runTest {
+        val transport = Transport()
+        val repository = jobsRepository(transport, lease = true)
+        val selection = RemoteSelection("host", "project", "session")
+        repository.activate(selection)
+        runCurrent()
+        repository.refreshJobs()
+        runCurrent()
+        fun leaseLists() = transport.jobsListRequests().count { it.hasLease() }
+        fun allLists() = transport.jobsListRequests().size
+        assertTrue(leaseLists() > 0)
+
+        // The host reconnected to no longer advertises the list-lease capability (an older host).
+        transport.capabilities = setOf(BACKGROUND_JOBS_CAPABILITY)
+        transport.listener.failed(false, R.string.remote_connection_error)
+        repository.activate(selection)
+        runCurrent()
+        repository.refreshJobs()
+        runCurrent()
+        assertFalse(canLeaseJobsList(repository.state.value))
+        assertFalse(transport.jobsListRequests().last().hasLease())
+        val leaseListsAfterReconnect = leaseLists()
+
+        advanceTimeBy(3 * JOBS_LIST_LEASE_RENEW_MILLIS)
+        runCurrent()
+        assertEquals(leaseListsAfterReconnect, leaseLists())
+
+        // The re-list heuristic is active again for this older host.
+        val before = allLists()
+        transport.listener.message(
+            Wire.objectOf(
+                "type" to "event", "sessionId" to "session",
+                "revision" to 1, "kind" to "session.status", "status" to "running",
+            )
+        )
+        runCurrent()
+        assertEquals(before + 1, allLists())
+    }
+
+    @Test
+    fun aCapabilityThatArrivesMidConnectionStartsLeasingAtOnce() = runTest {
+        val transport = Transport()
+        val tui = session(origin = "tui")
+        configure(transport, sessions = listOf(tui), opened = tui)
+        transport.capabilities = setOf(BACKGROUND_JOBS_CAPABILITY)
+        var leaseAdvertised = false
+        val original = transport.response
+        transport.response = { request ->
+            val result = original(request)
+            if (request.text("type") == "projects.list" && leaseAdvertised && result != null)
+                JsonObject(
+                    result + ("capabilities" to JsonArray(listOf(JsonPrimitive(BACKGROUND_JOBS_LIST_LEASE_CAPABILITY))))
+                )
+            else result
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.refreshJobs()
+        runCurrent()
+        fun leaseLists() = transport.jobsListRequests().count { it.hasLease() }
+        assertFalse(canLeaseJobsList(repository.state.value))
+        assertEquals(0, leaseLists())
+
+        // The host now advertises the lease capability; a later projects.list (here, resolving a
+        // notification while the chat stays connected) merges it in without a reconnect.
+        leaseAdvertised = true
+        repository.openNotification("host", "session")
+        runCurrent()
+
+        assertTrue(canLeaseJobsList(repository.state.value))
+        assertEquals(1, leaseLists())
     }
 
     @Test

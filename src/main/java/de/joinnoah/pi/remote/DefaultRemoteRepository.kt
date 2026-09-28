@@ -887,7 +887,12 @@ class DefaultRemoteRepository(
                     .orEmpty()
                 val merged = routeCapabilities.filter { it in advertised }
                 if (merged.isNotEmpty()) {
+                    // Capabilities merge in additively as later projects.list replies arrive; a list
+                    // lease that only now becomes possible starts leasing at once, not at the next
+                    // session change or reconnect.
+                    val hadLease = canLeaseJobsList(state.value)
                     update { it.copy(capabilities = it.capabilities + merged) }
+                    if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
                 if (PROJECT_OPEN_CAPABILITY in merged) resumeClone()
             }

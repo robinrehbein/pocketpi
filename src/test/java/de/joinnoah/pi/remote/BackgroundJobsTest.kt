@@ -628,6 +628,36 @@ class BackgroundJobsTest {
     }
 
     @Test
+    fun renewalTicksDoNotToggleLoadingSoTheRefreshButtonStaysEnabled() = runTest {
+        val harness = Harness(backgroundScope)
+        harness.state = harness.state.copy(capabilities = harness.state.capabilities + BACKGROUND_JOBS_LIST_LEASE_CAPABILITY)
+        harness.source.list = { emptyList() }
+        harness.controller.refresh()
+        runCurrent()
+        assertFalse(harness.state.jobs!!.loading)
+
+        var resume: kotlin.coroutines.Continuation<List<BackgroundJob>>? = null
+        harness.source.list = { kotlin.coroutines.suspendCoroutine { resume = it } }
+        advanceTimeBy(JOBS_LIST_LEASE_RENEW_MILLIS)
+        runCurrent()
+        // The renewal request is in flight, but it must never disable the refresh button.
+        assertFalse(harness.state.jobs!!.loading)
+        resume!!.resumeWith(Result.success(listOf(running(0))))
+        runCurrent()
+        assertFalse(harness.state.jobs!!.loading)
+        assertEquals(listOf("job"), harness.state.jobs!!.jobs.map { it.id })
+
+        // A manual refresh still shows loading normally.
+        harness.source.list = { kotlin.coroutines.suspendCoroutine { resume = it } }
+        harness.controller.refresh()
+        runCurrent()
+        assertTrue(harness.state.jobs!!.loading)
+        resume!!.resumeWith(Result.success(emptyList()))
+        runCurrent()
+        assertFalse(harness.state.jobs!!.loading)
+    }
+
+    @Test
     fun jobsChangedRefreshesTheListWithoutARequest() = runTest {
         val harness = Harness(backgroundScope)
         harness.source.list = { emptyList() }

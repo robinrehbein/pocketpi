@@ -558,13 +558,21 @@ internal class BackgroundJobsController(
             else -> if (!current().connected) JobsFailure.OFFLINE else JobsFailure.FAILED
         }
 
-    /** Lists the selected session's jobs and makes an open job view pull again. */
-    fun refresh() {
+    /**
+     * Lists the selected session's jobs and makes an open job view pull again. [silent] is for the
+     * lease's own 30-second renewal tick: it still lists and updates the jobs, but never touches
+     * `loading`, so it does not disable the refresh button for an action the user did not take.
+     */
+    fun refresh(silent: Boolean = false) {
         val state = current()
         val sessionId = state.selection.sessionId ?: return
-        if (!canUseBackgroundJobs(state) || !state.connected) return
+        if (!canUseBackgroundJobs(state) || !state.connected) {
+            // A lost connection or capability ends the lease at once, not at the next renewal tick.
+            stopLease()
+            return
+        }
         ensure(sessionId)
-        write(sessionId) { it.copy(loading = true) }
+        if (!silent) write(sessionId) { it.copy(loading = true) }
         val lease = canLeaseJobsList(state)
         val version = ++listVersion
         listJob?.cancel()
@@ -572,24 +580,28 @@ internal class BackgroundJobsController(
             try {
                 val items = source.listJobs(sessionId, lease)
                 if (version != listVersion) return@launch
-                write(sessionId) { it.withJobs(items).copy(loading = false, failure = null, unsupported = false) }
+                write(sessionId) { jobs ->
+                    jobs.withJobs(items).copy(failure = null, unsupported = false, loading = jobs.loading && silent)
+                }
             } catch (e: Exception) {
                 // A request the repository cancelled, such as after a session change, counts as a failure.
                 if (e is CancellationException && !currentCoroutineContext().isActive) throw e
                 // A late answer to a replaced request leaves the newer one's state alone.
                 if (version != listVersion) return@launch
                 val reason = failure(e)
-                write(sessionId) {
-                    it.copy(
-                        loading = false,
+                write(sessionId) { jobs ->
+                    jobs.copy(
+                        loading = jobs.loading && silent,
                         unsupported = reason == JobsFailure.UNSUPPORTED,
                         failure = reason.takeIf { r -> r != JobsFailure.UNSUPPORTED },
                     )
                 }
             }
         }
-        // A reconnect can end the watch lease; the open view watches again right away.
-        wake.trySend(Unit)
+        if (!silent) {
+            // A reconnect can end the watch lease; the open view watches again right away.
+            wake.trySend(Unit)
+        }
         manageLease(sessionId)
     }
 
@@ -611,7 +623,7 @@ internal class BackgroundJobsController(
             while (isActive) {
                 delay(JOBS_LIST_LEASE_RENEW_MILLIS)
                 if (version != leaseVersion || !leaseActive(sessionId)) return@launch
-                refresh()
+                refresh(silent = true)
             }
         }
     }
