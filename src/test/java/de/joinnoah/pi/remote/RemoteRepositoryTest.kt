@@ -1294,6 +1294,25 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun sessionsFreshOnlyWhenTheListWasActuallyFetchedThisTime() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        assertTrue(
+            "The list was just fetched on this connection",
+            repository.state.value.sessionsFresh,
+        )
+        val listRequests = transport.sent.count { it.text("type") == "sessions.list" }
+        // Same connection, same project: the cached list is reused rather than refetched.
+        repository.activate(RemoteSelection("host", "project"))
+        assertEquals(listRequests, transport.sent.count { it.text("type") == "sessions.list" })
+        assertFalse(
+            "A reused cached list must not be trusted to declare a session closed",
+            repository.state.value.sessionsFresh,
+        )
+    }
+
+    @Test
     fun foregroundWithValidatedNetworkResynchronizesSavedSelectionWithoutOpeningIt() = runTest {
         val transport = Transport().also { configure(it) }
         val repository = repository(transport)

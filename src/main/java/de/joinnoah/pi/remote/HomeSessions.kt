@@ -189,6 +189,25 @@ internal fun shortcutId(routeId: String, sessionId: String) = "session:$routeId:
 
 internal fun routeShortcutPrefix(routeId: String) = "session:$routeId:"
 
+/** Separates entries of the persisted, published-shortcut-list signature (see [HomeSurfaces]). */
+internal const val SHORTCUT_SIGNATURE_DELIMITER = "\u001F"
+
+/**
+ * One entry of that signature: `id|title|projectName`. The host controls [title] and
+ * [projectName], so both are stripped of the field separator and the entry separator first —
+ * otherwise a crafted title could shift a later field into an earlier one, or split what should
+ * be one list entry into several once the signature round-trips through storage.
+ */
+internal fun shortcutSignatureEntry(
+    routeId: String,
+    sessionId: String,
+    title: String,
+    projectName: String,
+): String {
+    fun sanitized(value: String) = value.replace(SHORTCUT_SIGNATURE_DELIMITER, " ").replace("|", " ")
+    return "${shortcutId(routeId, sessionId)}|${sanitized(title)}|${sanitized(projectName)}"
+}
+
 /**
  * Sessions the host positively no longer lists as live: known rows of the open project that are
  * missing from its full, trusted session list. Falling out of the snapshot's size cap or out of the
