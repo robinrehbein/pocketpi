@@ -32,7 +32,8 @@ class AttentionNotificationTest {
     private fun push(vararg fields: Pair<String, String>) =
         parsePushPayload(mapOf("routeId" to "r", "target" to "s", "eventId" to "e") + fields)!!
 
-    private fun posted() = manager.activeNotifications.single { it.id == 2 }
+    /** The one attention notification posted under [id] (2 for `*.done`, 3 for `*.stuck`). */
+    private fun posted(id: Int) = manager.activeNotifications.single { it.id == id }
 
     private fun title(notification: android.app.Notification) =
         notification.extras.getCharSequence(NotificationCompat.EXTRA_TITLE).toString()
@@ -41,22 +42,24 @@ class AttentionNotificationTest {
     fun eachKindRendersItsOwnTitle() {
         val expected =
             mapOf(
-                "subagent.done" to "Subagent finished",
-                "subagent.stuck" to "Subagent needs attention",
-                "job.done" to "Background shell finished",
-                "job.stuck" to "Background shell looks stuck",
+                "subagent.done" to Pair("Subagent finished", 2),
+                "subagent.stuck" to Pair("Subagent looks stuck", 3),
+                "job.done" to Pair("Background job finished", 2),
+                "job.stuck" to Pair("Background job looks stuck", 3),
             )
-        for ((kind, text) in expected) {
+        for ((kind, expectation) in expected) {
+            val (text, id) = expectation
             RemoteNotifications.postAttention(context, push("event" to kind, "jobId" to "job_1"))
-            assertEquals(text, title(posted().notification))
+            assertEquals(text, title(posted(id).notification))
+            RemoteNotifications.cancel(context, "r", "s")
         }
     }
 
     @Test
     fun aBundleShowsTheNumberOfChildren() {
         RemoteNotifications.postAttention(context, push("event" to "subagent.done", "count" to "3"))
-        assertEquals("3 subagents finished", title(posted().notification))
-        assertEquals("3 subagents finished", title(posted().notification.publicVersion))
+        assertEquals("3 subagents finished", title(posted(2).notification))
+        assertEquals("3 subagents finished", title(posted(2).notification.publicVersion))
     }
 
     @Test
@@ -64,6 +67,17 @@ class AttentionNotificationTest {
         RemoteNotifications.postGenericQuestion(context, push("event" to "question"))
         RemoteNotifications.postAttention(context, push("event" to "job.done", "jobId" to "job_1"))
         assertEquals(setOf(1, 2), manager.activeNotifications.map { it.id }.toSet())
+        RemoteNotifications.cancel(context, "r", "s")
+        assertTrue(manager.activeNotifications.isEmpty())
+    }
+
+    @Test
+    fun stuckAndDoneNoticesForTheSameSessionBothShow() {
+        RemoteNotifications.postAttention(context, push("event" to "job.stuck", "jobId" to "job_1"))
+        RemoteNotifications.postAttention(context, push("event" to "job.done", "jobId" to "job_2"))
+        assertEquals(setOf(2, 3), manager.activeNotifications.map { it.id }.toSet())
+        assertEquals("Background job looks stuck", title(posted(3).notification))
+        assertEquals("Background job finished", title(posted(2).notification))
         RemoteNotifications.cancel(context, "r", "s")
         assertTrue(manager.activeNotifications.isEmpty())
     }
@@ -77,7 +91,7 @@ class AttentionNotificationTest {
         assertTrue(job.getBooleanExtra(RemoteNotifications.EXTRA_JOBS, false))
         assertEquals("job_1", job.getStringExtra(RemoteNotifications.EXTRA_JOB))
         assertNull(list.getStringExtra(RemoteNotifications.EXTRA_JOB))
-        assertEquals(setOf(session.data, job.data, list.data).size, 3)
+        assertEquals(3, setOf(session.data, job.data, list.data).size)
         assertNotEquals(session.data, job.data)
         val plain = notificationIntent(context, NotificationTarget("r", "s"))
         assertEquals(session.data, plain.data)

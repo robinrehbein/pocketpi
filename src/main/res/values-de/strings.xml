@@ -134,16 +134,16 @@
     <string name="remote_notification_complete">pi ist fertig</string>
     <string name="remote_notification_question">pi braucht eine Antwort</string>
     <string name="remote_notification_subagent_done">Subagent ist fertig</string>
-    <string name="remote_notification_subagent_stuck">Subagent braucht Aufmerksamkeit</string>
-    <string name="remote_notification_job_done">Hintergrund-Shell ist fertig</string>
-    <string name="remote_notification_job_stuck">Hintergrund-Shell scheint zu hängen</string>
+    <string name="remote_notification_subagent_stuck">Subagent scheint zu hängen</string>
+    <string name="remote_notification_job_done">Hintergrundjob ist fertig</string>
+    <string name="remote_notification_job_stuck">Hintergrundjob scheint zu hängen</string>
     <plurals name="remote_notification_subagents_done">
         <item quantity="one">%d Subagent ist fertig</item>
-        <item quantity="other">%d Subagents sind fertig</item>
+        <item quantity="other">%d Subagenten sind fertig</item>
     </plurals>
     <plurals name="remote_notification_jobs_done">
-        <item quantity="one">%d Hintergrund-Shell ist fertig</item>
-        <item quantity="other">%d Hintergrund-Shells sind fertig</item>
+        <item quantity="one">%d Hintergrundjob ist fertig</item>
+        <item quantity="other">%d Hintergrundjobs sind fertig</item>
     </plurals>
     <string name="remote_notification_open">Öffne die Sitzung, um ihren aktuellen Stand zu sehen.</string>
     <string name="remote_appearance">Darstellung</string>
