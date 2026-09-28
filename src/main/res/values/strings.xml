@@ -277,4 +277,16 @@
         <item quantity="one">… %d byte skipped</item>
         <item quantity="other">… %d bytes skipped</item>
     </plurals>
+    <string name="remote_two_pane_empty">Choose a session to open its chat here.</string>
+    <string name="remote_inspector_empty">Tool details and file changes open here.</string>
+    <string name="remote_session_list_hide">Hide session list</string>
+    <string name="remote_session_list_show">Show session list</string>
+    <string name="remote_session_search">Search sessions</string>
+    <string name="remote_session_search_empty">No session matches your search.</string>
+    <string name="remote_keyboard_title">Hardware keyboard</string>
+    <string name="remote_keyboard_help">In the two-pane layout on wide screens, while a keyboard such as a Book Cover Keyboard is attached. On a phone, Enter keeps adding a line.</string>
+    <string name="remote_keyboard_enter_sends">Enter sends, Shift+Enter adds a line</string>
+    <string name="remote_keyboard_shortcut_send">Ctrl+Enter: send</string>
+    <string name="remote_keyboard_shortcut_search">Ctrl+K or Ctrl+F: search sessions</string>
+    <string name="remote_keyboard_shortcut_switch">Ctrl+Up/Down or Alt+Up/Down: previous or next session</string>
 </resources>

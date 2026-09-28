@@ -18,6 +18,8 @@ data class RemoteSettings(
     val hideOfflineSessions: Boolean = false,
     val swipeEndToStart: SwipeAction = SwipeAction.CLOSE,
     val swipeStartToEnd: SwipeAction = SwipeAction.RENAME,
+    /** With a hardware keyboard, Enter sends and Shift+Enter inserts a newline. */
+    val enterSends: Boolean = true,
 )
 
 interface SettingsRepository {
@@ -34,6 +36,8 @@ interface SettingsRepository {
     fun setSwipeEndToStart(action: SwipeAction)
 
     fun setSwipeStartToEnd(action: SwipeAction)
+
+    fun setEnterSends(enabled: Boolean)
 
     /** The chat header actions, most used first; read once when a chat opens. */
     fun rankedChatActions(now: Long = System.currentTimeMillis()): List<ChatAction> = DEFAULT_CHAT_ACTIONS
@@ -55,6 +59,7 @@ class DefaultSettingsRepository(context: Context) : SettingsRepository {
                 preferences.getBoolean("hide_offline_sessions", false),
                 swipeAction("swipe_end_to_start", SwipeAction.CLOSE),
                 swipeAction("swipe_start_to_end", SwipeAction.RENAME),
+                preferences.getBoolean("enter_sends", true),
             )
         )
     override val state = mutable.asStateFlow()
@@ -89,6 +94,11 @@ class DefaultSettingsRepository(context: Context) : SettingsRepository {
     override fun setSwipeStartToEnd(action: SwipeAction) {
         preferences.edit().putString("swipe_start_to_end", action.name).apply()
         mutable.value = mutable.value.copy(swipeStartToEnd = action)
+    }
+
+    override fun setEnterSends(enabled: Boolean) {
+        preferences.edit().putBoolean("enter_sends", enabled).apply()
+        mutable.value = mutable.value.copy(enterSends = enabled)
     }
 
     override fun rankedChatActions(now: Long): List<ChatAction> =

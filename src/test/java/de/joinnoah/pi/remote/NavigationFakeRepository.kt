@@ -184,4 +184,8 @@ internal class FakeSettingsRepository : SettingsRepository {
     override fun setSwipeStartToEnd(action: SwipeAction) {
         state.value = state.value.copy(swipeStartToEnd = action)
     }
+
+    override fun setEnterSends(enabled: Boolean) {
+        state.value = state.value.copy(enterSends = enabled)
+    }
 }
