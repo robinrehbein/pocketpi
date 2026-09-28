@@ -198,7 +198,11 @@ transfer between the two applications. A previous debug installation under
 
 ## Play testing releases
 
-`.github/workflows/release.yml` runs only after a successful `Android CI` push run on the current
+Follow the [Play testing runbook](docs/runbooks/play-testing-release.md) for first-release setup,
+verification, and recovery. The new Play app has not yet had a verified dual-track release; complete
+the Play, Firebase, signing, and GitHub environment setup before enabling automatic publishing.
+
+When enabled, `.github/workflows/release.yml` runs only after a successful `Android CI` push run on the current
 `main` commit. It builds one signed AAB, then submits it to Play Internal Testing (`qa`) and the
 configured Closed Alpha track in one Play edit. It stops if either track cannot accept the release.
 It never targets production. Play may still hold an accepted edit for app review; check the Play
