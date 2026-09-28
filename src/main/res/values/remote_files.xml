@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_files_open">Files</string>
+    <string name="remote_files_title">Files</string>
+    <string name="remote_files_close">Close files</string>
+    <string name="remote_files_back">Back</string>
+    <string name="remote_files_reload">Reload</string>
+    <string name="remote_files_loading">Loading files</string>
+    <string name="remote_files_retry">Try again</string>
+    <string name="remote_files_empty">This folder is empty.</string>
+    <string name="remote_files_file_empty">This file is empty.</string>
+    <string name="remote_files_truncated">Not all files of this folder are listed.</string>
+    <string name="remote_files_load_more">Load more</string>
+    <string name="remote_files_not_a_repository">This session folder is not a git repository. The file browser shows only files git knows about.</string>
+    <string name="remote_files_git_unavailable">Git is not installed on the computer, or it is older than version 2.31.</string>
+    <string name="remote_files_kind_dir">Folder</string>
+    <string name="remote_files_kind_file">File</string>
+    <string name="remote_files_kind_symlink">Symbolic link</string>
+    <string name="remote_files_kind_submodule">Submodule</string>
+    <string name="remote_files_symlink">Symbolic link, cannot be opened</string>
+    <string name="remote_files_submodule">Submodule, cannot be opened</string>
+    <string name="remote_files_binary">Binary file. It cannot be shown as text.</string>
+    <string name="remote_files_too_large">This file is larger than 1 MB and cannot be shown.</string>
+    <string name="remote_files_reopened">The file changed on the computer and was loaded again from the start.</string>
+    <string name="remote_files_line_select">Select line</string>
+    <plurals name="remote_files_selected_lines">
+        <item quantity="one">%d line selected</item>
+        <item quantity="other">%d lines selected</item>
+    </plurals>
+    <string name="remote_files_clear_selection">Clear</string>
+    <string name="remote_files_send_file">Send file to pi</string>
+    <string name="remote_files_send_lines">Send lines to pi</string>
+    <string name="remote_files_prefill_failed">The quote does not fit into the message.</string>
+    <string name="remote_files_quote_file">The file `%1$s`:</string>
+    <string name="remote_files_quote_line">From `%1$s`, line %2$d:</string>
+    <string name="remote_files_quote_lines">From `%1$s`, lines %2$d–%3$d:</string>
+    <string name="remote_files_reference_file">Look at `%1$s`.</string>
+    <string name="remote_files_reference_line">Look at `%1$s` line %2$d.</string>
+    <string name="remote_files_reference_lines">Look at `%1$s` lines %2$d–%3$d.</string>
+    <string name="remote_files_failure_unsupported">This computer cannot show files yet. Update pi Remote on the computer.</string>
+    <string name="remote_files_failure_offline">You are offline. Reconnect to load the files.</string>
+    <string name="remote_files_failure_not_found">This file or folder is no longer there, or git does not know it.</string>
+    <string name="remote_files_failure_invalid_path">This file cannot be opened from the phone.</string>
+    <string name="remote_files_failure_forbidden">This project is no longer shared with this phone.</string>
+    <string name="remote_files_failure_busy">The computer is busy. Try again in a moment.</string>
+    <string name="remote_files_failure_failed">The files could not be loaded.</string>
+</resources>

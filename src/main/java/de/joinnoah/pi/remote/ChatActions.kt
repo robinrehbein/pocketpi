@@ -5,6 +5,7 @@ import kotlin.math.pow
 /** The actions of the chat header pill, in the order the pill shows them. */
 enum class ChatAction {
     CHANGES,
+    FILES,
     RENAME,
     REFRESH,
     SETTINGS,
@@ -16,9 +17,12 @@ data class ActionUsage(val score: Double, val at: Long)
 /** Uses lose half their weight every 14 days, so the pill follows recent habits. */
 internal const val ACTION_USAGE_HALF_LIFE_MILLIS = 14L * 24 * 60 * 60 * 1000
 
-/** The ranking without any use, and the tie-break: Changes and Refresh come first. */
+/**
+ * The ranking without any use, and the tie-break: Changes, then Files, then Refresh. Usage is
+ * stored per action name, so an action added later simply starts without uses.
+ */
 internal val DEFAULT_CHAT_ACTIONS =
-    listOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.RENAME, ChatAction.SETTINGS)
+    listOf(ChatAction.CHANGES, ChatAction.FILES, ChatAction.REFRESH, ChatAction.RENAME, ChatAction.SETTINGS)
 
 internal fun ActionUsage.decayed(now: Long): Double =
     score * 0.5.pow((now - at).coerceAtLeast(0L) / ACTION_USAGE_HALF_LIFE_MILLIS.toDouble())

@@ -113,6 +113,8 @@ data class RemoteState(
     val toolOutput: ToolOutputDownload? = null,
     /** The changes view of the selected session; null while it is closed. */
     val changes: ChangesState? = null,
+    /** The file browser of the selected session; null while it is closed. */
+    val files: FilesState? = null,
     /** Background jobs of the selected session (`session.background_jobs.v1`); null until listed. */
     val jobs: JobsState? = null,
     val folders: FolderBrowserState = FolderBrowserState(),
@@ -252,6 +254,32 @@ interface RemoteRepository {
 
     /** Shows the diff of [path], or the file list again for null. */
     fun openChangesFile(path: String?) {}
+
+    /** `session.files.list`; only with [FILES_CAPABILITY]. Throws [RemoteRequestException]. */
+    suspend fun filesList(sessionId: String, path: String, after: String?): FileListing =
+        throw RemoteRequestException("unsupported")
+
+    /** `session.files.read` of one page; a later page carries the first page's version. */
+    suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?): FileChunk =
+        throw RemoteRequestException("unsupported")
+
+    /** Opens [RemoteState.files] for the selected session at its folder. */
+    fun openFiles() {}
+
+    fun closeFiles() {}
+
+    /** Shows the folder [path], `""` being the session folder. */
+    fun openFilesDir(path: String) {}
+
+    /** Shows the file [path], or the folder again for null. */
+    fun openFilesFile(path: String?) {}
+
+    /** The next page of the open file, or of the shown folder. */
+    fun loadMoreFiles() {}
+
+    fun reloadFiles() {}
+
+    fun selectFileLines(selection: LineSelection?) {}
 
     /**
      * Adds [comment], replacing one on the same line, and keeps it in the session's draft. Returns

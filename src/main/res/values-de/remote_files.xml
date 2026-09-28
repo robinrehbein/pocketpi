@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_files_open">Dateien</string>
+    <string name="remote_files_title">Dateien</string>
+    <string name="remote_files_close">Dateien schließen</string>
+    <string name="remote_files_back">Zurück</string>
+    <string name="remote_files_reload">Neu laden</string>
+    <string name="remote_files_loading">Dateien werden geladen</string>
+    <string name="remote_files_retry">Erneut versuchen</string>
+    <string name="remote_files_empty">Dieser Ordner ist leer.</string>
+    <string name="remote_files_file_empty">Diese Datei ist leer.</string>
+    <string name="remote_files_truncated">Nicht alle Dateien dieses Ordners sind aufgeführt.</string>
+    <string name="remote_files_load_more">Mehr laden</string>
+    <string name="remote_files_not_a_repository">Dieser Sitzungsordner ist kein Git-Repository. Der Dateibrowser zeigt nur Dateien, die Git kennt.</string>
+    <string name="remote_files_git_unavailable">Git ist auf dem Computer nicht installiert oder älter als Version 2.31.</string>
+    <string name="remote_files_kind_dir">Ordner</string>
+    <string name="remote_files_kind_file">Datei</string>
+    <string name="remote_files_kind_symlink">Symbolischer Link</string>
+    <string name="remote_files_kind_submodule">Submodul</string>
+    <string name="remote_files_symlink">Symbolischer Link, kann nicht geöffnet werden</string>
+    <string name="remote_files_submodule">Submodul, kann nicht geöffnet werden</string>
+    <string name="remote_files_binary">Binärdatei. Sie kann nicht als Text angezeigt werden.</string>
+    <string name="remote_files_too_large">Diese Datei ist größer als 1 MB und kann nicht angezeigt werden.</string>
+    <string name="remote_files_reopened">Die Datei hat sich auf dem Computer geändert und wurde von vorn neu geladen.</string>
+    <string name="remote_files_line_select">Zeile auswählen</string>
+    <plurals name="remote_files_selected_lines">
+        <item quantity="one">%d Zeile ausgewählt</item>
+        <item quantity="other">%d Zeilen ausgewählt</item>
+    </plurals>
+    <string name="remote_files_clear_selection">Aufheben</string>
+    <string name="remote_files_send_file">Datei an pi senden</string>
+    <string name="remote_files_send_lines">Zeilen an pi senden</string>
+    <string name="remote_files_prefill_failed">Das Zitat passt nicht mehr in die Nachricht.</string>
+    <string name="remote_files_quote_file">Die Datei `%1$s`:</string>
+    <string name="remote_files_quote_line">Aus `%1$s`, Zeile %2$d:</string>
+    <string name="remote_files_quote_lines">Aus `%1$s`, Zeilen %2$d–%3$d:</string>
+    <string name="remote_files_reference_file">Sieh dir `%1$s` an.</string>
+    <string name="remote_files_reference_line">Sieh dir `%1$s` an, Zeile %2$d.</string>
+    <string name="remote_files_reference_lines">Sieh dir `%1$s` an, Zeilen %2$d–%3$d.</string>
+    <string name="remote_files_failure_unsupported">Dieser Computer kann noch keine Dateien zeigen. Aktualisiere pi Remote auf dem Computer.</string>
+    <string name="remote_files_failure_offline">Du bist offline. Verbinde dich neu, um die Dateien zu laden.</string>
+    <string name="remote_files_failure_not_found">Diese Datei oder dieser Ordner ist nicht mehr da, oder Git kennt sie nicht.</string>
+    <string name="remote_files_failure_invalid_path">Diese Datei kann nicht vom Handy aus geöffnet werden.</string>
+    <string name="remote_files_failure_forbidden">Dieses Projekt ist für dieses Handy nicht mehr freigegeben.</string>
+    <string name="remote_files_failure_busy">Der Computer ist ausgelastet. Versuch es gleich noch einmal.</string>
+    <string name="remote_files_failure_failed">Die Dateien konnten nicht geladen werden.</string>
+</resources>

@@ -1,0 +1,712 @@
+{
+  "version": 1,
+  "note": "session.files.v1 wire examples. The app must see session.files.v1 in the projects.list capabilities route before sending any session.files.* command. Paths the parser accepts may still be answered invalid_path by the host (malformed, denied, symlink or special file).",
+  "valid": [
+    {
+      "name": "list-command-root",
+      "payload": {
+        "type": "session.files.list",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": ""
+      }
+    },
+    {
+      "name": "list-command-next-page",
+      "payload": {
+        "type": "session.files.list",
+        "requestId": "req-2",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "src/app",
+        "after": "model.ts"
+      }
+    },
+    {
+      "name": "list-command-dotfolder",
+      "payload": {
+        "type": "session.files.list",
+        "requestId": "req-3",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": ".github/workflows"
+      }
+    },
+    {
+      "name": "read-command-first-page",
+      "payload": {
+        "type": "session.files.read",
+        "requestId": "req-4",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "src/app/main.ts"
+      }
+    },
+    {
+      "name": "read-command-next-page",
+      "payload": {
+        "type": "session.files.read",
+        "requestId": "req-5",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "src/app/main.ts",
+        "offset": 196000,
+        "version": "RmlsZVZlcnNpb25BYmMxMg"
+      }
+    },
+    {
+      "name": "read-command-denied-path-parses",
+      "payload": {
+        "type": "session.files.read",
+        "requestId": "req-6",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": ".env"
+      }
+    },
+    {
+      "name": "read-command-malformed-path-parses",
+      "payload": {
+        "type": "session.files.read",
+        "requestId": "req-7",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "../etc/passwd"
+      }
+    },
+    {
+      "name": "list-root",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "",
+          "available": true,
+          "entries": [
+            {
+              "name": ".github",
+              "type": "dir"
+            },
+            {
+              "name": "src",
+              "type": "dir"
+            },
+            {
+              "name": "vendor",
+              "type": "submodule"
+            },
+            {
+              "name": "latest",
+              "type": "symlink"
+            },
+            {
+              "name": "README.md",
+              "type": "file",
+              "size": 2048
+            }
+          ],
+          "truncated": false,
+          "nextAfter": "README.md"
+        }
+      }
+    },
+    {
+      "name": "list-last-page-truncated",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "src/app",
+          "available": true,
+          "entries": [
+            {
+              "name": "zeta.ts",
+              "type": "file",
+              "size": 0
+            }
+          ],
+          "truncated": true
+        }
+      }
+    },
+    {
+      "name": "list-empty",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "",
+          "available": true,
+          "entries": [],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "list-git-unavailable",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "",
+          "available": false,
+          "reason": "git_unavailable"
+        }
+      }
+    },
+    {
+      "name": "list-not-a-repository",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "",
+          "available": false,
+          "reason": "not_a_repository"
+        }
+      }
+    },
+    {
+      "name": "read-text",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.read",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "src/app/main.ts",
+          "version": "RmlsZVZlcnNpb25BYmMxMg",
+          "size": 13,
+          "offset": 0,
+          "content": "hello\nworld\n\n",
+          "binary": false
+        }
+      }
+    },
+    {
+      "name": "read-text-first-of-two-pages",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.read",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "src/app/main.ts",
+          "version": "RmlsZVZlcnNpb25BYmMxMg",
+          "size": 300000,
+          "offset": 0,
+          "content": "line one\n",
+          "binary": false,
+          "nextOffset": 9
+        }
+      }
+    },
+    {
+      "name": "read-text-last-page",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.read",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "src/app/main.ts",
+          "version": "RmlsZVZlcnNpb25BYmMxMg",
+          "size": 300000,
+          "offset": 299990,
+          "content": "last line\n",
+          "binary": false
+        }
+      }
+    },
+    {
+      "name": "read-empty-file",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.read",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "empty.txt",
+          "version": "RmlsZVZlcnNpb25BYmMxMg",
+          "size": 0,
+          "offset": 0,
+          "content": "",
+          "binary": false
+        }
+      }
+    },
+    {
+      "name": "read-binary",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.read",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "assets/logo.png",
+          "version": "RmlsZVZlcnNpb25BYmMxMg",
+          "size": 4096,
+          "offset": 0,
+          "content": "",
+          "binary": true
+        }
+      }
+    },
+    {
+      "name": "read-too-large",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.read",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "data/dump.sql",
+          "version": "RmlsZVZlcnNpb25BYmMxMg",
+          "size": 2097152,
+          "offset": 0,
+          "content": "",
+          "binary": false,
+          "omitted": "too_large"
+        }
+      }
+    },
+    {
+      "name": "read-invalid-path-error",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": false,
+        "error": {
+          "code": "invalid_path",
+          "message": "This file cannot be opened"
+        }
+      }
+    },
+    {
+      "name": "read-not-found-error",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": false,
+        "error": {
+          "code": "not_found",
+          "message": "File changed; reopen"
+        }
+      }
+    },
+    {
+      "name": "projects-files-capability",
+      "payload": {
+        "type": "result",
+        "requestId": "capabilities.v1:req-8",
+        "ok": true,
+        "data": {
+          "kind": "projects",
+          "items": [],
+          "capabilities": [
+            "session.git.v1",
+            "session.files.v1"
+          ]
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "list-command-missing-path",
+      "payload": {
+        "type": "session.files.list",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
+      }
+    },
+    {
+      "name": "list-command-extra-key",
+      "payload": {
+        "type": "session.files.list",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "",
+        "depth": 2
+      }
+    },
+    {
+      "name": "list-command-nul-path",
+      "payload": {
+        "type": "session.files.list",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "a\u0000b"
+      }
+    },
+    {
+      "name": "list-command-empty-after",
+      "payload": {
+        "type": "session.files.list",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "",
+        "after": ""
+      }
+    },
+    {
+      "name": "list-command-long-path",
+      "payload": {
+        "type": "session.files.list",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "read-command-empty-path",
+      "payload": {
+        "type": "session.files.read",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": ""
+      }
+    },
+    {
+      "name": "read-command-offset-without-version",
+      "payload": {
+        "type": "session.files.read",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "a.txt",
+        "offset": 10
+      }
+    },
+    {
+      "name": "read-command-negative-offset",
+      "payload": {
+        "type": "session.files.read",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "a.txt",
+        "offset": -1,
+        "version": "RmlsZVZlcnNpb25BYmMxMg"
+      }
+    },
+    {
+      "name": "read-command-fractional-offset",
+      "payload": {
+        "type": "session.files.read",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "a.txt",
+        "offset": 1.5,
+        "version": "RmlsZVZlcnNpb25BYmMxMg"
+      }
+    },
+    {
+      "name": "read-command-offset-over-cap",
+      "payload": {
+        "type": "session.files.read",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "a.txt",
+        "offset": 1048577,
+        "version": "RmlsZVZlcnNpb25BYmMxMg"
+      }
+    },
+    {
+      "name": "read-command-bad-version",
+      "payload": {
+        "type": "session.files.read",
+        "requestId": "r",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "a.txt",
+        "offset": 0,
+        "version": "HEAD"
+      }
+    },
+    {
+      "name": "read-command-bad-session-id",
+      "payload": {
+        "type": "session.files.read",
+        "requestId": "r",
+        "sessionId": "a b",
+        "path": "a.txt"
+      }
+    },
+    {
+      "name": "list-entry-unknown-type",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "",
+          "available": true,
+          "entries": [
+            {
+              "name": "dev",
+              "type": "device"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "list-entry-size-on-dir",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "",
+          "available": true,
+          "entries": [
+            {
+              "name": "src",
+              "type": "dir",
+              "size": 1
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "list-entry-name-with-slash",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "",
+          "available": true,
+          "entries": [
+            {
+              "name": "src/a.ts",
+              "type": "file",
+              "size": 1
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "list-entry-dot-dot",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "",
+          "available": true,
+          "entries": [
+            {
+              "name": "..",
+              "type": "dir"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "list-unavailable-with-entries",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "",
+          "available": false,
+          "reason": "not_a_repository",
+          "entries": []
+        }
+      }
+    },
+    {
+      "name": "list-unknown-reason",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "",
+          "available": false,
+          "reason": "base_unavailable"
+        }
+      }
+    },
+    {
+      "name": "list-missing-truncated",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "",
+          "available": true,
+          "entries": []
+        }
+      }
+    },
+    {
+      "name": "read-binary-with-content",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.read",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "a.bin",
+          "version": "RmlsZVZlcnNpb25BYmMxMg",
+          "size": 4,
+          "offset": 0,
+          "content": "abcd",
+          "binary": true
+        }
+      }
+    },
+    {
+      "name": "read-omitted-with-content",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.read",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "a.txt",
+          "version": "RmlsZVZlcnNpb25BYmMxMg",
+          "size": 2097152,
+          "offset": 0,
+          "content": "a",
+          "binary": false,
+          "omitted": "too_large"
+        }
+      }
+    },
+    {
+      "name": "read-omitted-with-next-offset",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.read",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "a.txt",
+          "version": "RmlsZVZlcnNpb25BYmMxMg",
+          "size": 2097152,
+          "offset": 0,
+          "content": "",
+          "binary": false,
+          "omitted": "too_large",
+          "nextOffset": 1
+        }
+      }
+    },
+    {
+      "name": "read-next-offset-not-after-offset",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.read",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "a.txt",
+          "version": "RmlsZVZlcnNpb25BYmMxMg",
+          "size": 100,
+          "offset": 10,
+          "content": "a\n",
+          "binary": false,
+          "nextOffset": 10
+        }
+      }
+    },
+    {
+      "name": "read-offset-past-size",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.read",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "a.txt",
+          "version": "RmlsZVZlcnNpb25BYmMxMg",
+          "size": 10,
+          "offset": 11,
+          "content": "",
+          "binary": false
+        }
+      }
+    },
+    {
+      "name": "read-unknown-omitted",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.read",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "a.txt",
+          "version": "RmlsZVZlcnNpb25BYmMxMg",
+          "size": 10,
+          "offset": 0,
+          "content": "",
+          "binary": false,
+          "omitted": "base_unavailable"
+        }
+      }
+    },
+    {
+      "name": "read-bad-version",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.read",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "a.txt",
+          "version": "v1",
+          "size": 1,
+          "offset": 0,
+          "content": "a",
+          "binary": false
+        }
+      }
+    }
+  ]
+}
