@@ -20,6 +20,8 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.MenuOpen
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentPaste
@@ -120,6 +122,16 @@ internal fun RemoteScreen(
     val sessionPreferences =
         (model as? SessionsViewModel)?.preferences?.collectAsStateWithLifecycle()?.value
     val hideOfflineSessions = sessionPreferences?.hideOfflineSessions ?: false
+    // Two-pane roles: the session list on the left, the chat on the right. Both null/false in the
+    // phone layout, which then renders exactly as before.
+    val paneLayout = LocalPaneLayout.current
+    val twoPane = LocalTwoPane.current
+    val listPane = LocalListPane.current?.takeIf { key is RemoteNavKey.Sessions }
+    val detailPane = LocalDetailPane.current && key is RemoteNavKey.Chat
+    val sideInspector = key is RemoteNavKey.Chat && paneLayout.inspector != InspectorMode.OVERLAY
+    // Hardware Enter and Ctrl+Enter only send in the two-pane layout; phones keep Enter as a newline.
+    val hardwareKeyboard = LocalHardwareKeyboard.current && paneLayout.twoPane
+    var sessionQuery by rememberSaveable(key) { mutableStateOf("") }
     var collapsedSessionIds by rememberSaveable(key) { mutableStateOf(arrayListOf<String>()) }
     val collapsedIds = collapsedSessionIds.toSet()
     val visibleSessions =
@@ -132,6 +144,12 @@ internal fun RemoteScreen(
                 collapsedIds,
             )
         }
+    val listedSessions =
+        remember(visibleSessions, sessionQuery, listPane != null) {
+            if (listPane != null) filterSessions(visibleSessions, sessionQuery) else visibleSessions
+        }
+    if (listPane != null && twoPane != null)
+        LaunchedEffect(listedSessions) { twoPane.visibleSessionIds = listedSessions.map { it.id } }
     val sessionCount =
         remember(state.sessions, state.connected, state.loading, hideOfflineSessions) {
             visibleSessionListItems(
@@ -203,6 +221,16 @@ internal fun RemoteScreen(
         }
     }
     val listState = rememberLazyListState()
+    val sessionSearchFocus = remember { FocusRequester() }
+    if (listPane != null && twoPane != null)
+        LaunchedEffect(twoPane.searchRequests) {
+            // Ctrl+K: each request focuses the search field once, also when it expanded the list.
+            if (twoPane.searchRequests == twoPane.searchHandled) return@LaunchedEffect
+            twoPane.searchHandled = twoPane.searchRequests
+            listState.scrollToItem(0)
+            withFrameNanos { }
+            runCatching { sessionSearchFocus.requestFocus() }
+        }
     var composerSize by remember { mutableStateOf(IntSize.Zero) }
     var headerSize by remember { mutableStateOf(IntSize.Zero) }
     val composerHeight = with(LocalDensity.current) { composerSize.height.toDp() }
@@ -511,7 +539,8 @@ internal fun RemoteScreen(
                 val maxPillWidth =
                     maxWidth - 32.dp - if (narrow) 0.dp else actionsWidth + 8.dp
                 val maxTitleWidth =
-                    (maxPillWidth - 72.dp - if (hasTuiInfo) 40.dp else 0.dp)
+                    (maxPillWidth - 72.dp - (if (hasTuiInfo) 40.dp else 0.dp) -
+                        if (detailPane) 48.dp else 0.dp)
                         .coerceAtLeast(24.dp)
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Row(
@@ -525,6 +554,22 @@ internal fun RemoteScreen(
                             color = headerColor,
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (detailPane && twoPane != null) {
+                                    val collapsed = twoPane.listCollapsed
+                                    IconButton(
+                                        onClick = { twoPane.listCollapsed = !collapsed },
+                                        modifier = Modifier.size(48.dp).testTag("toggleSessionList"),
+                                    ) {
+                                        Icon(
+                                            if (collapsed) Icons.Default.Menu
+                                            else Icons.AutoMirrored.Filled.MenuOpen,
+                                            stringResource(
+                                                if (collapsed) R.string.remote_session_list_show
+                                                else R.string.remote_session_list_hide
+                                            ),
+                                        )
+                                    }
+                                }
                                 IconButton(onClick = navigator::back, modifier = Modifier.size(48.dp)) {
                                     Icon(
                                         Icons.AutoMirrored.Filled.ArrowBack,
@@ -615,6 +660,57 @@ internal fun RemoteScreen(
             }
         }
     }
+    val changesOpen =
+        state.changes?.takeIf { it.sessionId == state.selection.sessionId && chatModel != null }
+    val changesContent: (@Composable () -> Unit)? =
+        changesOpen?.let { changes ->
+            {
+                ChangesPane(
+                    changes,
+                    remember(chatModel) { changesActions(checkNotNull(chatModel)) { composerFocusRequest++ } },
+                    Modifier.fillMaxSize(),
+                )
+            }
+        }
+    val toolContent: (@Composable () -> Unit)? =
+        openTool?.let { tool ->
+            {
+                val download = state.toolOutput?.takeIf { it.toolCallId == tool.toolCallId }
+                ToolDetailScreen(
+                    item = tool,
+                    download = download,
+                    canLoadFullOutput =
+                        TOOL_OUTPUT_CAPABILITY in state.capabilities &&
+                            TOOL_OUTPUT_CAPABILITY !in state.unavailableCapabilities,
+                    canAskToFix =
+                        tool.state == "error" && tool.outputMessageId != null && acceptsPrompts,
+                    onLoadFullOutput = { tool.toolCallId?.let { chatModel?.loadToolOutput(it) } },
+                    onCancelFullOutput = { chatModel?.cancelToolOutput() },
+                    onAskToFix = { tool.outputMessageId?.let(::askToFix) },
+                    onQuote = {
+                        model.quote(tool.outputMessageId ?: tool.sourceId)
+                        closeTool()
+                    },
+                    onClose = ::closeTool,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+    // Wide windows show tool details and diffs beside the chat; the tool detail stays on top of
+    // the diff there too, as in the overlay.
+    val inspectorContent: (@Composable () -> Unit)? =
+        if (changesContent == null && toolContent == null) null
+        else {
+            {
+                changesContent?.invoke()
+                toolContent?.invoke()
+            }
+        }
+    InspectorRow(
+        shown = sideInspector && (paneLayout.inspector == InspectorMode.PERSISTENT || inspectorContent != null),
+        width = paneLayout.inspectorWidth,
+        inspector = inspectorContent,
+    ) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         floatingActionButtonPosition = FabPosition.Center,
@@ -686,13 +782,17 @@ internal fun RemoteScreen(
                 }
         },
     ) { insets ->
-        Box(
+        BoxWithConstraints(
             if (key is RemoteNavKey.Chat)
                 Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).imePadding()
             else Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)
         ) {
         // While the tool detail covers the chat, the chat below must not be reachable by TalkBack.
-        val underlay = if (openTool != null) Modifier.clearAndSetSemantics {} else Modifier
+        val underlay = if (openTool != null && !sideInspector) Modifier.clearAndSetSemantics {} else Modifier
+        // A wide chat pane centres its bubbles in a reading column; phones never reach the limit.
+        val readingInset =
+            if (key is RemoteNavKey.Chat) ((maxWidth - 40.dp - MAX_READING_WIDTH) / 2).coerceAtLeast(0.dp)
+            else 0.dp
         val railShown = key is RemoteNavKey.Chat && timelineRailVisible(markers) && listScrollable
         LazyColumn(
             if (key is RemoteNavKey.Chat) Modifier.fillMaxSize().then(underlay)
@@ -700,9 +800,9 @@ internal fun RemoteScreen(
             state = listState,
             contentPadding =
                 PaddingValues(
-                    start = 20.dp,
+                    start = 20.dp + readingInset,
                     // Room for the timeline rail, so it never covers a card's controls.
-                    end = if (railShown) 52.dp else 20.dp,
+                    end = maxOf(if (railShown) 52.dp else 20.dp, 20.dp + readingInset),
                     top = headerHeight + if (key is RemoteNavKey.Chat) 16.dp else 48.dp,
                     bottom =
                         if (
@@ -792,7 +892,8 @@ internal fun RemoteScreen(
                         }
                     }
                 }
-                        if (state.error != null) {
+            // Beside an open chat, the chat pane shows the error; the list does not repeat it.
+            if (state.error != null && listPane?.selectedSessionId == null) {
                 leading++
                 item {
                     Card(
@@ -946,6 +1047,44 @@ internal fun RemoteScreen(
                             selected = preferences?.swipeStartToEnd,
                             onSelect = { (model as SettingsViewModel).setSwipeStartToEnd(it) },
                         )
+                    }
+                }
+                item {
+                    Section(stringResource(R.string.remote_keyboard_title)) {
+                        Text(
+                            stringResource(R.string.remote_keyboard_help),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        val enterSends = preferences?.enterSends ?: true
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .toggleable(value = enterSends, role = Role.Switch) {
+                                    (model as SettingsViewModel).setEnterSends(it)
+                                }
+                                .testTag("enterSendsSwitch")
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(stringResource(R.string.remote_keyboard_enter_sends), Modifier.weight(1f))
+                            Switch(checked = enterSends, onCheckedChange = null)
+                        }
+                        Column(
+                            Modifier.testTag("keyboardShortcuts"),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            listOf(
+                                R.string.remote_keyboard_shortcut_send,
+                                R.string.remote_keyboard_shortcut_search,
+                                R.string.remote_keyboard_shortcut_switch,
+                            ).forEach {
+                                Text(
+                                    stringResource(it),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                     }
                 }
                 item { PredictionSettingsSection() }
@@ -1129,15 +1268,31 @@ internal fun RemoteScreen(
                         }
                     }
                     is RemoteNavKey.Sessions -> {
+                        if (listPane != null && state.sessions.isNotEmpty())
+                            item(key = "session-search") {
+                                SessionSearchField(
+                                    query = sessionQuery,
+                                    onQuery = { sessionQuery = it },
+                                    onSearch = {
+                                        listedSessions.firstOrNull()?.let { first ->
+                                            navigator.open(RemoteNavKey.Chat(key.routeId, key.projectId, first.id))
+                                        }
+                                    },
+                                    focusRequester = sessionSearchFocus,
+                                )
+                            }
                         if (state.sessions.isEmpty()) {
                             if (state.loading) item { SessionListSkeleton() }
                             else item { Text(stringResource(R.string.remote_empty_sessions)) }
                         }
                         else if (visibleSessions.isEmpty() && state.connected && !state.loading)
                             item { Text(stringResource(R.string.remote_offline_sessions_hidden)) }
-                        items(visibleSessions, key = SessionListItem::id) { session ->
+                        else if (listedSessions.isEmpty() && visibleSessions.isNotEmpty())
+                            item { Text(stringResource(R.string.remote_session_search_empty)) }
+                        items(listedSessions, key = SessionListItem::id) { session ->
                             SessionListRow(
                                 item = session,
+                                selected = session.id == listPane?.selectedSessionId,
                                 enabled = !state.connected || !state.loading,
                                 closeAvailable =
                                     canCloseSession(
@@ -1326,7 +1481,9 @@ internal fun RemoteScreen(
                     Icon(Icons.Default.ArrowDownward, stringResource(R.string.remote_scroll_to_bottom))
                 }
             Box(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                Modifier.align(Alignment.BottomCenter)
+                    .widthIn(max = MAX_READING_WIDTH + 32.dp)
+                    .fillMaxWidth()
                     .onSizeChanged { composerSize = it }.testTag("floatingComposer")
                     .then(underlay)
                     .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
@@ -1386,6 +1543,8 @@ internal fun RemoteScreen(
                             filePicker.launch(arrayOf("*/*"))
                         },
                         focusRequester = composerFocus,
+                        hardwareKeyboard = hardwareKeyboard,
+                        enterSends = chatPreferences?.enterSends ?: true,
                     )
                 }
             }
@@ -1393,13 +1552,7 @@ internal fun RemoteScreen(
                 snackbar,
                 Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp),
             )
-            state.changes?.takeIf { it.sessionId == state.selection.sessionId && chatModel != null }?.let { changes ->
-                ChangesPane(
-                    changes,
-                    remember(chatModel) { changesActions(checkNotNull(chatModel)) { composerFocusRequest++ } },
-                    Modifier.fillMaxSize(),
-                )
-            }
+            if (!sideInspector) changesContent?.invoke()
             state.jobs
                 ?.takeIf {
                     // Stays open through a reconnect, which clears the capabilities for a moment.
@@ -1415,29 +1568,10 @@ internal fun RemoteScreen(
                         Modifier.fillMaxSize(),
                     )
                 }
-            openTool?.let { tool ->
-                val download = state.toolOutput?.takeIf { it.toolCallId == tool.toolCallId }
-                ToolDetailScreen(
-                    item = tool,
-                    download = download,
-                    canLoadFullOutput =
-                        TOOL_OUTPUT_CAPABILITY in state.capabilities &&
-                            TOOL_OUTPUT_CAPABILITY !in state.unavailableCapabilities,
-                    canAskToFix =
-                        tool.state == "error" && tool.outputMessageId != null && acceptsPrompts,
-                    onLoadFullOutput = { tool.toolCallId?.let { chatModel?.loadToolOutput(it) } },
-                    onCancelFullOutput = { chatModel?.cancelToolOutput() },
-                    onAskToFix = { tool.outputMessageId?.let(::askToFix) },
-                    onQuote = {
-                        model.quote(tool.outputMessageId ?: tool.sourceId)
-                        closeTool()
-                    },
-                    onClose = ::closeTool,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+            if (!sideInspector) toolContent?.invoke()
         }
         }
+    }
     }
     val hideOfflineLabel = stringResource(R.string.remote_hide_offline_sessions)
     if (tuiInfoOpen && key is RemoteNavKey.Chat && state.session?.optionalText("origin") == "tui")

@@ -8,15 +8,33 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.ViewCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
+import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.metadata
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
+import androidx.navigation3.scene.SceneStrategy
+import androidx.navigation3.scene.SinglePaneSceneStrategy
 import androidx.navigation3.ui.NavDisplay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -364,6 +382,32 @@ internal class RemoteNavigator(
         operation.invokeOnCompletion { consumeOnce() }
     }
 
+    /**
+     * Runs a two-pane keyboard shortcut. Only the session list and its chat react; hosts,
+     * projects, folders and settings leave the keys alone.
+     */
+    fun shortcut(shortcut: KeyboardShortcut, twoPane: TwoPaneState): Boolean {
+        val top = stack.lastOrNull()
+        val sessions =
+            when (top) {
+                is RemoteNavKey.Chat -> RemoteNavKey.Sessions(top.routeId, top.projectId)
+                is RemoteNavKey.Sessions -> top
+                else -> return false
+            }
+        when (shortcut) {
+            KeyboardShortcut.SEARCH -> twoPane.requestSearch()
+            KeyboardShortcut.PREVIOUS_SESSION,
+            KeyboardShortcut.NEXT_SESSION -> {
+                val step = if (shortcut == KeyboardShortcut.NEXT_SESSION) 1 else -1
+                val current = (top as? RemoteNavKey.Chat)?.sessionId
+                adjacentSession(twoPane.visibleSessionIds, current, step)
+                    ?.takeIf { it != current }
+                    ?.let { open(RemoteNavKey.Chat(sessions.routeId, sessions.projectId, it)) }
+            }
+        }
+        return true
+    }
+
     fun disconnect() {
         invalidate()
         repository.disconnect()
@@ -426,35 +470,123 @@ internal fun RemoteNavigation(
             }
         }
     }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        // Recomputed on every size change: rotation, split-screen resizes and DeX windows.
+        val layout = paneLayout(maxWidth)
+        val twoPane = rememberSaveable(saver = TwoPaneState.Saver) { TwoPaneState() }
+        val hardwareKeyboard = hardwareKeyboardAttached()
+        val shortcuts = layout.twoPane && hardwareKeyboard
+        val collapsed = twoPane.listCollapsed
+        val sceneStrategies =
+            remember(layout, twoPane, collapsed) {
+                if (layout.twoPane)
+                    listOf<SceneStrategy<NavKey>>(
+                        ListDetailSceneStrategy(layout, twoPane, collapsed),
+                        SinglePaneSceneStrategy(),
+                    )
+                else listOf<SceneStrategy<NavKey>>(SinglePaneSceneStrategy())
+            }
+        // Only a change of layout bucket rebuilds this; resize ticks within one keep it.
+        val onBack =
+            remember(layout, twoPane, navigator, stack) {
+                {
+                    when (twoPaneBackStep(layout, twoPane.listCollapsed, stack.lastOrNull())) {
+                        BackStep.EXPAND_LIST -> twoPane.listCollapsed = false
+                        BackStep.NAVIGATE -> navigator.back()
+                    }
+                }
+            }
+        // With nothing focused, Compose sees no key events at all; the window then reports them
+        // as unhandled. Shortcuts run from there without moving focus, so TalkBack's focus stays
+        // where it is, and an open dialog (its own window) keeps every key to itself.
+        val view = LocalView.current
+        if (shortcuts)
+            DisposableEffect(view, navigator, twoPane) {
+                val listener =
+                    ViewCompat.OnUnhandledKeyEventListenerCompat { _, event ->
+                        navigator.shortcut(KeyEvent(event), twoPane)
+                    }
+                ViewCompat.addOnUnhandledKeyEventListener(view, listener)
+                onDispose { ViewCompat.removeOnUnhandledKeyEventListener(view, listener) }
+            }
+        CompositionLocalProvider(
+            LocalPaneLayout provides layout,
+            LocalTwoPane provides twoPane.takeIf { layout.twoPane },
+            LocalHardwareKeyboard provides hardwareKeyboard,
+        ) {
+            Box(
+                // While something in the layout has focus (the composer, the search field), the
+                // shortcuts run here, before that field sees the keys.
+                if (shortcuts) Modifier.fillMaxSize().onPreviewKeyEvent { navigator.shortcut(it, twoPane) }
+                else Modifier.fillMaxSize()
+            ) {
+                RemoteNavDisplay(
+                    stack,
+                    navigator,
+                    onBack,
+                    sceneStrategies,
+                    repository,
+                    settings,
+                    pushConfigured,
+                    pushSettings.pushEnabled,
+                    enablePush,
+                )
+            }
+        }
+    }
+}
+
+/** Runs a hardware keyboard shortcut of the two-pane layout; false leaves the key alone. */
+private fun RemoteNavigator.shortcut(event: KeyEvent, twoPane: TwoPaneState): Boolean {
+    if (event.type != KeyEventType.KeyDown) return false
+    val shortcut =
+        keyboardShortcut(event.key, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed)
+            ?: return false
+    return shortcut(shortcut, twoPane)
+}
+
+@Composable
+private fun RemoteNavDisplay(
+    stack: NavBackStack<NavKey>,
+    navigator: RemoteNavigator,
+    onBack: () -> Unit,
+    sceneStrategies: List<SceneStrategy<NavKey>>,
+    repository: RemoteRepository,
+    settings: SettingsRepository,
+    pushConfigured: Boolean,
+    pushEnabled: Boolean,
+    enablePush: () -> Unit,
+) {
     NavDisplay(
         backStack = stack,
-        onBack = navigator::back,
+        onBack = onBack,
         entryDecorators =
             listOf(
                 rememberSaveableStateHolderNavEntryDecorator(),
                 rememberViewModelStoreNavEntryDecorator(),
             ),
+        sceneStrategies = sceneStrategies,
         entryProvider =
             entryProvider {
                 entry<RemoteNavKey.Hosts> { key ->
                     val model = viewModel { HostsViewModel(repository) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushSettings.pushEnabled, enablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
                 }
                 entry<RemoteNavKey.Projects> { key ->
                     val model = viewModel { ProjectsViewModel(repository, key) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushSettings.pushEnabled, enablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
                 }
-                entry<RemoteNavKey.Sessions> { key ->
+                entry<RemoteNavKey.Sessions>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { SessionsViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushSettings.pushEnabled, enablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
                 }
                 entry<RemoteNavKey.FolderBrowser> { key ->
                     val model = viewModel { FolderBrowserViewModel(repository, key) }
                     FolderBrowserScreen(key, model, navigator)
                 }
-                entry<RemoteNavKey.Chat> { key ->
+                entry<RemoteNavKey.Chat>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ChatViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushSettings.pushEnabled, enablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
                 }
                 entry<RemoteNavKey.Settings>(
                     metadata = metadata {
@@ -464,7 +596,7 @@ internal fun RemoteNavigation(
                     },
                 ) { key ->
                     val model = viewModel { SettingsViewModel(repository, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushSettings.pushEnabled, enablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
                 }
             },
         transitionSpec = { depthTransition(forward = true) },

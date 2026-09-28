@@ -18,6 +18,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -92,6 +100,10 @@ internal fun ChatComposer(
     voiceEngine: VoiceRecognitionEngine? = null,
     voicePermissionGrantedOverride: Boolean? = null,
     focusRequester: FocusRequester? = null,
+    /** A hardware keyboard is attached; only then do Enter and Ctrl+Enter send. */
+    hardwareKeyboard: Boolean = false,
+    /** The "Enter sends" setting; off, a hardware Enter inserts a newline as on screen. */
+    enterSends: Boolean = false,
 ) {
     val predictions = LocalPromptPredictions.current
     val childControls = childControlsAvailable(state)
@@ -183,6 +195,21 @@ internal fun ChatComposer(
         }
     }
     val latestAccept = rememberUpdatedState(acceptPrediction)
+    // A hardware Enter sends what the primary button would send, but never stops a run or starts
+    // voice input: with nothing to send it does nothing.
+    val keyboardSend: () -> Unit = {
+        when {
+            showBusyAction -> if (canQueue) {
+                recordPrompt()
+                if (busyAction == BusyComposerAction.Steer) onSteer() else onFollowUp()
+            }
+            canSendDraft(state) && voiceInput.state !is VoiceInputState.Listening -> {
+                recordPrompt()
+                send()
+            }
+        }
+    }
+    val latestKeyboardSend = rememberUpdatedState(keyboardSend)
     FloatingSurface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             state.quote?.let { QuotePreview(it, Modifier.fillMaxWidth(), onRemoveQuote) }
@@ -375,6 +402,34 @@ internal fun ChatComposer(
                                     stringResource(R.string.remote_prediction_announce, it)
                                 }.orEmpty(),
                             ) { latestAccept.value() }
+                            .onPreviewKeyEvent { event ->
+                                when (
+                                    composerEnter(
+                                        event.key,
+                                        event.type == KeyEventType.KeyDown,
+                                        ctrl = event.isCtrlPressed || event.isMetaPressed,
+                                        shift = event.isShiftPressed,
+                                        alt = event.isAltPressed,
+                                        hardwareKeyboard = hardwareKeyboard,
+                                        enterSends = enterSends,
+                                    )
+                                ) {
+                                    ComposerEnter.DEFAULT -> false
+                                    ComposerEnter.SEND -> {
+                                        latestKeyboardSend.value()
+                                        true
+                                    }
+                                    ComposerEnter.NEWLINE -> {
+                                        val text = shown.text
+                                        val start = shown.selection.min
+                                        val next = text.substring(0, start) + "\n" + text.substring(shown.selection.max)
+                                        field = TextFieldValue(next, TextRange(start + 1))
+                                        voiceInput.userEdited(next)
+                                        onDraft(next)
+                                        true
+                                    }
+                                }
+                            }
                             .testTag("composerField"),
                     maxLines = 6,
                     keyboardOptions =
@@ -414,6 +469,16 @@ internal fun ChatComposer(
         }
     }
 }
+
+/** The draft can be sent now; the same rule the primary button follows. */
+internal fun canSendDraft(state: RemoteState): Boolean =
+    state.connected &&
+        !state.loading &&
+        state.status == "idle" &&
+        !state.sending &&
+        !state.importingAttachments &&
+        !state.configurationChanging &&
+        (state.draft.isNotBlank() || state.attachments.isNotEmpty())
 
 /** What the child control row says about the selected subagent child, or null for nothing. */
 internal fun childControlStatus(state: RemoteState): Int? {

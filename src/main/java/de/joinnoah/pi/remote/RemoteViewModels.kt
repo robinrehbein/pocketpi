@@ -302,4 +302,6 @@ internal class SettingsViewModel(
     fun setSwipeEndToStart(action: SwipeAction) = settings.setSwipeEndToStart(action)
 
     fun setSwipeStartToEnd(action: SwipeAction) = settings.setSwipeStartToEnd(action)
+
+    fun setEnterSends(enabled: Boolean) = settings.setEnterSends(enabled)
 }

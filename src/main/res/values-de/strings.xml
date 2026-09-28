@@ -277,4 +277,16 @@
         <item quantity="one">… %d Byte übersprungen</item>
         <item quantity="other">… %d Bytes übersprungen</item>
     </plurals>
+    <string name="remote_two_pane_empty">Wähle eine Sitzung, um ihren Chat hier zu öffnen.</string>
+    <string name="remote_inspector_empty">Tool-Details und Dateiänderungen öffnen sich hier.</string>
+    <string name="remote_session_list_hide">Sitzungsliste ausblenden</string>
+    <string name="remote_session_list_show">Sitzungsliste einblenden</string>
+    <string name="remote_session_search">Sitzungen durchsuchen</string>
+    <string name="remote_session_search_empty">Keine Sitzung passt zur Suche.</string>
+    <string name="remote_keyboard_title">Hardware-Tastatur</string>
+    <string name="remote_keyboard_help">Im zweispaltigen Layout auf breiten Bildschirmen, solange eine Tastatur wie das Book Cover Keyboard angeschlossen ist. Auf dem Smartphone fügt Enter weiterhin eine Zeile ein.</string>
+    <string name="remote_keyboard_enter_sends">Enter sendet, Umschalt+Enter fügt eine Zeile ein</string>
+    <string name="remote_keyboard_shortcut_send">Strg+Enter: senden</string>
+    <string name="remote_keyboard_shortcut_search">Strg+K oder Strg+F: Sitzungen durchsuchen</string>
+    <string name="remote_keyboard_shortcut_switch">Strg+Pfeil hoch/runter oder Alt+Pfeil hoch/runter: vorherige oder nächste Sitzung</string>
 </resources>
