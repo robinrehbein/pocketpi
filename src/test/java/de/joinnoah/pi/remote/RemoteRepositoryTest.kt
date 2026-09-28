@@ -257,12 +257,15 @@ class RemoteRepositoryTest {
         assertTrue(close.text("requestId").isNotBlank())
     }
 
-    private fun TestScope.jobsRepository(transport: Transport): DefaultRemoteRepository {
+    private fun TestScope.jobsRepository(transport: Transport, lease: Boolean = false): DefaultRemoteRepository {
         val tui = session(origin = "tui")
         configure(transport, sessions = listOf(tui), opened = tui)
-        transport.capabilities = setOf(BACKGROUND_JOBS_CAPABILITY)
+        transport.capabilities =
+            setOf(BACKGROUND_JOBS_CAPABILITY) + if (lease) setOf(BACKGROUND_JOBS_LIST_LEASE_CAPABILITY) else emptySet()
         return repository(transport)
     }
+
+    private fun Transport.jobsListRequests() = sent.filter { it.text("type") == "session.jobs.list" }
 
     @Test
     fun aSessionStatusChangeRefreshesTheJobList() = runTest {
@@ -296,6 +299,155 @@ class RemoteRepositoryTest {
         assertTrue(repository.state.value.connected)
         assertEquals("session", repository.state.value.jobs?.sessionId)
         assertTrue(repository.state.value.jobs!!.listOpen)
+    }
+
+    @Test
+    fun listsWithALeaseOnlyWhenTheHostAdvertisesTheCapability() = runTest {
+        val transport = Transport()
+        val repository = jobsRepository(transport, lease = false)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.refreshJobs()
+        runCurrent()
+        val unleased = transport.jobsListRequests()
+        assertTrue(unleased.isNotEmpty())
+        assertTrue(unleased.none { "lease" in it })
+
+        val leasedTransport = Transport()
+        val leasedRepository = jobsRepository(leasedTransport, lease = true)
+        leasedRepository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        leasedRepository.refreshJobs()
+        runCurrent()
+        val leased = leasedTransport.jobsListRequests()
+        assertTrue(leased.isNotEmpty())
+        assertTrue(leased.all { it.flag("lease") })
+    }
+
+    @Test
+    fun renewsTheListLeaseEveryThirtySecondsWhileTheChatStaysOpenAndConnected() = runTest {
+        val transport = Transport()
+        val repository = jobsRepository(transport, lease = true)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.refreshJobs()
+        runCurrent()
+        fun leaseLists() = transport.jobsListRequests().count { it.flag("lease") }
+        val before = leaseLists()
+
+        advanceTimeBy(JOBS_LIST_LEASE_RENEW_MILLIS - 1)
+        runCurrent()
+        assertEquals(before, leaseLists())
+        advanceTimeBy(2)
+        runCurrent()
+        assertEquals(before + 1, leaseLists())
+        advanceTimeBy(JOBS_LIST_LEASE_RENEW_MILLIS)
+        runCurrent()
+        assertEquals(before + 2, leaseLists())
+    }
+
+    @Test
+    fun leaseRenewalStopsWhenTheChatClosesOrTheSessionChanges() = runTest {
+        val transport = Transport()
+        val repository = jobsRepository(transport, lease = true)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.refreshJobs()
+        runCurrent()
+        fun leaseLists() = transport.jobsListRequests().count { it.flag("lease") }
+        val before = leaseLists()
+
+        // Closing the chat (no session selected) stops the renewal loop.
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        advanceTimeBy(3 * JOBS_LIST_LEASE_RENEW_MILLIS)
+        runCurrent()
+        assertEquals(before, leaseLists())
+    }
+
+    @Test
+    fun leaseRenewalStopsInTheBackgroundAndRelistsOnReturningToTheForeground() = runTest {
+        val transport = Transport()
+        val repository = jobsRepository(transport, lease = true)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.refreshJobs()
+        runCurrent()
+        fun leaseLists() = transport.jobsListRequests().count { it.flag("lease") }
+        val before = leaseLists()
+
+        repository.setForeground(false)
+        advanceTimeBy(3 * JOBS_LIST_LEASE_RENEW_MILLIS)
+        runCurrent()
+        assertEquals(before, leaseLists())
+
+        // Returning to the foreground lists again right away, without waiting out the interval.
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(before + 1, leaseLists())
+    }
+
+    @Test
+    fun aReconnectRelistsWithTheLeaseRightAway() = runTest {
+        val transport = Transport()
+        val repository = jobsRepository(transport, lease = true)
+        val selection = RemoteSelection("host", "project", "session")
+        repository.activate(selection)
+        runCurrent()
+        repository.refreshJobs()
+        runCurrent()
+        fun leaseLists() = transport.jobsListRequests().count { it.flag("lease") }
+        val before = leaseLists()
+
+        transport.listener.failed(false, R.string.remote_connection_error)
+        repository.activate(selection)
+        runCurrent()
+        // The chat is still open after the reconnect; the app relists to renew the lease.
+        repository.refreshJobs()
+        runCurrent()
+        assertEquals(before + 1, leaseLists())
+    }
+
+    @Test
+    fun theStatusChangeHeuristicIsSkippedOnlyWhenTheListLeaseCapabilityIsPresent() = runTest {
+        for (lease in listOf(false, true)) {
+            val transport = Transport()
+            val repository = jobsRepository(transport, lease = lease)
+            repository.activate(RemoteSelection("host", "project", "session"))
+            runCurrent()
+            val before = transport.jobsListRequests().size
+            transport.listener.message(
+                Wire.objectOf(
+                    "type" to "event", "sessionId" to "session",
+                    "revision" to 1, "kind" to "session.status", "status" to "running",
+                )
+            )
+            runCurrent()
+            assertEquals("lease=$lease", if (lease) before else before + 1, transport.jobsListRequests().size)
+        }
+    }
+
+    @Test
+    fun theBashBgHeuristicIsSkippedOnlyWhenTheListLeaseCapabilityIsPresent() = runTest {
+        for (lease in listOf(false, true)) {
+            val transport = Transport()
+            val repository = jobsRepository(transport, lease = lease)
+            repository.activate(RemoteSelection("host", "project", "session"))
+            runCurrent()
+            val before = transport.jobsListRequests().size
+            transport.listener.message(
+                Wire.objectOf(
+                    "type" to "event",
+                    "sessionId" to "session",
+                    "revision" to 1,
+                    "kind" to "message.upsert",
+                    "message" to
+                        Wire.objectOf("id" to "tool-message", "role" to "tool", "toolName" to "bash_bg"),
+                )
+            )
+            runCurrent()
+            assertEquals("lease=$lease", if (lease) before else before + 1, transport.jobsListRequests().size)
+        }
     }
 
     @Test

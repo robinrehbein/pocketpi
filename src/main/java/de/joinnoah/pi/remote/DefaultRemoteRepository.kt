@@ -98,6 +98,7 @@ class DefaultRemoteRepository(
             FOLLOW_UP_CAPABILITY,
             TOOL_OUTPUT_CAPABILITY,
             BACKGROUND_JOBS_CAPABILITY,
+            BACKGROUND_JOBS_LIST_LEASE_CAPABILITY,
             // The host advertises subagent control only on this route, never at authentication.
             SUBAGENT_CONTROL_CAPABILITY,
             PROJECT_OPEN_CAPABILITY,
@@ -926,6 +927,8 @@ class DefaultRemoteRepository(
                     if (payload.text("kind") == "session.status") updateSessionStatus(payload)
                     if (payload.text("kind") == "message.upsert" &&
                         payload.text("sessionId") == state.value.selection.sessionId &&
+                        // A held list lease already gets session.jobs.changed for this; older hosts need the hint.
+                        !canLeaseJobsList(state.value) &&
                         (payload["message"] as? JsonObject)?.let {
                             it.optionalText("role") == "tool" && it.optionalText("toolName") in setOf("bash_bg", "bash_kill")
                         } == true
@@ -1069,7 +1072,8 @@ class DefaultRemoteRepository(
         sessionStatusOverrides[id] = status
         if (status != known) dropStaleChildControl(id)
         // Job events need a watch lease; a status change is the list's hint that jobs changed.
-        if (id == state.value.selection.sessionId) jobsController.refreshSoon()
+        // A held list lease already gets session.jobs.changed for this; older hosts need the hint.
+        if (id == state.value.selection.sessionId && !canLeaseJobsList(state.value)) jobsController.refreshSoon()
         if (sessionStatusRevisions.size > 4096) {
             val oldest = sessionStatusRevisions.keys.first()
             sessionStatusRevisions.remove(oldest)
@@ -1831,6 +1835,7 @@ class DefaultRemoteRepository(
     }
 
     override fun setForeground(foreground: Boolean) {
+        jobsController.setForeground(foreground)
         val signal = recovery.foreground(foreground)
         if (!foreground) {
             queueNavigationWrite(immediate = true)
@@ -3527,10 +3532,12 @@ class DefaultRemoteRepository(
         BackgroundJobsController(
             scope,
             object : JobSource {
-                override suspend fun listJobs(sessionId: String): List<BackgroundJob> {
+                override suspend fun listJobs(sessionId: String, lease: Boolean): List<BackgroundJob> {
                     requireJobs()
+                    val fields = mutableListOf<Pair<String, Any?>>("sessionId" to sessionId)
+                    if (lease) fields += "lease" to true
                     return parseJobList(
-                        request("session.jobs.list", selectionEpoch, "sessionId" to sessionId),
+                        request("session.jobs.list", selectionEpoch, *fields.toTypedArray()),
                         sessionId,
                     )
                 }

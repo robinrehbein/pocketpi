@@ -40,8 +40,17 @@ import kotlinx.serialization.json.JsonObject
 
 internal const val BACKGROUND_JOBS_CAPABILITY = "session.background_jobs.v1"
 
+/**
+ * Hosts advertising this accept `lease: true` on `session.jobs.list`: while held, the host pushes
+ * `session.jobs.changed` for the session without a watch, so the open chat needs no re-list heuristic.
+ */
+internal const val BACKGROUND_JOBS_LIST_LEASE_CAPABILITY = "session.background_jobs.list_lease.v1"
+
 /** A watch leases job events for 60 seconds; the open job view renews it this often. */
 internal const val JOB_LEASE_RENEW_MILLIS = 30_000L
+
+/** The host's list lease lasts 60 seconds; the open chat renews it this often. */
+internal const val JOBS_LIST_LEASE_RENEW_MILLIS = 30_000L
 
 /** Automatic list refreshes run at most this often. */
 internal const val JOBS_AUTO_REFRESH_MILLIS = 3_000L
@@ -227,6 +236,10 @@ internal fun canUseBackgroundJobs(state: RemoteState): Boolean =
         BACKGROUND_JOBS_CAPABILITY !in state.unavailableCapabilities &&
         state.session != null &&
         state.session.optionalText("origin") !in setOf("rpc", "history")
+
+/** True when the host advertises the list-lease capability for a session that can hold one. */
+internal fun canLeaseJobsList(state: RemoteState): Boolean =
+    canUseBackgroundJobs(state) && BACKGROUND_JOBS_LIST_LEASE_CAPABILITY in state.capabilities
 
 /** The selected session's jobs state, or null when the entry should stay hidden. */
 internal fun visibleJobs(state: RemoteState): JobsState? =
@@ -488,7 +501,8 @@ internal fun jobOutputLines(parts: List<JobOutputPart>, limit: Int = MAX_JOB_OUT
 
 /** The `session.jobs.*` requests. Implementations throw [RemoteRequestException] on errors. */
 internal interface JobSource {
-    suspend fun listJobs(sessionId: String): List<BackgroundJob>
+    /** [lease] asks the host for a 60-second list lease; never true for a host without the capability. */
+    suspend fun listJobs(sessionId: String, lease: Boolean): List<BackgroundJob>
 
     suspend fun watchJob(sessionId: String, jobId: String, since: Long?): JobChunk
 
@@ -517,6 +531,9 @@ internal class BackgroundJobsController(
     private var buffer = JobOutputBuffer()
     private var autoRefresh: Job? = null
     private var refreshAgain = false
+    private var foreground = true
+    private var leaseJob: Job? = null
+    private var leaseVersion = 0L
 
     private fun write(sessionId: String, block: (JobsState) -> JobsState) =
         update { state ->
@@ -548,11 +565,12 @@ internal class BackgroundJobsController(
         if (!canUseBackgroundJobs(state) || !state.connected) return
         ensure(sessionId)
         write(sessionId) { it.copy(loading = true) }
+        val lease = canLeaseJobsList(state)
         val version = ++listVersion
         listJob?.cancel()
         listJob = scope.launch {
             try {
-                val items = source.listJobs(sessionId)
+                val items = source.listJobs(sessionId, lease)
                 if (version != listVersion) return@launch
                 write(sessionId) { it.withJobs(items).copy(loading = false, failure = null, unsupported = false) }
             } catch (e: Exception) {
@@ -570,8 +588,48 @@ internal class BackgroundJobsController(
                 }
             }
         }
-        // A reconnect can end the lease; the open view watches again right away.
+        // A reconnect can end the watch lease; the open view watches again right away.
         wake.trySend(Unit)
+        manageLease(sessionId)
+    }
+
+    /** True while a list lease for [sessionId] should be held: the chat is open, in front and connected. */
+    private fun leaseActive(sessionId: String): Boolean {
+        val state = current()
+        return foreground && state.connected && state.selection.sessionId == sessionId && canLeaseJobsList(state)
+    }
+
+    /** Starts the 30-second list-lease renewal loop for [sessionId] if it should run and is not already. */
+    private fun manageLease(sessionId: String) {
+        if (!leaseActive(sessionId)) {
+            stopLease()
+            return
+        }
+        if (leaseJob?.isActive == true) return
+        val version = ++leaseVersion
+        leaseJob = scope.launch {
+            while (isActive) {
+                delay(JOBS_LIST_LEASE_RENEW_MILLIS)
+                if (version != leaseVersion || !leaseActive(sessionId)) return@launch
+                refresh()
+            }
+        }
+    }
+
+    private fun stopLease() {
+        leaseVersion++
+        leaseJob?.cancel()
+        leaseJob = null
+    }
+
+    /**
+     * The app left or returned to the foreground; a backgrounded app holds no list lease. Returning
+     * lists again right away, the same as a reconnect, instead of waiting out the renewal interval.
+     */
+    fun setForeground(value: Boolean) {
+        if (foreground == value) return
+        foreground = value
+        if (!foreground) stopLease() else refresh()
     }
 
     /**
@@ -597,6 +655,7 @@ internal class BackgroundJobsController(
     /** Stops listing and watching when another session is selected; a requested kill still runs. */
     fun stop() {
         stopWatch()
+        stopLease()
         listVersion++
         listJob?.cancel()
         listJob = null

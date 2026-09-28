@@ -235,12 +235,16 @@ class BackgroundJobsTest {
 
     private class Source : JobSource {
         val watches = mutableListOf<Long?>()
+        val lists = mutableListOf<Boolean>()
         var list: suspend () -> List<BackgroundJob> = { emptyList() }
         var answer: (Long?) -> JobChunk = { error("no answer") }
         var kill: () -> Unit = {}
         var kills = 0
 
-        override suspend fun listJobs(sessionId: String) = list()
+        override suspend fun listJobs(sessionId: String, lease: Boolean): List<BackgroundJob> {
+            lists += lease
+            return list()
+        }
 
         override suspend fun watchJob(sessionId: String, jobId: String, since: Long?): JobChunk {
             watches += since
@@ -558,5 +562,82 @@ class BackgroundJobsTest {
         assertEquals(1, visibleJobs(harness.state)?.jobs?.size)
         harness.controller.onEvent(JobEvent.Status("s", chunk(0, "", status = "exited").job))
         assertEquals(JobStatus.EXITED, harness.state.jobs!!.jobs.single().status)
+    }
+
+    @Test
+    fun refreshSendsLeaseOnlyWhenTheHostAdvertisesTheCapability() = runTest {
+        val harness = Harness(backgroundScope)
+        harness.source.list = { emptyList() }
+        harness.controller.refresh()
+        runCurrent()
+        assertEquals(listOf(false), harness.source.lists)
+
+        harness.state = harness.state.copy(capabilities = harness.state.capabilities + BACKGROUND_JOBS_LIST_LEASE_CAPABILITY)
+        harness.controller.refresh()
+        runCurrent()
+        assertEquals(listOf(false, true), harness.source.lists)
+    }
+
+    @Test
+    fun renewsTheListLeaseEveryThirtySecondsWhileOpenConnectedAndForeground() = runTest {
+        val harness = Harness(backgroundScope)
+        harness.state = harness.state.copy(capabilities = harness.state.capabilities + BACKGROUND_JOBS_LIST_LEASE_CAPABILITY)
+        harness.source.list = { emptyList() }
+        harness.controller.refresh()
+        runCurrent()
+        assertEquals(1, harness.source.lists.size)
+
+        advanceTimeBy(JOBS_LIST_LEASE_RENEW_MILLIS - 1)
+        runCurrent()
+        assertEquals(1, harness.source.lists.size)
+        advanceTimeBy(2)
+        runCurrent()
+        assertEquals(listOf(true, true), harness.source.lists)
+        advanceTimeBy(JOBS_LIST_LEASE_RENEW_MILLIS)
+        runCurrent()
+        assertEquals(3, harness.source.lists.size)
+    }
+
+    @Test
+    fun leaseRenewalStopsWhenTheControllerStopsOrTheAppBackgrounds() = runTest {
+        val harness = Harness(backgroundScope)
+        harness.state = harness.state.copy(capabilities = harness.state.capabilities + BACKGROUND_JOBS_LIST_LEASE_CAPABILITY)
+        harness.source.list = { emptyList() }
+        harness.controller.refresh()
+        runCurrent()
+        val afterOpen = harness.source.lists.size
+
+        // A session change (or the chat closing) stops the renewal.
+        harness.controller.stop()
+        advanceTimeBy(3 * JOBS_LIST_LEASE_RENEW_MILLIS)
+        runCurrent()
+        assertEquals(afterOpen, harness.source.lists.size)
+
+        harness.controller.refresh()
+        runCurrent()
+        val afterReopen = harness.source.lists.size
+
+        // Backgrounding the app stops it too, and returning to the foreground lists again right away.
+        harness.controller.setForeground(false)
+        advanceTimeBy(3 * JOBS_LIST_LEASE_RENEW_MILLIS)
+        runCurrent()
+        assertEquals(afterReopen, harness.source.lists.size)
+        harness.controller.setForeground(true)
+        runCurrent()
+        assertEquals(afterReopen + 1, harness.source.lists.size)
+    }
+
+    @Test
+    fun jobsChangedRefreshesTheListWithoutARequest() = runTest {
+        val harness = Harness(backgroundScope)
+        harness.source.list = { emptyList() }
+        harness.controller.refresh()
+        runCurrent()
+        val before = harness.source.lists.size
+
+        harness.source.list = { error("not called") }
+        harness.controller.onEvent(JobEvent.Changed("s", listOf(running(1))))
+        assertEquals(listOf("job"), harness.state.jobs?.jobs?.map { it.id })
+        assertEquals(before, harness.source.lists.size)
     }
 }
