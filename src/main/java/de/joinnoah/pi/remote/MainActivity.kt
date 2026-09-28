@@ -35,7 +35,14 @@ class MainActivity : ComponentActivity() {
             val route = savedInstanceState.getString("pendingRouteId")
             val session = savedInstanceState.getString("pendingSessionId")
             if (route != null && session != null)
-                notification = RemoteNotification(route, session, ++delivery)
+                notification =
+                    RemoteNotification(
+                        route,
+                        session,
+                        ++delivery,
+                        savedInstanceState.getBoolean("pendingJobs"),
+                        savedInstanceState.getString("pendingJobId"),
+                    )
         }
         setContent {
             CompositionLocalProvider(LocalPromptPredictions provides app.predictions) {
@@ -61,6 +68,8 @@ class MainActivity : ComponentActivity() {
         notification?.let {
             outState.putString("pendingRouteId", it.routeId)
             outState.putString("pendingSessionId", it.sessionId)
+            outState.putBoolean("pendingJobs", it.jobs)
+            it.jobId?.let { job -> outState.putString("pendingJobId", job) }
         }
         super.onSaveInstanceState(outState)
     }
@@ -84,7 +93,15 @@ class MainActivity : ComponentActivity() {
         if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
         val route = intent.getStringExtra("routeId") ?: return
         val session = intent.getStringExtra("target") ?: return
-        notification = RemoteNotification(route, session, ++delivery)
+        notification =
+            RemoteNotification(
+                route,
+                session,
+                ++delivery,
+                intent.getBooleanExtra(RemoteNotifications.EXTRA_JOBS, false),
+                // Nullable on purpose: the strict push-id check, not the looser String one.
+                intent.getStringExtra(RemoteNotifications.EXTRA_JOB).takeIf(::isOpaqueId),
+            )
     }
 }
 

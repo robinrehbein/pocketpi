@@ -133,6 +133,18 @@
     <string name="remote_notification_denied">Notifications are off. You can enable them in Android settings.</string>
     <string name="remote_notification_complete">pi has finished</string>
     <string name="remote_notification_question">pi needs an answer</string>
+    <string name="remote_notification_subagent_done">Subagent finished</string>
+    <string name="remote_notification_subagent_stuck">Subagent looks stuck</string>
+    <string name="remote_notification_job_done">Background job finished</string>
+    <string name="remote_notification_job_stuck">Background job looks stuck</string>
+    <plurals name="remote_notification_subagents_done">
+        <item quantity="one">%d subagent finished</item>
+        <item quantity="other">%d subagents finished</item>
+    </plurals>
+    <plurals name="remote_notification_jobs_done">
+        <item quantity="one">%d background job finished</item>
+        <item quantity="other">%d background jobs finished</item>
+    </plurals>
     <string name="remote_notification_open">Open the session to see its current state.</string>
     <string name="remote_appearance">Appearance</string>
     <string name="remote_theme_system">System</string>
@@ -230,6 +242,10 @@
     <string name="remote_child_uncertain">The outcome is unknown. Check the session before you try again.</string>
     <string name="remote_child_unsupported">Reload the pi remote extension on the Mac to control subagents.</string>
     <string name="remote_child_parent_offline">The parent session is offline.</string>
+    <string name="remote_child_stop_parent_offline">The parent session is offline, so nothing was stopped. Try Stop again once the parent is back.</string>
+    <string name="remote_child_stop_not_running">Nothing was stopped: the subagent is no longer running.</string>
+    <string name="remote_child_stop_unavailable">Nothing was stopped: the parent session can no longer stop this subagent. Stopping here now ends only this run.</string>
+    <string name="remote_child_stop_child_offline">This subagent is offline, so nothing was stopped.</string>
     <string name="remote_child_stopped_run_only">Stopped this run only. The parent\'s pi remote extension is too old to record your stop, so the parent may restart the subagent. Reload the extension on the Mac.</string>
     <string name="remote_child_quote_unsupported">Quotes cannot be sent to a subagent. Remove the quote to resume it.</string>
     <string name="remote_child_command_unsupported">Commands cannot resume a subagent. Send a plain message instead.</string>
