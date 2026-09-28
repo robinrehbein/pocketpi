@@ -97,6 +97,35 @@
       }
     },
     {
+      "name": "agent-card-progress",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 15,
+        "kind": "message.upsert",
+        "message": {
+          "id": "msg-tool-agent-1",
+          "role": "tool",
+          "text": "",
+          "state": "complete",
+          "toolName": "Agent",
+          "toolCallId": "toolu_agent_01",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "explore",
+                "state": "running",
+                "task": "Find the router",
+                "sessionId": "019a2f3d-0000-7000-8000-000000000002",
+                "activity": "reading index.ts"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
       "name": "compaction-running",
       "payload": {
         "type": "event",
@@ -338,6 +367,32 @@
                 "agent": "explorer",
                 "state": "running",
                 "sessionId": "child session"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "progress-on-bash",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 16,
+        "kind": "message.upsert",
+        "message": {
+          "id": "msg-tool-bash-1",
+          "role": "tool",
+          "text": "",
+          "state": "complete",
+          "toolName": "bash",
+          "toolCallId": "toolu_bash_01",
+          "subagentProgress": {
+            "mode": "single",
+            "agents": [
+              {
+                "agent": "explore",
+                "state": "running"
               }
             ]
           }
