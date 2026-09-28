@@ -19,7 +19,7 @@ class PushDeliverySetupTest {
 
         instrumentation.uiAutomation
             .executeShellCommand(
-                "pm grant de.joinnoah.pocketpi ${Manifest.permission.POST_NOTIFICATIONS}",
+                "pm grant ${instrumentation.targetContext.packageName} ${Manifest.permission.POST_NOTIFICATIONS}",
             )
             .close()
 

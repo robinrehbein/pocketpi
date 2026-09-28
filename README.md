@@ -1,7 +1,7 @@
 # PocketPi for Android
 
 This separate application controls pi sessions on paired Macs through the pi Remote relay. It uses
-application ID `de.joinnoah.pocketpi` and does not share Noah accounts or data.
+application ID `de.robinrehbein.pocketpi` and does not share Noah accounts or data.
 
 ## Build and install
 
@@ -112,7 +112,7 @@ Disconnecting does not automatically resubmit a prompt.
 ## Firebase
 
 Push remains disabled when Firebase settings are absent. Configure a separate Firebase Android app
-for `de.joinnoah.pocketpi`. Supply these values through environment variables, Gradle properties or
+for `de.robinrehbein.pocketpi`. Supply these values through environment variables, Gradle properties or
 `local.properties`:
 
 - `PI_REMOTE_FIREBASE_API_KEY`
@@ -188,11 +188,13 @@ and sizes of the typography styles. Code blocks use monospace. No Samsung font f
 on devices without those families, including the AOSP emulator, Android supplies its default font.
 The actual Samsung font therefore requires verification on a Samsung device.
 
-The installed Android application ID is `de.joinnoah.pocketpi`. This repository is PocketPi's
+The installed Android application ID is `de.robinrehbein.pocketpi`. This repository is PocketPi's
 Gradle root. The internal Kotlin namespace, pi extension directory and `/remote` command
-retain their existing names.
-A previous debug installation under `de.joinnoah.pi.remote` is a separate app and does not share
-pairings or settings with PocketPi.
+retain their existing names. The previous Play app under `de.joinnoah.pocketpi` remains a
+separate installation. Install this new app separately, pair it with the Mac again, and remove the
+old app only after confirming that the new pairing works. Pairings, drafts and settings do not
+transfer between the two applications. A previous debug installation under
+`de.joinnoah.pi.remote` is also separate.
 
 ## Play testing releases
 
@@ -219,15 +221,15 @@ service account JSON key.
 
 Set the environment secrets `POCKETPI_UPLOAD_KEYSTORE_B64`, `POCKETPI_UPLOAD_STORE_PASSWORD`,
 `POCKETPI_UPLOAD_KEY_ALIAS`, `POCKETPI_UPLOAD_KEY_PASSWORD`, and the four `PI_REMOTE_FIREBASE_*`
-values listed above. The keystore secret is the base64 encoding of the existing PocketPi upload
+values listed above. The keystore secret is the base64 encoding of the new Play app's upload
 keystore. `validateUploadKey` checks its private key and the upload certificate SHA-256 fingerprint
-`06:0C:E8:05:BB:E7:36:AF:A7:30:F3:DF:F3:05:01:2A:62:2A:88:6A:EE:8E:E1:95:47:2D:87:1B:C9:B7:04:15`.
-Do not generate a new signing key for an update. A local release build accepts the same signing
+`E5:0A:EE:1E:63:41:FF:AE:CD:1E:FE:AE:0B:25:B3:64:B5:80:B2:01:1B:E4:3C:06:2F:0A:23:54:1D:72:83:B5`.
+Keep this signing key for updates to the new Play app. A local release build accepts the same signing
 values as environment variables or ignored `local.properties` entries.
 
 The release script reads every current Play bundle, APK and track version code, then uses the next
 integer. Gradle embeds it as `versionCode` and the workflow sets a visible name such as
-`0.3.19-ci.23`. The script checks the version again immediately before upload and fails if another
+`0.3.19-ci.1`. An empty Play app starts at version code `1`. The script checks the version again immediately before upload and fails if another
 publisher used it. It commits with `ERROR_IF_IN_REVIEW` so an existing Play review is not canceled.
 The Closed Alpha track must already exist and its app-content declarations, testers, countries and
 reviewer access must be ready in Play Console. A missing track or Play rejection stops the entire

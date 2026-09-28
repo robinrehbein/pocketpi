@@ -55,7 +55,7 @@ class VerifyBundleTests(unittest.TestCase):
             result = unittest.mock.Mock(returncode=0, stdout="jar verified.\n", stderr="")
             cert = unittest.mock.Mock(returncode=0, stdout="SHA256: 00:11:22\n", stderr="")
             with patch.object(verify_bundle.subprocess, "run", side_effect=[result, cert]):
-                with self.assertRaisesRegex(ValueError, "not the existing Play upload certificate"):
+                with self.assertRaisesRegex(ValueError, "not the new Play upload certificate"):
                     verify_bundle.verify_bundle(bundle)
 
     def test_partially_signed_archive_is_rejected(self):

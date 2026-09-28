@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-UPLOAD_CERT_SHA256 = "06:0C:E8:05:BB:E7:36:AF:A7:30:F3:DF:F3:05:01:2A:62:2A:88:6A:EE:8E:E1:95:47:2D:87:1B:C9:B7:04:15"
+UPLOAD_CERT_SHA256 = "E5:0A:EE:1E:63:41:FF:AE:CD:1E:FE:AE:0B:25:B3:64:B5:80:B2:01:1B:E4:3C:06:2F:0A:23:54:1D:72:83:B5"
 
 
 def verify_bundle(bundle: Path):
@@ -31,7 +31,7 @@ def verify_bundle(bundle: Path):
     )
     fingerprints = re.findall(r"(?im)^\s*SHA256:\s*([0-9a-f:]+)\s*$", certificate.stdout)
     if certificate.returncode != 0 or UPLOAD_CERT_SHA256 not in (value.upper() for value in fingerprints):
-        raise ValueError("Release AAB signer is not the existing Play upload certificate")
+        raise ValueError("Release AAB signer is not the new Play upload certificate")
 
 
 def main():
