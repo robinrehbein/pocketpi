@@ -38,12 +38,12 @@ data class ToolOutputDownload(
 )
 
 internal fun canFollowUp(state: RemoteState): Boolean =
-    FOLLOW_UP_CAPABILITY in state.capabilities && state.session != null &&
-        state.session.optionalText("origin") == "rpc"
+    (FOLLOW_UP_CAPABILITY in state.capabilities && state.session != null &&
+        state.session.optionalText("origin") == "rpc") || childControlsAvailable(state)
 
 internal fun canSteer(state: RemoteState): Boolean =
-    STEER_CAPABILITY in state.capabilities && state.session != null &&
-        state.session.optionalText("origin") == "rpc"
+    (STEER_CAPABILITY in state.capabilities && state.session != null &&
+        state.session.optionalText("origin") == "rpc") || childControlsAvailable(state)
 
 data class RemoteSelection(
     val routeId: String? = null,
@@ -83,6 +83,14 @@ data class RemoteState(
     val sending: Boolean = false,
     val uncertain: Boolean = false,
     val followUps: List<PendingFollowUp> = emptyList(),
+    /** Phone stops and resumes of subagent children, by child session ID. */
+    val childControls: Map<String, ChildControl> = emptyMap(),
+    /**
+     * Children whose parent answered `unsupported` to a phone control: its extension predates
+     * subagent control, so these fall back to the plain abort until the selection or connection
+     * changes.
+     */
+    val childControlUnsupported: Set<String> = emptySet(),
     val answering: Set<String> = emptySet(),
     val capabilities: Set<String> = emptySet(),
     val unavailableCapabilities: Set<String> = emptySet(),
@@ -102,6 +110,8 @@ data class RemoteState(
     val toolOutput: ToolOutputDownload? = null,
     /** The changes view of the selected session; null while it is closed. */
     val changes: ChangesState? = null,
+    /** Background jobs of the selected session (`session.background_jobs.v1`); null until listed. */
+    val jobs: JobsState? = null,
     val folders: FolderBrowserState = FolderBrowserState(),
 )
 
@@ -183,6 +193,12 @@ interface RemoteRepository {
 
     fun dismissFollowUp(requestId: String) {}
 
+    /** `session.subagent.stop` for the selected running child; only with [SUBAGENT_CONTROL_CAPABILITY]. */
+    fun stopChild() {}
+
+    /** `session.subagent.resume` of the selected child with [message]; only with [SUBAGENT_CONTROL_CAPABILITY]. */
+    fun resumeChild(message: String) {}
+
     fun abort()
 
     fun abortSession(sessionId: String) {}
@@ -192,6 +208,21 @@ interface RemoteRepository {
     fun loadToolOutput(toolCallId: String) {}
 
     fun cancelToolOutput() {}
+
+    /** Lists the selected session's background jobs; only with [BACKGROUND_JOBS_CAPABILITY]. */
+    fun refreshJobs() {}
+
+    fun openJobs() {}
+
+    fun closeJobs() {}
+
+    /** Shows [jobId]'s live output, watching it again at least every 30 seconds while open. */
+    fun openJob(jobId: String) {}
+
+    fun closeJob() {}
+
+    /** Stops [jobId] through `session.jobs.kill`; the caller confirmed it with the user. */
+    fun stopJob(jobId: String) {}
 
     fun answer(questionId: String, answer: JsonObject)
 

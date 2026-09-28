@@ -20,6 +20,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
@@ -75,6 +78,8 @@ internal fun ChatComposer(
     onRemoveQuote: () -> Unit,
     onFollowUp: () -> Unit = {},
     onSteer: () -> Unit = {},
+    onStopChild: () -> Unit = {},
+    onResumeChild: () -> Unit = {},
     onDismissFollowUp: (String) -> Unit = {},
     onAbort: () -> Unit = onStop,
     onAnswer: (String, kotlinx.serialization.json.JsonObject) -> Unit = { _, _ -> },
@@ -118,10 +123,43 @@ internal fun ChatComposer(
         else -> BusyComposerAction.FollowUp
     }
     val hasDraft = state.draft.isNotBlank() || state.attachments.isNotEmpty()
+    val childControls = childControlsAvailable(state)
+    val childResume = offersChildResume(state)
+    val control = childControl(state)
     val canQueue = state.connected && !state.loading && !state.sending &&
         !state.importingAttachments && !state.configurationChanging &&
         state.questions.isEmpty() && hasDraft &&
-        !state.draft.trimStart().startsWith("/") && state.followUps.size < 64
+        !state.draft.trimStart().startsWith("/") && state.followUps.size < 64 &&
+        !(childControls && state.attachments.isNotEmpty())
+    val childBusy = control?.phase in setOf(ChildControlPhase.STOPPING, ChildControlPhase.RESUMING)
+    val canResumeChild = childResume && state.connected && !state.loading && !state.sending &&
+        !childBusy && state.draft.isNotBlank() && state.attachments.isEmpty() && state.quote == null &&
+        !state.draft.trimStart().startsWith("/")
+    var confirmChildStop by remember(state.selection.sessionId) { mutableStateOf(false) }
+    // In a child the host can stop, Stop goes through the parent's subagent manager after a
+    // confirmation, also while the composer offers a resume; elsewhere it aborts the run as before.
+    val stop: () -> Unit = if (childControls) ({ confirmChildStop = true }) else onStop
+    val send: () -> Unit = if (childResume) onResumeChild else onSend
+    if (confirmChildStop)
+        AlertDialog(
+            onDismissRequest = { confirmChildStop = false },
+            title = { Text(stringResource(R.string.remote_child_stop_title)) },
+            text = { Text(stringResource(R.string.remote_child_stop_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmChildStop = false
+                        onStopChild()
+                    },
+                    modifier = Modifier.testTag("confirmChildStop"),
+                ) { Text(stringResource(R.string.remote_child_stop_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmChildStop = false }) {
+                    Text(stringResource(R.string.remote_child_stop_dismiss))
+                }
+            },
+        )
     val showBusyAction = busyAction != null && hasDraft
     val voiceInput = rememberVoiceInputBinding(state.draft, onDraft, voiceEngine)
     // The draft text stays the source of truth; only the selection is local, so an accepted
@@ -186,6 +224,17 @@ internal fun ChatComposer(
                 content = suggestions,
             )
             VoiceInputStatus(voiceInput, state)
+            if (childControls)
+                ChildControlRow(
+                    status = childControlStatus(state),
+                    reason = control?.reason,
+                    resume = childResume,
+                    resumeEnabled = canResumeChild,
+                    stopEnabled = !childResume && !childBusy && state.connected && !state.loading &&
+                        state.status in setOf("running", "waiting"),
+                    onResume = onResumeChild,
+                    onStop = stop,
+                )
             if (state.followUps.isNotEmpty()) {
                 Column(
                     Modifier.fillMaxWidth().heightIn(max = 112.dp)
@@ -246,7 +295,7 @@ internal fun ChatComposer(
                         modifier = Modifier.testTag("busyDeliveryMode"),
                     )
                     IconButton(
-                        onClick = onStop,
+                        onClick = stop,
                         enabled = state.connected && !state.loading,
                         modifier = Modifier.testTag("stopRun"),
                     ) {
@@ -335,9 +384,9 @@ internal fun ChatComposer(
                     binding = voiceInput,
                     onSend = {
                         recordPrompt()
-                        onSend()
+                        send()
                     },
-                    onStop = onStop,
+                    onStop = stop,
                     busyAction = if (showBusyAction) busyAction else null,
                     busyActionEnabled = canQueue,
                     onBusyAction = {
@@ -361,6 +410,67 @@ internal fun ChatComposer(
                 )
             }
         }
+    }
+}
+
+/** What the child control row says about the selected subagent child, or null for nothing. */
+internal fun childControlStatus(state: RemoteState): Int? {
+    val running = state.status in setOf("running", "waiting")
+    return when (childControl(state)?.phase) {
+        ChildControlPhase.STOPPING -> R.string.remote_child_stopping
+        ChildControlPhase.RESUMING -> R.string.remote_child_resuming
+        ChildControlPhase.STOPPED_BY_YOU ->
+            if (running) null else R.string.remote_child_stopped_by_you
+        // After the resumed run ends, the next message resumes the child again.
+        ChildControlPhase.RESUMED -> if (running) null else R.string.remote_child_idle
+        ChildControlPhase.NOT_RUNNING -> R.string.remote_child_not_running
+        ChildControlPhase.REFUSED -> R.string.remote_child_refused_plain
+        ChildControlPhase.NOT_FOUND -> R.string.remote_child_not_found
+        ChildControlPhase.UNCERTAIN -> R.string.remote_child_uncertain
+        null -> if (running) null else R.string.remote_child_idle
+    }
+}
+
+@Composable
+private fun ChildControlRow(
+    status: Int?,
+    reason: String?,
+    resume: Boolean,
+    resumeEnabled: Boolean,
+    stopEnabled: Boolean,
+    onResume: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().testTag("childControls"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (status == null) Spacer(Modifier.weight(1f))
+        else
+            Text(
+                if (status == R.string.remote_child_refused_plain && reason != null)
+                    stringResource(R.string.remote_child_refused, reason)
+                else stringResource(status),
+                modifier =
+                    Modifier.weight(1f)
+                        .semantics { liveRegion = LiveRegionMode.Polite }
+                        .testTag("childControlStatus"),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        if (resume)
+            TextButton(
+                onClick = onResume,
+                enabled = resumeEnabled,
+                modifier = Modifier.testTag("resumeChild"),
+            ) { Text(stringResource(R.string.remote_child_resume)) }
+        else
+            TextButton(
+                onClick = onStop,
+                enabled = stopEnabled,
+                modifier = Modifier.testTag("stopChild"),
+            ) { Text(stringResource(R.string.remote_child_stop)) }
     }
 }
 

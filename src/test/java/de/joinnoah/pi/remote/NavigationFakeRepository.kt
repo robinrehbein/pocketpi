@@ -16,6 +16,16 @@ internal class NavigationFakeRepository : RemoteRepository {
     val imports = mutableListOf<Triple<RemoteSelection, List<String>, Boolean>>()
     val quotes = mutableListOf<String>()
     val abortedSessions = mutableListOf<String>()
+    var childStops = 0
+    val childResumes = mutableListOf<String>()
+
+    override fun stopChild() {
+        childStops++
+    }
+
+    override fun resumeChild(message: String) {
+        childResumes += message
+    }
     val toolOutputRequests = mutableListOf<String>()
     var sessionRefreshes = 0
     val browsed = mutableListOf<Pair<String, String>>()

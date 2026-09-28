@@ -202,4 +202,21 @@ class RemoteViewModelsTest {
         assertEquals(SwipeAction.NONE, model.preferences.value.swipeEndToStart)
         assertEquals(SwipeAction.CLOSE, model.preferences.value.swipeStartToEnd)
     }
+
+    @Test
+    fun `child controls reach only the chat they belong to`() = runTest {
+        val repository = NavigationFakeRepository()
+        repository.state.value =
+            RemoteState(selection = RemoteSelection("host", "project", "child"), draft = "Go on")
+        val chat = ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "child"), FakeSettingsRepository())
+        val other = ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "other"), FakeSettingsRepository())
+        other.stopChild()
+        other.resumeChild()
+        assertEquals(0, repository.childStops)
+        assertTrue(repository.childResumes.isEmpty())
+        chat.stopChild()
+        chat.resumeChild()
+        assertEquals(1, repository.childStops)
+        assertEquals(listOf("Go on"), repository.childResumes)
+    }
 }

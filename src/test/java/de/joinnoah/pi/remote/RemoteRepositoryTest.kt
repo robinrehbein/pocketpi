@@ -257,6 +257,47 @@ class RemoteRepositoryTest {
         assertTrue(close.text("requestId").isNotBlank())
     }
 
+    private fun TestScope.jobsRepository(transport: Transport): DefaultRemoteRepository {
+        val tui = session(origin = "tui")
+        configure(transport, sessions = listOf(tui), opened = tui)
+        transport.capabilities = setOf(BACKGROUND_JOBS_CAPABILITY)
+        return repository(transport)
+    }
+
+    @Test
+    fun aSessionStatusChangeRefreshesTheJobList() = runTest {
+        val transport = Transport()
+        val repository = jobsRepository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        fun lists() = transport.sent.count { it.text("type") == "session.jobs.list" }
+        val before = lists()
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        runCurrent()
+        assertEquals(before + 1, lists())
+    }
+
+    @Test
+    fun aReconnectToTheSameSessionKeepsTheJobsView() = runTest {
+        val transport = Transport()
+        val repository = jobsRepository(transport)
+        val selection = RemoteSelection("host", "project", "session")
+        repository.activate(selection)
+        runCurrent()
+        repository.openJobs()
+        runCurrent()
+        assertTrue(repository.state.value.jobs!!.listOpen)
+        val connects = transport.connects
+        transport.listener.failed(false, R.string.remote_connection_error)
+        repository.activate(selection)
+        runCurrent()
+        assertTrue(transport.connects > connects)
+        assertTrue(repository.state.value.connected)
+        assertEquals("session", repository.state.value.jobs?.sessionId)
+        assertTrue(repository.state.value.jobs!!.listOpen)
+    }
+
     @Test
     fun closeDoesNotDispatchForTuiOrHistorySessions() = runTest {
         for (origin in listOf("tui", "history")) {
@@ -2382,6 +2423,15 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun routeCapabilitiesEnableSubagentControl() = runTest {
+        val transport = Transport().also(::configure)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SUBAGENT_CONTROL_CAPABILITY))))
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        assertTrue(SUBAGENT_CONTROL_CAPABILITY in repository.state.value.capabilities)
+    }
+
+    @Test
     fun routeCapabilitiesIgnoreUnknownAndOversizedLists() = runTest {
         val transport = Transport().also(::configure)
         advertising(
@@ -2909,5 +2959,372 @@ class RemoteRepositoryTest {
         assertFalse(repository.state.value.configurationLoading)
         assertEquals(R.string.remote_fork_busy, repository.state.value.error)
         assertEquals(source, repository.state.value.selection)
+    }
+
+    private fun child(status: String = "idle") =
+        JsonObject(session("child", origin = "tui", status = status) + ("parentSessionId" to JsonPrimitive("parent")))
+
+    private suspend fun TestScope.childRepository(
+        transport: Transport,
+        status: String = "idle",
+        capabilities: Set<String> = setOf(SUBAGENT_CONTROL_CAPABILITY),
+        drafts: Drafts = Drafts(),
+        control: (JsonObject) -> JsonObject? = { null },
+    ): DefaultRemoteRepository {
+        configure(transport, listOf(session("parent"), child(status)), child(status))
+        transport.capabilities = capabilities
+        val normal = transport.response
+        transport.response = { request -> control(request) ?: normal(request) }
+        return repository(transport, drafts).also {
+            it.activate(RemoteSelection("host", "project", "child"))
+            if (status == "running")
+                transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+                    "revision" to 1, "kind" to "session.status", "status" to "running"))
+        }
+    }
+
+    private fun controlResult(status: String, vararg extra: Pair<String, Any?>) =
+        Wire.objectOf("kind" to "subagent.control", "sessionId" to "child", "status" to status, *extra)
+
+    @Test
+    fun runningChildTakesSteerAndFollowUpAndOffersResumeWhenNotRunning() = runTest {
+        val transport = Transport()
+        val drafts = Drafts()
+        val repository = childRepository(transport, "running", drafts = drafts) { request ->
+            if (request.text("type") == "session.prompt")
+                Wire.objectOf("kind" to "accepted", "sessionId" to "child")
+            else null
+        }
+        assertTrue(canSteer(repository.state.value) && canFollowUp(repository.state.value))
+        assertFalse(offersChildResume(repository.state.value))
+        repository.draft("Look at the tests first")
+        repository.steer()
+        runCurrent()
+        val steer = transport.sent.last { it.text("type") == "session.prompt" }
+        assertEquals("child", steer.text("sessionId"))
+        assertEquals("steer", steer.text("delivery"))
+        assertEquals("accepted", repository.state.value.followUps.single().status)
+
+        transport.failure = { if (it.text("type") == "session.prompt") "not_running" else null }
+        repository.draft("Also check the docs")
+        repository.followUp()
+        runCurrent()
+        val followUp = transport.sent.last { it.text("type") == "session.prompt" }
+        assertEquals("follow_up", followUp.text("delivery"))
+        val state = repository.state.value
+        assertNull(state.error)
+        assertFalse(state.uncertain)
+        assertEquals("Also check the docs", state.draft)
+        assertEquals(ChildControlPhase.NOT_RUNNING, childControl(state)?.phase)
+        assertTrue(offersChildResume(state))
+        assertEquals(R.string.remote_child_not_running, childControlStatus(state))
+        val stored = drafts.values.getValue(DraftKey("host", "child"))
+        assertEquals("Also check the docs", stored.text)
+        assertNull(stored.mutationId)
+        assertNull(stored.submittedText)
+    }
+
+    @Test
+    fun childWithoutCapabilityKeepsMacLocalBehaviour() = runTest {
+        val transport = Transport()
+        val repository = childRepository(transport, "running", capabilities = setOf(STEER_CAPABILITY))
+        assertFalse(canSteer(repository.state.value))
+        repository.draft("Steer")
+        repository.steer()
+        repository.stopChild()
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") in setOf("session.prompt", "session.subagent.stop") })
+    }
+
+    @Test
+    fun stopChildSendsStopAndMarksStoppedByYou() = runTest {
+        val transport = Transport()
+        var answer = controlResult("accepted", "agentId" to "a1")
+        val repository = childRepository(transport, "running") { request ->
+            if (request.text("type") == "session.subagent.stop") answer else null
+        }
+        repository.stopChild()
+        assertEquals(ChildControlPhase.STOPPING, childControl(repository.state.value)?.phase)
+        runCurrent()
+        val stop = transport.sent.single { it.text("type") == "session.subagent.stop" }
+        assertEquals(setOf("type", "requestId", "sessionId"), stop.keys)
+        assertEquals("child", stop.text("sessionId"))
+        assertEquals(ChildControl(ChildControlPhase.STOPPED_BY_YOU, agentId = "a1"),
+            childControl(repository.state.value))
+        assertNull(childControlStatus(repository.state.value))
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+            "revision" to 2, "kind" to "session.status", "status" to "idle"))
+        assertEquals(R.string.remote_child_stopped_by_you, childControlStatus(repository.state.value))
+        assertTrue(offersChildResume(repository.state.value))
+
+        answer = controlResult("refused", "reason" to "Reviewer diff changed")
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+            "revision" to 3, "kind" to "session.status", "status" to "running"))
+        repository.stopChild()
+        runCurrent()
+        val refused = childControl(repository.state.value)
+        assertEquals(ChildControlPhase.REFUSED, refused?.phase)
+        assertEquals("Reviewer diff changed", refused?.reason)
+    }
+
+    @Test
+    fun resumeChildSendsMessageAndHandlesEachOutcome() = runTest {
+        val transport = Transport()
+        var answer: JsonObject? = controlResult("refused", "reason" to "Outside the child's folder")
+        val repository = childRepository(transport) { request ->
+            if (request.text("type") == "session.subagent.resume") answer else null
+        }
+        assertTrue(offersChildResume(repository.state.value))
+        assertEquals(R.string.remote_child_idle, childControlStatus(repository.state.value))
+        repository.draft("Continue with step two")
+        repository.resumeChild("Continue with step two")
+        assertEquals(ChildControlPhase.RESUMING, childControl(repository.state.value)?.phase)
+        runCurrent()
+        val resume = transport.sent.last { it.text("type") == "session.subagent.resume" }
+        assertEquals(setOf("type", "requestId", "sessionId", "message"), resume.keys)
+        assertEquals("child", resume.text("sessionId"))
+        assertEquals("Continue with step two", resume.text("message"))
+        assertEquals(ChildControl(ChildControlPhase.REFUSED, "Outside the child's folder"),
+            childControl(repository.state.value))
+        assertEquals("Continue with step two", repository.state.value.draft)
+
+        answer = controlResult("not_found")
+        repository.resumeChild("Continue with step two")
+        runCurrent()
+        assertEquals(ChildControlPhase.NOT_FOUND, childControl(repository.state.value)?.phase)
+        assertEquals("Continue with step two", repository.state.value.draft)
+
+        answer = null
+        transport.failure = { if (it.text("type") == "session.subagent.resume") "internal" else null }
+        repository.resumeChild("Continue with step two")
+        runCurrent()
+        assertEquals(ChildControlPhase.UNCERTAIN, childControl(repository.state.value)?.phase)
+        assertNull(repository.state.value.error)
+
+        transport.failure = { if (it.text("type") == "session.subagent.resume") "invalid_request" else null }
+        repository.resumeChild("Continue with step two")
+        runCurrent()
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertEquals(ChildControlPhase.UNCERTAIN, childControl(repository.state.value)?.phase)
+        repository.dismissError()
+
+        transport.failure = { null }
+        answer = controlResult("accepted", "agentId" to "agent-2")
+        repository.resumeChild("Continue with step two")
+        runCurrent()
+        assertEquals(ChildControl(ChildControlPhase.RESUMED, agentId = "agent-2"),
+            childControl(repository.state.value))
+        assertEquals("", repository.state.value.draft)
+        assertNull(repository.state.value.error)
+
+        // The next resume names the agent the accepted one started.
+        repository.draft("And step three")
+        repository.resumeChild("And step three")
+        runCurrent()
+        assertEquals("agent-2", transport.sent.last { it.text("type") == "session.subagent.resume" }.text("agentId"))
+
+        // A parent whose extension predates subagent control: the child loses its phone controls.
+        transport.failure = { if (it.text("type") == "session.subagent.resume") "unsupported" else null }
+        repository.draft("And step four")
+        repository.resumeChild("And step four")
+        runCurrent()
+        assertEquals(R.string.remote_child_unsupported, repository.state.value.error)
+        assertFalse(childControlsAvailable(repository.state.value))
+        assertFalse(offersChildResume(repository.state.value))
+    }
+
+    @Test
+    fun resumeChildReportsWhatItCannotSend() = runTest {
+        val transport = Transport()
+        val repository = childRepository(transport)
+        repository.draft("/review")
+        repository.resumeChild("/review")
+        assertEquals(R.string.remote_child_command_unsupported, repository.state.value.error)
+        repository.dismissError()
+        val long = "a".repeat(CHILD_RESUME_MAX_BYTES + 1)
+        repository.draft(long)
+        repository.resumeChild(long)
+        assertEquals(R.string.remote_prompt_too_long, repository.state.value.error)
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.subagent.resume" })
+    }
+
+    @Test
+    fun childControlWithoutAReplyAfterSendingIsUncertain() = runTest {
+        val transport = Transport()
+        var answer: JsonObject? = null
+        val repository = childRepository(transport, "running") { request ->
+            if (request.text("type") == "session.subagent.stop") answer else null
+        }
+        // Timed out.
+        repository.stopChild()
+        runCurrent()
+        advanceTimeBy(31_000)
+        runCurrent()
+        assertEquals(ChildControlPhase.UNCERTAIN, childControl(repository.state.value)?.phase)
+        assertNull(repository.state.value.error)
+
+        // A malformed reply.
+        answer = Wire.objectOf("kind" to "accepted", "sessionId" to "child")
+        repository.stopChild()
+        runCurrent()
+        assertEquals(ChildControlPhase.UNCERTAIN, childControl(repository.state.value)?.phase)
+        assertNull(repository.state.value.error)
+
+        // A definite host error keeps the earlier state.
+        transport.failure = { if (it.text("type") == "session.subagent.stop") "invalid_request" else null }
+        repository.stopChild()
+        runCurrent()
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertEquals(ChildControlPhase.UNCERTAIN, childControl(repository.state.value)?.phase)
+        repository.dismissError()
+
+        // The selection changes while the stop is out.
+        transport.failure = { null }
+        answer = null
+        repository.stopChild()
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "parent"))
+        runCurrent()
+        advanceTimeBy(31_000)
+        runCurrent()
+        assertEquals(ChildControlPhase.UNCERTAIN, repository.state.value.childControls["child"]?.phase)
+    }
+
+    @Test
+    fun childStatusChangeDropsAStaleOutcome() = runTest {
+        val transport = Transport()
+        val repository = childRepository(transport) { request ->
+            if (request.text("type") == "session.subagent.resume") controlResult("not_found") else null
+        }
+        repository.draft("Continue")
+        repository.resumeChild("Continue")
+        runCurrent()
+        assertEquals(ChildControlPhase.NOT_FOUND, childControl(repository.state.value)?.phase)
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+            "revision" to 1, "kind" to "session.status", "status" to "idle"))
+        assertEquals(ChildControlPhase.NOT_FOUND, childControl(repository.state.value)?.phase)
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+            "revision" to 2, "kind" to "session.status", "status" to "running"))
+        assertNull(childControl(repository.state.value))
+        assertNull(childControlStatus(repository.state.value))
+    }
+
+    @Test
+    fun stopWithTheParentOfflineReportsItAndSendsNoAbort() = runTest {
+        val transport = Transport()
+        val repository = childRepository(transport, "running")
+        transport.failure = { if (it.text("type") == "session.subagent.stop") "offline" else null }
+        repository.stopChild()
+        runCurrent()
+        assertEquals("session.subagent.stop", transport.sent.last().text("type"))
+        assertTrue(transport.sent.none { it.text("type") == "session.abort" })
+        assertEquals(R.string.remote_child_parent_offline, repository.state.value.error)
+        assertNull(childControl(repository.state.value))
+        assertTrue(childControlsAvailable(repository.state.value))
+    }
+
+    @Test
+    fun stopFallsBackToAbortWhenTheParentIsTooOld() = runTest {
+        val transport = Transport()
+        val repository = childRepository(transport, "running") { request ->
+            if (request.text("type") == "session.abort") Wire.objectOf("kind" to "accepted") else null
+        }
+        transport.failure = { if (it.text("type") == "session.subagent.stop") "unsupported" else null }
+        repository.stopChild()
+        runCurrent()
+        assertEquals("child", transport.sent.last().text("sessionId"))
+        assertEquals("session.abort", transport.sent.last().text("type"))
+        // The abort stopped this run only; the parent may restart the subagent.
+        assertEquals(R.string.remote_child_stopped_run_only, repository.state.value.error)
+        assertNull(childControl(repository.state.value))
+        assertFalse(childControlsAvailable(repository.state.value))
+        assertFalse(canSteer(repository.state.value))
+        assertTrue(canAbortRemoteRun(repository.state.value, "host"))
+    }
+
+    @Test
+    fun stopReportsTheOldParentWhenItsAbortFailsToo() = runTest {
+        val transport = Transport()
+        val repository = childRepository(transport, "running")
+        transport.failure = {
+            when (it.text("type")) {
+                "session.subagent.stop" -> "unsupported"
+                "session.abort" -> "internal"
+                else -> null
+            }
+        }
+        repository.stopChild()
+        runCurrent()
+        assertEquals("session.abort", transport.sent.last().text("type"))
+        assertEquals(R.string.remote_child_unsupported, repository.state.value.error)
+    }
+
+    @Test
+    fun anOldParentVerdictLastsOnlyUntilTheSelectionOrConnectionChanges() = runTest {
+        val transport = Transport()
+        val repository = childRepository(transport, "running")
+        transport.failure = { if (it.text("type") == "session.subagent.stop") "unsupported" else null }
+        repository.stopChild()
+        runCurrent()
+        assertFalse(childControlsAvailable(repository.state.value))
+        transport.failure = { null }
+
+        repository.activate(RemoteSelection("host", "project", "parent"))
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "child"))
+        runCurrent()
+        assertTrue(repository.state.value.childControlUnsupported.isEmpty())
+        assertTrue(childControlsAvailable(repository.state.value))
+        // The child is idle after the reselection: an old parent answers the resume the same way.
+        transport.failure = { if (it.text("type") == "session.subagent.resume") "unsupported" else null }
+        repository.draft("Continue")
+        repository.resumeChild("Continue")
+        runCurrent()
+        assertFalse(childControlsAvailable(repository.state.value))
+        transport.failure = { null }
+
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertTrue(repository.state.value.childControlUnsupported.isEmpty())
+        advanceTimeBy(1000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertTrue(childControlsAvailable(repository.state.value))
+    }
+
+    @Test
+    fun aStaleOutcomeKeepsTheResumedAgentForTheNextResume() = runTest {
+        val transport = Transport()
+        var answer = controlResult("accepted", "agentId" to "agent-2")
+        val repository = childRepository(transport) { request ->
+            if (request.text("type") == "session.subagent.resume") answer else null
+        }
+        repository.draft("Continue")
+        repository.resumeChild("Continue")
+        runCurrent()
+        answer = controlResult("refused", "reason" to "Busy")
+        repository.draft("Continue again")
+        repository.resumeChild("Continue again")
+        runCurrent()
+        assertEquals(ChildControl(ChildControlPhase.REFUSED, "Busy", "agent-2"), childControl(repository.state.value))
+
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        assertEquals(ChildControl(null, agentId = "agent-2"), childControl(repository.state.value))
+        assertNull(childControlStatus(repository.state.value))
+        assertFalse(offersChildResume(repository.state.value))
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+            "revision" to 2, "kind" to "session.status", "status" to "idle"))
+        // The UI reads the neutral entry like no entry at all.
+        assertEquals(R.string.remote_child_idle, childControlStatus(repository.state.value))
+        assertTrue(offersChildResume(repository.state.value))
+
+        answer = controlResult("accepted")
+        repository.resumeChild("Continue again")
+        runCurrent()
+        assertEquals("agent-2", transport.sent.last { it.text("type") == "session.subagent.resume" }.text("agentId"))
     }
 }

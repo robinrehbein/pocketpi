@@ -177,3 +177,78 @@ internal fun commandName(text: String): String? =
 
 internal fun selectCommand(text: String, command: RemoteCommand): String =
     "/" + command.name + text.dropWhile { !it.isWhitespace() }
+
+/** Steer, follow-up, stop and resume for subagent children (`session.subagent_control.v1`). */
+const val SUBAGENT_CONTROL_CAPABILITY = "session.subagent_control.v1"
+
+/** Where a phone stop or resume of one subagent child stands. */
+enum class ChildControlPhase {
+    STOPPING,
+    STOPPED_BY_YOU,
+    RESUMING,
+    RESUMED,
+    /** A steer or follow-up met a child that is not running; the composer offers a resume. */
+    NOT_RUNNING,
+    REFUSED,
+    NOT_FOUND,
+    /** The parent's reply was lost: the stop or resume may have run. */
+    UNCERTAIN,
+}
+
+data class ChildControl(
+    /** Null once a stale outcome is dropped: the entry only keeps [agentId] and shows nothing. */
+    val phase: ChildControlPhase?,
+    /** The host's reason, only for [ChildControlPhase.REFUSED]. */
+    val reason: String? = null,
+    /** The agent that runs after an accepted resume; a resume from disk starts under a new ID. */
+    val agentId: String? = null,
+)
+
+/** The selected session is a subagent child, whose parent link the host supplied. */
+internal fun isChildSession(state: RemoteState): Boolean =
+    state.session?.optionalText("parentSessionId")?.isNotBlank() == true
+
+/** The host can steer, stop and resume the selected child from the phone. */
+internal fun childControlsAvailable(state: RemoteState): Boolean =
+    isChildSession(state) && SUBAGENT_CONTROL_CAPABILITY in state.capabilities &&
+        SUBAGENT_CONTROL_CAPABILITY !in state.unavailableCapabilities &&
+        state.selection.sessionId !in state.childControlUnsupported
+
+/** Phases that describe one reply and go stale once the child's status changes. */
+internal val STALE_CHILD_CONTROL_PHASES =
+    setOf(
+        ChildControlPhase.NOT_RUNNING,
+        ChildControlPhase.REFUSED,
+        ChildControlPhase.NOT_FOUND,
+        ChildControlPhase.UNCERTAIN,
+    )
+
+/** Largest resume message the host accepts, in UTF-8 bytes (`session.subagent.resume`). */
+internal const val CHILD_RESUME_MAX_BYTES = 128 * 1024
+
+/** The stop or resume state of the selected child, if any. */
+internal fun childControl(state: RemoteState): ChildControl? =
+    state.selection.sessionId?.let { state.childControls[it] }
+
+/** The composer sends a resume instead of a prompt: the child is not running or said so. */
+internal fun offersChildResume(state: RemoteState): Boolean =
+    childControlsAvailable(state) &&
+        (state.status !in setOf("running", "waiting") ||
+            childControl(state)?.phase == ChildControlPhase.NOT_RUNNING)
+
+internal data class SubagentControlResult(
+    val status: String,
+    val agentId: String?,
+    val reason: String?,
+)
+
+/** Reads a `subagent.control` result for [sessionId]; an unknown status reads as unknown outcome. */
+internal fun subagentControlResult(data: JsonObject, sessionId: String): SubagentControlResult {
+    require(data.text("kind") == "subagent.control" && data.text("sessionId") == sessionId)
+    val status = data.text("status")
+    return SubagentControlResult(
+        status.takeIf { it in setOf("accepted", "not_found", "refused") } ?: "unknown",
+        data.optionalText("agentId")?.takeIf { status == "accepted" },
+        data.optionalText("reason")?.takeIf { status == "refused" }?.take(500),
+    )
+}

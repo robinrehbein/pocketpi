@@ -168,6 +168,9 @@ private fun agentUsage(agent: JsonObject): AgentUsage? {
 
 private val agentStates = setOf("queued", "running", "succeeded", "failed", "cancelled")
 
+/** Tools rendered as a subagent card: the retired `subagent` tool and the fork's `Agent` tool. */
+private val SUBAGENT_TOOLS = setOf("subagent", "Agent")
+
 private fun subagentProgress(message: JsonObject): ConversationItem.Subagent {
     val progress = message["subagentProgress"] as? JsonObject
     val mode = progress?.safeText("mode")?.takeIf { it in setOf("single", "parallel", "chain") }
@@ -314,7 +317,7 @@ internal fun conversationItems(
             val timestamp = message.messageTimestamp()
             if (role == "tool") {
                 if (message.optionalText("toolCallId") in calls) continue
-                if (message.optionalText("toolName") == "subagent" && message["subagentProgress"] != null) {
+                if (message.optionalText("toolName") in SUBAGENT_TOOLS && message["subagentProgress"] != null) {
                     val progress = subagentProgress(message)
                     if (progress.agents.isNotEmpty()) {
                         add(progress)
@@ -429,7 +432,7 @@ internal fun conversationItems(
                         )
                     "toolCall" -> {
                         val output = outputs[part.text("id")]
-                        if (part.text("name") == "subagent" && output?.get("subagentProgress") != null) {
+                        if (part.text("name") in SUBAGENT_TOOLS && output?.get("subagentProgress") != null) {
                             val progress = subagentProgress(output)
                             if (progress.agents.isNotEmpty()) {
                                 add(
