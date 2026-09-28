@@ -197,6 +197,11 @@ class BackgroundJobsTest {
             listOf("titled", "red").map(JobOutputLine::Text),
             jobOutputLines(listOf(JobOutputPart.Text("\u001B]0;a\nb\u0007titled\n\u001B[31mred\u001B[0m\n"))),
         )
+        // An ST (ESC \) terminator removes a multi-line OSC just as whole as a BEL one does.
+        assertEquals(
+            listOf("titled", "red").map(JobOutputLine::Text),
+            jobOutputLines(listOf(JobOutputPart.Text("\u001B]0;a\nb\u001B\\titled\n\u001B[31mred\u001B[0m\n"))),
+        )
     }
 
     @Test
@@ -521,6 +526,23 @@ class BackgroundJobsTest {
         runCurrent()
         assertTrue(harness.state.jobs!!.loading)
         assertNull(harness.state.jobs!!.failure)
+    }
+
+    @Test
+    fun aLateSuccessOfAReplacedRefreshKeepsTheNewerOneLoading() = runTest {
+        val harness = Harness(backgroundScope)
+        var first: kotlin.coroutines.Continuation<List<BackgroundJob>>? = null
+        // The first request ignores its cancellation and succeeds once it resumes.
+        harness.source.list = { kotlin.coroutines.suspendCoroutine { first = it } }
+        harness.controller.refresh()
+        runCurrent()
+        harness.source.list = { kotlinx.coroutines.awaitCancellation() }
+        harness.controller.refresh()
+        runCurrent()
+        first!!.resumeWith(Result.success(listOf(running(0))))
+        runCurrent()
+        assertTrue(harness.state.jobs!!.loading)
+        assertTrue(harness.state.jobs!!.jobs.isEmpty())
     }
 
     @Test

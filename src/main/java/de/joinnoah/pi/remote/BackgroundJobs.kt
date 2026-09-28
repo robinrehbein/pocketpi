@@ -286,7 +286,7 @@ internal const val JOB_LINE_CHUNK_CHARS = 2_000
 private val ANSI_ESCAPE =
     Regex(
         // CSI; OSC; DCS, SOS, PM and APC strings; two-byte escapes such as ESC ( B, ESC = or ESC 7.
-        // A string without its terminator removes no more than the rest of its line.
+        // An OSC or DCS with no terminator anywhere in the input removes only the rest of its line.
         "\u001B\\[[0-?]*[ -/]*[@-~]" +
             "|\u001B\\][^\u0007\u001B]*(?:\u0007|\u001B\\\\)|\u001B\\][^\u0007\u001B\n]*" +
             "|\u001B[PX^_][^\u001B]*\u001B\\\\|\u001B[PX^_][^\u001B\n]*" +
@@ -548,8 +548,8 @@ internal class BackgroundJobsController(
         if (!canUseBackgroundJobs(state) || !state.connected) return
         ensure(sessionId)
         write(sessionId) { it.copy(loading = true) }
-        listJob?.cancel()
         val version = ++listVersion
+        listJob?.cancel()
         listJob = scope.launch {
             try {
                 val items = source.listJobs(sessionId)
@@ -597,6 +597,7 @@ internal class BackgroundJobsController(
     /** Stops listing and watching when another session is selected; a requested kill still runs. */
     fun stop() {
         stopWatch()
+        listVersion++
         listJob?.cancel()
         listJob = null
         autoRefresh?.cancel()

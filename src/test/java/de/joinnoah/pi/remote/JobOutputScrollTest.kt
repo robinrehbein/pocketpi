@@ -15,7 +15,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
-/** The open job view follows the end of its output. */
+/**
+ * Behaviour tests: the open job view's list ends pinned to the last line, however tall the items
+ * are. They pass with the old `Int.MAX_VALUE` offset as well as the current `Int.MAX_VALUE / 2`,
+ * so they pin the scrolled-to-end behaviour, not the offset's overflow fix.
+ */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 // Legacy graphics lays out text on one line; the tall items need real wrapping.
