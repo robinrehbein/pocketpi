@@ -1185,6 +1185,12 @@ class RemoteNavigationUiTest {
         assertBadgeInsideViewport()
         val headerActions = compose.onNodeWithTag("headerActionsPill")
         val headerTop = headerActions.fetchSemanticsNode().boundsInRoot.top
+        assertEquals(
+            "Filter must end where the header actions pill ends",
+            headerActions.fetchSemanticsNode().boundsInRoot.right,
+            compose.onNodeWithTag("sessionsFilterPill").fetchSemanticsNode().boundsInRoot.right,
+            1f,
+        )
 
         compose.runOnIdle {
             repository.state.value = repository.state.value.copy(sessions = longSessions())
@@ -1645,8 +1651,21 @@ class RemoteNavigationUiTest {
         openChat()
     }
 
-    private fun toolHeader(text: String) =
-        compose.onNode(hasTestTag("toolCardHeader") and hasText(text, substring = true))
+    private fun toolHeaderMatcher(text: String) =
+        hasTestTag("toolCardHeader") and hasText(text, substring = true)
+
+    private fun toolHeader(text: String) = compose.onNode(toolHeaderMatcher(text))
+
+    /**
+     * Scrolls the chat list until [matcher] is composed and returns it. The list only composes
+     * what fits between the header and the composer, and on a small screen the insight cards and
+     * the touched-files summary push the first message out of it. Fails if the list does not hold
+     * the node at all, or if the chat list is not reachable (for example under the tool detail).
+     */
+    private fun scrollChatTo(matcher: SemanticsMatcher): SemanticsNodeInteraction {
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(matcher)
+        return compose.onNode(matcher).assertExists()
+    }
 
     @Test
     fun toolCardOpensDetailAndCloseOrBackReturnsToChat() {
@@ -1668,9 +1687,9 @@ class RemoteNavigationUiTest {
         UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).pressBack()
         compose.waitForIdle()
         compose.onNodeWithTag("toolDetailClose", useUnmergedTree = true).assertDoesNotExist()
-        compose.onNodeWithText("Message for live").assertExists()
+        scrollChatTo(hasText("Message for live"))
 
-        toolHeader("./gradlew test").performSemanticsAction(SemanticsActions.OnClick)
+        scrollChatTo(toolHeaderMatcher("./gradlew test")).performSemanticsAction(SemanticsActions.OnClick)
         compose.onNodeWithTag("toolDetailAskFix").performClick()
         compose.onNodeWithTag("toolDetailClose", useUnmergedTree = true).assertDoesNotExist()
         compose.onNode(hasSetTextAction())
@@ -1687,7 +1706,7 @@ class RemoteNavigationUiTest {
         }
         compose.waitForIdle()
         assertFalse(toolHeader("src/a.kt").isDisplayed())
-        compose.onNodeWithTag("touchedFilesChip").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("touchedFilesSummary").assertIsDisplayed().performClick()
         compose.onNodeWithTag("touchedFilesSheet").assertIsDisplayed()
         compose.mainClock.autoAdvance = false
         try {
@@ -1707,16 +1726,20 @@ class RemoteNavigationUiTest {
     @Test
     fun errorFilterChipShowsOnlyErrorCards() {
         openInsightsChat()
-        compose.onNodeWithText("Message for live").assertExists()
-        compose.onAllNodesWithTag("toolCard").assertCountEquals(2)
+        // Not every card fits the screen at once, so each is scrolled to instead of counted.
+        scrollChatTo(hasText("Message for live"))
+        scrollChatTo(toolHeaderMatcher("src/a.kt"))
+        scrollChatTo(toolHeaderMatcher("./gradlew test"))
         compose.onNodeWithTag("errorFilterChip").assertIsDisplayed().performClick()
+        // Filtered, the list holds only the failed run, which fits: nothing else is composed.
         compose.onNodeWithText("Message for live").assertDoesNotExist()
         compose.onAllNodesWithTag("toolCard").assertCountEquals(1)
         toolHeader("./gradlew test").assertExists()
         toolHeader("src/a.kt").assertDoesNotExist()
         compose.onNodeWithTag("errorFilterChip").performClick()
-        compose.onNodeWithText("Message for live").assertExists()
-        compose.onAllNodesWithTag("toolCard").assertCountEquals(2)
+        scrollChatTo(hasText("Message for live"))
+        scrollChatTo(toolHeaderMatcher("src/a.kt"))
+        scrollChatTo(toolHeaderMatcher("./gradlew test"))
     }
 
     @Test

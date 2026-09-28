@@ -31,7 +31,7 @@ class ChatPanelsUiTest {
     private val resources = InstrumentationRegistry.getInstrumentation().targetContext.resources
 
     @Test
-    fun touchedFilesChipShowsCountAndRowTapReportsLatestItem() {
+    fun touchedFilesSummaryShowsCountAndRowTapReportsLatestItem() {
         val files =
             TouchedFiles(
                 changed = listOf(TouchedFile("src/main/App.kt", 2, "edit-2"), TouchedFile("README.md", 1, "write-1")),
@@ -42,7 +42,7 @@ class ChatPanelsUiTest {
         compose.setContent {
             MaterialTheme {
                 var open by remember { mutableStateOf(false) }
-                TouchedFilesChip(files) { open = true }
+                TouchedFilesSummary(files, lines = null) { open = true }
                 if (open)
                     TouchedFilesSheet(
                         files,
@@ -55,9 +55,9 @@ class ChatPanelsUiTest {
             }
         }
         val description = resources.getQuantityString(R.plurals.remote_panel_files_touched, 3, 3)
-        compose.onNodeWithTag("touchedFilesChip").assertIsDisplayed().assertTextContains("3")
+        compose.onNodeWithTag("touchedFilesSummary").assertIsDisplayed().assertTextContains("3", substring = true)
         compose.onNodeWithContentDescription(description).assertExists()
-        compose.onNodeWithTag("touchedFilesChip").performClick()
+        compose.onNodeWithTag("touchedFilesSummary").performClick()
         compose.waitUntil(5_000) {
             compose.onAllNodesWithTag("touchedFilesSheet").fetchSemanticsNodes().isNotEmpty()
         }
@@ -70,9 +70,9 @@ class ChatPanelsUiTest {
     }
 
     @Test
-    fun touchedFilesChipIsHiddenWithoutFiles() {
-        compose.setContent { MaterialTheme { TouchedFilesChip(TouchedFiles(emptyList(), emptyList())) {} } }
-        compose.onNodeWithTag("touchedFilesChip").assertDoesNotExist()
+    fun touchedFilesSummaryIsHiddenWithoutFiles() {
+        compose.setContent { MaterialTheme { TouchedFilesSummary(TouchedFiles(emptyList(), emptyList()), lines = null) {} } }
+        compose.onNodeWithTag("touchedFilesSummary").assertDoesNotExist()
     }
 
     @Test
@@ -142,7 +142,11 @@ class ChatPanelsUiTest {
 
     @Test
     fun timelineRailLetsDragsScrollTheListAndIgnoresFarTaps() {
-        val markers = listOf(TimelineMarker("only", TimelineMarkerKind.EDIT, 0f))
+        val markers =
+            listOf(
+                TimelineMarker("first", TimelineMarkerKind.EDIT, 0f),
+                TimelineMarker("second", TimelineMarkerKind.PLAN, 0.1f),
+            )
         val jumps = mutableListOf<String>()
         lateinit var list: LazyListState
         compose.setContent {
