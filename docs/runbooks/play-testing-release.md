@@ -6,10 +6,9 @@ custom Closed Alpha track. The release workflow does not update production.
 
 ## First release setup
 
-1. Merge the standalone [Android CI](../../.github/workflows/ci.yml) workflow into `main`. In
-   GitHub, require its `PocketPi checks` job before merging. CI runs resource parity, unit tests,
-   a debug build, lint, and API 36 instrumentation tests. Wait to merge the release workflow until
-   the remaining setup below is complete.
+1. Confirm the standalone [Android CI](../../.github/workflows/ci.yml) workflow passes on `main`.
+   In GitHub, require its `PocketPi checks` job before merging. CI runs resource parity, unit tests,
+   a debug build, lint, and API 36 instrumentation tests.
 2. In the Google Cloud project that owns Play API access, enable the Google Play Android Developer
    API. Create a dedicated service account for PocketPi publishing. In Play Console, invite that
    account with access limited to this app and the permissions needed to view the app and release to
@@ -44,11 +43,11 @@ custom Closed Alpha track. The release workflow does not update production.
    countries, app-content declarations, and reviewer access ready. The first closed release may
    require Play review. A video showing a paired Mac can support the reviewer instructions, but
    its availability and Play's acceptance must be checked in the Console.
-6. Merge the [release workflow](../../.github/workflows/release.yml) into `main` only after these
-   prerequisites are ready. Its merge starts Android CI; a green run immediately starts the first
-   automated Play release.
+6. The [release workflow](../../.github/workflows/release.yml) is already on `main`. A green Android
+   CI run on the current `main` commit starts an automated Play release. Confirm all prerequisites
+   before relying on it to publish.
 
-Before enabling the first automatic release, resolve the current setup gaps: locate the existing
+Before the first automatic release can succeed, resolve the current setup gaps: locate the existing
 upload keystore; finish OIDC, the protected environment and its secrets; grant the dedicated service
 account app-scoped Play permissions; obtain the exact closed track ID; finish the Closed Alpha
 reviewer-access material and outstanding Play declarations. Internal Testing currently has
