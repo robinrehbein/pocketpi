@@ -49,6 +49,18 @@ internal object RemoteNotifications {
     }
 
     /**
+     * The app ships under a fresh application ID, so a plain install never had the sync channel;
+     * this only matters for a dev/sideload upgrade of an older install, or a future OS upgrade of
+     * a device that created it below Android 12. Deleting it where it's never (re-)created keeps
+     * such an install from carrying a dead channel forever. Cheap and idempotent, so it can just
+     * run on every startup.
+     */
+    fun deleteSyncChannel(context: Context) {
+        if (Build.VERSION.SDK_INT < 31) return
+        NotificationManagerCompat.from(context).deleteNotificationChannel(SYNC_CHANNEL)
+    }
+
+    /**
      * Only Android 8 to 11 show this, briefly, while a question is read in the background: from
      * Android 12 expedited work no longer needs a foreground service, so the channel would never be
      * shown there.

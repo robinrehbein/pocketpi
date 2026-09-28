@@ -151,17 +151,22 @@ internal class PreferenceUpgradeState(
         }
 
     /**
-     * Drops `event:` keys of routes no longer paired, and caps the rest to the newest
-     * [MAX_EVENT_KEYS]: nothing else ever removes an entry whose session never sent a completion
-     * push, so the set would otherwise grow without bound.
+     * Caps `event:` keys to the newest [MAX_EVENT_KEYS], dropping any of a route no longer
+     * paired along the way: nothing else removes an entry whose session never sent a completion
+     * push, so the set would otherwise grow without bound. [forgetRoute] already drops a route's
+     * keys immediately on unpair, so this only needs to act once the count actually runs over —
+     * [pairedRoutes] decrypts the pairing store, and every push calling this on every write would
+     * otherwise pay that cost for nothing on the common, well-behaved path.
      */
     private fun pruneEvents() {
+        val all = preferences.all
+        val eventKeys = all.keys.filter { it.startsWith("event:") }
+        if (eventKeys.size <= MAX_EVENT_KEYS) return
         val paired = pairedRoutes()
         val entries =
-            preferences.all.entries.mapNotNull { (key, value) ->
-                if (!key.startsWith("event:")) return@mapNotNull null
+            eventKeys.map { key ->
                 val routeId = key.removePrefix("event:pi:").substringBefore(':')
-                val at = (value as? String)?.substringBefore(EVENT_STAMP_DELIMITER, "")?.toLongOrNull() ?: 0L
+                val at = (all[key] as? String)?.substringBefore(EVENT_STAMP_DELIMITER, "")?.toLongOrNull() ?: 0L
                 Triple(key, routeId, at)
             }
         val stale = entries.filter { (_, routeId, _) -> routeId !in paired }

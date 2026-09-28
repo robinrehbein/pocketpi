@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
@@ -26,6 +27,26 @@ class RemoteNotificationsChannelOnAndroid13Test {
     @Test
     fun createSyncChannelIsANoOpAboveAndroid11() {
         RemoteNotifications.createSyncChannel(context)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        assertNull(manager.getNotificationChannel(RemoteNotifications.SYNC_CHANNEL))
+    }
+
+    @Test
+    fun deleteSyncChannelRemovesAChannelLeftOverFromAnUpgrade() {
+        // Stands in for an install that created the channel while still below Android 12 (a
+        // dev/sideload upgrade — a fresh install under the current application ID never has it).
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(RemoteNotifications.SYNC_CHANNEL, "Background checks", NotificationManager.IMPORTANCE_LOW)
+        )
+        RemoteNotifications.deleteSyncChannel(context)
+        assertNull(manager.getNotificationChannel(RemoteNotifications.SYNC_CHANNEL))
+    }
+
+    @Test
+    fun deleteSyncChannelIsIdempotentWhenThereIsNothingToDelete() {
+        RemoteNotifications.deleteSyncChannel(context)
+        RemoteNotifications.deleteSyncChannel(context)
         val manager = context.getSystemService(NotificationManager::class.java)
         assertNull(manager.getNotificationChannel(RemoteNotifications.SYNC_CHANNEL))
     }

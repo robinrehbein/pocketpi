@@ -236,7 +236,8 @@ internal class HomeSurfaces(
                     )
                 }
                 // Title changes matter; status changes don't, since it isn't shown.
-                val signature = chosen.map { "${shortcutId(it.routeId, it.sessionId)}|${it.title}|${it.projectName}" }
+                val signature =
+                    chosen.map { shortcutSignatureEntry(it.routeId, it.sessionId, it.title, it.projectName) }
                 if (signature != publishedShortcuts || plan.enable.isNotEmpty()) {
                     if (ShortcutManagerCompat.setDynamicShortcuts(context, shortcuts)) {
                         publishedShortcuts = signature
@@ -271,4 +272,3 @@ internal class HomeSurfaces(
 
 internal const val PUBLISHED_SHORTCUTS_PREFS = "pocket_pi_shortcuts"
 internal const val PUBLISHED_SHORTCUTS_KEY = "signature"
-internal const val SHORTCUT_SIGNATURE_DELIMITER = "\u001F"

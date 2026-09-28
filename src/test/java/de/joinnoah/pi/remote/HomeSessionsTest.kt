@@ -260,4 +260,18 @@ class HomeSessionsTest {
             projectChats = chats,
         )
     }
+
+    @Test
+    fun shortcutSignatureEntryStripsSeparatorsFromHostSuppliedFields() {
+        // A title or project name containing the list or field separator must not be able to
+        // shift a later field into an earlier one, or split into more than one signature entry
+        // once the signature round-trips through storage.
+        val withListSeparator = shortcutSignatureEntry("r", "s", "Ti\u001Ftle", "Pro\u001Fject")
+        assertEquals("session:r:s|Ti tle|Pro ject", withListSeparator)
+        assertEquals(-1, withListSeparator.indexOf(SHORTCUT_SIGNATURE_DELIMITER))
+
+        val withFieldSeparator = shortcutSignatureEntry("r", "s", "a|b", "c|d")
+        assertEquals("session:r:s|a b|c d", withFieldSeparator)
+        assertEquals(2, withFieldSeparator.count { it == '|' })
+    }
 }

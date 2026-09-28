@@ -30,19 +30,41 @@ class PreferenceUpgradeStateTest {
     }
 
     @Test
-    fun eventsOfRoutesNoLongerPairedArePruned() {
-        val tagKept = RemoteNotifications.tag("kept", "s1")
-        val tagGone = RemoteNotifications.tag("gone", "s1")
-        val setup = state(setOf("kept", "gone"))
-        setup.setLatestEvent(tagKept, "e1")
-        setup.setLatestEvent(tagGone, "e2")
-        assertEquals("e1", setup.latestEvent(tagKept))
-        assertEquals("e2", setup.latestEvent(tagGone))
+    fun forgetRouteRemovesItsEventsImmediatelyRegardlessOfTheCap() {
+        // The unpair path must not wait for MAX_EVENT_KEYS to be crossed before cleaning up.
+        val tag = RemoteNotifications.tag("gone", "s1")
+        val s = state(setOf("gone"))
+        s.setLatestEvent(tag, "e1")
+        assertEquals("e1", s.latestEvent(tag))
+        s.forgetRoute("gone")
+        assertNull(s.latestEvent(tag))
+    }
 
-        // "gone" is no longer among the paired routes; the next write anywhere prunes its keys.
-        val afterUnpair = state(setOf("kept"))
-        afterUnpair.setLatestEvent(RemoteNotifications.tag("kept", "s2"), "e3")
-        assertEquals("e1", afterUnpair.latestEvent(tagKept))
+    @Test
+    fun prunePaysToDecryptThePairingStoreOnlyOnceOverTheCap() {
+        // pairedRoutes() (PairingStore.load()) decrypts the on-disk pairing store; a question push
+        // calling setLatestEvent must not pay that cost while comfortably under the cap, since
+        // forgetRoute() already handles the unpair case immediately.
+        var pairedRoutesCalls = 0
+        val s = PreferenceUpgradeState(context, pairedRoutes = { pairedRoutesCalls++; emptySet() }, now = { 0L })
+        repeat(5) { s.setLatestEvent(RemoteNotifications.tag("r", "s$it"), "e$it") }
+        assertEquals(0, pairedRoutesCalls)
+    }
+
+    @Test
+    fun eventsOfRoutesNoLongerPairedArePrunedOnceOverTheCap() {
+        val clock = longArrayOf(0)
+        val tagGone = RemoteNotifications.tag("gone", "s1")
+        state(setOf("kept", "gone"), clock).setLatestEvent(tagGone, "e_gone")
+
+        // "gone" was unpaired without going through forgetRoute() in this scenario; only once
+        // enough further writes push the store over the cap does the pairing-based sweep run and
+        // catch it.
+        val afterUnpair = state(setOf("kept"), clock)
+        (1..201).forEach { i ->
+            clock[0] = i.toLong()
+            afterUnpair.setLatestEvent(RemoteNotifications.tag("kept", "s$i"), "e$i")
+        }
         assertNull(afterUnpair.latestEvent(tagGone))
     }
 
@@ -60,5 +82,20 @@ class PreferenceUpgradeStateTest {
         // The oldest writes are the ones dropped, the newest survive.
         assertNull(paired.latestEvent(tags.first()))
         assertEquals("e204", paired.latestEvent(tags.last()))
+    }
+
+    @Test
+    fun aLegacyValueWithoutATimestampPrefixRoundTripsAndSurvivesAPruneUnderTheCap() {
+        // Values written before the timestamp-stamped format existed have no delimiter at all.
+        context.getSharedPreferences("question_upgrades", Context.MODE_PRIVATE)
+            .edit()
+            .putString("event:${RemoteNotifications.tag("r", "legacy")}", "legacy-event-id")
+            .commit()
+        val s = state(setOf("r"))
+        assertEquals("legacy-event-id", s.latestEvent(RemoteNotifications.tag("r", "legacy")))
+        // A further write elsewhere stays comfortably under the cap, so the legacy entry must not
+        // be evicted just for lacking a timestamp.
+        s.setLatestEvent(RemoteNotifications.tag("r", "other"), "e2")
+        assertEquals("legacy-event-id", s.latestEvent(RemoteNotifications.tag("r", "legacy")))
     }
 }

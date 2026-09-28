@@ -65,6 +65,7 @@ class RemoteApplication : Application() {
         home.observe(repository.state)
         observeOpenedSession()
         RemoteNotifications.createChannel(this)
+        RemoteNotifications.deleteSyncChannel(this)
         if (pushConfigured) {
             FirebaseApp.initializeApp(
                 this,
