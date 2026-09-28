@@ -46,4 +46,61 @@ class NotificationDeepLinkTest {
         runCurrent()
         assertEquals(RemoteSelection("second", "project", "target").keys(), stack)
     }
+
+    @Test
+    fun jobNotificationOpensThatJobOfItsSession() = runTest {
+        val repository = NavigationFakeRepository()
+        val target = RemoteSelection("host", "project", "owner")
+        repository.notificationLookup = {
+            repository.state.value = RemoteState(selection = target)
+            target
+        }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        var consumed = 0
+        navigation.notification("host", "owner", jobs = true, jobId = "job_1") { consumed++ }
+        runCurrent()
+        assertEquals(target.keys(), stack)
+        assertEquals(listOf(null, "job_1"), repository.jobOpens)
+        assertEquals(1, consumed)
+    }
+
+    @Test
+    fun bundledJobNotificationOpensTheJobList() = runTest {
+        val repository = NavigationFakeRepository()
+        val target = RemoteSelection("host", "project", "owner")
+        repository.notificationLookup = {
+            repository.state.value = RemoteState(selection = target)
+            target
+        }
+        val navigation = RemoteNavigator(repository, mutableListOf(RemoteNavKey.Hosts), backgroundScope)
+        navigation.notification("host", "owner", jobs = true)
+        runCurrent()
+        assertEquals(listOf<String?>(null), repository.jobOpens)
+    }
+
+    @Test
+    fun jobsStayClosedWhenTheSessionCouldNotBeOpened() = runTest {
+        val repository = NavigationFakeRepository()
+        repository.notification = null
+        val navigation = RemoteNavigator(repository, mutableListOf(RemoteNavKey.Hosts), backgroundScope)
+        navigation.notification("host", "gone", jobs = true, jobId = "job_1")
+        runCurrent()
+        assertEquals(emptyList<String?>(), repository.jobOpens)
+    }
+
+    @Test
+    fun sessionNotificationOpensNoJobs() = runTest {
+        val repository = NavigationFakeRepository()
+        val target = RemoteSelection("host", "project", "child")
+        repository.notificationLookup = {
+            repository.state.value = RemoteState(selection = target)
+            target
+        }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        RemoteNavigator(repository, stack, backgroundScope).notification("host", "child")
+        runCurrent()
+        assertEquals(target.keys(), stack)
+        assertEquals(emptyList<String?>(), repository.jobOpens)
+    }
 }

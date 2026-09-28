@@ -23,10 +23,123 @@ class NotificationModelTest {
     }
 
     @Test
-    fun unknownOrMissingEventKindIsACompletion() {
+    fun missingEventKindIsACompletionAndAnUnknownOneIsIgnored() {
         val base = mapOf("routeId" to "r", "target" to "s", "eventId" to "e")
         assertEquals(PushEvent.COMPLETE, parsePushPayload(base)?.event)
-        assertEquals(PushEvent.COMPLETE, parsePushPayload(base + ("event" to "other"))?.event)
+        assertEquals(PushEvent.COMPLETE, parsePushPayload(base + ("event" to "complete"))?.event)
+        assertNull(parsePushPayload(base + ("event" to "other")))
+        assertNull(parsePushPayload(base + ("event" to "")))
+        assertNull(parsePushPayload(base + ("event" to "job.")))
+    }
+
+    @Test
+    fun completeAndQuestionKeepTheirPayloadAndTarget() {
+        val base = mapOf("routeId" to "r", "target" to "s", "eventId" to "e")
+        // Extra fields never change the two original kinds.
+        val extras = mapOf("parent" to "p", "jobId" to "j", "count" to "4")
+        val complete = parsePushPayload(base + ("event" to "complete") + extras)
+        assertEquals(PushPayload("r", "s", "e", PushEvent.COMPLETE), complete)
+        val question = parsePushPayload(base + ("event" to "question") + extras)
+        assertEquals(PushPayload("r", "s", "e", PushEvent.QUESTION), question)
+        assertEquals(NotificationTarget("r", "s"), notificationTarget(complete!!))
+        assertEquals(NotificationTarget("r", "s"), notificationTarget(question!!))
+        assertEquals(false, PushEvent.COMPLETE.attention || PushEvent.QUESTION.attention)
+    }
+
+    @Test
+    fun eachChildAndShellKindParsesWithItsFields() {
+        val base = mapOf("routeId" to "r", "target" to "child", "eventId" to "e", "parent" to "p")
+        assertEquals(
+            PushPayload("r", "child", "e", PushEvent.SUBAGENT_DONE, parent = "p"),
+            parsePushPayload(base + ("event" to "subagent.done")),
+        )
+        assertEquals(
+            PushPayload("r", "child", "e", PushEvent.SUBAGENT_STUCK, parent = "p"),
+            parsePushPayload(base + ("event" to "subagent.stuck")),
+        )
+        assertEquals(
+            PushPayload("r", "child", "e", PushEvent.JOB_DONE, parent = "p", jobId = "job_1"),
+            parsePushPayload(base + ("event" to "job.done") + ("jobId" to "job_1")),
+        )
+        assertEquals(
+            PushPayload("r", "child", "e", PushEvent.JOB_STUCK, parent = "p", jobId = "job_1"),
+            parsePushPayload(base + ("event" to "job.stuck") + ("jobId" to "job_1")),
+        )
+        assertTrue(PushEvent.entries.filter { it.attention }.size == 4)
+    }
+
+    @Test
+    fun subagentNoticesOpenTheirTargetSession() {
+        val base = mapOf("routeId" to "r", "target" to "child", "eventId" to "e", "parent" to "p")
+        for (kind in listOf("subagent.done", "subagent.stuck")) {
+            val payload = parsePushPayload(base + ("event" to kind))!!
+            assertEquals(NotificationTarget("r", "child"), notificationTarget(payload))
+        }
+        // A bundle already targets the parent session.
+        val bundle =
+            parsePushPayload(base + ("event" to "subagent.done") + ("target" to "p") + ("count" to "3"))!!
+        assertEquals(NotificationTarget("r", "p"), notificationTarget(bundle))
+    }
+
+    @Test
+    fun jobNoticesOpenTheJobOfTheirSession() {
+        val base = mapOf("routeId" to "r", "target" to "s", "eventId" to "e", "jobId" to "job_1")
+        for (kind in listOf("job.done", "job.stuck")) {
+            val payload = parsePushPayload(base + ("event" to kind))!!
+            assertEquals(
+                NotificationTarget("r", "s", jobs = true, jobId = "job_1"),
+                notificationTarget(payload),
+            )
+        }
+        // A bundle or a missing job id opens the session's job list instead.
+        val bundle = parsePushPayload(base + ("event" to "job.done") + ("count" to "2"))!!
+        assertEquals(NotificationTarget("r", "s", jobs = true), notificationTarget(bundle))
+        val missing = parsePushPayload(base - "jobId" + ("event" to "job.stuck"))!!
+        assertEquals(NotificationTarget("r", "s", jobs = true), notificationTarget(missing))
+    }
+
+    @Test
+    fun bundledCompletionsCarryTheirCount() {
+        val base = mapOf("routeId" to "r", "target" to "p", "eventId" to "e")
+        val subagents = parsePushPayload(base + ("event" to "subagent.done") + ("count" to "3"))!!
+        assertEquals(3, subagents.count)
+        assertEquals(
+            AttentionTitle.Bundle(R.plurals.remote_notification_subagents_done, 3),
+            attentionTitle(subagents),
+        )
+        val jobs = parsePushPayload(base + ("event" to "job.done") + ("count" to "999"))!!
+        assertEquals(
+            AttentionTitle.Bundle(R.plurals.remote_notification_jobs_done, 999),
+            attentionTitle(jobs),
+        )
+    }
+
+    @Test
+    fun singleNoticesHaveTheirOwnTitle() {
+        val base = mapOf("routeId" to "r", "target" to "s", "eventId" to "e")
+        fun title(kind: String, count: String = "1") =
+            attentionTitle(parsePushPayload(base + ("event" to kind) + ("count" to count))!!)
+        assertEquals(AttentionTitle.Single(R.string.remote_notification_subagent_done), title("subagent.done"))
+        assertEquals(AttentionTitle.Single(R.string.remote_notification_subagent_stuck), title("subagent.stuck"))
+        assertEquals(AttentionTitle.Single(R.string.remote_notification_job_done), title("job.done"))
+        assertEquals(AttentionTitle.Single(R.string.remote_notification_job_stuck), title("job.stuck"))
+        // Only completions bundle; a count on a stall is ignored.
+        assertEquals(AttentionTitle.Single(R.string.remote_notification_job_stuck), title("job.stuck", "5"))
+    }
+
+    @Test
+    fun malformedOptionalFieldsDegradeInsteadOfDroppingThePush() {
+        val base = mapOf("routeId" to "r", "target" to "s", "eventId" to "e", "event" to "job.done")
+        for (count in listOf("0", "1000", "-2", "2.5", "03", "", " 3", "x", "9".repeat(40))) {
+            assertEquals(count, 1, parsePushPayload(base + ("count" to count))?.count)
+        }
+        val bad = parsePushPayload(base + ("jobId" to "a/b") + ("parent" to "p\n"))!!
+        assertNull(bad.jobId)
+        assertNull(bad.parent)
+        assertEquals(NotificationTarget("r", "s", jobs = true), notificationTarget(bad))
+        // The target stays required.
+        assertNull(parsePushPayload(base - "target"))
+        assertNull(parsePushPayload(base + ("target" to "")))
     }
 
     @Test
