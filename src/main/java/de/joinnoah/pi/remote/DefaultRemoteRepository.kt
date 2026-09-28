@@ -1105,17 +1105,10 @@ class DefaultRemoteRepository(
     private suspend fun listSessions(projectId: String, epoch: Long): List<JsonObject> {
         sessionStatusOverrides.clear()
         sessionTitleOverrides.clear()
-        val connection = generation
         return request("sessions.list", epoch, "projectId" to projectId)
             .array("items")
             .map { withSessionTitle(withSessionStatus(it)) }
-            .also { if (connection == generation) freshSessions = FreshSessions(connection, projectId, it) }
     }
-
-    private class FreshSessions(val connection: Long, val projectId: String, val sessions: List<JsonObject>)
-
-    /** The last list the host returned on this connection, to tell it apart from cached lists. */
-    private var freshSessions: FreshSessions? = null
 
     private fun publishTimeline() {
         timeline?.let { t ->
@@ -1177,6 +1170,10 @@ class DefaultRemoteRepository(
         sessions: List<JsonObject> = emptyList(),
         session: JsonObject? = null,
         cachedChat: CachedChat? = null,
+        // True only when `sessions` was actually fetched from the host during this call, as
+        // opposed to a reused cache — a cached list may already be stale even on the same
+        // connection, so it must never be trusted to declare a session closed.
+        sessionsFresh: Boolean = false,
     ) {
         timeline = session?.let {
             Timeline(it.text("id")).apply { beginSnapshotEpoch(it.text("status")) }
@@ -1204,10 +1201,7 @@ class DefaultRemoteRepository(
                     ?.second.orEmpty(),
                 project = project,
                 sessions = sessions.map { withSessionTitle(withSessionStatus(it)) },
-                sessionsFresh = freshSessions.let { fresh ->
-                    fresh != null && fresh.connection == generation &&
-                        fresh.projectId == project?.optionalText("id") && fresh.sessions === sessions
-                },
+                sessionsFresh = sessionsFresh,
                 session = session?.let(::withSessionTitle),
                 messages = cachedChat?.messages ?: emptyList(),
                 questions = emptyList(),
@@ -1333,12 +1327,13 @@ class DefaultRemoteRepository(
                     ?.sessions
             // A session opened by hand may have registered after the cached list was fetched
             // (a subagent child, for example), so a miss there asks the host again.
+            var sessionsFetchedNow = false
             val sessions =
                 cached?.takeUnless { list ->
                     mode == ActivationMode.USER_OPEN &&
                         selection.sessionId != null &&
                         list.none { it.text("id") == selection.sessionId }
-                } ?: listSessions(project.text("id"), epoch)
+                } ?: listSessions(project.text("id"), epoch).also { sessionsFetchedNow = true }
             checkEpoch(epoch)
             cachedSessions = CachedSessions(host.routeId, project.text("id"), project, sessions)
             val session = sessions.find { it.text("id") == selection.sessionId }
@@ -1348,7 +1343,7 @@ class DefaultRemoteRepository(
                         (session.optionalText("origin") !in setOf("rpc", "tui") ||
                             session.text("status") == "offline"))
             ) {
-                select(parent, host, projects, project, sessions)
+                select(parent, host, projects, project, sessions, sessionsFresh = sessionsFetchedNow)
                 return parent
             }
             val chosen =
@@ -1359,7 +1354,7 @@ class DefaultRemoteRepository(
             val canonicalProject =
                 projects.find { it.text("id") == chosen.text("projectId") }
                     ?: run {
-                        select(parent, host, projects, project, sessions)
+                        select(parent, host, projects, project, sessions, sessionsFresh = sessionsFetchedNow)
                         return parent
                     }
             val canonical =
@@ -1372,6 +1367,7 @@ class DefaultRemoteRepository(
                 sessions,
                 chosen,
                 cachedChat?.takeIf { useCache && it.selection == canonical },
+                sessionsFresh = sessionsFetchedNow,
             )
             try {
                 snapshot(epoch)
@@ -1384,7 +1380,7 @@ class DefaultRemoteRepository(
                     return canonical
                 }
                 cachedChat = null
-                select(parent, host, projects, project, sessions)
+                select(parent, host, projects, project, sessions, sessionsFresh = sessionsFetchedNow)
                 reportError(R.string.remote_request_error)
                 return parent
             }
@@ -3010,7 +3006,10 @@ class DefaultRemoteRepository(
                 if (epoch != selectionEpoch || state.value.selection != selection ||
                     activeHost?.routeId != routeId
                 ) return@launch
-                update { it.copy(sessions = sessions) }
+                cachedSessions?.takeIf { it.routeId == routeId && it.projectId == projectId }?.let {
+                    cachedSessions = it.copy(sessions = sessions)
+                }
+                update { it.copy(sessions = sessions, sessionsFresh = true) }
                 cacheCurrentScreen()
             } catch (_: CancellationException) {} catch (_: Exception) {
                 // The previous list stays; the next refresh or reconnect retries.

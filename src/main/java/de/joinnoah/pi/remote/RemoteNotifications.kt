@@ -46,13 +46,25 @@ internal object RemoteNotifications {
                         description = localized.getString(R.string.remote_notification_channel_help)
                     }
             )
-        // Only Android 8 to 11 show it, briefly, while a question is read in the background.
+    }
+
+    /**
+     * Only Android 8 to 11 show this, briefly, while a question is read in the background: from
+     * Android 12 expedited work no longer needs a foreground service, so the channel would never be
+     * shown there.
+     */
+    fun createSyncChannel(context: Context) {
+        if (Build.VERSION.SDK_INT >= 31) return
+        val localized = localized(context)
         context.getSystemService(NotificationManager::class.java)
             .createNotificationChannel(
                 NotificationChannel(
                     SYNC_CHANNEL,
                     localized.getString(R.string.remote_notification_sync_channel),
-                    NotificationManager.IMPORTANCE_MIN,
+                    // This channel only ever backs the foreground-service notification below
+                    // Android 12; on Android 8.0/8.1 (API 26-27) IMPORTANCE_MIN can keep that
+                    // notification from showing at all, so LOW is the floor here.
+                    NotificationManager.IMPORTANCE_LOW,
                 )
             )
     }
