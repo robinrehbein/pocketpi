@@ -5,9 +5,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -148,5 +152,40 @@ class ChatPanelsTest {
             MaterialTheme { TouchedFilesSummary(TouchedFiles(emptyList(), emptyList()), TouchedLineCounts(1, 1)) {} }
         }
         compose.onNodeWithTag("touchedFilesSummary").assertDoesNotExist()
+    }
+
+    @Test
+    fun subagentStripRowsMeetTheMinimumTouchTarget() {
+        val strip =
+            SubagentStrip(
+                entries =
+                    listOf(
+                        SubagentStripEntry("s1", "explorer", "explorer task", "running", "reading files", true),
+                        SubagentStripEntry(null, "reviewer", "short", "queued", null, false, openable = false),
+                    ),
+                running = 1,
+                missingSessionIds = emptySet(),
+                unmatchedRunning = 0,
+            )
+        compose.setContent {
+            MaterialTheme { SubagentStrip(strip, canAbort = { false }, onOpen = {}, onAbort = {}) }
+        }
+        // Rows are collapsed until the header is expanded.
+        compose.onNodeWithText("explorer task").assertDoesNotExist()
+        compose.onNode(hasClickAction() and hasAnyAncestor(hasTestTag("subagentStrip"))).performClick()
+        val rows = compose.onAllNodesWithTag("subagentStripEntry")
+        rows.assertCountEquals(2)
+        rows[0].assertHeightIsAtLeast(48.dp)
+        rows[1].assertHeightIsAtLeast(48.dp)
+    }
+
+    @Test
+    fun compactionBannerIsAPoliteLiveRegion() {
+        compose.setContent {
+            MaterialTheme { CompactionBanner(SessionCompaction("threshold", 0L), nowMillis = 0L) }
+        }
+        val liveRegion =
+            compose.onNodeWithTag("compactionBanner").fetchSemanticsNode().config[SemanticsProperties.LiveRegion]
+        assertEquals(androidx.compose.ui.semantics.LiveRegionMode.Polite, liveRegion)
     }
 }
