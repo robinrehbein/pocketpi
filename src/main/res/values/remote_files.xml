@@ -22,7 +22,11 @@
     <string name="remote_files_binary">Binary file. It cannot be shown as text.</string>
     <string name="remote_files_too_large">This file is larger than 1 MB and cannot be shown.</string>
     <string name="remote_files_reopened">The file changed on the computer and was loaded again from the start.</string>
-    <string name="remote_files_line_select">Select line</string>
+    <string name="remote_files_line_start">Start selection at line %1$d</string>
+    <string name="remote_files_line_end">End selection at line %1$d</string>
+    <string name="remote_files_line_clear">Clear selection</string>
+    <string name="remote_files_selection_line">Selected: line %1$d</string>
+    <string name="remote_files_selection_lines">Selected: lines %1$d–%2$d</string>
     <plurals name="remote_files_selected_lines">
         <item quantity="one">%d line selected</item>
         <item quantity="other">%d lines selected</item>

@@ -117,15 +117,21 @@ class ProjectFilesTest {
     }
 
     @Test
-    fun lineTapsStartAndEndARange() {
-        val start = null.tap(5)
+    fun lineTapsStartEndAndClearARange() {
+        assertEquals(LineTap.START, null.tapAction(5))
+        val start = checkNotNull(null.tap(5))
         assertEquals(LineSelection(5), start)
         assertEquals(5..5, start.first..start.last)
-        val range = start.tap(3)
+        assertEquals(LineTap.END, start.tapAction(3))
+        val range = checkNotNull(start.tap(3))
         assertEquals(3, range.first)
         assertEquals(5, range.last)
-        // A third tap starts over.
+        // A tap after the end starts over.
+        assertEquals(LineTap.START, range.tapAction(5))
         assertEquals(LineSelection(9), range.tap(9))
+        // Tapping the start again before an end clears.
+        assertEquals(LineTap.CLEAR, start.tapAction(5))
+        assertNull(start.tap(5))
     }
 
     // ---- Quote --------------------------------------------------------------------------

@@ -53,23 +53,59 @@ internal data class SyntaxColors(
 )
 
 /** Each of [lines] as styled text, cut at [MAX_CODE_LINE_CHARS] for display. */
-internal fun highlightLines(lines: List<String>, language: SyntaxLanguage?, colors: SyntaxColors): List<AnnotatedString> {
-    val highlighter: LineHighlighter =
-        when (language) {
-            null -> return lines.map { AnnotatedString(it.take(MAX_CODE_LINE_CHARS)) }
-            SyntaxLanguage.KOTLIN ->
-                CLike(colors, KOTLIN_KEYWORDS, nestedComments = true, tripleQuotes = true, backticks = false, dollarTemplates = true)
-            SyntaxLanguage.SWIFT ->
-                CLike(colors, SWIFT_KEYWORDS, nestedComments = true, tripleQuotes = true, backticks = false, dollarTemplates = false)
-            SyntaxLanguage.TYPESCRIPT, SyntaxLanguage.JAVASCRIPT ->
-                CLike(colors, SCRIPT_KEYWORDS, nestedComments = false, tripleQuotes = false, backticks = true, dollarTemplates = false)
-            SyntaxLanguage.JSON -> JsonLines(colors)
-            SyntaxLanguage.YAML -> YamlLines(colors)
-            SyntaxLanguage.MARKDOWN -> MarkdownLines(colors)
+internal fun highlightLines(lines: List<String>, language: SyntaxLanguage?, colors: SyntaxColors): List<AnnotatedString> =
+    if (language == null) lines.map { AnnotatedString(it.take(MAX_CODE_LINE_CHARS)) }
+    else IncrementalHighlighter(language, colors).update(lines)
+
+private fun lineHighlighter(language: SyntaxLanguage, colors: SyntaxColors): LineHighlighter =
+    when (language) {
+        SyntaxLanguage.KOTLIN ->
+            CLike(colors, KOTLIN_KEYWORDS, nestedComments = true, tripleQuotes = true, backticks = false, dollarTemplates = true)
+        SyntaxLanguage.SWIFT ->
+            CLike(colors, SWIFT_KEYWORDS, nestedComments = true, tripleQuotes = true, backticks = false, dollarTemplates = false)
+        SyntaxLanguage.TYPESCRIPT, SyntaxLanguage.JAVASCRIPT ->
+            CLike(colors, SCRIPT_KEYWORDS, nestedComments = false, tripleQuotes = false, backticks = true, dollarTemplates = false)
+        SyntaxLanguage.JSON -> JsonLines(colors)
+        SyntaxLanguage.YAML -> YamlLines(colors)
+        SyntaxLanguage.MARKDOWN -> MarkdownLines(colors)
+    }
+
+/**
+ * Highlights one version of a file as its pages arrive. Pages only ever append lines, so each
+ * [update] styles just the lines after those it already did, continuing from the tokenizer state
+ * (an open block comment, string or fence) where the previous page ended. If the lines it did no
+ * longer lead the new ones (a page ended inside a line), it starts over. Safe to call from any
+ * thread; calls run one at a time.
+ */
+internal class IncrementalHighlighter(private val language: SyntaxLanguage, private val colors: SyntaxColors) {
+    private var highlighter = lineHighlighter(language, colors)
+    private val source = ArrayList<String>()
+    private val styled = ArrayList<AnnotatedString>()
+
+    /** Lines tokenized so far, across all updates; for tests. */
+    var tokenized = 0
+        private set
+
+    @Synchronized
+    fun update(lines: List<String>): List<AnnotatedString> {
+        val continues =
+            lines.size >= source.size && (source.isEmpty() || lines[source.size - 1] == source.last())
+        if (!continues) {
+            highlighter = lineHighlighter(language, colors)
+            source.clear()
+            styled.clear()
         }
-    return lines.map { line ->
-        if (line.length > MAX_HIGHLIGHT_LINE_CHARS) AnnotatedString(line.take(MAX_CODE_LINE_CHARS))
-        else AnnotatedString.Builder(line).apply { highlighter.line(line, this) }.toAnnotatedString()
+        for (index in source.size until lines.size) {
+            val line = lines[index]
+            source += line
+            styled +=
+                if (line.length > MAX_HIGHLIGHT_LINE_CHARS) AnnotatedString(line.take(MAX_CODE_LINE_CHARS))
+                else {
+                    tokenized++
+                    AnnotatedString.Builder(line).apply { highlighter.line(line, this) }.toAnnotatedString()
+                }
+        }
+        return styled.toList()
     }
 }
 

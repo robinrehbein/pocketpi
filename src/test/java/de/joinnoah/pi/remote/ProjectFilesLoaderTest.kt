@@ -43,6 +43,8 @@ class ProjectFilesLoaderTest {
         override lateinit var listener: RemoteTransport.Listener
         val sent = mutableListOf<JsonObject>()
         var failure: (JsonObject) -> String? = { null }
+        /** `session.git.*` answers; held by default. */
+        var git: (JsonObject) -> JsonObject? = { null }
 
         override fun connect(host: PairedHost) = listener.ready(emptySet())
 
@@ -94,7 +96,12 @@ class ProjectFilesLoaderTest {
                         "messages" to JsonArray(emptyList()),
                         "pendingQuestions" to JsonArray(emptyList()),
                     )
-                else -> if (request.text("type").startsWith("session.files.")) files(request) else Wire.objectOf("kind" to "accepted")
+                else ->
+                    when {
+                        request.text("type").startsWith("session.files.") -> files(request)
+                        request.text("type").startsWith("session.git.") -> git(request)
+                        else -> Wire.objectOf("kind" to "accepted")
+                    }
             }
         }
     }
@@ -371,5 +378,49 @@ class ProjectFilesLoaderTest {
         repository.reloadFiles()
         runCurrent()
         assertEquals(FilesFailure.BUSY, repository.state.value.files?.file?.failure)
+    }
+
+    @Test
+    fun filesAndChangesCloseEachOther() = runTest {
+        val heldFiles = mutableListOf<JsonObject>()
+        var holdFiles = false
+        val transport = Transport(capabilities) { request ->
+            if (holdFiles) {
+                heldFiles += request
+                null
+            } else listing(request, "a.kt")
+        }
+        val repository = opened(transport)
+        assertNotNull(repository.state.value.files)
+
+        // Changes close the files, and a files answer arriving later does not bring them back.
+        holdFiles = true
+        repository.openFilesDir("src")
+        runCurrent()
+        repository.openChanges()
+        runCurrent()
+        assertNull(repository.state.value.files)
+        assertNotNull(repository.state.value.changes)
+        transport.result(heldFiles.single(), listing(heldFiles.single(), "late.kt"))
+        runCurrent()
+        assertNull(repository.state.value.files)
+
+        // Files close the changes, whose status is still on its way.
+        val status = transport.sent.last { it.text("type") == "session.git.status" }
+        holdFiles = false
+        repository.openFiles()
+        runCurrent()
+        assertNull(repository.state.value.changes)
+        assertNotNull(repository.state.value.files)
+        transport.result(
+            status,
+            Wire.objectOf(
+                "kind" to "git.status", "sessionId" to sessionId, "base" to "session",
+                "available" to false, "reason" to "not_a_repository",
+            ),
+        )
+        runCurrent()
+        assertNull(repository.state.value.changes)
+        assertEquals(listOf("a.kt"), repository.state.value.files?.listing?.entries?.map { it.name })
     }
 }

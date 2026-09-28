@@ -173,4 +173,42 @@ class SyntaxHighlightTest {
         assertTrue(lines.single().spanStyles.isEmpty())
         assertEquals("val x = \"y\" // z", lines.single().text)
     }
+
+    @Test
+    fun laterPagesOnlyStyleTheirOwnLinesAndContinueTheState() {
+        val all = listOf("val a = 1 /* opens", "still comment", "*/ val b = \"\"\"raw", "raw end\"\"\" + 2")
+        val incremental = IncrementalHighlighter(SyntaxLanguage.KOTLIN, colors)
+        val first = incremental.update(all.take(2))
+        assertEquals(2, incremental.tokenized)
+        val second = incremental.update(all)
+        // Only the two new lines were tokenized, and the first two are the same objects.
+        assertEquals(4, incremental.tokenized)
+        assertTrue(first[0] === second[0] && first[1] === second[1])
+        // The comment open at the page boundary closes on the next page, as in one pass.
+        assertEquals(listOf("*/"), second[2].spans(Color.Gray))
+        assertEquals(listOf("val"), second[2].spans(Color.Red))
+        assertEquals(highlight(SyntaxLanguage.KOTLIN, *all.toTypedArray()), second)
+        // The same lines again cost nothing.
+        incremental.update(all)
+        assertEquals(4, incremental.tokenized)
+    }
+
+    @Test
+    fun aFenceOpenAtAPageBoundaryStaysOpen() {
+        val incremental = IncrementalHighlighter(SyntaxLanguage.MARKDOWN, colors)
+        incremental.update(listOf("# Title", "```"))
+        val lines = incremental.update(listOf("# Title", "```", "# code, not a heading", "```", "# Heading"))
+        assertEquals(listOf("# code, not a heading"), lines[2].spans(Color.Green))
+        assertEquals(Color.Cyan, lines[4].spanStyles.single().item.color)
+    }
+
+    @Test
+    fun changedLinesStartOver() {
+        val incremental = IncrementalHighlighter(SyntaxLanguage.KOTLIN, colors)
+        incremental.update(listOf("val a = 1 /* open"))
+        // A page that ended inside a line: its last line grew, so everything is styled again.
+        val lines = incremental.update(listOf("val a = 1 // no comment block", "val b = 2"))
+        assertEquals(3, incremental.tokenized)
+        assertEquals(listOf("val"), lines[1].spans(Color.Red))
+    }
 }

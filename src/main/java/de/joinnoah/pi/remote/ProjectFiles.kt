@@ -72,9 +72,26 @@ data class LineSelection(val anchor: Int, val end: Int? = null) {
     val last: Int get() = maxOf(anchor, end ?: anchor)
 }
 
-/** A tap on [line]'s number: the first tap starts a range, the second ends it, a third starts anew. */
-internal fun LineSelection?.tap(line: Int): LineSelection =
-    if (this == null || end != null) LineSelection(line) else copy(end = line)
+/** What a tap on a line number does. */
+internal enum class LineTap { START, END, CLEAR }
+
+/**
+ * The first tap starts a range and the second ends it; a tap after that starts anew. Tapping the
+ * start again before choosing an end clears the selection.
+ */
+internal fun LineSelection?.tapAction(line: Int): LineTap =
+    when {
+        this == null || end != null -> LineTap.START
+        line == anchor -> LineTap.CLEAR
+        else -> LineTap.END
+    }
+
+internal fun LineSelection?.tap(line: Int): LineSelection? =
+    when (tapAction(line)) {
+        LineTap.START -> LineSelection(line)
+        LineTap.END -> checkNotNull(this).copy(end = line)
+        LineTap.CLEAR -> null
+    }
 
 /** The open file: its pages joined, or why it shows no text. */
 data class OpenFile(

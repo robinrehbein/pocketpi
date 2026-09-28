@@ -18,11 +18,11 @@ data class ActionUsage(val score: Double, val at: Long)
 internal const val ACTION_USAGE_HALF_LIFE_MILLIS = 14L * 24 * 60 * 60 * 1000
 
 /**
- * The ranking without any use, and the tie-break: Changes, then Files, then Refresh. Usage is
- * stored per action name, so an action added later simply starts without uses.
+ * The ranking without any use, and the tie-break: Changes and Refresh come first. Usage is stored
+ * per action name, so an action added later, like Files, simply starts without uses.
  */
 internal val DEFAULT_CHAT_ACTIONS =
-    listOf(ChatAction.CHANGES, ChatAction.FILES, ChatAction.REFRESH, ChatAction.RENAME, ChatAction.SETTINGS)
+    listOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.RENAME, ChatAction.SETTINGS)
 
 internal fun ActionUsage.decayed(now: Long): Double =
     score * 0.5.pow((now - at).coerceAtLeast(0L) / ACTION_USAGE_HALF_LIFE_MILLIS.toDouble())

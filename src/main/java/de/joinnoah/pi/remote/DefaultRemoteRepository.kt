@@ -3637,8 +3637,12 @@ class DefaultRemoteRepository(
             ::update,
         )
 
-    override fun openChanges() =
+    // Changes and files share one place on screen: opening one closes the other, which also
+    // stops its loader.
+    override fun openChanges() {
+        filesLoader.close()
         changesLoader.open(currentDraftKey()?.let { drafts[it]?.reviewComments }.orEmpty())
+    }
 
     override fun closeChanges() = changesLoader.close()
 
@@ -3694,7 +3698,10 @@ class DefaultRemoteRepository(
             ::update,
         )
 
-    override fun openFiles() = filesLoader.open()
+    override fun openFiles() {
+        changesLoader.close()
+        filesLoader.open()
+    }
 
     override fun closeFiles() = filesLoader.close()
 

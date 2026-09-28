@@ -10,6 +10,11 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -127,6 +132,40 @@ class FilesPaneUiTest {
         assertEquals(listOf(label(R.string.remote_files_quote_file, "a.json") + "\n\n```json\n{\"a\": 1}\n```"), sent)
     }
 
+    private fun clickLabel(tag: String) =
+        compose.onNodeWithTag(tag).fetchSemanticsNode().config[SemanticsActions.OnClick].label
+
+    private fun stateOf(tag: String) =
+        compose.onNodeWithTag(tag).fetchSemanticsNode().config.getOrNull(SemanticsProperties.StateDescription)
+
+    @Test
+    fun lineNumbersAreWideTargetsThatSayWhatATapDoes() {
+        render(
+            FilesState(
+                "s",
+                loading = false,
+                listing = root,
+                file = OpenFile("a.kt", loading = false, content = (1..8).joinToString("") { "line $it\n" }),
+            )
+        )
+        compose.onNodeWithTag("filesLine:3").assertWidthIsAtLeast(48.dp)
+        assertEquals(label(R.string.remote_files_line_start, 3), clickLabel("filesLine:3"))
+        assertEquals(null, stateOf("filesLine:3"))
+        compose.onNodeWithTag("filesLine:3").performClick()
+        assertEquals(label(R.string.remote_files_line_clear), clickLabel("filesLine:3"))
+        assertEquals(label(R.string.remote_files_line_end, 5), clickLabel("filesLine:5"))
+        assertEquals(label(R.string.remote_files_selection_line, 3), stateOf("filesLine:7"))
+        compose.onNodeWithTag("filesLine:5").performClick()
+        assertEquals(label(R.string.remote_files_selection_lines, 3, 5), stateOf("filesLine:1"))
+        assertEquals(label(R.string.remote_files_line_start, 3), clickLabel("filesLine:3"))
+        assertEquals(true, compose.onNodeWithTag("filesLine:4").fetchSemanticsNode().config.getOrNull(SemanticsProperties.Selected))
+        // Starting anew and tapping the start again clears the selection.
+        compose.onNodeWithTag("filesLine:6").performClick()
+        compose.onNodeWithTag("filesLine:6").performClick()
+        assertEquals(null, stateOf("filesLine:6"))
+        compose.onNodeWithTag("filesSelection").assertDoesNotExist()
+    }
+
     // ---- Through the chat screen ---------------------------------------------------------
 
     private val repository = NavigationFakeRepository()
@@ -205,5 +244,32 @@ class FilesPaneUiTest {
         back()
         assertNull(repository.state.value.files?.file)
         compose.onNode(hasTestTag("filesList") and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
+    }
+
+    /*
+     * On a phone either pane covers the chat header, so the other cannot be opened while it is
+     * shown; ProjectFilesLoaderTest covers the exclusion itself, whatever the layout. Beside the
+     * chat both stay reachable, so the inspector must show one at a time.
+     */
+    @Test
+    @Config(qualifiers = "w1300dp-h800dp")
+    fun filesAndChangesReplaceEachOtherInTheInspector() {
+        chat(setOf(GIT_CAPABILITY, FILES_CAPABILITY))
+        fun shown(tag: String) =
+            compose.onNode(hasTestTag(tag) and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
+        // New users see Changes and Refresh in the pill; Files is in the menu.
+        compose.onNodeWithTag("chatAction_changes").performClick()
+        compose.waitForIdle()
+        shown("changesPane")
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.onNodeWithTag("chatActionMenu_files").performClick()
+        compose.waitForIdle()
+        shown("filesPane")
+        compose.onNodeWithTag("changesPane").assertDoesNotExist()
+        compose.onNodeWithTag("chatAction_changes").performClick()
+        compose.waitForIdle()
+        shown("changesPane")
+        compose.onNodeWithTag("filesPane").assertDoesNotExist()
+        assertNull(repository.state.value.files)
     }
 }

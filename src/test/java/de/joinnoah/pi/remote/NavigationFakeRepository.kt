@@ -88,9 +88,23 @@ internal class NavigationFakeRepository : RemoteRepository {
     /** What [openFiles] shows; the session ID is filled in from the selection. */
     var filesOnOpen: (String) -> FilesState = { FilesState(it, loading = false, listing = FileListing("")) }
 
+    // Like the real repository, files and changes close each other.
     override fun openFiles() {
         filesOpens++
-        state.value = state.value.copy(files = filesOnOpen(checkNotNull(state.value.selection.sessionId)))
+        state.value = state.value.copy(changes = null, files = filesOnOpen(checkNotNull(state.value.selection.sessionId)))
+    }
+
+    override fun openChanges() {
+        val sessionId = checkNotNull(state.value.selection.sessionId)
+        state.value =
+            state.value.copy(
+                files = null,
+                changes = ChangesState(sessionId, loading = false, status = GitStatus(GitBase.SESSION, "Q2hhbmdlc1NuYXBzaG90MQ"), log = GitLog()),
+            )
+    }
+
+    override fun closeChanges() {
+        state.value = state.value.copy(changes = null)
     }
 
     override fun closeFiles() {

@@ -60,7 +60,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -357,22 +359,31 @@ private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Un
     val language = remember(file.path) { languageFor(file.path) }
     val colors = syntaxColors()
     val plain = remember(lines) { lines.map { AnnotatedString(it.take(MAX_CODE_LINE_CHARS)) } }
-    // Highlighting a large file takes a moment; the plain text shows meanwhile. The result names
-    // the lines it belongs to, so a newer page never shows an older page's highlighting.
+    // One highlighter per version of the file: a later page only styles the lines it adds. While
+    // it works, the lines styled before stay styled and only the new ones show plain.
+    val highlighter =
+        remember(file.version, language, colors) { language?.let { IncrementalHighlighter(it, colors) } }
     val highlighted by
-        produceState<Pair<List<String>, List<AnnotatedString>>?>(null, lines, language, colors) {
-            value =
-                if (language == null) null
-                else lines to withContext(Dispatchers.Default) { highlightLines(lines, language, colors) }
+        produceState<Pair<IncrementalHighlighter, List<AnnotatedString>>?>(null, lines, highlighter) {
+            if (highlighter != null)
+                value = highlighter to withContext(Dispatchers.Default) { highlighter.update(lines) }
         }
-    val shown = highlighted?.takeIf { it.first === lines }?.second ?: plain
+    val shown =
+        highlighted
+            ?.takeIf { (owner, styled) -> owner === highlighter && styled.size <= lines.size }
+            ?.let { (_, styled) -> if (styled.size == lines.size) styled else styled + plain.subList(styled.size, plain.size) }
+            ?: plain
     val style = monoTextStyle()
     val contentWidth = rememberCodeContentWidth(lines, style)
     val charWidth = rememberMonoCharWidth(style)
     val numberWidth = charWidth * lines.size.coerceAtLeast(1).toString().length
     val scroll = rememberScrollState()
     val selection = file.selection?.takeIf { it.last <= lines.size }
-    val selectLabel = stringResource(R.string.remote_files_line_select)
+    val selectionState =
+        selection?.let {
+            if (it.first == it.last) stringResource(R.string.remote_files_selection_line, it.first)
+            else stringResource(R.string.remote_files_selection_lines, it.first, it.last)
+        }
     Column(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("filesFile")) {
             if (file.reopened)
@@ -394,8 +405,8 @@ private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Un
                 lines.isEmpty() && file.nextOffset == null ->
                     item(key = "empty") { FilesNotice(stringResource(R.string.remote_files_file_empty)) }
                 else -> {
-                    // Rows stay one text line high, below the 48dp touch target, to keep code
-                    // readable; the same trade-off as the diff rows.
+                    // Rows stay one text line high to keep code dense; the number cell is at
+                    // least 48dp wide, so it stays easy to hit sideways.
                     itemsIndexed(shown, contentType = { _, _ -> "line" }) { index, text ->
                         val number = index + 1
                         FileLineRow(
@@ -404,7 +415,8 @@ private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Un
                             selection != null && number in selection.first..selection.last,
                             FileRowStyle(style, numberWidth, contentWidth),
                             scroll,
-                            selectLabel,
+                            lineTapLabel(context, file.selection.tapAction(number), number),
+                            selectionState,
                         ) { actions.onSelectLines(file.selection.tap(number)) }
                     }
                     if (file.nextOffset != null) loadMore(file.moreLoading, file.moreFailure, actions.onLoadMore)
@@ -422,6 +434,13 @@ private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Un
     }
 }
 
+private fun lineTapLabel(context: Context, action: LineTap, line: Int): String =
+    when (action) {
+        LineTap.START -> context.getString(R.string.remote_files_line_start, line)
+        LineTap.END -> context.getString(R.string.remote_files_line_end, line)
+        LineTap.CLEAR -> context.getString(R.string.remote_files_line_clear)
+    }
+
 private class FileRowStyle(val text: TextStyle, val numberWidth: Dp, val contentWidth: Dp)
 
 @Composable
@@ -431,15 +450,20 @@ private fun FileLineRow(
     selected: Boolean,
     rowStyle: FileRowStyle,
     scroll: ScrollState,
-    selectLabel: String,
+    tapLabel: String,
+    selectionState: String?,
     onTapNumber: () -> Unit,
 ) {
     val background = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Unspecified
     Row(Modifier.fillMaxWidth().background(background).testTag(if (selected) "filesLineSelected" else "filesLineRow")) {
         Text(
             number.toString(),
-            Modifier.clickable(onClickLabel = selectLabel, onClick = onTapNumber)
-                .width(rowStyle.numberWidth + 16.dp)
+            Modifier.clickable(onClickLabel = tapLabel, onClick = onTapNumber)
+                .semantics {
+                    this.selected = selected
+                    if (selectionState != null) stateDescription = selectionState
+                }
+                .width(maxOf(rowStyle.numberWidth + 16.dp, 48.dp))
                 .padding(horizontal = 8.dp)
                 .testTag("filesLine:$number"),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
