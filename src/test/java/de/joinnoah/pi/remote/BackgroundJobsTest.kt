@@ -176,6 +176,32 @@ class BackgroundJobsTest {
         assertEquals(listOf(JobOutputLine.Text("a"), JobOutputLine.Text("] text")), buffer.lines)
         buffer.finish()
         assertEquals(listOf(JobOutputLine.Text("a"), JobOutputLine.Text("] text")), buffer.lines)
+
+        // An OSC cut after its first terminator byte loses that ESC too.
+        val cut = JobOutputBuffer()
+        cut.append(JobOutputPart.Text("done\u001B]0;title\u001B"))
+        assertEquals(listOf(JobOutputLine.Text("done")), cut.lines)
+        cut.finish()
+        assertEquals(listOf(JobOutputLine.Text("done]0;title")), cut.lines)
+    }
+
+    @Test
+    fun anUnterminatedStringRemovesNoMoreThanItsLine() {
+        val long = "x".repeat(5000)
+        assertEquals(
+            listOf("a", "next", "", "last").map(JobOutputLine::Text),
+            jobOutputLines(listOf(JobOutputPart.Text("a\u001B]0;$long\nnext\n\u001BP$long\nlast\n"))),
+        )
+        // Terminated strings still go whole, and colour codes are still stripped.
+        assertEquals(
+            listOf("titled", "red").map(JobOutputLine::Text),
+            jobOutputLines(listOf(JobOutputPart.Text("\u001B]0;a\nb\u0007titled\n\u001B[31mred\u001B[0m\n"))),
+        )
+        // An ST (ESC \) terminator removes a multi-line OSC just as whole as a BEL one does.
+        assertEquals(
+            listOf("titled", "red").map(JobOutputLine::Text),
+            jobOutputLines(listOf(JobOutputPart.Text("\u001B]0;a\nb\u001B\\titled\n\u001B[31mred\u001B[0m\n"))),
+        )
     }
 
     @Test
@@ -209,7 +235,7 @@ class BackgroundJobsTest {
 
     private class Source : JobSource {
         val watches = mutableListOf<Long?>()
-        var list: () -> List<BackgroundJob> = { emptyList() }
+        var list: suspend () -> List<BackgroundJob> = { emptyList() }
         var answer: (Long?) -> JobChunk = { error("no answer") }
         var kill: () -> Unit = {}
         var kills = 0
@@ -480,6 +506,43 @@ class BackgroundJobsTest {
         advanceTimeBy(3 * JOBS_AUTO_REFRESH_MILLIS)
         runCurrent()
         assertEquals(2, lists)
+    }
+
+    @Test
+    fun aLateFailureOfAReplacedRefreshKeepsTheNewerOneLoading() = runTest {
+        val harness = Harness(backgroundScope)
+        var first: kotlin.coroutines.Continuation<Unit>? = null
+        // The first request ignores its cancellation and fails once it resumes.
+        harness.source.list = {
+            kotlin.coroutines.suspendCoroutine<Unit> { first = it }
+            throw RemoteRequestException("failed")
+        }
+        harness.controller.refresh()
+        runCurrent()
+        harness.source.list = { kotlinx.coroutines.awaitCancellation() }
+        harness.controller.refresh()
+        runCurrent()
+        first!!.resumeWith(Result.success(Unit))
+        runCurrent()
+        assertTrue(harness.state.jobs!!.loading)
+        assertNull(harness.state.jobs!!.failure)
+    }
+
+    @Test
+    fun aLateSuccessOfAReplacedRefreshKeepsTheNewerOneLoading() = runTest {
+        val harness = Harness(backgroundScope)
+        var first: kotlin.coroutines.Continuation<List<BackgroundJob>>? = null
+        // The first request ignores its cancellation and succeeds once it resumes.
+        harness.source.list = { kotlin.coroutines.suspendCoroutine { first = it } }
+        harness.controller.refresh()
+        runCurrent()
+        harness.source.list = { kotlinx.coroutines.awaitCancellation() }
+        harness.controller.refresh()
+        runCurrent()
+        first!!.resumeWith(Result.success(listOf(running(0))))
+        runCurrent()
+        assertTrue(harness.state.jobs!!.loading)
+        assertTrue(harness.state.jobs!!.jobs.isEmpty())
     }
 
     @Test
