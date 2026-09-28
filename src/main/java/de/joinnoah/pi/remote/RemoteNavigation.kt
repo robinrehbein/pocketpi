@@ -309,7 +309,17 @@ internal class RemoteNavigator(
         }
     }
 
-    fun notification(routeId: String, sessionId: String, consumed: () -> Unit = {}) {
+    /**
+     * Opens the session of a tapped notification. With [jobs] it then opens that session's
+     * background jobs, and [jobId]'s output on top when given.
+     */
+    fun notification(
+        routeId: String,
+        sessionId: String,
+        jobs: Boolean = false,
+        jobId: String? = null,
+        consumed: () -> Unit = {},
+    ) {
         if (
             routeId.isBlank() ||
                 routeId.length > 256 ||
@@ -332,6 +342,18 @@ internal class RemoteNavigator(
             val selection = repository.openNotification(routeId, sessionId)
             if (current == request) {
                 if (selection != null) replace(selection, keepSettings = false) else restore()
+                // Only once the session itself is open, since the jobs belong to the selection.
+                if (
+                    jobs &&
+                        selection != null &&
+                        selection.routeId == routeId &&
+                        selection.sessionId == sessionId &&
+                        repository.state.value.selection == selection
+                ) {
+                    repository.openJobs()
+                    // Nullable on purpose: the strict push-id check, not the looser String one.
+                    jobId.takeIf(::isOpaqueId)?.let(repository::openJob)
+                }
             }
         }
         activation = operation
@@ -352,6 +374,9 @@ internal data class RemoteNotification(
     val routeId: String,
     val sessionId: String,
     val delivery: Long,
+    /** Opens the session's background jobs, and [jobId] among them when given. */
+    val jobs: Boolean = false,
+    val jobId: String? = null,
 )
 
 // Parent and child screens share a depth axis.
@@ -392,7 +417,9 @@ internal fun RemoteNavigation(
     }
     LaunchedEffect(notification, navigator) {
         notification?.let {
-            navigator.notification(it.routeId, it.sessionId) { consumeNotification(it) }
+            navigator.notification(it.routeId, it.sessionId, it.jobs, it.jobId) {
+                consumeNotification(it)
+            }
         }
     }
     NavDisplay(
