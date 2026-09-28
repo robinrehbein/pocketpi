@@ -117,10 +117,6 @@ internal class RemoteNavigator(
         selection: RemoteSelection,
         keepSettings: Boolean = true,
         keepStackedChats: Boolean = true,
-        // Only a restored activation may fall back to a stacked parent chat when its own session
-        // is gone: reconcile()'s shortened selection is the host's authoritative state and always
-        // collapses the stack exactly as it says.
-        fallbackToStackedParent: Boolean = false,
     ) {
         val keys = selection.keys()
         // The folder browser shares the Projects selection, so it survives a restore on top of it.
@@ -129,26 +125,16 @@ internal class RemoteNavigator(
             setStack(keys + folders, keepSettings)
             return
         }
-        val oldTop = topKey() as? RemoteNavKey.Chat
         val chat = keys.lastOrNull() as? RemoteNavKey.Chat
         // A child chat opened on top of its parent keeps the parent beneath it across
         // restores and reconnects.
         val beneath =
             if (keepStackedChats && chat != null && topKey() == chat) chatsBeneathTop()
             else emptyList()
-        when {
-            chat != null && beneath.isNotEmpty() -> setStack(sessionKeys(chat) + stacked(beneath + chat), keepSettings)
-            // The top chat's own session is gone (for example it went offline while restoring) and
-            // it had a parent stacked beneath it: land on that still-known parent instead of
-            // dropping the whole stack to the sessions list underneath it.
-            chat == null && fallbackToStackedParent && keepStackedChats && oldTop != null && topKey() == oldTop ->
-                chatsBeneathTop().let { ancestors ->
-                    val parentChat = ancestors.lastOrNull()
-                    if (parentChat != null && parentChat.selection().keys().dropLast(1) == keys)
-                        setStack(sessionKeys(parentChat) + stacked(ancestors), keepSettings)
-                    else setStack(keys, keepSettings)
-                }
-            else -> setStack(keys, keepSettings)
+        if (chat == null || beneath.isEmpty()) {
+            setStack(keys, keepSettings)
+        } else {
+            setStack(sessionKeys(chat) + stacked(beneath + chat), keepSettings)
         }
     }
 
@@ -156,7 +142,24 @@ internal class RemoteNavigator(
         val current = invalidate()
         activation = scope.launch {
             val canonical = repository.activate(key.selection(), mode)
-            if (current == request) replace(canonical, fallbackToStackedParent = mode == ActivationMode.RESTORE)
+            if (current != request) return@launch
+            val chat = canonical.keys().lastOrNull() as? RemoteNavKey.Chat
+            // The restored chat's own session is gone (offline, or otherwise dropped by the host)
+            // and it had a parent stacked beneath it: land on that still-known parent, actually
+            // re-activated through the repository so its own selection and loaded state match,
+            // instead of dropping the whole stack to the sessions list underneath it.
+            if (mode == ActivationMode.RESTORE && chat == null && key is RemoteNavKey.Chat && topKey() == key) {
+                val ancestors = chatsBeneathTop()
+                val parentChat = ancestors.lastOrNull()
+                if (parentChat != null && parentChat.selection().keys().dropLast(1) == canonical.keys()) {
+                    setStack(sessionKeys(parentChat) + stacked(ancestors), keepSettings = true)
+                    val restored = repository.activate(parentChat.selection(), ActivationMode.RESTORE)
+                    if (current != request) return@launch
+                    if (restored != parentChat.selection()) replace(restored)
+                    return@launch
+                }
+            }
+            replace(canonical)
         }
     }
 

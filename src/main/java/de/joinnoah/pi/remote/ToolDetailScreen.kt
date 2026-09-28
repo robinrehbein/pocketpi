@@ -207,33 +207,23 @@ internal fun highlightedText(
 
 /**
  * A clipboard payload well under the Binder transaction limit (~1 MiB shared by the whole
- * transaction, not just this extra). 256 KiB leaves headroom for the rest of the transaction.
+ * transaction, not just this extra). A `String` marshals as UTF-16 (2 bytes per `char`), so
+ * 128 Ki chars is about 256 KiB and leaves headroom for the rest of the transaction.
  */
-internal const val CLIPBOARD_MAX_BYTES = 256 * 1024
+internal const val CLIPBOARD_MAX_CHARS = 128 * 1024
 
-private fun utf8ByteLength(codePoint: Int): Int =
-    when {
-        codePoint <= 0x7F -> 1
-        codePoint <= 0x7FF -> 2
-        codePoint <= 0xFFFF -> 3
-        else -> 4
-    }
+/** How long typing must settle before the search result count is announced to TalkBack. */
+internal const val SEARCH_ANNOUNCE_DEBOUNCE_MILLIS = 600L
 
 /**
- * [text] cut to at most [maxBytes] of UTF-8, true when it was cut. The cut always lands on a code
- * point boundary, so a surrogate pair is never split.
+ * [text] cut to at most [maxChars] UTF-16 `char`s, true when it was cut. The cut never lands
+ * inside a surrogate pair.
  */
-internal fun clipboardSafeText(text: String, maxBytes: Int = CLIPBOARD_MAX_BYTES): Pair<String, Boolean> {
-    var byteCount = 0
-    var index = 0
-    while (index < text.length) {
-        val codePoint = text.codePointAt(index)
-        val size = utf8ByteLength(codePoint)
-        if (byteCount + size > maxBytes) return text.substring(0, index) to true
-        byteCount += size
-        index += Character.charCount(codePoint)
-    }
-    return text to false
+internal fun clipboardSafeText(text: String, maxChars: Int = CLIPBOARD_MAX_CHARS): Pair<String, Boolean> {
+    if (text.length <= maxChars) return text to false
+    var end = maxChars.coerceAtLeast(0)
+    if (end > 0 && end < text.length && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) end--
+    return text.substring(0, end) to true
 }
 
 private val prettyJson = Json { prettyPrint = true }
@@ -869,6 +859,17 @@ private fun SearchBar(
             copyOutcome = null
         }
     }
+    // Announced to TalkBack only after typing settles, not on every keystroke: the visible count
+    // below still updates immediately.
+    var announcedQuery by remember { mutableStateOf(query) }
+    var announcedMatches by remember { mutableStateOf(matches) }
+    var announcedCurrent by remember { mutableStateOf(current) }
+    LaunchedEffect(query, matches, current) {
+        delay(SEARCH_ANNOUNCE_DEBOUNCE_MILLIS)
+        announcedQuery = query
+        announcedMatches = matches
+        announcedCurrent = current
+    }
     val copyLabel = stringResource(R.string.remote_tool_detail_copy)
     Surface(modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
@@ -910,10 +911,7 @@ private fun SearchBar(
                     Icon(Icons.Default.ContentCopy, copyLabel)
                 }
             }
-            FlowRow(
-                Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (query.isNotEmpty())
                     Text(
                         when {
@@ -924,6 +922,8 @@ private fun SearchBar(
                         Modifier.testTag("toolDetailSearchCount"),
                         style = MaterialTheme.typography.labelSmall,
                     )
+                // A separate, own live region: a copy outcome change never re-triggers the search
+                // announcement (and vice versa).
                 copyOutcome?.let {
                     Text(
                         stringResource(
@@ -933,11 +933,26 @@ private fun SearchBar(
                                 CopyOutcome.FAILED -> R.string.remote_tool_detail_copy_failed
                             }
                         ),
-                        Modifier.testTag("toolDetailCopyResult"),
+                        Modifier.testTag("toolDetailCopyResult").semantics { liveRegion = LiveRegionMode.Polite },
                         style = MaterialTheme.typography.labelSmall,
                         color = if (it == CopyOutcome.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+            if (announcedQuery.isNotEmpty()) {
+                val announcedText =
+                    when {
+                        announcedMatches == 0 -> stringResource(R.string.remote_tool_detail_search_none)
+                        announcedMatches >= 1000 ->
+                            stringResource(R.string.remote_tool_detail_search_count_capped, announcedCurrent + 1, announcedMatches)
+                        else -> stringResource(R.string.remote_tool_detail_search_count, announcedCurrent + 1, announcedMatches)
+                    }
+                Spacer(
+                    Modifier.size(0.dp).testTag("toolDetailSearchAnnouncement").semantics {
+                        liveRegion = LiveRegionMode.Polite
+                        contentDescription = announcedText
+                    }
+                )
             }
         }
     }

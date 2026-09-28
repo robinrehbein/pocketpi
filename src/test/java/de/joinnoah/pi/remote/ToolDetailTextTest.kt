@@ -144,35 +144,35 @@ class ToolDetailTextTest {
 
     @Test
     fun clipboardSafeTextPassesShortTextThrough() {
-        val (text, truncated) = clipboardSafeText("hello", maxBytes = 100)
+        val (text, truncated) = clipboardSafeText("hello", maxChars = 100)
         assertEquals("hello", text)
         assertFalse(truncated)
     }
 
     @Test
-    fun clipboardSafeTextCutsAsciiAtTheByteLimit() {
-        val (text, truncated) = clipboardSafeText("0123456789", maxBytes = 4)
+    fun clipboardSafeTextCutsAtTheCharLimit() {
+        val (text, truncated) = clipboardSafeText("0123456789", maxChars = 4)
         assertEquals("0123", text)
         assertTrue(truncated)
-        assertEquals(4, text.toByteArray(Charsets.UTF_8).size)
+        assertEquals(4, text.length)
     }
 
     @Test
     fun clipboardSafeTextNeverSplitsASurrogatePair() {
-        val emoji = "😀" // 4 UTF-8 bytes, one surrogate pair
-        val (text, truncated) = clipboardSafeText("ab$emoji", maxBytes = 3)
-        // The emoji does not fit in the 1 remaining byte after "ab", so it is dropped whole.
+        val emoji = "😀" // one surrogate pair, 2 UTF-16 chars
+        val (text, truncated) = clipboardSafeText("ab$emoji", maxChars = 3)
+        // The emoji does not fit in the 1 remaining char after "ab", so it is dropped whole.
         assertEquals("ab", text)
         assertTrue(truncated)
-        assertTrue(text.toByteArray(Charsets.UTF_8).size <= 3)
+        for (i in text.indices) assertFalse(text[i].isHighSurrogate() && i == text.lastIndex)
     }
 
     @Test
-    fun clipboardSafeTextDefaultLimitIs256Kib() {
-        val huge = "x".repeat(CLIPBOARD_MAX_BYTES * 2)
+    fun clipboardSafeTextDefaultLimitIs256KibOfUtf16() {
+        val huge = "x".repeat(CLIPBOARD_MAX_CHARS * 2)
         val (text, truncated) = clipboardSafeText(huge)
         assertTrue(truncated)
-        assertEquals(CLIPBOARD_MAX_BYTES, text.length)
+        assertEquals(CLIPBOARD_MAX_CHARS, text.length)
     }
 
     @Test

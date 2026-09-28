@@ -247,6 +247,7 @@ class RemoteNavigationTest {
         navigation.openChild(parent, child)
         runCurrent()
         // The child's session went offline: the host drops it back to the project's session list.
+        // The parent is still live and comes back unchanged when restored.
         repository.activation = { selection, mode ->
             if (mode == ActivationMode.RESTORE && selection == child.selection()) RemoteSelection("host", "project")
             else selection
@@ -254,6 +255,39 @@ class RemoteNavigationTest {
         navigation.restore()
         runCurrent()
         assertEquals(base + parent, stack)
+        // The parent was actually re-activated through the repository, not just placed on the nav
+        // stack: its own selection is what the repository (and the parent's ChatViewModel) now see.
+        assertEquals(parent.selection(), repository.state.value.selection)
+        assertEquals(
+            listOf(child.selection(), parent.selection()),
+            repository.activations.takeLast(2).map { it.first },
+        )
+        assertEquals(ActivationMode.RESTORE, repository.activations.last().second)
+        // reconcile() sees the parent's own (unshortened) selection now, so it does not collapse
+        // the stack back to the sessions list on the next state emission.
+        navigation.reconcile(repository.state.value)
+        assertEquals(base + parent, stack)
+    }
+
+    @Test
+    fun `back into an offline parent falls back further to its own live parent`() = runTest {
+        val repository = NavigationFakeRepository()
+        val (stack, navigation) = onParent(repository)
+        val grandparent = RemoteNavKey.Chat("host", "project", "grandparent")
+        navigation.openChild(grandparent, parent)
+        runCurrent()
+        navigation.openChild(parent, child)
+        runCurrent()
+        assertEquals(base + grandparent + parent + child, stack)
+        // The parent (what Back lands on) is itself offline; the grandparent is still live.
+        repository.activation = { selection, mode ->
+            if (mode == ActivationMode.RESTORE && selection == parent.selection()) RemoteSelection("host", "project")
+            else selection
+        }
+        navigation.back()
+        runCurrent()
+        assertEquals(base + grandparent, stack)
+        assertEquals(grandparent.selection(), repository.state.value.selection)
     }
 
     @Test

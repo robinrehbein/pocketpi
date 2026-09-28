@@ -31,12 +31,12 @@
     <string name="remote_tool_detail_search_next">Nächster Treffer</string>
     <string name="remote_tool_detail_copy">Ausgabe kopieren</string>
     <string name="remote_tool_detail_copied">Ausgabe kopiert</string>
-    <string name="remote_tool_detail_copy_truncated">Kopiert, aber die Ausgabe war zu groß: Es wurde nur der erste Teil kopiert.</string>
+    <string name="remote_tool_detail_copy_truncated">Kopiert, aber die Ausgabe war zu groß – nur der erste Teil wurde kopiert.</string>
     <string name="remote_tool_detail_copy_failed">Die Ausgabe ist zu groß zum Kopieren.</string>
     <string name="remote_tool_detail_load_full">Vollständige Ausgabe laden</string>
     <string name="remote_tool_detail_loading">Vollständige Ausgabe wird geladen: %1$s</string>
     <string name="remote_tool_detail_loading_progress">Vollständige Ausgabe wird geladen: %1$s von %2$s</string>
-    <string name="remote_tool_detail_loading_started">Laden der vollständigen Ausgabe gestartet</string>
+    <string name="remote_tool_detail_loading_started">Laden der vollständigen Ausgabe wird gestartet</string>
     <string name="remote_tool_detail_loading_progress_percent">Vollständige Ausgabe wird geladen: %1$d Prozent</string>
     <string name="remote_tool_detail_cancel_load">Laden abbrechen</string>
     <string name="remote_tool_detail_retry">Erneut versuchen</string>
