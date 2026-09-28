@@ -7,6 +7,18 @@
         <item quantity="one">%d-mal verwendet</item>
         <item quantity="other">%d-mal verwendet</item>
     </plurals>
+    <plurals name="remote_panel_files_count">
+        <item quantity="one">%d Datei</item>
+        <item quantity="other">%d Dateien</item>
+    </plurals>
+    <plurals name="remote_panel_lines_added">
+        <item quantity="one">%d Zeile hinzugefügt</item>
+        <item quantity="other">%d Zeilen hinzugefügt</item>
+    </plurals>
+    <plurals name="remote_panel_lines_removed">
+        <item quantity="one">%d Zeile entfernt</item>
+        <item quantity="other">%d Zeilen entfernt</item>
+    </plurals>
     <string name="remote_panel_files_title">Dateien in diesem Chat</string>
     <string name="remote_panel_files_changed">Geändert</string>
     <string name="remote_panel_files_read">Gelesen</string>
@@ -26,6 +38,11 @@
     <string name="remote_panel_jump_question">Zur letzten Frage springen</string>
     <string name="remote_panel_jump_edit">Zur letzten Änderung springen</string>
     <string name="remote_panel_jump_plan">Zum letzten Plan springen</string>
+    <string name="remote_panel_marker_error">Fehler</string>
+    <string name="remote_panel_marker_question">Frage</string>
+    <string name="remote_panel_marker_edit">Änderung</string>
+    <string name="remote_panel_marker_plan">Plan</string>
+    <string name="remote_panel_timeline_legend">Markierungen in der Zeitleiste</string>
     <string name="remote_panel_errors_filter">Fehler (%d)</string>
     <string name="remote_panel_compacting">Kontext wird verdichtet…</string>
     <string name="remote_panel_compaction_manual">Manuell gestartet</string>

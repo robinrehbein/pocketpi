@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import android.content.Context
+import androidx.core.content.edit
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
@@ -31,7 +32,15 @@ internal class HomeSurfaces(
     private val mutex = Mutex()
     private var loaded = false
     private val shortcutMutex = Mutex()
-    private var publishedShortcuts: List<String>? = null
+
+    // Persisted across process restarts: setDynamicShortcuts is launcher rate-limited, and every
+    // background cold start (a push, a worker) would otherwise call it once just to find nothing
+    // changed since the last, still-warm publish.
+    private val shortcutPrefs =
+        context.getSharedPreferences(PUBLISHED_SHORTCUTS_PREFS, Context.MODE_PRIVATE)
+    private var publishedShortcuts: List<String>? =
+        shortcutPrefs.getString(PUBLISHED_SHORTCUTS_KEY, null)
+            ?.let { if (it.isEmpty()) emptyList() else it.split(SHORTCUT_SIGNATURE_DELIMITER) }
 
     /** Shortcut IDs of sessions known to be closed, waiting to be disabled. */
     private val closed: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
@@ -227,10 +236,15 @@ internal class HomeSurfaces(
                     )
                 }
                 // Title changes matter; status changes don't, since it isn't shown.
-                val signature = chosen.map { "${shortcutId(it.routeId, it.sessionId)}|${it.title}|${it.projectName}" }
+                val signature =
+                    chosen.map { shortcutSignatureEntry(it.routeId, it.sessionId, it.title, it.projectName) }
                 if (signature != publishedShortcuts || plan.enable.isNotEmpty()) {
-                    if (ShortcutManagerCompat.setDynamicShortcuts(context, shortcuts))
+                    if (ShortcutManagerCompat.setDynamicShortcuts(context, shortcuts)) {
                         publishedShortcuts = signature
+                        shortcutPrefs.edit {
+                            putString(PUBLISHED_SHORTCUTS_KEY, signature.joinToString(SHORTCUT_SIGNATURE_DELIMITER))
+                        }
+                    }
                 }
                 // Pinned shortcuts stay on the home screen; disable the ones of closed sessions.
                 if (plan.disable.isNotEmpty()) {
@@ -255,3 +269,6 @@ internal class HomeSurfaces(
         }
 
 }
+
+internal const val PUBLISHED_SHORTCUTS_PREFS = "pocket_pi_shortcuts"
+internal const val PUBLISHED_SHORTCUTS_KEY = "signature"

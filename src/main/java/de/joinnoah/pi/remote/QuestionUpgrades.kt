@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.edit
-import androidx.work.BackoffPolicy
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
@@ -13,7 +12,6 @@ import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
@@ -109,16 +107,33 @@ internal class QuestionUpgrader(
     }
 }
 
-internal class PreferenceUpgradeState(context: Context) : UpgradeState {
+internal class PreferenceUpgradeState(
+    context: Context,
+    /** The routes currently paired, used to prune events of routes no longer paired. */
+    private val pairedRoutes: () -> Set<String> = {
+        try {
+            PairingStore(context).load().map { it.routeId }.toSet()
+        } catch (_: Exception) {
+            emptySet()
+        }
+    },
+    private val now: () -> Long = System::currentTimeMillis,
+) : UpgradeState {
     private val preferences =
         context.getSharedPreferences("question_upgrades", Context.MODE_PRIVATE)
 
-    override fun latestEvent(tag: String): String? = preferences.getString("event:$tag", null)
+    override fun latestEvent(tag: String): String? =
+        preferences.getString("event:$tag", null)?.substringAfter(EVENT_STAMP_DELIMITER)
 
-    override fun setLatestEvent(tag: String, eventId: String?) =
-        preferences.edit {
-            if (eventId == null) remove("event:$tag") else putString("event:$tag", eventId)
+    override fun setLatestEvent(tag: String, eventId: String?) {
+        // commit(), not apply(): a completion (eventId == null) races the worker it is meant to
+        // cancel, and an async write here could lose that race.
+        preferences.edit(commit = true) {
+            if (eventId == null) remove("event:$tag")
+            else putString("event:$tag", "${now()}$EVENT_STAMP_DELIMITER$eventId")
         }
+        if (eventId != null) pruneEvents()
+    }
 
     override fun unreachableAt(routeId: String): Long? =
         preferences.getLong("unreachable:$routeId", -1L).takeIf { it >= 0 }
@@ -134,6 +149,40 @@ internal class PreferenceUpgradeState(context: Context) : UpgradeState {
                 .filter { it.startsWith("event:pi:$routeId:") || it == "unreachable:$routeId" }
                 .forEach { remove(it) }
         }
+
+    /**
+     * Caps `event:` keys to the newest [MAX_EVENT_KEYS], dropping any of a route no longer
+     * paired along the way: nothing else removes an entry whose session never sent a completion
+     * push, so the set would otherwise grow without bound. [forgetRoute] already drops a route's
+     * keys immediately on unpair, so this only needs to act once the count actually runs over —
+     * [pairedRoutes] decrypts the pairing store, and every push calling this on every write would
+     * otherwise pay that cost for nothing on the common, well-behaved path.
+     */
+    private fun pruneEvents() {
+        val all = preferences.all
+        val eventKeys = all.keys.filter { it.startsWith("event:") }
+        if (eventKeys.size <= MAX_EVENT_KEYS) return
+        val paired = pairedRoutes()
+        val entries =
+            eventKeys.map { key ->
+                val routeId = key.removePrefix("event:pi:").substringBefore(':')
+                val at = (all[key] as? String)?.substringBefore(EVENT_STAMP_DELIMITER, "")?.toLongOrNull() ?: 0L
+                Triple(key, routeId, at)
+            }
+        val stale = entries.filter { (_, routeId, _) -> routeId !in paired }
+        val overflow =
+            entries.filter { (_, routeId, _) -> routeId in paired }
+                .sortedByDescending { (_, _, at) -> at }
+                .drop(MAX_EVENT_KEYS)
+        val toRemove = (stale + overflow).map { it.first }
+        if (toRemove.isEmpty()) return
+        preferences.edit { toRemove.forEach { remove(it) } }
+    }
+
+    private companion object {
+        const val EVENT_STAMP_DELIMITER = "\u0001"
+        const val MAX_EVENT_KEYS = 200
+    }
 }
 
 internal object QuestionUpgrades {
@@ -156,7 +205,8 @@ internal object QuestionUpgrades {
         val request =
             OneTimeWorkRequestBuilder<QuestionUpgradeWorker>()
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-                .setBackoffCriteria(BackoffPolicy.LINEAR, 10, TimeUnit.SECONDS)
+                // A failed upgrade is never retried (Result.success() always, below) — the generic
+                // notification already offers Open — so a backoff policy would never apply.
                 .addTag(routeTag(payload.routeId))
                 .setInputData(
                     workDataOf(
@@ -231,7 +281,7 @@ class QuestionUpgradeWorker(context: Context, parameters: WorkerParameters) :
     /** Only used below Android 12, where expedited work runs as a short foreground service. */
     override suspend fun getForegroundInfo(): ForegroundInfo {
         val context = applicationContext
-        RemoteNotifications.createChannel(context)
+        RemoteNotifications.createSyncChannel(context)
         val notification =
             NotificationCompat.Builder(context, RemoteNotifications.SYNC_CHANNEL)
                 .setSmallIcon(R.drawable.ic_remote)

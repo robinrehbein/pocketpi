@@ -215,6 +215,38 @@ class ToolPresentationTest {
     }
 
     @Test
+    fun touchedLineCountsSumTheEditDiffs() {
+        val twoForOne = """{"path":"a.kt","edits":[{"oldText":"a\nb","newText":"a\nc\nd"}]}"""
+        val oneForOne = """{"path":"b.kt","edits":[{"oldText":"x","newText":"y"}]}"""
+        val items =
+            listOf(
+                activity("1", "edit", twoForOne),
+                activity("2", "read", """{"path":"a.kt"}"""),
+                activity("3", "edit", oneForOne),
+                // A failed edit changed nothing, and a write has no old text to diff against.
+                activity("4", "edit", oneForOne, state = "error"),
+                activity("5", "write", """{"path":"c.kt","content":"new"}"""),
+            )
+        assertEquals(TouchedLineCounts(added = 3, removed = 2), touchedLineCounts(items))
+        assertNull(touchedLineCounts(listOf(activity("w", "write", """{"path":"c.kt","content":"x"}"""))))
+        assertNull(touchedLineCounts(emptyList()))
+    }
+
+    @Test
+    fun touchedLineTextsAreGitStyle() {
+        assertEquals("+12", addedLinesText(12))
+        assertEquals("\u22124", removedLinesText(4))
+        assertEquals("+0", addedLinesText(0))
+        assertEquals("\u22120", removedLinesText(0))
+    }
+
+    @Test
+    fun touchedFilesTapOpensChangesOnlyWhenTheHostHasThem() {
+        assertEquals(TouchedFilesTarget.CHANGES, touchedFilesTarget(changesAvailable = true))
+        assertEquals(TouchedFilesTarget.SHEET, touchedFilesTarget(changesAvailable = false))
+    }
+
+    @Test
     fun timelineMarkersClassifyAndPositionItems() {
         val items =
             listOf(

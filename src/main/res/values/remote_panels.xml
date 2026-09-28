@@ -8,6 +8,18 @@
         <item quantity="one">Used %d time</item>
         <item quantity="other">Used %d times</item>
     </plurals>
+    <plurals name="remote_panel_files_count">
+        <item quantity="one">%d file</item>
+        <item quantity="other">%d files</item>
+    </plurals>
+    <plurals name="remote_panel_lines_added">
+        <item quantity="one">%d line added</item>
+        <item quantity="other">%d lines added</item>
+    </plurals>
+    <plurals name="remote_panel_lines_removed">
+        <item quantity="one">%d line removed</item>
+        <item quantity="other">%d lines removed</item>
+    </plurals>
     <string name="remote_panel_files_title">Files in this chat</string>
     <string name="remote_panel_files_changed">Changed</string>
     <string name="remote_panel_files_read">Read</string>
@@ -27,6 +39,11 @@
     <string name="remote_panel_jump_question">Jump to last question</string>
     <string name="remote_panel_jump_edit">Jump to last edit</string>
     <string name="remote_panel_jump_plan">Jump to last plan</string>
+    <string name="remote_panel_marker_error">Error</string>
+    <string name="remote_panel_marker_question">Question</string>
+    <string name="remote_panel_marker_edit">Edit</string>
+    <string name="remote_panel_marker_plan">Plan</string>
+    <string name="remote_panel_timeline_legend">Timeline markers</string>
     <string name="remote_panel_errors_filter">Errors (%d)</string>
     <string name="remote_panel_compacting">Compacting context…</string>
     <string name="remote_panel_compaction_manual">Started manually</string>
