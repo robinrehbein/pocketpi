@@ -1,8 +1,11 @@
 package de.joinnoah.pi.remote
 
+import android.content.Context
 import android.content.res.Configuration
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -10,6 +13,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.Locale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -26,8 +30,13 @@ class ChildStopUiTest {
     private var aborts = 0
     private var questionAborts = 0
     private var childStops = 0
+    private val current = mutableStateOf(RemoteState())
 
-    private fun render(child: Boolean, question: Boolean = false) {
+    private fun render(
+        child: Boolean,
+        question: Boolean = false,
+        control: ChildControl = ChildControl(ChildControlPhase.NOT_RUNNING),
+    ) {
         val session = Wire.objectOf("id" to "child", "origin" to "rpc", "status" to "running")
         val state =
             RemoteState(
@@ -42,13 +51,14 @@ class ChildStopUiTest {
                     if (question) listOf(Wire.objectOf("id" to "q1", "kind" to "plan", "plan" to "Step one"))
                     else emptyList(),
                 capabilities = setOf(SUBAGENT_CONTROL_CAPABILITY, STEER_CAPABILITY, FOLLOW_UP_CAPABILITY),
-                // A steer met a child that is not running: the composer offers a resume.
-                childControls = mapOf("child" to ChildControl(ChildControlPhase.NOT_RUNNING)),
+                // By default a steer met a child that is not running: the composer offers a resume.
+                childControls = mapOf("child" to control),
             )
+        current.value = state
         compose.setContent {
             MaterialTheme {
                 ChatComposer(
-                    state,
+                    current.value,
                     onDraft = {},
                     onSend = {},
                     onStop = { aborts++ },
@@ -97,14 +107,40 @@ class ChildStopUiTest {
     }
 
     @Test
-    fun parentOfflineStopNamesTheWayOut() {
+    fun questionAbortInAChildWaitsForAStopInFlight() {
+        render(child = true, question = true, control = ChildControl(ChildControlPhase.STOPPING))
+        compose.onNodeWithTag("abortRun").assertIsNotEnabled()
+    }
+
+    @Test
+    fun confirmingAfterTheChildWentIdleStillReachesTheStop() {
+        render(child = true)
+        compose.onNodeWithTag("stopRun").performClick()
+        compose.onNodeWithTag("confirmChildStop").assertIsDisplayed()
+        // The child goes idle while the dialog is open; the repository explains the no-op.
+        compose.runOnIdle {
+            current.value = current.value.copy(status = "idle", childControls = emptyMap())
+        }
+        compose.onNodeWithTag("confirmChildStop").assertIsDisplayed().performClick()
+        assertEquals(0, aborts)
+        assertEquals(1, childStops)
+    }
+
+    @Test
+    fun parentOfflineStopHasItsOwnMessageInBothLocales() {
         val context = RuntimeEnvironment.getApplication()
-        val english = context.getString(R.string.remote_child_stop_parent_offline)
-        assertTrue(english, english.contains("subagent strip in the parent chat"))
         val german =
             context.createConfigurationContext(
                 Configuration(context.resources.configuration).apply { setLocale(Locale.GERMAN) }
-            ).getString(R.string.remote_child_stop_parent_offline)
-        assertTrue(german, german.contains("Subagenten-Leiste des übergeordneten Chats"))
+            )
+        for (localized in listOf<Context>(context, german)) {
+            val stop = localized.getString(R.string.remote_child_stop_parent_offline)
+            assertTrue(stop.isNotBlank())
+            assertNotEquals(localized.getString(R.string.remote_child_parent_offline), stop)
+        }
+        assertNotEquals(
+            context.getString(R.string.remote_child_stop_parent_offline),
+            german.getString(R.string.remote_child_stop_parent_offline),
+        )
     }
 }

@@ -2802,6 +2802,7 @@ class DefaultRemoteRepository(
             val notice =
                 when {
                     !childControlsAvailable(current) -> R.string.remote_child_stop_unavailable
+                    current.status == "offline" -> R.string.remote_child_stop_child_offline
                     current.status !in setOf("running", "waiting") -> R.string.remote_child_stop_not_running
                     else -> null
                 }

@@ -3084,6 +3084,19 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun stopConfirmedAfterTheChildWentOfflineSaysItIsOffline() = runTest {
+        val transport = Transport()
+        val repository = childRepository(transport, "running")
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+            "revision" to 2, "kind" to "session.status", "status" to "offline"))
+        val sent = transport.sent.size
+        repository.stopChild()
+        runCurrent()
+        assertEquals(sent, transport.sent.size)
+        assertEquals(R.string.remote_child_stop_child_offline, repository.state.value.error)
+    }
+
+    @Test
     fun stopConfirmedAfterTheParentTurnedOutTooOldSaysNothingWasStopped() = runTest {
         val transport = Transport()
         val repository = childRepository(transport, "running")
@@ -3252,7 +3265,7 @@ class RemoteRepositoryTest {
         runCurrent()
         assertEquals("session.subagent.stop", transport.sent.last().text("type"))
         assertTrue(transport.sent.none { it.text("type") == "session.abort" })
-        // The message names the way out: stop it from the parent chat once the parent is back.
+        // The message says nothing was stopped and to try again once the parent is back.
         assertEquals(R.string.remote_child_stop_parent_offline, repository.state.value.error)
         assertNull(childControl(repository.state.value))
         assertTrue(childControlsAvailable(repository.state.value))
