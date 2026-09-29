@@ -21,6 +21,8 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -42,6 +44,10 @@ class FilesPaneUiTest {
     private val sent = mutableListOf<String>()
     private var closed = 0
     private var reloaded = 0
+    private var moreLoads = 0
+    private val requestedPreviews = mutableListOf<String>()
+    private val peeked = mutableListOf<String>()
+    private var dismissedPeeks = 0
 
     private val root =
         FileListing(
@@ -61,6 +67,9 @@ class FilesPaneUiTest {
         compose.waitForIdle()
     }
 
+    private fun scrollToEntry(name: String) =
+        compose.onNodeWithTag("filesList").performScrollToNode(hasTestTag("filesEntry:$name"))
+
     /** Renders the pane alone; navigation only records, the test moves [state] itself. */
     private fun render(initial: FilesState, projectName: String? = null): (FilesState) -> Unit {
         var state by mutableStateOf(initial)
@@ -72,8 +81,14 @@ class FilesPaneUiTest {
                         onClose = { closed++ },
                         onOpenDir = { opened += it },
                         onOpenFile = { files += it },
-                        onLoadMore = {},
+                        onLoadMore = { moreLoads++ },
                         onReload = { reloaded++ },
+                        onRequestPreview = { requestedPreviews += it },
+                        onShowPeek = { path, type ->
+                            peeked += path
+                            state = state.copy(peek = FilesPeek(path, type, loading = false, listing = if (type == FileEntryType.DIR) FileListing(path) else null))
+                        },
+                        onDismissPeek = { dismissedPeeks++; state = state.copy(peek = null) },
                         onSelectLines = { state = state.copy(file = state.file?.copy(selection = it)) },
                         onSend = {
                             sent += it
@@ -85,6 +100,54 @@ class FilesPaneUiTest {
             }
         }
         return { state = it }
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun listingUsesTwoTileColumnsAndRequestsVisibleFilePreview() {
+        val listing = root.copy(entries = listOf(FileEntry("src", FileEntryType.DIR), FileEntry("docs", FileEntryType.DIR), FileEntry("README.md", FileEntryType.FILE, 2048)))
+        render(FilesState("s", loading = false, listing = listing))
+        compose.onNodeWithTag("filesEntry:src").assertExists()
+        compose.onNodeWithTag("filesEntry:README.md").assertExists()
+        val folder = compose.onNodeWithTag("filesEntry:src").getUnclippedBoundsInRoot()
+        val docs = compose.onNodeWithTag("filesEntry:docs").getUnclippedBoundsInRoot()
+        assertEquals(folder.top, docs.top)
+        assertEquals(true, folder.left < docs.left)
+        compose.waitForIdle()
+        assertEquals(listOf("README.md"), requestedPreviews)
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h700dp")
+    fun widePaneUsesThreeTileColumns() {
+        val listing = FileListing("", listOf("src", "docs", "scripts").map { FileEntry(it, FileEntryType.DIR) })
+        render(FilesState("s", loading = false, listing = listing))
+        val tiles = listOf("src", "docs", "scripts").map { compose.onNodeWithTag("filesEntry:$it").getUnclippedBoundsInRoot() }
+        assertEquals(tiles[0].top, tiles[1].top)
+        assertEquals(tiles[1].top, tiles[2].top)
+        assertEquals(true, tiles[0].left < tiles[1].left && tiles[1].left < tiles[2].left)
+    }
+
+    @Test
+    fun paginationRemainsReachableAfterTiles() {
+        render(FilesState("s", loading = false, listing = root.copy(nextAfter = "README.md")))
+        compose.onNodeWithTag("filesList").performScrollToNode(hasTestTag("filesLoadMore"))
+        compose.onNodeWithTag("filesLoadMore").performClick()
+        assertEquals(1, moreLoads)
+    }
+
+    @Test
+    fun longPressPeeksWithoutOpeningAndBackDismissesIt() {
+        render(FilesState("s", loading = false, listing = root))
+        scrollToEntry("README.md")
+        compose.onNodeWithTag("filesEntry:README.md").performSemanticsAction(SemanticsActions.OnLongClick)
+        compose.onNodeWithTag("filePeek").assertIsDisplayed()
+        assertEquals(listOf("README.md"), peeked)
+        assertEquals(emptyList<String?>(), files)
+        back()
+        compose.onNodeWithTag("filePeek").assertDoesNotExist()
+        assertEquals(1, dismissedPeeks)
+        assertEquals(0, closed)
     }
 
     @Test
@@ -154,15 +217,18 @@ class FilesPaneUiTest {
     @Test
     fun foldersOpenFilesOpenAndLinksDoNot() {
         render(FilesState("s", loading = false, listing = root))
+        compose.onNodeWithTag("filesCrumb:").assertIsNotEnabled()
+        compose.onNodeWithTag("filesEntry:src").performClick()
+        scrollToEntry("README.md")
         compose.onNodeWithText(Formatter.formatShortFileSize(compose.activity, 2048)).assertExists()
         compose.onNodeWithText(label(R.string.remote_files_submodule)).assertExists()
-        compose.onNodeWithTag("filesEntry:src").performClick()
         compose.onNodeWithTag("filesEntry:README.md").performClick()
+        scrollToEntry("latest")
         compose.onNodeWithTag("filesEntry:latest").performClick()
+        scrollToEntry("vendor")
         compose.onNodeWithTag("filesEntry:vendor").performClick()
         assertEquals(listOf("src"), opened)
         assertEquals(listOf<String?>("README.md"), files)
-        compose.onNodeWithTag("filesCrumb:").assertIsNotEnabled()
     }
 
     @Test

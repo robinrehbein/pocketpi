@@ -63,9 +63,16 @@ internal fun FileEntryTile(
     onRequestPreview: () -> Unit,
     onPeek: (IntRect) -> Unit,
     modifier: Modifier = Modifier,
+    tag: String = "fileTile:${entry.name}",
 ) {
     val openable = entry.type == FileEntryType.DIR || entry.type == FileEntryType.FILE
-    val kind = stringResource(entry.type.kindString())
+    val kind = stringResource(
+        when (entry.type) {
+            FileEntryType.SYMLINK -> R.string.remote_files_symlink
+            FileEntryType.SUBMODULE -> R.string.remote_files_submodule
+            else -> entry.type.kindString()
+        }
+    )
     val context = LocalContext.current
     val fileSize = if (entry.type == FileEntryType.FILE) entry.size?.let { Formatter.formatShortFileSize(context, it) } else null
     val peekAction = stringResource(R.string.remote_files_peek_action)
@@ -84,7 +91,7 @@ internal fun FileEntryTile(
                 val rect = coordinates.boundsInWindow()
                 bounds = IntRect(rect.left.roundToInt(), rect.top.roundToInt(), rect.right.roundToInt(), rect.bottom.roundToInt())
             }
-            .testTag("fileTile:${entry.name}")
+            .testTag(tag)
             .then(
                 if (openable) Modifier.combinedClickable(
                     onClick = onOpen,

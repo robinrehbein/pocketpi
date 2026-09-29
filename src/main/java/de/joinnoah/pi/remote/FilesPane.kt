@@ -1,7 +1,6 @@
 package de.joinnoah.pi.remote
 
 import android.content.Context
-import android.text.format.Formatter
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -16,7 +15,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -27,22 +25,21 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -59,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
@@ -85,6 +83,9 @@ internal class FilesActions(
     val onOpenFile: (String?) -> Unit,
     val onLoadMore: () -> Unit,
     val onReload: () -> Unit,
+    val onRequestPreview: (String) -> Unit,
+    val onShowPeek: (String, FileEntryType) -> Unit,
+    val onDismissPeek: () -> Unit,
     val onSelectLines: (LineSelection?) -> Unit,
     /** Puts a quote into the composer. Nothing is sent. False when it did not fit. */
     val onSend: (String) -> Boolean,
@@ -104,6 +105,7 @@ internal fun FilesPane(
 ) {
     val back = {
         when {
+            state.peek != null -> actions.onDismissPeek()
             state.file != null -> actions.onOpenFile(null)
             state.path.isNotEmpty() -> actions.onOpenDir(parentPath(state.path))
             else -> actions.onClose()
@@ -261,43 +263,108 @@ private fun LazyListScope.loadMore(loading: Boolean, failure: FilesFailure?, onL
 
 @Composable
 private fun FolderList(state: FilesState, actions: FilesActions) {
-    LazyColumn(Modifier.fillMaxSize().testTag("filesList")) {
-        item(key = "crumbs") { Breadcrumbs(state.path, actions.onOpenDir) }
-        val listing = state.listing
-        val failure = state.failure
-        when {
-            failure != null -> item(key = "failure") { FilesFailureNotice(failure, actions.onReload) }
-            state.loading || listing == null -> item(key = "loading") { FilesLoading() }
-            listing.unavailable != null ->
-                item(key = "unavailable") {
-                    FilesNotice(
-                        stringResource(
-                            when (listing.unavailable) {
-                                FilesUnavailable.GIT_UNAVAILABLE -> R.string.remote_files_git_unavailable
-                                FilesUnavailable.NOT_A_REPOSITORY -> R.string.remote_files_not_a_repository
-                            }
-                        ),
-                        Modifier.testTag("filesUnavailable"),
-                    )
-                }
-            else -> {
-                if (listing.entries.isEmpty() && listing.nextAfter == null)
-                    item(key = "empty") { FilesNotice(stringResource(R.string.remote_files_empty)) }
-                items(listing.entries, key = { "entry:" + it.name }) { entry ->
-                    EntryRow(entry) {
-                        val path = childPath(state.path, entry.name)
-                        when (entry.type) {
-                            FileEntryType.DIR -> actions.onOpenDir(path)
-                            FileEntryType.FILE -> actions.onOpenFile(path)
-                            FileEntryType.SYMLINK, FileEntryType.SUBMODULE -> Unit
-                        }
+    val gridState = rememberLazyGridState()
+    var peekAnchor by remember { mutableStateOf<IntRect?>(null) }
+    LaunchedEffect(state.path, state.listing, state.file) {
+        if (peekAnchor != null) {
+            peekAnchor = null
+            if (state.peek != null) actions.onDismissPeek()
+        }
+    }
+    LaunchedEffect(gridState.isScrollInProgress) {
+        if (gridState.isScrollInProgress && state.peek != null) {
+            peekAnchor = null
+            actions.onDismissPeek()
+        }
+    }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val columns = if (maxWidth < 600.dp) 2 else 3
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(columns),
+            modifier = Modifier.fillMaxSize().testTag("filesList"),
+            state = gridState,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            item(key = "crumbs", span = { GridItemSpan(maxLineSpan) }) { Breadcrumbs(state.path, actions.onOpenDir) }
+            val listing = state.listing
+            val failure = state.failure
+            when {
+                failure != null -> item(key = "failure", span = { GridItemSpan(maxLineSpan) }) { FilesFailureNotice(failure, actions.onReload) }
+                state.loading || listing == null -> item(key = "loading", span = { GridItemSpan(maxLineSpan) }) { FilesLoading() }
+                listing.unavailable != null ->
+                    item(key = "unavailable", span = { GridItemSpan(maxLineSpan) }) {
+                        FilesNotice(
+                            stringResource(
+                                when (listing.unavailable) {
+                                    FilesUnavailable.GIT_UNAVAILABLE -> R.string.remote_files_git_unavailable
+                                    FilesUnavailable.NOT_A_REPOSITORY -> R.string.remote_files_not_a_repository
+                                }
+                            ),
+                            Modifier.testTag("filesUnavailable"),
+                        )
                     }
+                else -> {
+                    if (listing.entries.isEmpty() && listing.nextAfter == null)
+                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) { FilesNotice(stringResource(R.string.remote_files_empty)) }
+                    val folders = listing.entries.filter { it.type == FileEntryType.DIR }
+                    val files = listing.entries.filter { it.type != FileEntryType.DIR }
+                    if (folders.isNotEmpty())
+                        item(key = "foldersHeading", span = { GridItemSpan(maxLineSpan) }) {
+                            Text(stringResource(R.string.remote_files_folders), style = MaterialTheme.typography.titleSmall)
+                        }
+                    items(folders.size, key = { "entry:" + folders[it].name }) { index ->
+                        val entry = folders[index]
+                        val path = childPath(state.path, entry.name)
+                        FileEntryTile(entry, null, { actions.onOpenDir(path) }, {}, { anchor ->
+                            peekAnchor = anchor
+                            actions.onShowPeek(path, entry.type)
+                        }, tag = "filesEntry:${entry.name}")
+                    }
+                    if (files.isNotEmpty())
+                        item(key = "filesHeading", span = { GridItemSpan(maxLineSpan) }) {
+                            Text(stringResource(R.string.remote_files_title), style = MaterialTheme.typography.titleSmall)
+                        }
+                    items(files.size, key = { "entry:" + files[it].name }) { index ->
+                        val entry = files[index]
+                        val path = childPath(state.path, entry.name)
+                        FileEntryTile(
+                            entry = entry,
+                            preview = state.previews[path],
+                            onOpen = { if (entry.type == FileEntryType.FILE) actions.onOpenFile(path) },
+                            onRequestPreview = { actions.onRequestPreview(path) },
+                            onPeek = { anchor ->
+                                peekAnchor = anchor
+                                actions.onShowPeek(path, entry.type)
+                            },
+                            tag = "filesEntry:${entry.name}",
+                        )
+                    }
+                    if (listing.nextAfter != null)
+                        item(key = "more", span = { GridItemSpan(maxLineSpan) }) {
+                            when {
+                                state.moreFailure != null -> FilesFailureNotice(state.moreFailure, actions.onLoadMore)
+                                state.moreLoading -> FilesLoading()
+                                else -> TextButton(onClick = actions.onLoadMore, Modifier.testTag("filesLoadMore")) {
+                                    Text(stringResource(R.string.remote_files_load_more))
+                                }
+                            }
+                        }
+                    if (listing.truncated)
+                        item(key = "truncated", span = { GridItemSpan(maxLineSpan) }) {
+                            FilesNotice(stringResource(R.string.remote_files_truncated))
+                        }
                 }
-                if (listing.nextAfter != null) loadMore(state.moreLoading, state.moreFailure, actions.onLoadMore)
-                if (listing.truncated)
-                    item(key = "truncated") { FilesNotice(stringResource(R.string.remote_files_truncated)) }
             }
         }
+        val anchor = peekAnchor
+        val peek = state.peek
+        if (anchor != null && peek != null)
+            FilePeekPopup(peek, state.previews[peek.path], anchor) {
+                peekAnchor = null
+                actions.onDismissPeek()
+            }
     }
 }
 
@@ -321,59 +388,6 @@ private fun Breadcrumbs(path: String, onOpenDir: (String) -> Unit) {
             ) {
                 Text(segment, fontFamily = FontFamily.Monospace, maxLines = 1)
             }
-        }
-    }
-}
-
-@Composable
-private fun EntryRow(entry: FileEntry, onOpen: () -> Unit) {
-    val context = LocalContext.current
-    val openable = entry.type == FileEntryType.DIR || entry.type == FileEntryType.FILE
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val detail =
-        when (entry.type) {
-            FileEntryType.FILE -> entry.size?.let { Formatter.formatShortFileSize(context, it) }
-            FileEntryType.SYMLINK -> stringResource(R.string.remote_files_symlink)
-            FileEntryType.SUBMODULE -> stringResource(R.string.remote_files_submodule)
-            FileEntryType.DIR -> null
-        }
-    Row(
-        Modifier.fillMaxWidth()
-            .then(if (openable) Modifier.clickable(onClick = onOpen) else Modifier)
-            .heightIn(min = 48.dp)
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .testTag("filesEntry:${entry.name}"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Icon(
-            when (entry.type) {
-                FileEntryType.DIR -> Icons.Default.Folder
-                FileEntryType.FILE -> Icons.Default.Description
-                FileEntryType.SYMLINK -> Icons.Default.Link
-                FileEntryType.SUBMODULE -> Icons.Default.AccountTree
-            },
-            stringResource(
-                when (entry.type) {
-                    FileEntryType.DIR -> R.string.remote_files_kind_dir
-                    FileEntryType.FILE -> R.string.remote_files_kind_file
-                    FileEntryType.SYMLINK -> R.string.remote_files_kind_symlink
-                    FileEntryType.SUBMODULE -> R.string.remote_files_kind_submodule
-                }
-            ),
-            Modifier.size(24.dp),
-            tint = if (entry.type == FileEntryType.DIR) MaterialTheme.colorScheme.primary else muted,
-        )
-        Column(Modifier.weight(1f)) {
-            Text(
-                entry.name,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (openable) LocalContentColor.current else muted,
-                maxLines = 1,
-                overflow = TextOverflow.MiddleEllipsis,
-            )
-            if (detail != null)
-                Text(detail, style = MaterialTheme.typography.labelMedium, color = muted, maxLines = 1)
         }
     }
 }

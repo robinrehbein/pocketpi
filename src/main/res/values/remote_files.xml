@@ -2,6 +2,7 @@
 <resources>
     <string name="remote_files_open">Files</string>
     <string name="remote_files_title">Files</string>
+    <string name="remote_files_folders">Folders</string>
     <string name="remote_files_close">Close files</string>
     <string name="remote_files_back">Back</string>
     <string name="remote_files_reload">Reload</string>

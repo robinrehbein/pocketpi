@@ -2,6 +2,7 @@
 <resources>
     <string name="remote_files_open">Dateien</string>
     <string name="remote_files_title">Dateien</string>
+    <string name="remote_files_folders">Ordner</string>
     <string name="remote_files_close">Dateien schließen</string>
     <string name="remote_files_back">Zurück</string>
     <string name="remote_files_reload">Neu laden</string>
