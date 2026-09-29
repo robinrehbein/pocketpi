@@ -9,9 +9,6 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
-import androidx.compose.ui.test.hasAnyAncestor
-import androidx.compose.ui.test.hasClickAction
-import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -172,7 +169,7 @@ class ChatPanelsTest {
         }
         // Rows are collapsed until the header is expanded.
         compose.onNodeWithText("explorer task").assertDoesNotExist()
-        compose.onNode(hasClickAction() and hasAnyAncestor(hasTestTag("subagentStrip"))).performClick()
+        compose.onNodeWithTag("subagentStrip").performClick()
         val rows = compose.onAllNodesWithTag("subagentStripEntry")
         rows.assertCountEquals(2)
         rows[0].assertHeightIsAtLeast(48.dp)
