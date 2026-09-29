@@ -1,12 +1,19 @@
 package de.joinnoah.pi.remote
 
 import android.Manifest
+import android.animation.ValueAnimator
 import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
 import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
@@ -40,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.geometry.Rect
@@ -60,6 +68,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -1412,13 +1421,34 @@ internal fun RemoteScreen(
                             shape = CircleShape,
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (state.host != null)
-                                    IconButton(onClick = model::refresh, modifier = Modifier.size(48.dp)) {
+                                if (state.host != null) {
+                                    val rotation =
+                                        if (state.loading && ValueAnimator.areAnimatorsEnabled()) {
+                                            val transition = rememberInfiniteTransition(label = "refresh")
+                                            transition.animateFloat(
+                                                initialValue = 0f,
+                                                targetValue = 360f,
+                                                animationSpec = infiniteRepeatable(
+                                                    animation = tween(900, easing = LinearEasing),
+                                                    repeatMode = RepeatMode.Restart,
+                                                ),
+                                                label = "refresh-rotation",
+                                            ).value
+                                        } else 0f
+                                    val refreshing = stringResource(R.string.remote_refreshing)
+                                    IconButton(
+                                        onClick = model::refresh,
+                                        modifier = Modifier.size(48.dp).semantics {
+                                            if (state.loading) stateDescription = refreshing
+                                        },
+                                    ) {
                                         Icon(
                                             Icons.Default.Refresh,
                                             stringResource(R.string.remote_refresh),
+                                            modifier = Modifier.graphicsLayer { rotationZ = rotation },
                                         )
                                     }
+                                }
                                 IconButton(onClick = navigator::settings, modifier = Modifier.size(48.dp)) {
                                     Icon(
                                         Icons.Default.Settings,

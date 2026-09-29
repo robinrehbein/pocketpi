@@ -108,6 +108,7 @@
     <string name="remote_request_error">The request could not be completed. Refresh and try again.</string>
     <string name="remote_storage_error">Saved pairing could not be opened. Pair this computer again.</string>
     <string name="remote_refresh">Refresh</string>
+    <string name="remote_refreshing">Refreshing</string>
     <string name="remote_load_older">Load earlier messages</string>
     <string name="remote_tool">Tool output</string>
     <string name="remote_truncated">Output shortened</string>
