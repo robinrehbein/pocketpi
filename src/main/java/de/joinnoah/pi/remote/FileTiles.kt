@@ -119,7 +119,7 @@ internal fun FileEntryTile(
                 if (entry.type == FileEntryType.FILE) {
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        text = previewText(preview),
+                        text = previewText(preview, maxSourceLines = 3),
                         modifier = Modifier.weight(1f)
                             .testTag("fileTilePreview:${entry.name}")
                             .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
@@ -174,13 +174,14 @@ private fun FileEntryType.icon() = when (this) {
 }
 
 @Composable
-private fun previewText(preview: FileTilePreview?): String = when {
+private fun previewText(preview: FileTilePreview?, maxSourceLines: Int? = null): String = when {
     preview == null || preview.loading -> stringResource(R.string.remote_files_preview_loading)
     preview.binary -> stringResource(R.string.remote_files_preview_binary)
     preview.tooLarge -> stringResource(R.string.remote_files_preview_too_large)
     preview.failure != null -> stringResource(R.string.remote_files_preview_failed)
     preview.content.isNullOrEmpty() -> stringResource(R.string.remote_files_preview_empty)
-    else -> preview.content.lines().take(3).joinToString("\n")
+    maxSourceLines != null -> preview.content.lines().take(maxSourceLines).joinToString("\n")
+    else -> preview.content
 }
 
 /** Coordinates from the lazy grid item must be window coordinates. */

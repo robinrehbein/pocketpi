@@ -2,6 +2,7 @@ package de.joinnoah.pi.remote
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -32,6 +33,7 @@ internal class ProjectFilesLoader(
     private var peekVersion = 0L
     private val previewQueue = ArrayDeque<String>()
     private val previewJobs = mutableMapOf<String, Job>()
+    private var drainingPreviews = false
     private var peekJob: Job? = null
 
     private fun files(): FilesState? =
@@ -116,53 +118,62 @@ internal class ProjectFilesLoader(
     }
 
     private fun startPreviews(sessionId: String, folder: String) {
-        if (files()?.let { it.sessionId == sessionId && it.path == folder } != true) return
-        while (previewJobs.size < 2 && previewQueue.isNotEmpty()) {
-            val path = previewQueue.removeFirst()
-            val version = previewVersion
-            fun active() = version == previewVersion &&
-                files()?.let { it.sessionId == sessionId && it.path == folder && path in it.previews } == true
-            previewJobs[path] = scope.launch {
-                try {
-                    val chunk = source.filesRead(sessionId, path, 0, null)
-                    if (active()) {
-                        val preview = FileTilePreview(
-                            loading = false,
-                            content = if (chunk.binary || chunk.tooLarge) null else chunk.content.take(FILE_TILE_PREVIEW_CHARS),
-                            binary = chunk.binary,
-                            tooLarge = chunk.tooLarge,
-                        )
-                        write(sessionId) { state ->
-                            if (state.path != folder) state
-                            else {
-                                val updated = cache(state, path, preview)
-                                if (updated.peek?.path == path && updated.peek.type == FileEntryType.FILE)
-                                    updated.copy(peek = updated.peek.copy(loading = false))
-                                else updated
+        if (drainingPreviews) return
+        drainingPreviews = true
+        try {
+            while (previewJobs.size < 2 && previewQueue.isNotEmpty() &&
+                files()?.let { it.sessionId == sessionId && it.path == folder } == true
+            ) {
+                val path = previewQueue.removeFirst()
+                val version = previewVersion
+                fun active() = version == previewVersion &&
+                    files()?.let { it.sessionId == sessionId && it.path == folder && path in it.previews } == true
+                val job = scope.launch(start = CoroutineStart.LAZY) {
+                    try {
+                        val chunk = source.filesRead(sessionId, path, 0, null)
+                        if (active()) {
+                            val preview = FileTilePreview(
+                                loading = false,
+                                content = if (chunk.binary || chunk.tooLarge) null else chunk.content.take(FILE_TILE_PREVIEW_CHARS),
+                                binary = chunk.binary,
+                                tooLarge = chunk.tooLarge,
+                            )
+                            write(sessionId) { state ->
+                                if (state.path != folder) state
+                                else {
+                                    val updated = cache(state, path, preview)
+                                    if (updated.peek?.path == path && updated.peek.type == FileEntryType.FILE)
+                                        updated.copy(peek = updated.peek.copy(loading = false))
+                                    else updated
+                                }
                             }
                         }
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    if (active()) {
-                        write(sessionId) { state ->
-                            if (state.path != folder) state
-                            else {
-                                val updated = cache(state, path, FileTilePreview(loading = false, failure = failure(e)))
-                                if (updated.peek?.path == path && updated.peek.type == FileEntryType.FILE)
-                                    updated.copy(peek = updated.peek.copy(loading = false))
-                                else updated
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        if (active()) {
+                            write(sessionId) { state ->
+                                if (state.path != folder) state
+                                else {
+                                    val updated = cache(state, path, FileTilePreview(loading = false, failure = failure(e)))
+                                    if (updated.peek?.path == path && updated.peek.type == FileEntryType.FILE)
+                                        updated.copy(peek = updated.peek.copy(loading = false))
+                                    else updated
+                                }
                             }
                         }
-                    }
-                } finally {
-                    if (version == previewVersion) {
-                        previewJobs.remove(path)
-                        startPreviews(sessionId, folder)
+                    } finally {
+                        if (version == previewVersion) {
+                            previewJobs.remove(path)
+                            startPreviews(sessionId, folder)
+                        }
                     }
                 }
+                previewJobs[path] = job
+                job.start()
             }
+        } finally {
+            drainingPreviews = false
         }
     }
 

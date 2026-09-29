@@ -155,6 +155,21 @@ class FileTilesUiTest {
         assertEquals(1, dismisses)
     }
 
+    @Test fun filePeekShowsCachedFourthLineWhileTileStaysAtThree() {
+        val content = "one\ntwo\nthree\nfour"
+        compose.setContent {
+            MaterialTheme {
+                FilePeekPopup(
+                    peek = FilesPeek(path = "notes.kt", type = FileEntryType.FILE, loading = false),
+                    preview = FileTilePreview(loading = false, content = content),
+                    anchorBounds = IntRect(80, 400, 180, 500),
+                    onDismiss = {},
+                )
+            }
+        }
+        compose.onNodeWithText(content).assertIsDisplayed()
+    }
+
     @Test fun positionProviderChoosesAboveOrBelowAndClampsEdges() {
         val provider = FilePeekPositionProvider(Density(1f))
         val window = IntSize(300, 600)

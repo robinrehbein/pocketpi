@@ -1,6 +1,8 @@
 package de.joinnoah.pi.remote
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
@@ -51,6 +53,33 @@ class ProjectFilesPreviewTest {
         assertEquals("alpha", browser.files.previews.getValue("a.kt").content)
         assertEquals(0L, browser.source.reads.last().offset)
         assertNull(browser.source.reads.last().version)
+    }
+
+    @Test fun immediateReadFailuresReleaseBothPreviewSlots() {
+        val requested = mutableListOf<String>()
+        val source = object : FileSource {
+            override suspend fun filesList(sessionId: String, path: String, after: String?) = FileListing(path)
+
+            override suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?): FileChunk {
+                requested += path
+                if (path != "third.kt") throw IllegalStateException("immediate failure")
+                return FileChunk(path, "version", 5, 0, "ready", false)
+            }
+        }
+        var state = RemoteState(
+            selection = RemoteSelection(sessionId = "session"), connected = true,
+            files = FilesState("session", loading = false, listing = FileListing("")),
+        )
+        val loader = ProjectFilesLoader(CoroutineScope(Dispatchers.Unconfined), source, { state }) { update -> state = update(state) }
+
+        loader.requestPreview("first.kt")
+        loader.requestPreview("second.kt")
+        loader.requestPreview("third.kt")
+
+        assertEquals(listOf("first.kt", "second.kt", "third.kt"), requested)
+        assertEquals(FilesFailure.FAILED, state.files!!.previews.getValue("first.kt").failure)
+        assertEquals(FilesFailure.FAILED, state.files!!.previews.getValue("second.kt").failure)
+        assertEquals("ready", state.files!!.previews.getValue("third.kt").content)
     }
 
     @Test fun previewContentAndCacheAreBounded() = runTest {

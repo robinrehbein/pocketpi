@@ -157,11 +157,13 @@ class FilesPaneUiTest {
     }
 
     @Test
+    @Config(qualifiers = "w320dp-h640dp")
     fun rootHeaderShowsSeparatePills() {
         render(FilesState("s", loading = false, listing = root))
         compose.onNodeWithTag("filesHeaderPill").assertIsDisplayed()
         compose.onNodeWithTag("filesReloadPill").assertIsDisplayed()
         compose.onNodeWithTag("filesTitle").assertTextEquals(label(R.string.remote_files_title))
+        compose.onNodeWithTag("filesTitle").assertWidthIsAtLeast(36.dp)
         compose.onNodeWithTag("filesSubtitle").assertDoesNotExist()
         compose.onNodeWithTag("filesBack").assertDoesNotExist()
         compose.onNodeWithTag("filesClose").assertWidthIsAtLeast(48.dp)

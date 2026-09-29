@@ -167,17 +167,17 @@ private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Un
                         )
                     }
                     Spacer(Modifier.width(12.dp))
-                    Column(Modifier.widthIn(max = maxTextWidth)) {
+                    Column(Modifier.widthIn(min = minOf(120.dp, maxTextWidth), max = maxTextWidth)) {
                         Text(
                             stringResource(R.string.remote_files_title),
-                            Modifier.testTag("filesTitle"),
+                            Modifier.fillMaxWidth().testTag("filesTitle"),
                             style = MaterialTheme.typography.titleMedium,
                             maxLines = 1,
                         )
                         if (subtitle != null)
                             Text(
                                 subtitle,
-                                Modifier.testTag("filesSubtitle"),
+                                Modifier.fillMaxWidth().testTag("filesSubtitle"),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontFamily = if (nested) FontFamily.Monospace else null,
