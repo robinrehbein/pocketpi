@@ -46,6 +46,7 @@ internal fun SessionControls(
     state: RemoteState,
     refreshConfiguration: () -> Unit,
     refreshContextUsage: () -> Unit,
+    compactContext: () -> Unit,
     refreshAdvisor: () -> Unit,
     setAdvisor: (String?, String?, String?) -> Unit,
     setModel: (String, String) -> Unit,
@@ -312,6 +313,15 @@ internal fun SessionControls(
             unavailable =
                 !state.connected || CONTEXT_CAPABILITY !in state.capabilities ||
                     CONTEXT_CAPABILITY in state.unavailableCapabilities,
+            showCompact = COMPACT_CAPABILITY in state.capabilities &&
+                COMPACT_CAPABILITY !in state.unavailableCapabilities,
+            canCompact = state.connected && !state.loading && state.status == "idle" &&
+                !state.sending && state.answering.isEmpty() && !state.configurationChanging &&
+                !state.compactionRequesting &&
+                !compactionVisible(state.compaction, System.currentTimeMillis()),
+            compacting = state.compactionRequesting ||
+                compactionVisible(state.compaction, System.currentTimeMillis()),
+            onCompact = compactContext,
         )
     }
     if (showAdvisor) AdvisorPickerSheet(
@@ -430,7 +440,14 @@ internal fun SessionControls(
  * long usage breakdown never clips against the sheet's edge instead of scrolling.
  */
 @Composable
-internal fun ContextSheetBody(usage: SessionContextUsage?, unavailable: Boolean) {
+internal fun ContextSheetBody(
+    usage: SessionContextUsage?,
+    unavailable: Boolean,
+    showCompact: Boolean = false,
+    canCompact: Boolean = false,
+    compacting: Boolean = false,
+    onCompact: () -> Unit = {},
+) {
     Column(
         Modifier.fillMaxWidth()
             .heightIn(max = 480.dp)
@@ -451,6 +468,14 @@ internal fun ContextSheetBody(usage: SessionContextUsage?, unavailable: Boolean)
             } else Text(stringResource(R.string.remote_context_unknown))
             usage.totals?.let { UsageSummary(it) }
         }
+        if (showCompact)
+            Button(
+                onClick = onCompact,
+                enabled = canCompact,
+                modifier = Modifier.fillMaxWidth().testTag("compactContextButton"),
+            ) {
+                Text(stringResource(if (compacting) R.string.remote_context_compacting else R.string.remote_context_compact))
+            }
         Text(
             stringResource(R.string.remote_context_estimate),
             style = MaterialTheme.typography.bodySmall,

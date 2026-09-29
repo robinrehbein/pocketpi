@@ -47,6 +47,7 @@ internal open class DestinationViewModel(
                     toolOutput = null,
                     changes = null,
                     compaction = null,
+                    compactionRequesting = false,
                 )
         }
 
@@ -88,6 +89,8 @@ internal open class DestinationViewModel(
     fun refreshConfiguration() = active(repository::refreshConfiguration)
 
     fun refreshContextUsage() = active(repository::refreshContextUsage)
+
+    fun compactContext() = active(repository::compactContext)
 
     fun refreshAdvisor() = active(repository::refreshAdvisor)
 

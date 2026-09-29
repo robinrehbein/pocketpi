@@ -6,6 +6,7 @@ const val CONFIGURATION_CAPABILITY = "session.configuration.v1"
 const val COMMANDS_CAPABILITY = "session.commands.v1"
 const val RENAME_CAPABILITY = "session.rename.v1"
 const val CONTEXT_CAPABILITY = "session.context.v1"
+const val COMPACT_CAPABILITY = "session.compact.v1"
 const val ADVISOR_CAPABILITY = "session.advisor.v1"
 
 data class AdvisorChoice(

@@ -3057,6 +3057,32 @@ class RemoteRepositoryTest {
         assertNull(repository.state.value.compaction)
     }
 
+    @Test
+    fun manualCompactionDispatchesWithoutChangingTheDraft() = runTest {
+        val transport = Transport()
+        configure(transport)
+        transport.capabilities = setOf(COMPACT_CAPABILITY)
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.compact") null else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.draft("Keep this draft")
+        repository.compactContext()
+        runCurrent()
+        assertEquals("Keep this draft", repository.state.value.draft)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.compact" })
+        assertTrue(repository.state.value.compactionRequesting)
+        repository.compactContext()
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.compact" })
+        val compact = transport.sent.last { it.text("type") == "session.compact" }
+        transport.result(compact, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertFalse(repository.state.value.compactionRequesting)
+    }
+
     private fun forking(
         transport: Transport,
         result: (JsonObject) -> JsonObject? = { request ->
