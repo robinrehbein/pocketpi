@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -79,6 +80,28 @@ internal fun RemoteSelection.keys(): List<RemoteNavKey> = buildList {
     val project = projectId ?: return@buildList
     add(RemoteNavKey.Sessions(route, project))
     sessionId?.let { add(RemoteNavKey.Chat(route, project, it)) }
+}
+
+/** Keeps each chat's timeline choice when its navigation entry is replaced by another chat. */
+internal class TimelineVisibility(initialCollapsed: Set<String> = emptySet()) {
+    private var collapsed by mutableStateOf(initialCollapsed)
+
+    private fun id(key: RemoteNavKey.Chat): String =
+        listOf(key.routeId, key.projectId, key.sessionId).joinToString("") { "${it.length}:$it" }
+
+    fun expanded(key: RemoteNavKey.Chat): Boolean = id(key) !in collapsed
+
+    fun toggle(key: RemoteNavKey.Chat) {
+        val id = id(key)
+        collapsed = if (id in collapsed) collapsed - id else collapsed + id
+    }
+
+    companion object {
+        val Saver = Saver<TimelineVisibility, ArrayList<String>>(
+            save = { ArrayList(it.collapsed) },
+            restore = { TimelineVisibility(it.toSet()) },
+        )
+    }
 }
 
 internal class RemoteNavigator(
@@ -459,6 +482,7 @@ internal fun RemoteNavigation(
     val stack = rememberNavBackStack(RemoteNavKey.Hosts)
     val scope = rememberCoroutineScope()
     val navigator = remember(repository, stack) { RemoteNavigator(repository, stack, scope) }
+    val timelineVisibility = rememberSaveable(saver = TimelineVisibility.Saver) { TimelineVisibility() }
     LaunchedEffect(navigator) {
         navigator.restore()
         repository.state.collect { navigator.reconcile(it) }
@@ -530,6 +554,7 @@ internal fun RemoteNavigation(
                     pushConfigured,
                     pushSettings.pushEnabled,
                     enablePush,
+                    timelineVisibility,
                 )
             }
         }
@@ -556,6 +581,7 @@ private fun RemoteNavDisplay(
     pushConfigured: Boolean,
     pushEnabled: Boolean,
     enablePush: () -> Unit,
+    timelineVisibility: TimelineVisibility,
 ) {
     NavDisplay(
         backStack = stack,
@@ -570,15 +596,15 @@ private fun RemoteNavDisplay(
             entryProvider {
                 entry<RemoteNavKey.Hosts> { key ->
                     val model = viewModel { HostsViewModel(repository) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility)
                 }
                 entry<RemoteNavKey.Projects> { key ->
                     val model = viewModel { ProjectsViewModel(repository, key) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility)
                 }
                 entry<RemoteNavKey.Sessions>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { SessionsViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility)
                 }
                 entry<RemoteNavKey.FolderBrowser> { key ->
                     val model = viewModel { FolderBrowserViewModel(repository, key) }
@@ -586,7 +612,7 @@ private fun RemoteNavDisplay(
                 }
                 entry<RemoteNavKey.Chat>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ChatViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility)
                 }
                 entry<RemoteNavKey.Settings>(
                     metadata = metadata {
@@ -596,7 +622,7 @@ private fun RemoteNavDisplay(
                     },
                 ) { key ->
                     val model = viewModel { SettingsViewModel(repository, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility)
                 }
             },
         transitionSpec = { depthTransition(forward = true) },
