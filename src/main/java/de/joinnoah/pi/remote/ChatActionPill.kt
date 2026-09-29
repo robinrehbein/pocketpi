@@ -16,7 +16,6 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -91,7 +90,7 @@ internal fun ChatActionPill(layout: ChatActionLayout, color: Color, onAction: (C
                                     FloatingSurface(
                                         modifier = Modifier.size(48.dp),
                                         shape = CircleShape,
-                                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        color = color,
                                     ) {
                                         IconButton(
                                             onClick = {
