@@ -127,6 +127,8 @@ data class FilesState(
     val moreLoading: Boolean = false,
     val moreFailure: FilesFailure? = null,
     val file: OpenFile? = null,
+    val previews: Map<String, FileTilePreview> = emptyMap(),
+    val peek: FilesPeek? = null,
 )
 
 internal fun canBrowseFiles(state: RemoteState): Boolean =

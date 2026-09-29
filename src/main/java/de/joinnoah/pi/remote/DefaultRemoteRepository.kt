@@ -3713,6 +3713,12 @@ class DefaultRemoteRepository(
 
     override fun reloadFiles() = filesLoader.reload()
 
+    override fun requestFilesPreview(path: String) = filesLoader.requestPreview(path)
+
+    override fun showFilesPeek(path: String, type: FileEntryType) = filesLoader.showPeek(path, type)
+
+    override fun dismissFilesPeek() = filesLoader.dismissPeek()
+
     override fun selectFileLines(selection: LineSelection?) = filesLoader.selectLines(selection)
 
     private fun editReviewComments(block: (List<ReviewComment>) -> List<ReviewComment>) {

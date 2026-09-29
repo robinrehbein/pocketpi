@@ -28,6 +28,11 @@ internal class ProjectFilesLoader(
     private var fileJob: Job? = null
     private var listVersion = 0L
     private var fileVersion = 0L
+    private var previewVersion = 0L
+    private var peekVersion = 0L
+    private val previewQueue = ArrayDeque<String>()
+    private val previewJobs = mutableMapOf<String, Job>()
+    private var peekJob: Job? = null
 
     private fun files(): FilesState? =
         current().files?.takeIf { it.sessionId == current().selection.sessionId }
@@ -65,10 +70,154 @@ internal class ProjectFilesLoader(
         fileJob = null
     }
 
+    private fun stopPreviews() {
+        previewVersion++
+        previewJobs.values.forEach { it.cancel() }
+        previewJobs.clear()
+        previewQueue.clear()
+        stopPeek()
+    }
+
+    private fun stopPeek() {
+        peekVersion++
+        peekJob?.cancel()
+        peekJob = null
+    }
+
+    private fun cache(files: FilesState, path: String, preview: FileTilePreview): FilesState {
+        val kept = LinkedHashMap(files.previews)
+        kept.remove(path)
+        kept[path] = preview
+        while (kept.size > MAX_CACHED_FILE_PREVIEWS) {
+            val pinned = files.peek?.takeIf { it.type == FileEntryType.FILE }?.path
+            val oldest = kept.keys.firstOrNull { it != pinned } ?: break
+            kept.remove(oldest)
+        }
+        return files.copy(previews = kept)
+    }
+
+    /** Fetches only the first read page for a tile in the current folder. */
+    fun requestPreview(path: String) {
+        val files = files() ?: return
+        if (parentPath(path) != files.path || path in files.previews) return
+        if (path in previewQueue || path in previewJobs) {
+            // The cache may have evicted a still-pending tile. Restore its entry so the
+            // existing request can publish its result, and an open Peek can pin it.
+            write(files.sessionId) { cache(it, path, FileTilePreview()) }
+            return
+        }
+        if (!current().connected) {
+            write(files.sessionId) { cache(it, path, FileTilePreview(loading = false, failure = FilesFailure.OFFLINE)) }
+            return
+        }
+        write(files.sessionId) { cache(it, path, FileTilePreview()) }
+        previewQueue.addLast(path)
+        startPreviews(files.sessionId, files.path)
+    }
+
+    private fun startPreviews(sessionId: String, folder: String) {
+        if (files()?.let { it.sessionId == sessionId && it.path == folder } != true) return
+        while (previewJobs.size < 2 && previewQueue.isNotEmpty()) {
+            val path = previewQueue.removeFirst()
+            val version = previewVersion
+            fun active() = version == previewVersion &&
+                files()?.let { it.sessionId == sessionId && it.path == folder && path in it.previews } == true
+            previewJobs[path] = scope.launch {
+                try {
+                    val chunk = source.filesRead(sessionId, path, 0, null)
+                    if (active()) {
+                        val preview = FileTilePreview(
+                            loading = false,
+                            content = if (chunk.binary || chunk.tooLarge) null else chunk.content.take(FILE_TILE_PREVIEW_CHARS),
+                            binary = chunk.binary,
+                            tooLarge = chunk.tooLarge,
+                        )
+                        write(sessionId) { state ->
+                            if (state.path != folder) state
+                            else {
+                                val updated = cache(state, path, preview)
+                                if (updated.peek?.path == path && updated.peek.type == FileEntryType.FILE)
+                                    updated.copy(peek = updated.peek.copy(loading = false))
+                                else updated
+                            }
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (active()) {
+                        write(sessionId) { state ->
+                            if (state.path != folder) state
+                            else {
+                                val updated = cache(state, path, FileTilePreview(loading = false, failure = failure(e)))
+                                if (updated.peek?.path == path && updated.peek.type == FileEntryType.FILE)
+                                    updated.copy(peek = updated.peek.copy(loading = false))
+                                else updated
+                            }
+                        }
+                    }
+                } finally {
+                    if (version == previewVersion) {
+                        previewJobs.remove(path)
+                        startPreviews(sessionId, folder)
+                    }
+                }
+            }
+        }
+    }
+
+    /** Shows a read-only first-page peek without changing browser navigation. */
+    fun showPeek(path: String, type: FileEntryType) {
+        val files = files() ?: return
+        if (parentPath(path) != files.path || type !in setOf(FileEntryType.DIR, FileEntryType.FILE)) return
+        stopPeek()
+        val preview = files.previews[path]
+        write(files.sessionId) {
+            it.copy(peek = FilesPeek(path, type, loading = type == FileEntryType.DIR || preview?.loading != false))
+        }
+        if (type == FileEntryType.FILE) {
+            requestPreview(path)
+            return
+        }
+        if (!current().connected) {
+            write(files.sessionId) { it.copy(peek = it.peek?.copy(loading = false, failure = FilesFailure.OFFLINE)) }
+            return
+        }
+        val version = peekVersion
+        fun active() = version == peekVersion &&
+            files()?.let { it.sessionId == files.sessionId && it.path == files.path && it.peek?.path == path && it.peek.type == type } == true
+        peekJob = scope.launch {
+            try {
+                val page = source.filesList(files.sessionId, path, null)
+                if (active()) write(files.sessionId) { state ->
+                    val clipped = page.entries.size > MAX_FILE_PEEK_NAMES
+                    val listing = page.copy(
+                        entries = page.entries.take(MAX_FILE_PEEK_NAMES),
+                        truncated = page.truncated || clipped,
+                        nextAfter = page.nextAfter ?: if (clipped) page.entries[MAX_FILE_PEEK_NAMES - 1].name else null,
+                    )
+                    state.copy(peek = state.peek?.copy(loading = false, listing = listing))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (active()) write(files.sessionId) { state ->
+                    state.copy(peek = state.peek?.copy(loading = false, failure = failure(e)))
+                }
+            }
+        }
+    }
+
+    fun dismissPeek() {
+        stopPeek()
+        files()?.let { files -> write(files.sessionId) { it.copy(peek = null) } }
+    }
+
     /** Opens the browser at the session folder. */
     fun open() {
         stopList()
         stopFile()
+        stopPreviews()
         val state = current()
         val sessionId = state.selection.sessionId ?: return
         val failure =
@@ -84,6 +233,7 @@ internal class ProjectFilesLoader(
     fun close() {
         stopList()
         stopFile()
+        stopPreviews()
         update { it.copy(files = null) }
     }
 
@@ -95,6 +245,7 @@ internal class ProjectFilesLoader(
         val files = files() ?: return
         stopList()
         stopFile()
+        stopPreviews()
         val kept = files.parents.indexOfFirst { it.path == path }
         if (kept >= 0) {
             write(files.sessionId) {
@@ -107,6 +258,8 @@ internal class ProjectFilesLoader(
                     moreLoading = false,
                     moreFailure = null,
                     file = null,
+                    previews = emptyMap(),
+                    peek = null,
                 )
             }
             return
@@ -126,6 +279,8 @@ internal class ProjectFilesLoader(
                 moreLoading = false,
                 moreFailure = null,
                 file = null,
+                previews = emptyMap(),
+                peek = null,
             )
         }
         if (!offline) list(files.sessionId, path, after = null)
@@ -134,6 +289,8 @@ internal class ProjectFilesLoader(
     /** Reloads what is shown: the open file from its start, or the shown folder's first page. */
     fun reload() {
         val files = files() ?: return
+        stopPreviews()
+        write(files.sessionId) { it.copy(previews = emptyMap(), peek = null) }
         val file = files.file
         if (file != null) openFile(file.path) else openDir(files.path)
     }
@@ -205,6 +362,7 @@ internal class ProjectFilesLoader(
     /** Opens [path] of the shown folder from its first page, or returns to the folder for null. */
     fun openFile(path: String?) {
         val files = files() ?: return
+        dismissPeek()
         stopFile()
         if (path == null) {
             write(files.sessionId) { it.copy(file = null) }
