@@ -2,6 +2,7 @@
 <resources>
     <string name="remote_changes_open">Changes</string>
     <string name="remote_chat_actions_more">More actions</string>
+    <string name="remote_chat_actions_close">Close more actions</string>
     <string name="remote_changes_title">Changes</string>
     <string name="remote_changes_close">Close changes</string>
     <string name="remote_changes_back_to_files">Back to files</string>
