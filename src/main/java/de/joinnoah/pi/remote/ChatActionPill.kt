@@ -8,6 +8,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DropdownMenu
@@ -31,6 +32,7 @@ import androidx.compose.ui.unit.dp
 private fun ChatAction.icon(): ImageVector =
     when (this) {
         ChatAction.CHANGES -> Icons.Default.Difference
+        ChatAction.FILES -> Icons.Default.FolderOpen
         ChatAction.RENAME -> Icons.Default.Edit
         ChatAction.REFRESH -> Icons.Default.Refresh
         ChatAction.SETTINGS -> Icons.Default.Settings
@@ -39,6 +41,7 @@ private fun ChatAction.icon(): ImageVector =
 private fun ChatAction.label(): Int =
     when (this) {
         ChatAction.CHANGES -> R.string.remote_changes_open
+        ChatAction.FILES -> R.string.remote_files_open
         ChatAction.RENAME -> R.string.remote_rename_session
         ChatAction.REFRESH -> R.string.remote_refresh
         ChatAction.SETTINGS -> R.string.remote_settings
@@ -97,6 +100,25 @@ internal fun changesActions(model: ChatViewModel, focusComposer: () -> Unit) =
             model.prefillPrompt(prompt).also {
                 if (it) {
                     model.closeChanges()
+                    focusComposer()
+                }
+            }
+        },
+    )
+
+/** Wires [FilesPane] to [model]; a prefilled quote moves focus to the composer via [focusComposer]. */
+internal fun filesActions(model: ChatViewModel, focusComposer: () -> Unit) =
+    FilesActions(
+        onClose = model::closeFiles,
+        onOpenDir = model::openFilesDir,
+        onOpenFile = model::openFilesFile,
+        onLoadMore = model::loadMoreFiles,
+        onReload = model::reloadFiles,
+        onSelectLines = model::selectFileLines,
+        onSend = { prompt ->
+            model.prefillPrompt(prompt).also {
+                if (it) {
+                    model.closeFiles()
                     focusComposer()
                 }
             }

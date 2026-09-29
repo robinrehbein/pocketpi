@@ -514,6 +514,7 @@ internal fun RemoteScreen(
                     chatModel?.chatActions ?: DEFAULT_CHAT_ACTIONS,
                     buildSet {
                         if (canViewChanges(state) && state.connected) add(ChatAction.CHANGES)
+                        if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
                         if (canRename) add(ChatAction.RENAME)
                         add(ChatAction.REFRESH)
                         add(ChatAction.SETTINGS)
@@ -523,6 +524,7 @@ internal fun RemoteScreen(
                 chatModel?.recordChatAction(action)
                 when (action) {
                     ChatAction.CHANGES -> chatModel?.openChanges()
+                    ChatAction.FILES -> chatModel?.openFiles()
                     ChatAction.RENAME ->
                         state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
                     ChatAction.REFRESH -> model.refresh()
@@ -672,6 +674,17 @@ internal fun RemoteScreen(
                 )
             }
         }
+    val filesOpen = state.files?.takeIf { it.sessionId == state.selection.sessionId && chatModel != null }
+    val filesContent: (@Composable () -> Unit)? =
+        filesOpen?.let { files ->
+            {
+                FilesPane(
+                    files,
+                    remember(chatModel) { filesActions(checkNotNull(chatModel)) { composerFocusRequest++ } },
+                    Modifier.fillMaxSize(),
+                )
+            }
+        }
     val toolContent: (@Composable () -> Unit)? =
         openTool?.let { tool ->
             {
@@ -696,13 +709,14 @@ internal fun RemoteScreen(
                 )
             }
         }
-    // Wide windows show tool details and diffs beside the chat; the tool detail stays on top of
+    // Wide windows show tool details, diffs and files beside the chat; the tool detail stays on top of
     // the diff there too, as in the overlay.
     val inspectorContent: (@Composable () -> Unit)? =
-        if (changesContent == null && toolContent == null) null
+        if (changesContent == null && filesContent == null && toolContent == null) null
         else {
             {
                 changesContent?.invoke()
+                filesContent?.invoke()
                 toolContent?.invoke()
             }
         }
@@ -1553,6 +1567,7 @@ internal fun RemoteScreen(
                 Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp),
             )
             if (!sideInspector) changesContent?.invoke()
+            if (!sideInspector) filesContent?.invoke()
             state.jobs
                 ?.takeIf {
                     // Stays open through a reconnect, which clears the capabilities for a moment.

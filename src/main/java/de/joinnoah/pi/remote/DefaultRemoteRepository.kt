@@ -104,6 +104,7 @@ class DefaultRemoteRepository(
             PROJECT_OPEN_CAPABILITY,
             SESSION_FORK_CAPABILITY,
             GIT_CAPABILITY,
+            FILES_CAPABILITY,
         )
     private val mutable = MutableStateFlow(RemoteState())
     override val state = mutable.asStateFlow()
@@ -1201,6 +1202,7 @@ class DefaultRemoteRepository(
                 compaction = null,
                 toolOutput = null,
                 changes = null,
+                files = null,
                 // A reconnect keeps the open jobs view; the refresh after it watches again.
                 jobs = it.jobs?.takeIf { jobs -> sameSession && jobs.sessionId == selection.sessionId },
                 host = host,
@@ -3635,8 +3637,12 @@ class DefaultRemoteRepository(
             ::update,
         )
 
-    override fun openChanges() =
+    // Changes and files share one place on screen: opening one closes the other, which also
+    // stops its loader.
+    override fun openChanges() {
+        filesLoader.close()
         changesLoader.open(currentDraftKey()?.let { drafts[it]?.reviewComments }.orEmpty())
+    }
 
     override fun closeChanges() = changesLoader.close()
 
@@ -3645,6 +3651,69 @@ class DefaultRemoteRepository(
     override fun reloadChanges() = changesLoader.reload()
 
     override fun openChangesFile(path: String?) = changesLoader.openFile(path)
+
+    // ---- Project files (session.files.v1) ------------------------------------------------
+
+    private fun requireFiles(sessionId: String) {
+        val current = state.value
+        if (!current.connected) throw RemoteRequestException("offline")
+        // An older host closes the connection on a command it does not know.
+        if (FILES_CAPABILITY !in current.capabilities ||
+            FILES_CAPABILITY in current.unavailableCapabilities || sessionId.isEmpty()
+        ) throw RemoteRequestException("unsupported")
+    }
+
+    override suspend fun filesList(sessionId: String, path: String, after: String?): FileListing {
+        requireFiles(sessionId)
+        val fields = listOfNotNull("sessionId" to sessionId, "path" to path, after?.let { "after" to it })
+        val data = request("session.files.list", selectionEpoch, *fields.toTypedArray())
+        return parseFilesList(data, sessionId, path)
+    }
+
+    override suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?): FileChunk {
+        requireFiles(sessionId)
+        // The first page sends neither offset nor version, like the shared fixture.
+        val fields =
+            listOfNotNull(
+                "sessionId" to sessionId,
+                "path" to path,
+                if (offset > 0) "offset" to offset else null,
+                if (offset > 0) version?.let { "version" to it } else null,
+            )
+        val data = request("session.files.read", selectionEpoch, *fields.toTypedArray())
+        return parseFilesRead(data, sessionId, path, offset, version)
+    }
+
+    private val filesLoader =
+        ProjectFilesLoader(
+            scope,
+            object : FileSource {
+                override suspend fun filesList(sessionId: String, path: String, after: String?) =
+                    this@DefaultRemoteRepository.filesList(sessionId, path, after)
+
+                override suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?) =
+                    this@DefaultRemoteRepository.filesRead(sessionId, path, offset, version)
+            },
+            { state.value },
+            ::update,
+        )
+
+    override fun openFiles() {
+        changesLoader.close()
+        filesLoader.open()
+    }
+
+    override fun closeFiles() = filesLoader.close()
+
+    override fun openFilesDir(path: String) = filesLoader.openDir(path)
+
+    override fun openFilesFile(path: String?) = filesLoader.openFile(path)
+
+    override fun loadMoreFiles() = filesLoader.loadMore()
+
+    override fun reloadFiles() = filesLoader.reload()
+
+    override fun selectFileLines(selection: LineSelection?) = filesLoader.selectLines(selection)
 
     private fun editReviewComments(block: (List<ReviewComment>) -> List<ReviewComment>) {
         val key = currentDraftKey() ?: return

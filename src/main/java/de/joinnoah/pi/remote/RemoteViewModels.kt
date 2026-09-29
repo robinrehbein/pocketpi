@@ -253,6 +253,20 @@ internal class ChatViewModel(
 
     fun openChangesFile(path: String?) = active { repository.openChangesFile(path) }
 
+    fun openFiles() = active(repository::openFiles)
+
+    fun closeFiles() = repository.closeFiles()
+
+    fun openFilesDir(path: String) = active { repository.openFilesDir(path) }
+
+    fun openFilesFile(path: String?) = active { repository.openFilesFile(path) }
+
+    fun loadMoreFiles() = active(repository::loadMoreFiles)
+
+    fun reloadFiles() = active(repository::reloadFiles)
+
+    fun selectFileLines(selection: LineSelection?) = active { repository.selectFileLines(selection) }
+
     /** False when the comment was not saved; the caller keeps the user's text on screen. */
     fun setReviewComment(comment: ReviewComment): Boolean {
         var saved = false
