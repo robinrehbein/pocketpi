@@ -4,6 +4,7 @@ import android.text.format.DateFormat
 import android.text.format.DateUtils
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.ScrollableDefaults
@@ -26,6 +27,8 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.QuestionMark
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -363,6 +366,40 @@ internal const val MIN_TIMELINE_MARKERS = 2
 
 internal fun timelineRailVisible(markers: List<TimelineMarker>): Boolean = markers.size >= MIN_TIMELINE_MARKERS
 
+@Composable
+internal fun TimelineRailControl(
+    markers: List<TimelineMarker>,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onJump: (itemId: String) -> Unit,
+    modifier: Modifier = Modifier,
+    scrollState: ScrollableState? = null,
+) {
+    if (!timelineRailVisible(markers)) return
+    Column(modifier.width(48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        FilledTonalIconButton(
+            onClick = onToggle,
+            modifier = Modifier.testTag("timelineToggle"),
+        ) {
+            Icon(
+                if (expanded) Icons.Default.ChevronRight else Icons.Default.ChevronLeft,
+                contentDescription =
+                    stringResource(
+                        if (expanded) R.string.remote_panel_timeline_hide else R.string.remote_panel_timeline_show
+                    ),
+            )
+        }
+        if (expanded) {
+            TimelineRail(
+                markers = markers,
+                onJump = onJump,
+                modifier = Modifier.weight(1f),
+                scrollState = scrollState,
+            )
+        }
+    }
+}
+
 /** The marker closest to [fraction] (0..1 along the rail). */
 internal fun nearestMarker(markers: List<TimelineMarker>, fraction: Float): TimelineMarker? =
     markers.minByOrNull { abs(it.position - fraction) }
@@ -394,8 +431,12 @@ private fun TimelineMarkerBadge(kind: TimelineMarkerKind, modifier: Modifier = M
             TimelineMarkerKind.EDIT -> colors.primary to colors.onPrimary
             TimelineMarkerKind.PLAN -> colors.secondary to colors.onSecondary
         }
-    Box(modifier.size(16.dp).clip(CircleShape).background(container), contentAlignment = Alignment.Center) {
-        Icon(timelineMarkerIcon(kind), contentDescription = null, tint = content, modifier = Modifier.size(11.dp))
+    Box(
+        modifier.size(20.dp).clip(CircleShape).background(container)
+            .border(2.dp, colors.surface, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(timelineMarkerIcon(kind), contentDescription = null, tint = content, modifier = Modifier.size(12.dp))
     }
 }
 
@@ -461,7 +502,13 @@ internal fun TimelineRail(
             },
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.width(12.dp).fillMaxHeight()) {
+        Canvas(Modifier.width(24.dp).fillMaxHeight()) {
+            drawRoundRect(
+                color = trackColor.copy(alpha = 0.25f),
+                topLeft = Offset.Zero,
+                size = size,
+                cornerRadius = CornerRadius(size.width / 2),
+            )
             val trackWidth = 2.dp.toPx()
             drawRoundRect(
                 trackColor,

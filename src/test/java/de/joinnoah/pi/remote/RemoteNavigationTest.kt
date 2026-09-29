@@ -11,6 +11,22 @@ import org.junit.Test
 
 class RemoteNavigationTest {
     @Test
+    fun `timeline visibility follows each chat across session switches`() {
+        val first = RemoteNavKey.Chat("host", "project", "first")
+        val second = RemoteNavKey.Chat("host", "project", "second")
+        val visibility = TimelineVisibility()
+
+        assertTrue(visibility.expanded(first))
+        visibility.toggle(first)
+        assertFalse(visibility.expanded(first))
+        assertTrue(visibility.expanded(second))
+        visibility.toggle(second)
+        visibility.toggle(second)
+        assertFalse(visibility.expanded(first))
+        assertTrue(visibility.expanded(second))
+    }
+
+    @Test
     fun `explicit open replaces requested history ID with canonical live ID`() = runTest {
         val repository = NavigationFakeRepository()
         repository.activation = { selection, mode ->

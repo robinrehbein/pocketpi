@@ -119,6 +119,7 @@ internal fun RemoteScreen(
     pushConfigured: Boolean,
     pushEnabled: Boolean,
     enablePush: () -> Unit,
+    timelineVisibility: TimelineVisibility,
 ) {
     val state by model.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -786,7 +787,8 @@ internal fun RemoteScreen(
         val readingInset =
             if (key is RemoteNavKey.Chat) ((maxWidth - 40.dp - MAX_READING_WIDTH) / 2).coerceAtLeast(0.dp)
             else 0.dp
-        val railShown = key is RemoteNavKey.Chat && timelineRailVisible(markers) && listScrollable
+        val railAvailable = key is RemoteNavKey.Chat && timelineRailVisible(markers) && listScrollable
+        val timelineExpanded = chatKey?.let(timelineVisibility::expanded) ?: true
         LazyColumn(
             if (key is RemoteNavKey.Chat) Modifier.fillMaxSize().then(underlay)
             else Modifier.fillMaxSize(),
@@ -795,7 +797,7 @@ internal fun RemoteScreen(
                 PaddingValues(
                     start = 20.dp + readingInset,
                     // Room for the timeline rail, so it never covers a card's controls.
-                    end = maxOf(if (railShown) 52.dp else 20.dp, 20.dp + readingInset),
+                    end = maxOf(if (railAvailable) 76.dp else 20.dp, 20.dp + readingInset),
                     top = headerHeight + if (key is RemoteNavKey.Chat) 16.dp else 48.dp,
                     bottom =
                         if (
@@ -1469,9 +1471,11 @@ internal fun RemoteScreen(
                 chatHeader()
             }
         }
-        if (railShown)
-            TimelineRail(
-                markers,
+        if (railAvailable)
+            TimelineRailControl(
+                markers = markers,
+                expanded = timelineExpanded,
+                onToggle = { chatKey?.let(timelineVisibility::toggle) },
                 onJump = ::jumpTo,
                 scrollState = listState,
                 // Between the header and the composer.
@@ -1481,6 +1485,7 @@ internal fun RemoteScreen(
                         .padding(
                             top = headerHeight + 8.dp,
                             bottom = composerHeight + 8.dp,
+                            end = 24.dp,
                         )
                         .then(underlay),
             )
