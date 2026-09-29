@@ -10,7 +10,9 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -19,6 +21,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -38,6 +41,7 @@ class FilesPaneUiTest {
     private val files = mutableListOf<String?>()
     private val sent = mutableListOf<String>()
     private var closed = 0
+    private var reloaded = 0
 
     private val root =
         FileListing(
@@ -58,7 +62,7 @@ class FilesPaneUiTest {
     }
 
     /** Renders the pane alone; navigation only records, the test moves [state] itself. */
-    private fun render(initial: FilesState): (FilesState) -> Unit {
+    private fun render(initial: FilesState, projectName: String? = null): (FilesState) -> Unit {
         var state by mutableStateOf(initial)
         compose.setContent {
             MaterialTheme {
@@ -69,17 +73,82 @@ class FilesPaneUiTest {
                         onOpenDir = { opened += it },
                         onOpenFile = { files += it },
                         onLoadMore = {},
-                        onReload = {},
+                        onReload = { reloaded++ },
                         onSelectLines = { state = state.copy(file = state.file?.copy(selection = it)) },
                         onSend = {
                             sent += it
                             true
                         },
                     ),
+                    projectName = projectName,
                 )
             }
         }
         return { state = it }
+    }
+
+    @Test
+    fun rootHeaderShowsProjectNameWhenAvailable() {
+        render(FilesState("s", loading = false, listing = root), projectName = "PocketPi")
+        compose.onNodeWithTag("filesSubtitle").assertTextEquals("PocketPi")
+    }
+
+    @Test
+    fun rootHeaderShowsSeparatePills() {
+        render(FilesState("s", loading = false, listing = root))
+        compose.onNodeWithTag("filesHeaderPill").assertIsDisplayed()
+        compose.onNodeWithTag("filesReloadPill").assertIsDisplayed()
+        compose.onNodeWithTag("filesTitle").assertTextEquals(label(R.string.remote_files_title))
+        compose.onNodeWithTag("filesSubtitle").assertDoesNotExist()
+        compose.onNodeWithTag("filesBack").assertDoesNotExist()
+        compose.onNodeWithTag("filesClose").assertWidthIsAtLeast(48.dp)
+        compose.onNodeWithTag("filesReload").assertWidthIsAtLeast(48.dp)
+        compose.onNodeWithTag("filesClose").performClick()
+        assertEquals(1, closed)
+        compose.onNodeWithTag("filesReload").assertIsEnabled().performClick()
+        assertEquals(1, reloaded)
+    }
+
+    @Test
+    fun nestedHeaderShowsPathBackAndClose() {
+        render(FilesState("s", path = "src/app", loading = false, listing = FileListing("src/app")))
+        compose.onNodeWithTag("filesTitle").assertTextEquals(label(R.string.remote_files_title))
+        compose.onNodeWithTag("filesSubtitle").assertTextEquals("src/app")
+        compose.onNodeWithTag("filesBack").performClick()
+        assertEquals(listOf("src"), opened)
+        compose.onNodeWithTag("filesClose").performClick()
+        assertEquals(1, closed)
+    }
+
+    @Test
+    fun openFileHeaderShowsFilePath() {
+        render(FilesState("s", path = "src", loading = false, listing = root, file = OpenFile("src/App.kt", loading = false)))
+        compose.onNodeWithTag("filesSubtitle").assertTextEquals("src/App.kt")
+        compose.onNodeWithTag("filesBack").performClick()
+        assertEquals(listOf<String?>(null), files)
+    }
+
+    @Test
+    fun reloadIsDisabledWhileListingOrFileIsLoading() {
+        val show = render(FilesState("s", loading = true, listing = root))
+        compose.onNodeWithTag("filesReload").assertIsNotEnabled()
+        show(FilesState("s", loading = false, listing = root, file = OpenFile("a.kt", loading = true)))
+        compose.onNodeWithTag("filesReload").assertIsNotEnabled()
+        assertEquals(0, reloaded)
+    }
+
+    @Test
+    @Config(qualifiers = "w320dp-h640dp")
+    fun longNestedPathStaysInsideLeftPillBeforeReload() {
+        render(FilesState("s", path = "src/a/very/long/path/that/cannot/fit/on/a/narrow/phone", loading = false, listing = root))
+        val text = compose.onNodeWithTag("filesSubtitle").getUnclippedBoundsInRoot()
+        val left = compose.onNodeWithTag("filesHeaderPill").getUnclippedBoundsInRoot()
+        val reload = compose.onNodeWithTag("filesReloadPill").getUnclippedBoundsInRoot()
+        val close = compose.onNodeWithTag("filesClose").getUnclippedBoundsInRoot()
+        assertEquals(true, text.right <= close.left)
+        assertEquals(true, left.right < reload.left)
+        compose.onNodeWithTag("filesBack").assertIsDisplayed()
+        compose.onNodeWithTag("filesClose").assertIsDisplayed()
     }
 
     @Test

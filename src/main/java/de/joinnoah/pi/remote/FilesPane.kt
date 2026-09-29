@@ -9,8 +9,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,11 +21,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -92,7 +96,12 @@ internal class FilesActions(
  * inspector. Back closes the file, then climbs one folder, then closes the pane.
  */
 @Composable
-internal fun FilesPane(state: FilesState, actions: FilesActions, modifier: Modifier = Modifier) {
+internal fun FilesPane(
+    state: FilesState,
+    actions: FilesActions,
+    modifier: Modifier = Modifier,
+    projectName: String? = null,
+) {
     val back = {
         when {
             state.file != null -> actions.onOpenFile(null)
@@ -107,8 +116,7 @@ internal fun FilesPane(state: FilesState, actions: FilesActions, modifier: Modif
     val send: (String) -> Unit = { prompt -> prefillFailed = !actions.onSend(prompt) }
     Surface(modifier.fillMaxSize().testTag("filesPane")) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-            FilesTopBar(state, actions, back)
-            HorizontalDivider()
+            FilesTopBar(state, actions, back, projectName)
             if (prefillFailed)
                 Text(
                     stringResource(R.string.remote_files_prefill_failed),
@@ -127,38 +135,71 @@ internal fun FilesPane(state: FilesState, actions: FilesActions, modifier: Modif
 }
 
 @Composable
-private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Unit) {
+private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Unit, projectName: String?) {
     val nested = state.file != null || state.path.isNotEmpty()
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        if (nested)
-            IconButton(onClick = back, Modifier.testTag("filesBack")) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.remote_files_back))
+    val subtitle = (state.file?.path ?: state.path).takeIf(String::isNotEmpty) ?: projectName?.takeIf(String::isNotBlank)
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        val actionWidth = if (nested) 96.dp else 48.dp
+        val maxPillWidth = maxWidth - 48.dp - 8.dp
+        val maxTextWidth = (maxWidth - 48.dp - 8.dp - 8.dp - 20.dp - actionWidth - 12.dp).coerceAtLeast(24.dp)
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            FloatingSurface(
+                modifier = Modifier.widthIn(max = maxPillWidth).testTag("filesHeaderPill"),
+                shape = CircleShape,
+            ) {
+                Row(
+                    Modifier.padding(start = 8.dp, end = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(
+                        onClick = if (nested) back else actions.onClose,
+                        modifier = Modifier.size(48.dp).testTag(if (nested) "filesBack" else "filesClose"),
+                    ) {
+                        Icon(
+                            if (nested) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Close,
+                            stringResource(if (nested) R.string.remote_files_back else R.string.remote_files_close),
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.widthIn(max = maxTextWidth)) {
+                        Text(
+                            stringResource(R.string.remote_files_title),
+                            Modifier.testTag("filesTitle"),
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                        )
+                        if (subtitle != null)
+                            Text(
+                                subtitle,
+                                Modifier.testTag("filesSubtitle"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontFamily = if (nested) FontFamily.Monospace else null,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                    }
+                    if (nested)
+                        IconButton(onClick = actions.onClose, modifier = Modifier.size(48.dp).testTag("filesClose")) {
+                            Icon(Icons.Default.Close, stringResource(R.string.remote_files_close))
+                        }
+                }
             }
-        else
-            IconButton(onClick = actions.onClose, Modifier.testTag("filesClose")) {
-                Icon(Icons.Default.Close, stringResource(R.string.remote_files_close))
+            val busy = state.file?.loading ?: state.loading
+            FloatingSurface(modifier = Modifier.testTag("filesReloadPill"), shape = CircleShape) {
+                IconButton(
+                    onClick = actions.onReload,
+                    enabled = !busy,
+                    modifier = Modifier.size(48.dp).testTag("filesReload"),
+                ) {
+                    Icon(Icons.Default.Refresh, stringResource(R.string.remote_files_reload))
+                }
             }
-        val title = state.file?.path ?: state.path.ifEmpty { null }
-        Text(
-            title ?: stringResource(R.string.remote_files_title),
-            Modifier.weight(1f),
-            style = MaterialTheme.typography.titleMedium,
-            fontFamily = if (title != null) FontFamily.Monospace else null,
-            maxLines = 1,
-            overflow = TextOverflow.StartEllipsis,
-        )
-        val busy = state.file?.loading ?: state.loading
-        IconButton(onClick = actions.onReload, enabled = !busy, modifier = Modifier.testTag("filesReload")) {
-            Icon(Icons.Default.Refresh, stringResource(R.string.remote_files_reload))
         }
-        if (nested)
-            IconButton(onClick = actions.onClose, Modifier.testTag("filesClose")) {
-                Icon(Icons.Default.Close, stringResource(R.string.remote_files_close))
-            }
     }
 }
 
