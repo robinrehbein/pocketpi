@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish one PocketPi bundle to both Play testing tracks in one edit."""
+"""Publish one PocketPi bundle to configured Play testing tracks in one edit."""
 
 import argparse
 import os
