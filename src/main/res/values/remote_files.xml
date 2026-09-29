@@ -17,6 +17,14 @@
     <string name="remote_files_kind_file">File</string>
     <string name="remote_files_kind_symlink">Symbolic link</string>
     <string name="remote_files_kind_submodule">Submodule</string>
+    <string name="remote_files_preview_loading">Loading preview…</string>
+    <string name="remote_files_preview_binary">Binary file</string>
+    <string name="remote_files_preview_too_large">File too large</string>
+    <string name="remote_files_preview_failed">Preview unavailable</string>
+    <string name="remote_files_preview_empty">Empty file</string>
+    <string name="remote_files_peek_action">Peek at file or folder</string>
+    <string name="remote_files_peek_dismiss">Close preview</string>
+    <string name="remote_files_peek_more">More items…</string>
     <string name="remote_files_symlink">Symbolic link, cannot be opened</string>
     <string name="remote_files_submodule">Submodule, cannot be opened</string>
     <string name="remote_files_binary">Binary file. It cannot be shown as text.</string>
