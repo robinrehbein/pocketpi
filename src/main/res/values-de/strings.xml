@@ -108,6 +108,7 @@
     <string name="remote_request_error">Die Anfrage konnte nicht abgeschlossen werden. Aktualisiere die Ansicht und versuche es erneut.</string>
     <string name="remote_storage_error">Die gespeicherte Kopplung konnte nicht geöffnet werden. Kopple diesen Rechner erneut.</string>
     <string name="remote_refresh">Aktualisieren</string>
+    <string name="remote_refreshing">Wird aktualisiert</string>
     <string name="remote_load_older">Ältere Nachrichten laden</string>
     <string name="remote_tool">Tool-Ausgabe</string>
     <string name="remote_truncated">Ausgabe gekürzt</string>
