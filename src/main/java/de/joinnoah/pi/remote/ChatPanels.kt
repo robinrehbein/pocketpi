@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -246,16 +247,13 @@ internal fun SubagentStrip(
         if (strip.running > 0)
             pluralStringResource(R.plurals.remote_panel_subagents_running, strip.running, strip.running)
         else pluralStringResource(R.plurals.remote_panel_subagents_queued, strip.entries.size, strip.entries.size)
-    Surface(
-        modifier = Modifier.fillMaxWidth().testTag("subagentStrip"),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    ) {
-        Column {
+    Box {
+        FloatingSurface(shape = CircleShape) {
             Row(
-                Modifier.fillMaxWidth()
-                    .clickable(role = Role.Button) { expanded = !expanded }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                Modifier.clickable(role = Role.Button) { expanded = !expanded }
+                    .testTag("subagentStrip")
+                    .minimumInteractiveComponentSize()
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -266,10 +264,8 @@ internal fun SubagentStrip(
                 )
                 Text(
                     summary,
-                    Modifier.weight(1f),
                     style = MaterialTheme.typography.labelLarge,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 Icon(
                     if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
@@ -281,8 +277,19 @@ internal fun SubagentStrip(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (expanded)
-                for (entry in strip.entries) SubagentStripRow(entry, canAbort(entry), onOpen, onAbort)
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.widthIn(min = 240.dp, max = 320.dp).heightIn(max = 280.dp),
+        ) {
+            for (entry in strip.entries)
+                SubagentStripRow(
+                    entry,
+                    canAbort(entry),
+                    onOpen = onOpen,
+                    onAbort = onAbort,
+                )
         }
     }
 }
@@ -538,20 +545,30 @@ private fun TimelineLegend(offset: IntOffset, labels: Map<TimelineMarkerKind, St
 @Composable
 internal fun ErrorFilterChip(count: Int, selected: Boolean, onToggle: () -> Unit) {
     if (count == 0 && !selected) return
-    FilterChip(
-        selected = selected,
-        onClick = onToggle,
-        label = { Text(stringResource(R.string.remote_panel_errors_filter, count)) },
-        leadingIcon = {
+    FloatingSurface(
+        shape = CircleShape,
+        color = if (selected) MaterialTheme.colorScheme.errorContainer else floatingHeaderColor(),
+    ) {
+        Row(
+            Modifier.selectable(selected = selected, role = Role.Button, onClick = onToggle)
+                .testTag("errorFilterChip")
+                .minimumInteractiveComponentSize()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Icon(
                 Icons.Default.ErrorOutline,
                 contentDescription = null,
-                modifier = Modifier.size(FilterChipDefaults.IconSize),
+                modifier = Modifier.size(18.dp),
                 tint = MaterialTheme.colorScheme.error,
             )
-        },
-        modifier = Modifier.testTag("errorFilterChip"),
-    )
+            Text(
+                stringResource(R.string.remote_panel_errors_filter, count),
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+    }
 }
 
 // ---- Compaction ---------------------------------------------------------------------------

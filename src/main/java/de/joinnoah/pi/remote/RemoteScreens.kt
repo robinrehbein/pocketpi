@@ -624,36 +624,6 @@ internal fun RemoteScreen(
                             actionsControl()
                         }
                     }
-                    if (errorCount > 0 || onlyErrorsShown)
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .padding(top = 8.dp)
-                                .horizontalScroll(rememberScrollState())
-                                .testTag("chatInsights"),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            ErrorFilterChip(errorCount, onlyErrorsShown) {
-                                onlyErrorsShown = !onlyErrorsShown
-                                if (onlyErrorsShown) autoFollow = false
-                            }
-                        }
-                    if (strip.entries.isNotEmpty())
-                        Box(
-                            Modifier.fillMaxWidth()
-                                .padding(top = 8.dp)
-                                .heightIn(max = 280.dp)
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            SubagentStrip(
-                                strip,
-                                canAbort = { entry ->
-                                    entry.sessionId?.let { canAbortSubagent(state, it) } == true
-                                },
-                                onOpen = { entry -> entry.sessionId?.takeIf { entry.openable }?.let(::openChildSession) },
-                                onAbort = { entry -> if (entry.sessionId != null) abortChild = entry },
-                            )
-                        }
                     if (compactionVisible(state.compaction, compactionNow))
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             CompactionBanner(state.compaction, compactionNow)
@@ -1474,26 +1444,17 @@ internal fun RemoteScreen(
                 markers,
                 onJump = ::jumpTo,
                 scrollState = listState,
-                // Between the header and the composer, above the scroll-to-bottom button's slot.
+                // Between the header and the composer.
                 modifier =
                     Modifier.align(Alignment.TopEnd)
                         .fillMaxHeight()
                         .padding(
                             top = headerHeight + 8.dp,
-                            bottom = composerHeight + 16.dp + 40.dp + 8.dp,
+                            bottom = composerHeight + 8.dp,
                         )
                         .then(underlay),
             )
         if (key is RemoteNavKey.Chat) {
-            if (!autoFollow)
-                SmallFloatingActionButton(
-                    onClick = ::scrollToLatestItem,
-                    modifier = Modifier.align(Alignment.BottomEnd)
-                        .padding(end = 16.dp, bottom = composerHeight + 16.dp)
-                        .then(underlay),
-                ) {
-                    Icon(Icons.Default.ArrowDownward, stringResource(R.string.remote_scroll_to_bottom))
-                }
             Box(
                 Modifier.align(Alignment.BottomCenter)
                     .widthIn(max = MAX_READING_WIDTH + 32.dp)
@@ -1503,12 +1464,48 @@ internal fun RemoteScreen(
                     .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TouchedFilesSummary(touched, touchedLines) {
-                        when (touchedFilesTarget(canViewChanges(state) && state.connected)) {
-                            TouchedFilesTarget.CHANGES -> chatModel?.openChanges()
-                            TouchedFilesTarget.SHEET -> touchedSheet = true
+                    if (touched.total > 0 || errorCount > 0 || onlyErrorsShown ||
+                        strip.entries.isNotEmpty() || !autoFollow
+                    )
+                        Row(
+                            Modifier.fillMaxWidth().testTag("chatInsights"),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Row(
+                                Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                TouchedFilesSummary(touched, touchedLines) {
+                                    when (touchedFilesTarget(canViewChanges(state) && state.connected)) {
+                                        TouchedFilesTarget.CHANGES -> chatModel?.openChanges()
+                                        TouchedFilesTarget.SHEET -> touchedSheet = true
+                                    }
+                                }
+                                ErrorFilterChip(errorCount, onlyErrorsShown) {
+                                    onlyErrorsShown = !onlyErrorsShown
+                                    if (onlyErrorsShown) autoFollow = false
+                                }
+                                SubagentStrip(
+                                    strip,
+                                    canAbort = { entry ->
+                                        entry.sessionId?.let { canAbortSubagent(state, it) } == true
+                                    },
+                                    onOpen = { entry -> entry.sessionId?.takeIf { entry.openable }?.let(::openChildSession) },
+                                    onAbort = { entry -> if (entry.sessionId != null) abortChild = entry },
+                                )
+                            }
+                            if (!autoFollow) {
+                                Spacer(Modifier.width(8.dp))
+                                SmallFloatingActionButton(onClick = ::scrollToLatestItem) {
+                                    Icon(
+                                        Icons.Default.ArrowDownward,
+                                        stringResource(R.string.remote_scroll_to_bottom),
+                                    )
+                                }
+                            }
                         }
-                    }
                     ChatComposer(
                         state = state,
                         onDraft = model::draft,
