@@ -1,21 +1,21 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,9 +25,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 
 private fun ChatAction.icon(): ImageVector =
     when (this) {
@@ -63,22 +67,43 @@ internal fun ChatActionPill(layout: ChatActionLayout, color: Color, onAction: (C
                 var open by remember { mutableStateOf(false) }
                 Box {
                     IconButton(
-                        onClick = { open = true },
+                        onClick = { open = !open },
                         modifier = Modifier.size(48.dp).testTag("chatActionsMore"),
                     ) {
-                        Icon(Icons.Default.ExpandMore, stringResource(R.string.remote_chat_actions_more))
+                        Icon(
+                            if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            stringResource(
+                                if (open) R.string.remote_chat_actions_close
+                                else R.string.remote_chat_actions_more
+                            ),
+                        )
                     }
-                    DropdownMenu(open, onDismissRequest = { open = false }) {
-                        for (action in layout.menu)
-                            DropdownMenuItem(
-                                text = { Text(stringResource(action.label())) },
-                                leadingIcon = { Icon(action.icon(), null) },
-                                onClick = {
-                                    open = false
-                                    onAction(action)
-                                },
-                                modifier = Modifier.testTag("chatActionMenu_${action.name.lowercase()}"),
-                            )
+                    if (open) {
+                        Popup(
+                            alignment = Alignment.TopEnd,
+                            offset = IntOffset(0, with(LocalDensity.current) { 56.dp.roundToPx() }),
+                            onDismissRequest = { open = false },
+                            properties = PopupProperties(focusable = true),
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                for (action in layout.menu)
+                                    FloatingSurface(
+                                        modifier = Modifier.size(48.dp),
+                                        shape = CircleShape,
+                                        color = color,
+                                    ) {
+                                        IconButton(
+                                            onClick = {
+                                                open = false
+                                                onAction(action)
+                                            },
+                                            modifier = Modifier.size(48.dp).testTag("chatActionMenu_${action.name.lowercase()}"),
+                                        ) {
+                                            Icon(action.icon(), stringResource(action.label()))
+                                        }
+                                    }
+                            }
+                        }
                     }
                 }
             }
