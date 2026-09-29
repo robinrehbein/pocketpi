@@ -89,6 +89,8 @@ internal open class DestinationViewModel(
 
     fun refreshContextUsage() = active(repository::refreshContextUsage)
 
+    fun compactSession() = active(repository::compactSession)
+
     fun refreshAdvisor() = active(repository::refreshAdvisor)
 
     fun setAdvisor(provider: String?, id: String?, level: String?) =

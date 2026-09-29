@@ -220,6 +220,143 @@ class RemoteRepositoryTest {
         assertNull(repository.state.value.contextUsage)
     }
 
+    @Test
+    fun compactRequiresCapabilityAndIdleSessionWithoutChangingDraft() = runTest {
+        val transport = Transport()
+        configure(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.compactSession()
+        assertFalse(transport.sent.any { it.text("type") == "session.compact" })
+
+        transport.capabilities = setOf(COMPACT_CAPABILITY)
+        repository.disconnect()
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val original = transport.response
+        transport.response = { if (it.text("type") == "session.compact") null else original(it) }
+        repository.draft("keep me")
+        repository.compactSession()
+        runCurrent()
+        val request = transport.sent.last()
+        assertEquals("session.compact", request.text("type"))
+        assertEquals("session", request.text("sessionId"))
+        assertTrue(repository.state.value.compactChanging)
+        repository.compactSession()
+        assertEquals(request, transport.sent.last())
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertTrue(repository.state.value.compactChanging)
+        repository.compactSession()
+        assertEquals(request, transport.sent.last())
+        assertEquals("keep me", repository.state.value.draft)
+        assertNull(repository.state.value.compaction)
+        assertEquals(R.string.remote_compact_requested, repository.state.value.compactNotice)
+        transport.listener.message(Wire.objectOf(
+            "type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "session.compaction", "state" to "failed",
+        ))
+        assertEquals(R.string.remote_compact_error, repository.state.value.error)
+        assertFalse(repository.state.value.compactChanging)
+        assertNull(repository.state.value.compactNotice)
+        transport.listener.message(Wire.objectOf(
+            "type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "session.compaction", "state" to "done",
+        ))
+        assertNull(repository.state.value.compactNotice)
+
+        repository.compactSession()
+        runCurrent()
+        val late = transport.sent.last()
+        repository.activate(RemoteSelection())
+        transport.result(late, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertFalse(repository.state.value.compactChanging)
+        assertNull(repository.state.value.compactNotice)
+    }
+
+    @Test
+    fun compactOutcomeAfterRevisionGapBeatsLateRequestFailure() = runTest {
+        val transport = Transport()
+        configure(transport)
+        transport.capabilities = setOf(COMPACT_CAPABILITY)
+        val original = transport.response
+        var snapshotRevision = 0
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.compact" -> null
+                "session.snapshot" -> Wire.objectOf(
+                    "kind" to "snapshot", "sessionId" to request.text("sessionId"),
+                    "revision" to snapshotRevision, "status" to "idle",
+                    "messages" to JsonArray(emptyList()),
+                    "pendingQuestions" to JsonArray(emptyList()),
+                )
+                else -> original(request)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.compactSession()
+        runCurrent()
+        val request = transport.sent.last()
+        snapshotRevision = 4
+        transport.listener.message(Wire.objectOf(
+            "type" to "event", "sessionId" to "session", "revision" to 4,
+            "kind" to "session.compaction", "state" to "done",
+        ))
+        assertTrue(repository.state.value.compactChanging)
+        runCurrent()
+        assertFalse(repository.state.value.compactChanging)
+        assertEquals(R.string.remote_compact_done, repository.state.value.compactNotice)
+        repository.compactSession()
+        runCurrent()
+        val secondRequest = transport.sent.last()
+        assertTrue(repository.state.value.compactChanging)
+        transport.listener.message(Wire.objectOf(
+            "type" to "result", "requestId" to request.text("requestId"),
+            "ok" to false, "error" to Wire.objectOf("code" to "internal", "message" to "internal"),
+        ))
+        runCurrent()
+        assertTrue(repository.state.value.compactChanging)
+        assertEquals(R.string.remote_compact_requested, repository.state.value.compactNotice)
+        transport.result(secondRequest, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+    }
+
+    @Test
+    fun compactRunningSnapshotWithoutTerminalEventUnlocksWithUnknownOutcome() = runTest {
+        val transport = Transport()
+        configure(transport)
+        transport.capabilities = setOf(COMPACT_CAPABILITY)
+        val original = transport.response
+        var snapshotRevision = 0
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to request.text("sessionId"),
+                "revision" to snapshotRevision, "status" to "idle",
+                "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(emptyList()),
+            ) else if (request.text("type") == "session.compact")
+                Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.compactSession()
+        runCurrent()
+        snapshotRevision = 4
+        transport.listener.message(Wire.objectOf(
+            "type" to "event", "sessionId" to "session", "revision" to 3,
+            "kind" to "session.compaction", "state" to "running",
+        ))
+        assertTrue(repository.state.value.compactChanging)
+        runCurrent()
+        assertFalse(repository.state.value.compactChanging)
+        assertEquals(R.string.remote_compact_outcome_unknown, repository.state.value.compactNotice)
+    }
+
     private fun capable(transport: Transport) {
         configure(transport)
         transport.capabilities = setOf(CONFIGURATION_CAPABILITY, COMMANDS_CAPABILITY)

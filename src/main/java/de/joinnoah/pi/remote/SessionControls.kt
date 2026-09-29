@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Compress
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.SupportAgent
@@ -46,6 +47,7 @@ internal fun SessionControls(
     state: RemoteState,
     refreshConfiguration: () -> Unit,
     refreshContextUsage: () -> Unit,
+    compactSession: () -> Unit,
     refreshAdvisor: () -> Unit,
     setAdvisor: (String?, String?, String?) -> Unit,
     setModel: (String, String) -> Unit,
@@ -309,6 +311,14 @@ internal fun SessionControls(
     if (showContext) ModalBottomSheet(onDismissRequest = { showContext = false }) {
         ContextSheetBody(
             usage = usage,
+            canCompact = state.connected && !state.loading && state.status == "idle" &&
+                !state.sending && state.answering.isEmpty() && !state.compactChanging &&
+                state.compaction == null && state.selection.sessionId != null &&
+                COMPACT_CAPABILITY in state.capabilities &&
+                COMPACT_CAPABILITY !in state.unavailableCapabilities,
+            compacting = state.compactChanging || state.compaction != null,
+            compactNotice = state.compactNotice,
+            onCompact = compactSession,
             unavailable =
                 !state.connected || CONTEXT_CAPABILITY !in state.capabilities ||
                     CONTEXT_CAPABILITY in state.unavailableCapabilities,
@@ -430,7 +440,14 @@ internal fun SessionControls(
  * long usage breakdown never clips against the sheet's edge instead of scrolling.
  */
 @Composable
-internal fun ContextSheetBody(usage: SessionContextUsage?, unavailable: Boolean) {
+internal fun ContextSheetBody(
+    usage: SessionContextUsage?,
+    unavailable: Boolean,
+    canCompact: Boolean = false,
+    compacting: Boolean = false,
+    compactNotice: Int? = null,
+    onCompact: () -> Unit = {},
+) {
     Column(
         Modifier.fillMaxWidth()
             .heightIn(max = 480.dp)
@@ -451,6 +468,19 @@ internal fun ContextSheetBody(usage: SessionContextUsage?, unavailable: Boolean)
             } else Text(stringResource(R.string.remote_context_unknown))
             usage.totals?.let { UsageSummary(it) }
         }
+        Button(
+            onClick = onCompact,
+            enabled = canCompact,
+            modifier = Modifier.testTag("compactSessionButton"),
+        ) {
+            if (compacting) CircularProgressIndicator(
+                Modifier.size(18.dp), strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.onPrimary,
+            ) else Icon(Icons.Outlined.Compress, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.remote_compact_action))
+        }
+        compactNotice?.let { Text(stringResource(it), style = MaterialTheme.typography.bodySmall) }
         Text(
             stringResource(R.string.remote_context_estimate),
             style = MaterialTheme.typography.bodySmall,

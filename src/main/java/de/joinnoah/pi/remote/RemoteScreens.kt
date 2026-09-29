@@ -1529,6 +1529,7 @@ internal fun RemoteScreen(
                                 state,
                                 model::refreshConfiguration,
                                 model::refreshContextUsage,
+                                model::compactSession,
                                 model::refreshAdvisor,
                                 model::setAdvisor,
                                 model::setModel,

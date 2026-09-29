@@ -12,6 +12,13 @@
     <string name="remote_sessions">Sessions</string>
     <string name="remote_chat">Conversation</string>
     <string name="remote_context_title">Context usage</string>
+    <string name="remote_compact_action">Compact context</string>
+    <string name="remote_compact_requested">Compaction requested. Progress appears in the chat.</string>
+    <string name="remote_compact_done">Context compacted.</string>
+    <string name="remote_compact_aborted">Compaction canceled.</string>
+    <string name="remote_compact_outcome_unknown">Compaction ended. Refresh the session to check the result.</string>
+    <string name="remote_compact_error">Compaction failed. Refresh the session and try again.</string>
+    <string name="remote_compact_start_error">Could not confirm compaction. Refresh the session before trying again.</string>
     <string name="remote_advisor_title">Advisor</string>
     <string name="remote_advisor_busy">Advisor working</string>
     <string name="remote_advisor_error">Advisor blocked</string>

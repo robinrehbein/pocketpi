@@ -84,6 +84,11 @@ not executed remotely. Remove a quote before sending a slash command. A dispatch
 means pi received the command; it does not mean the command finished. Some terminal dialogs still
 require input on the Mac.
 
+The context usage sheet has a Compact context button for idle sessions. It requests pi's manual
+compaction without changing the chat draft or adding a slash command to pi's command list. The chat
+shows compaction progress; the request acknowledgement does not mean compaction has finished.
+Older hosts or terminal sessions without the updated remote extension cannot use the button.
+
 These controls require an updated host and remote extension. Restart the host after installing an
 update, and run `/reload` in terminal sessions. Older hosts can still provide basic conversations;
 unsupported controls remain unavailable.

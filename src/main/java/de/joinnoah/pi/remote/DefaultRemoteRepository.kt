@@ -167,6 +167,9 @@ class DefaultRemoteRepository(
     private var reconnectEnabled = true
     private val recovery = RemoteRecovery()
     private var timeline: Timeline? = null
+    private var pendingCompactOutcome: JsonObject? = null
+    private var compactRequestGeneration = 0L
+    private var compactWasRunning = false
     private data class CachedSessions(
         val routeId: String,
         val projectId: String,
@@ -990,7 +993,16 @@ class DefaultRemoteRepository(
                     if (payload.text("kind") in setOf("follow_up.status", "steer.status")) followUpReceipt(payload)
                     val timelineEvent = if (payload.text("kind") in setOf("follow_up.status", "steer.status"))
                         JsonObject(payload + ("kind" to JsonPrimitive("command.status"))) else payload
+                    if (payload.text("kind") == "session.compaction" &&
+                        payload.text("sessionId") == state.value.selection.sessionId &&
+                        payload.long("revision") > (timeline?.revision ?: Long.MAX_VALUE)) {
+                        when (payload.text("state")) {
+                            "running" -> if (state.value.compactChanging) compactWasRunning = true
+                            "done", "failed", "aborted" -> pendingCompactOutcome = payload
+                        }
+                    }
                     if (timeline?.event(timelineEvent) == true && !resynchronizing) snapshotAsync()
+                    applyCompactOutcome()
                     publishTimeline()
                 }
                 "host.event" ->
@@ -1120,6 +1132,25 @@ class DefaultRemoteRepository(
             .map { withSessionTitle(withSessionStatus(it)) }
     }
 
+    private fun applyCompactOutcome() {
+        val event = pendingCompactOutcome ?: return
+        val current = timeline ?: return
+        if (current.sessionId != event.text("sessionId") ||
+            current.revision < event.long("revision")) return
+        pendingCompactOutcome = null
+        if (current.compaction != null) return // A newer compaction superseded this outcome.
+        compactRequestGeneration++ // A late request acknowledgement cannot overwrite this result.
+        compactWasRunning = false
+        when (event.text("state")) {
+            "done" -> update { it.copy(compactChanging = false, compactNotice = R.string.remote_compact_done) }
+            "failed" -> {
+                update { it.copy(compactChanging = false, compactNotice = null) }
+                reportError(R.string.remote_compact_error)
+            }
+            "aborted" -> update { it.copy(compactChanging = false, compactNotice = R.string.remote_compact_aborted) }
+        }
+    }
+
     private fun publishTimeline() {
         timeline?.let { t ->
             if (t.status != state.value.status) state.value.selection.sessionId?.let(::dropStaleChildControl)
@@ -1154,6 +1185,16 @@ class DefaultRemoteRepository(
             checkEpoch(epoch)
             if (current !== timeline) return
             current.snapshot(data, older)
+            if (!older) {
+                if (current.compaction != null && state.value.compactChanging) compactWasRunning = true
+                applyCompactOutcome()
+                if (compactWasRunning && current.compaction == null &&
+                    pendingCompactOutcome == null && state.value.compactChanging) {
+                    compactRequestGeneration++
+                    compactWasRunning = false
+                    update { it.copy(compactChanging = false, compactNotice = R.string.remote_compact_outcome_unknown) }
+                }
+            }
             publishTimeline()
         } finally {
             if (epoch == selectionEpoch) resynchronizing = false
@@ -1185,6 +1226,9 @@ class DefaultRemoteRepository(
         // connection, so it must never be trusted to declare a session closed.
         sessionsFresh: Boolean = false,
     ) {
+        pendingCompactOutcome = null
+        compactWasRunning = false
+        compactRequestGeneration++
         timeline = session?.let {
             Timeline(it.text("id")).apply { beginSnapshotEpoch(it.text("status")) }
         }
@@ -1232,6 +1276,8 @@ class DefaultRemoteRepository(
                 nextCursor = cachedChat?.nextCursor,
                 configuration = null,
                 contextUsage = null,
+                compactChanging = false,
+                compactNotice = null,
                 advisor = null,
                 advisorLoading = false,
                 advisorChanging = false,
@@ -1300,6 +1346,8 @@ class DefaultRemoteRepository(
                         childControlUnsupported = emptySet(),
                         configuration = null,
                         contextUsage = null,
+                        compactChanging = false,
+                        compactNotice = null,
                         advisor = null,
                         advisorLoading = false,
                         advisorChanging = false,
@@ -1971,6 +2019,33 @@ class DefaultRemoteRepository(
             } finally {
                 if (epoch == selectionEpoch && version == contextVersion)
                     update { it.copy(contextLoading = false) }
+            }
+        }
+    }
+
+    override fun compactSession() {
+        val current = state.value
+        val sessionId = current.selection.sessionId ?: return
+        if (!current.connected || current.loading || current.status != "idle" ||
+            current.sending || current.answering.isNotEmpty() || current.compactChanging ||
+            current.compaction != null || COMPACT_CAPABILITY !in current.capabilities ||
+            COMPACT_CAPABILITY in current.unavailableCapabilities) return
+        val epoch = selectionEpoch
+        val generation = ++compactRequestGeneration
+        compactWasRunning = false
+        update { it.copy(compactChanging = true, compactNotice = R.string.remote_compact_requested) }
+        scope.launch {
+            try {
+                val result = request("session.compact", epoch, "sessionId" to sessionId)
+                require(result.text("kind") == "accepted" && result.text("sessionId") == sessionId)
+            } catch (_: CancellationException) {} catch (e: Exception) {
+                if (epoch == selectionEpoch && generation == compactRequestGeneration &&
+                    state.value.selection.sessionId == sessionId && state.value.compactChanging) {
+                    update { it.copy(compactChanging = false, compactNotice = null) }
+                    if (e.message == "unsupported")
+                        update { it.copy(unavailableCapabilities = it.unavailableCapabilities + COMPACT_CAPABILITY) }
+                    reportError(R.string.remote_compact_start_error)
+                }
             }
         }
     }

@@ -12,6 +12,13 @@
     <string name="remote_sessions">Sitzungen</string>
     <string name="remote_chat">Gespräch</string>
     <string name="remote_context_title">Kontextauslastung</string>
+    <string name="remote_compact_action">Kontext komprimieren</string>
+    <string name="remote_compact_requested">Komprimierung angefordert. Der Fortschritt erscheint im Chat.</string>
+    <string name="remote_compact_done">Kontext komprimiert.</string>
+    <string name="remote_compact_aborted">Komprimierung abgebrochen.</string>
+    <string name="remote_compact_outcome_unknown">Komprimierung beendet. Sitzung aktualisieren, um das Ergebnis zu prüfen.</string>
+    <string name="remote_compact_error">Komprimierung fehlgeschlagen. Sitzung aktualisieren und erneut versuchen.</string>
+    <string name="remote_compact_start_error">Komprimierung konnte nicht bestätigt werden. Sitzung vor einem erneuten Versuch aktualisieren.</string>
     <string name="remote_advisor_title">Advisor</string>
     <string name="remote_advisor_busy">Advisor arbeitet</string>
     <string name="remote_advisor_error">Advisor blockiert</string>

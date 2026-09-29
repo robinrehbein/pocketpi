@@ -5,6 +5,11 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -34,6 +39,27 @@ class ContextSheetBodyTest {
         val node = compose.onNodeWithTag("contextSheet").fetchSemanticsNode()
         // A vertically scrollable node carries a scroll-by action instead of clipping its overflow.
         assertTrue(node.config.contains(SemanticsActions.ScrollBy) || node.config.contains(SemanticsProperties.VerticalScrollAxisRange))
+    }
+
+    @Test
+    fun compactActionIsOnlyClickableWhenAvailable() {
+        var calls = 0
+        compose.setContent {
+            MaterialTheme {
+                ContextSheetBody(bigUsage, unavailable = false, canCompact = true,
+                    onCompact = { calls++ })
+            }
+        }
+        compose.onNodeWithTag("compactSessionButton").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun compactActionIsDisabledByDefault() {
+        compose.setContent {
+            MaterialTheme { ContextSheetBody(bigUsage, unavailable = false) }
+        }
+        compose.onNodeWithTag("compactSessionButton").assertIsNotEnabled()
     }
 
     @Test
