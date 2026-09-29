@@ -102,6 +102,7 @@ data class RemoteState(
     val configurationChanging: Boolean = false,
     val contextUsage: SessionContextUsage? = null,
     val contextLoading: Boolean = false,
+    val compactionRequesting: Boolean = false,
     val advisor: SessionAdvisor? = null,
     val advisorLoading: Boolean = false,
     val advisorChanging: Boolean = false,
@@ -176,6 +177,8 @@ interface RemoteRepository {
     fun refreshConfiguration() {}
 
     fun refreshContextUsage() {}
+
+    fun compactContext() {}
 
     fun refreshAdvisor() {}
 

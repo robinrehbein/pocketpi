@@ -752,6 +752,7 @@ class DefaultRemoteRepository(
                 configurationLoading = false,
                 configurationChanging = false,
                 contextLoading = false,
+                compactionRequesting = false,
                 commandsLoading = false,
                 toolOutput = null,
             )
@@ -810,6 +811,7 @@ class DefaultRemoteRepository(
                     connected = false,
                     connection = R.string.remote_connecting,
                     compaction = null,
+                    compactionRequesting = false,
                     toolOutput = null,
                     questions = emptyList(),
                     capabilities = emptySet(),
@@ -992,6 +994,12 @@ class DefaultRemoteRepository(
                         JsonObject(payload + ("kind" to JsonPrimitive("command.status"))) else payload
                     if (timeline?.event(timelineEvent) == true && !resynchronizing) snapshotAsync()
                     publishTimeline()
+                    if (payload.text("kind") == "session.compaction" &&
+                        payload.text("sessionId") == state.value.selection.sessionId &&
+                        payload.text("state") == "done") {
+                        update { it.copy(contextUsage = null) }
+                        refreshContextUsage()
+                    }
                 }
                 "host.event" ->
                     cloneEvent(payload)?.let(::applyCloneUpdate)
@@ -1200,6 +1208,7 @@ class DefaultRemoteRepository(
             it.copy(
                 selection = selection,
                 compaction = null,
+                compactionRequesting = false,
                 toolOutput = null,
                 changes = null,
                 files = null,
@@ -1293,6 +1302,7 @@ class DefaultRemoteRepository(
                         connected = false,
                         connection = R.string.remote_connecting,
                         compaction = null,
+                        compactionRequesting = false,
                         toolOutput = null,
                         questions = emptyList(),
                         capabilities = emptySet(),
@@ -1735,6 +1745,7 @@ class DefaultRemoteRepository(
             it.copy(
                 connected = false,
                 compaction = null,
+                compactionRequesting = false,
                 toolOutput = null,
                 projectChats = it.projectChats.map { chat -> chat.copy(verified = false) },
                 followUps = currentDraftKey()?.let { key -> drafts[key]?.followUps }.orEmpty(),
@@ -1971,6 +1982,34 @@ class DefaultRemoteRepository(
             } finally {
                 if (epoch == selectionEpoch && version == contextVersion)
                     update { it.copy(contextLoading = false) }
+            }
+        }
+    }
+
+    override fun compactContext() {
+        val current = state.value
+        val sessionId = current.selection.sessionId ?: return
+        if (!current.connected || current.loading || current.status != "idle" ||
+            current.sending || current.answering.isNotEmpty() || current.configurationChanging ||
+            current.compactionRequesting || compactionVisible(current.compaction, now()) ||
+            COMPACT_CAPABILITY !in current.capabilities ||
+            COMPACT_CAPABILITY in current.unavailableCapabilities ||
+            activeHost?.routeId != current.selection.routeId
+        ) return
+        val epoch = selectionEpoch
+        update { it.copy(compactionRequesting = true) }
+        scope.launch {
+            try {
+                val result = request("session.compact", epoch, "sessionId" to sessionId)
+                require(result.text("kind") == "accepted" && result.text("sessionId") == sessionId)
+            } catch (_: CancellationException) {} catch (e: Exception) {
+                if (epoch == selectionEpoch) {
+                    if (e.message == "unsupported")
+                        update { it.copy(unavailableCapabilities = it.unavailableCapabilities + COMPACT_CAPABILITY) }
+                    reportError(R.string.remote_compact_error)
+                }
+            } finally {
+                if (epoch == selectionEpoch) update { it.copy(compactionRequesting = false) }
             }
         }
     }

@@ -32,6 +32,9 @@
     <string name="remote_context_remaining">Verbleibend: etwa %1$,d Tokens</string>
     <string name="remote_context_unknown">Die Auslastung ist unbekannt, bis pi den Kontext erneut misst.</string>
     <string name="remote_context_estimate">Die Werte sind Schätzungen. pi liefert keine Aufschlüsselung nach Nachrichten oder Tools.</string>
+    <string name="remote_context_compact">Kontext komprimieren</string>
+    <string name="remote_context_compacting">Kontext wird komprimiert…</string>
+    <string name="remote_compact_error">Die Kontextkomprimierung konnte nicht gestartet werden.</string>
     <string name="remote_settings">Einstellungen</string>
     <string name="remote_settings_privacy_title">Datenschutzerklärung</string>
     <string name="remote_settings_privacy_help">Erfahre, wie PocketPi mit deinen Daten umgeht.</string>
