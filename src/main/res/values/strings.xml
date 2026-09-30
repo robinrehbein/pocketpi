@@ -70,6 +70,7 @@
     <string name="remote_local_command_settings">Open the session settings</string>
     <string name="remote_session_settings_title">Session settings</string>
     <string name="remote_session_settings_busy">pi is working. You can change these settings when it is idle.</string>
+    <string name="remote_session_settings_disabled">Settings can be changed when the session is idle and connected.</string>
     <string name="remote_session_settings_auto_compact">Auto-compact</string>
     <string name="remote_session_settings_auto_compact_hint">Compacts the context automatically when it gets close to the model\'s limit.</string>
     <string name="remote_session_settings_steering">Steering mode</string>

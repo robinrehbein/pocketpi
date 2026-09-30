@@ -1520,6 +1520,38 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun unsupportedSettingsChangeOnlyWithdrawsTheSettingsCapability() = runTest {
+        val transport = Transport().also(::capable)
+        transport.capabilities += SETTINGS_CAPABILITY
+        val original = transport.response
+        transport.response = {
+            when (it.text("type")) {
+                "session.configuration.get" -> configurationData(it.text("sessionId"), settings = settingsData())
+                "session.configuration.set" -> {
+                    transport.listener.message(
+                        Wire.objectOf(
+                            "type" to "result",
+                            "requestId" to it.text("requestId"),
+                            "ok" to false,
+                            "error" to Wire.objectOf("code" to "unsupported"),
+                        )
+                    )
+                    null
+                }
+                else -> original(it)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.changeSettings(autoCompaction = false)
+        runCurrent()
+        val state = repository.state.value
+        assertEquals(setOf(SETTINGS_CAPABILITY), state.unavailableCapabilities)
+        assertNotNull(state.configuration)
+    }
+
+    @Test
     fun failedSettingsChangeReadsTheConfigurationAgain() = runTest {
         val transport = Transport().also(::capable)
         transport.capabilities += SETTINGS_CAPABILITY

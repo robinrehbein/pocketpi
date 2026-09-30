@@ -548,6 +548,7 @@ internal fun RemoteScreen(
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
                         if (canRename) add(ChatAction.RENAME)
                         if (state.connected && !state.loading) add(ChatAction.NEW_SESSION)
+                        // Offered while pi runs (the sheet then explains it is read-only); `/settings` is typed into an idle draft only.
                         if (state.connected && !state.loading && sessionSettingsAvailable(state))
                             add(ChatAction.SESSION_SETTINGS)
                         add(ChatAction.REFRESH)

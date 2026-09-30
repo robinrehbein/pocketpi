@@ -73,8 +73,10 @@ internal fun SessionControls(
         pickerScope.launch { pickerSheet.hide() }.invokeOnCompletion { picker = null }
     }
     var showContext by remember { mutableStateOf(false) }
-    var showSettings by remember { mutableStateOf(false) }
-    LaunchedEffect(state.selection.sessionId) { showSettings = false }
+    var showSettings by remember(state.selection.sessionId) { mutableStateOf(false) }
+    // The flag must not outlive the sheet's visibility, or it reopens unprompted later.
+    val settingsVisible = state.connected && sessionSettingsAvailable(state)
+    LaunchedEffect(settingsVisible) { if (!settingsVisible) showSettings = false }
     var showAdvisor by remember { mutableStateOf(false) }
     var advisorChoice by remember(state.selection.sessionId) { mutableStateOf<AdvisorChoice?>(null) }
     var advisorLevel by remember(state.selection.sessionId) { mutableStateOf("high") }
@@ -364,7 +366,7 @@ internal fun SessionControls(
         )
     }
     val sessionSettings = confirmed?.settings
-    if (showSettings && sessionSettings != null && sessionSettingsAvailable(state))
+    if (showSettings && sessionSettings != null && settingsVisible)
         ModalBottomSheet(onDismissRequest = { showSettings = false }) {
             SessionSettingsSheetBody(
                 settings = sessionSettings,
@@ -557,9 +559,11 @@ internal fun SessionSettingsSheetBody(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(stringResource(R.string.remote_session_settings_title), style = MaterialTheme.typography.titleLarge)
-        if (working)
+        if (working || (!enabled && !busy))
             Text(
-                stringResource(R.string.remote_session_settings_busy),
+                stringResource(
+                    if (working) R.string.remote_session_settings_busy else R.string.remote_session_settings_disabled
+                ),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

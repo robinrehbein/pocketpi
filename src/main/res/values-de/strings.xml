@@ -70,6 +70,7 @@
     <string name="remote_local_command_settings">Sitzungseinstellungen öffnen</string>
     <string name="remote_session_settings_title">Sitzungseinstellungen</string>
     <string name="remote_session_settings_busy">pi arbeitet. Du kannst diese Einstellungen ändern, sobald pi wieder frei ist.</string>
+    <string name="remote_session_settings_disabled">Einstellungen lassen sich ändern, wenn die Sitzung frei und verbunden ist.</string>
     <string name="remote_session_settings_auto_compact">Automatisch komprimieren</string>
     <string name="remote_session_settings_auto_compact_hint">Komprimiert den Kontext automatisch, wenn er sich dem Limit des Modells nähert.</string>
     <string name="remote_session_settings_steering">Steuerungsmodus</string>

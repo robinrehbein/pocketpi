@@ -736,6 +736,7 @@ class DefaultRemoteRepository(
         sessionRefreshJob?.cancel()
         selectionEpoch++
         configurationVersion++
+        configurationNeedsRefresh = false
         contextVersion++
         commandsVersion++
         if (pairing?.isActive == true) {
@@ -2100,7 +2101,11 @@ class DefaultRemoteRepository(
                 failed = true
                 if (epoch == selectionEpoch && version == configurationVersion) {
                     configurationNeedsRefresh = true
-                    if (e.message == "unsupported")
+                    if (e.message == "unsupported" && rereadOnError) {
+                        // Only the settings change is unsupported; model and thinking still work.
+                        update { it.copy(unavailableCapabilities = it.unavailableCapabilities + SETTINGS_CAPABILITY) }
+                        reportError(R.string.remote_configuration_error)
+                    } else if (e.message == "unsupported")
                         update {
                             it.copy(
                                 configuration = null,
