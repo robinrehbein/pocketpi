@@ -178,4 +178,66 @@ class SessionControlsTest {
             usage,
         )
     }
+
+    private val chatState = RemoteState(
+        connected = true,
+        status = "idle",
+        capabilities = setOf(CONFIGURATION_CAPABILITY, COMPACT_CAPABILITY, RENAME_CAPABILITY),
+        session = Wire.objectOf("id" to "s1", "title" to "T", "origin" to "rpc"),
+    )
+
+    @Test
+    fun localCommandsFollowTheControlsTheyStandFor() {
+        val all = listOf(LocalCommand.NEW, LocalCommand.COMPACT, LocalCommand.MODEL, LocalCommand.NAME)
+        assertEquals(all, availableLocalCommands(chatState, true, 0))
+        assertFalse(LocalCommand.NEW in availableLocalCommands(chatState, false, 0))
+        val busy = chatState.copy(status = "running")
+        assertEquals(
+            listOf(LocalCommand.NEW, LocalCommand.MODEL, LocalCommand.NAME),
+            availableLocalCommands(busy, true, 0),
+        )
+        val bare = chatState.copy(capabilities = emptySet())
+        assertEquals(listOf(LocalCommand.NEW), availableLocalCommands(bare, true, 0))
+        assertTrue(availableLocalCommands(chatState.copy(loading = true), true, 0).isEmpty())
+        assertEquals(
+            listOf(LocalCommand.NEW, LocalCommand.MODEL, LocalCommand.NAME),
+            availableLocalCommands(chatState.copy(unavailableCapabilities = setOf(COMPACT_CAPABILITY)), true, 0),
+        )
+        val tuiOffline = chatState.copy(session = Wire.objectOf("id" to "s1", "title" to "T", "origin" to "web"))
+        assertFalse(LocalCommand.NAME in availableLocalCommands(tuiOffline, true, 0))
+    }
+
+    @Test
+    fun localInvocationParsesTheNameAndArgument() {
+        val all = availableLocalCommands(chatState, true, 0)
+        assertEquals(
+            LocalInvocation(LocalCommand.NAME, "My  new title"),
+            localInvocation(chatState.copy(draft = "/name   My  new title \n"), all),
+        )
+        assertEquals(LocalInvocation(LocalCommand.NAME, ""), localInvocation(chatState.copy(draft = "/name"), all))
+        assertEquals(LocalInvocation(LocalCommand.NEW, ""), localInvocation(chatState.copy(draft = "/new"), all))
+        assertNull(localInvocation(chatState.copy(draft = "/newer"), all))
+        assertNull(localInvocation(chatState.copy(draft = "/review"), all))
+        assertNull(localInvocation(chatState.copy(draft = "hello /new"), all))
+        assertNull(localInvocation(chatState.copy(draft = "/compact"), availableLocalCommands(chatState.copy(status = "running"), true, 0)))
+        assertNull(localInvocation(chatState.copy(draft = "/new", quote = MessageQuote("m", "user", "x")), all))
+    }
+
+    @Test
+    fun localCommandsShadowHostCommandsOfTheSameName() {
+        val host = listOf(
+            RemoteCommand("compact", "host compact", "extension"),
+            RemoteCommand("review", null, "prompt"),
+            RemoteCommand("news", null, "skill"),
+        )
+        val (local, remote) =
+            mergeCommandSuggestions(listOf(LocalCommand.NEW, LocalCommand.COMPACT), host, "")
+        assertEquals(listOf(LocalCommand.NEW, LocalCommand.COMPACT), local)
+        assertEquals(listOf("review", "news"), remote.map { it.name })
+        val (filteredLocal, filteredRemote) =
+            mergeCommandSuggestions(listOf(LocalCommand.NEW, LocalCommand.COMPACT), host, "NE")
+        assertEquals(listOf(LocalCommand.NEW), filteredLocal)
+        assertEquals(listOf("news"), filteredRemote.map { it.name })
+        assertEquals("/name  x", selectCommandName("/na  x", "name"))
+    }
 }

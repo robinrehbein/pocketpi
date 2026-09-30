@@ -177,7 +177,84 @@ internal fun commandName(text: String): String? =
     text.takeIf { it.startsWith("/") }?.drop(1)?.takeWhile { !it.isWhitespace() }
 
 internal fun selectCommand(text: String, command: RemoteCommand): String =
-    "/" + command.name + text.dropWhile { !it.isWhitespace() }
+    selectCommandName(text, command.name)
+
+internal fun selectCommandName(text: String, name: String): String =
+    "/" + name + text.dropWhile { !it.isWhitespace() }
+
+/** The Compact action is offered: the host advertises [COMPACT_CAPABILITY] and did not withdraw it. */
+internal fun compactAvailable(state: RemoteState): Boolean =
+    COMPACT_CAPABILITY in state.capabilities && COMPACT_CAPABILITY !in state.unavailableCapabilities
+
+/** Compacting can start now: the session is idle and no compaction is running or showing. */
+internal fun canCompact(state: RemoteState, nowMillis: Long): Boolean =
+    state.connected && !state.loading && state.status == "idle" &&
+        !state.sending && state.answering.isEmpty() && !state.configurationChanging &&
+        !state.compactionRequesting && !compactionVisible(state.compaction, nowMillis)
+
+/** The selected session can be renamed from the phone. */
+internal fun canRenameSession(state: RemoteState): Boolean =
+    state.connected && !state.loading &&
+        RENAME_CAPABILITY in state.capabilities &&
+        state.session?.text("origin") in setOf("tui", "rpc") &&
+        state.status != "offline"
+
+/**
+ * pi's built-in slash commands are not in the host's catalog, so the app maps the ones it has a
+ * control for. [commandName] is what follows the slash.
+ */
+internal enum class LocalCommand(val commandName: String, val description: Int) {
+    NEW("new", R.string.remote_local_command_new),
+    COMPACT("compact", R.string.remote_local_command_compact),
+    MODEL("model", R.string.remote_local_command_model),
+    NAME("name", R.string.remote_local_command_name),
+}
+
+/**
+ * The [LocalCommand]s that can run now, in list order. [inChat] is false outside a chat route,
+ * where a new session has no project to open in.
+ */
+internal fun availableLocalCommands(
+    state: RemoteState,
+    inChat: Boolean,
+    nowMillis: Long,
+): List<LocalCommand> =
+    LocalCommand.entries.filter { command ->
+        when (command) {
+            LocalCommand.NEW -> inChat && state.connected && !state.loading
+            LocalCommand.COMPACT -> compactAvailable(state) && canCompact(state, nowMillis)
+            LocalCommand.MODEL ->
+                state.connected && !state.loading && !state.configurationChanging &&
+                    configurationControlsAvailable(state.capabilities, state.unavailableCapabilities)
+            LocalCommand.NAME -> canRenameSession(state)
+        }
+    }
+
+/** A draft that names an available [LocalCommand]; [argument] is the trimmed text after the name. */
+internal data class LocalInvocation(val command: LocalCommand, val argument: String)
+
+/**
+ * The invocation the draft asks for, or null when it is no available local command. A quote or
+ * attachments never run one: the send then fails as for any command with extra context.
+ */
+internal fun localInvocation(state: RemoteState, available: List<LocalCommand>): LocalInvocation? {
+    if (state.quote != null || state.attachments.isNotEmpty()) return null
+    val name = commandName(state.draft) ?: return null
+    val command = available.firstOrNull { it.commandName == name } ?: return null
+    return LocalInvocation(command, state.draft.drop(1 + name.length).trim())
+}
+
+/** Host commands that a local command of the same name does not shadow. */
+internal fun mergeCommandSuggestions(
+    local: List<LocalCommand>,
+    host: List<RemoteCommand>,
+    prefix: String,
+): Pair<List<LocalCommand>, List<RemoteCommand>> =
+    local.filter { it.commandName.startsWith(prefix, ignoreCase = true) } to
+        host.filter { command ->
+            command.name.startsWith(prefix, ignoreCase = true) &&
+                local.none { it.commandName == command.name }
+        }
 
 /** Steer, follow-up, stop and resume for subagent children (`session.subagent_control.v1`). */
 const val SUBAGENT_CONTROL_CAPABILITY = "session.subagent_control.v1"

@@ -63,6 +63,10 @@
     <string name="remote_project_unshare_update_host">Aktualisiere pi Remote auf dem Mac, um Projektfreigaben von hier aus zu beenden</string>
     <string name="remote_project_unshare_update_needed">Update nötig</string>
     <string name="remote_new_session">Neue Sitzung</string>
+    <string name="remote_local_command_new">Neue Sitzung in diesem Projekt starten</string>
+    <string name="remote_local_command_compact">Sitzungskontext komprimieren</string>
+    <string name="remote_local_command_model">Modell auswählen</string>
+    <string name="remote_local_command_name">Sitzung umbenennen</string>
     <string name="remote_rename_session">Sitzung umbenennen</string>
     <string name="remote_session_name">Sitzungsname</string>
     <string name="remote_fork_session">Als Kopie fortsetzen</string>
