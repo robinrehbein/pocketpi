@@ -9,6 +9,7 @@ enum class ChatAction {
     RENAME,
     REFRESH,
     SETTINGS,
+    NEW_SESSION,
 }
 
 /** How often an action was used, decayed to [at]. */
@@ -19,10 +20,11 @@ internal const val ACTION_USAGE_HALF_LIFE_MILLIS = 14L * 24 * 60 * 60 * 1000
 
 /**
  * The ranking without any use, and the tie-break: Changes and Refresh come first. Usage is stored
- * per action name, so an action added later, like Files, simply starts without uses.
+ * per action name, so an action added later, like Files or New session, simply starts without uses.
  */
 internal val DEFAULT_CHAT_ACTIONS =
-    listOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.RENAME, ChatAction.SETTINGS)
+    listOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.RENAME, ChatAction.NEW_SESSION,
+        ChatAction.SETTINGS)
 
 internal fun ActionUsage.decayed(now: Long): Double =
     score * 0.5.pow((now - at).coerceAtLeast(0L) / ACTION_USAGE_HALF_LIFE_MILLIS.toDouble())

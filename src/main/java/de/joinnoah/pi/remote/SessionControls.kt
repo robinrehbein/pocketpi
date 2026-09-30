@@ -55,6 +55,12 @@ internal fun SessionControls(
     selectCommand: (RemoteCommand) -> Unit,
     refreshJobs: () -> Unit = {},
     openJobs: (() -> Unit)? = null,
+    /** The [LocalCommand]s that can run now; they lead the slash suggestions and shadow host commands. */
+    localCommands: List<LocalCommand> = emptyList(),
+    selectLocalCommand: (LocalCommand) -> Unit = {},
+    /** A typed `/model` asks for the model picker; [onModelPickerRequestHandled] acknowledges it. */
+    modelPickerRequested: Boolean = false,
+    onModelPickerRequestHandled: () -> Unit = {},
 ) {
     var picker by remember { mutableStateOf<String?>(null) }
     val pickerSheet = rememberModalBottomSheetState()
@@ -101,6 +107,15 @@ internal fun SessionControls(
             !state.configurationLoading &&
             !state.configurationChanging
     val slash = commandName(state.draft)
+    LaunchedEffect(modelPickerRequested) {
+        if (modelPickerRequested) {
+            if (available) {
+                picker = "model"
+                refreshConfiguration()
+            }
+            onModelPickerRequestHandled()
+        }
+    }
     val configurationChipColors =
         AssistChipDefaults.assistChipColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -279,16 +294,29 @@ internal fun SessionControls(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (
-            slash != null &&
-                COMMANDS_CAPABILITY in state.capabilities &&
-                COMMANDS_CAPABILITY !in state.unavailableCapabilities
-        ) {
-            val suggestions = state.commands.filter { it.name.startsWith(slash, ignoreCase = true) }
-            if (state.commandsLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            else if (suggestions.isNotEmpty())
+        val hostCommands =
+            COMMANDS_CAPABILITY in state.capabilities && COMMANDS_CAPABILITY !in state.unavailableCapabilities
+        if (slash != null && (hostCommands || localCommands.isNotEmpty())) {
+            val (localSuggestions, hostSuggestions) =
+                mergeCommandSuggestions(localCommands, if (hostCommands) state.commands else emptyList(), slash)
+            if (hostCommands && state.commandsLoading && localSuggestions.isEmpty())
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+            else if (localSuggestions.isNotEmpty() || hostSuggestions.isNotEmpty())
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 160.dp)) {
-                    items(suggestions, key = { it.name }) { command ->
+                    items(localSuggestions, key = { "local:" + it.commandName }) { command ->
+                        ListItem(
+                            headlineContent = { Text("/" + command.commandName) },
+                            supportingContent = {
+                                Text(
+                                    stringResource(command.description),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                            modifier = Modifier.clickable { selectLocalCommand(command) },
+                        )
+                    }
+                    items(hostSuggestions, key = { it.name }) { command ->
                         ListItem(
                             headlineContent = { Text("/" + command.name) },
                             supportingContent = {
@@ -300,7 +328,7 @@ internal fun SessionControls(
                         )
                     }
                 }
-            if (state.commandsTruncated)
+            if (hostCommands && state.commandsTruncated)
                 Text(
                     stringResource(R.string.remote_catalog_truncated),
                     style = MaterialTheme.typography.labelSmall,
@@ -313,12 +341,8 @@ internal fun SessionControls(
             unavailable =
                 !state.connected || CONTEXT_CAPABILITY !in state.capabilities ||
                     CONTEXT_CAPABILITY in state.unavailableCapabilities,
-            showCompact = COMPACT_CAPABILITY in state.capabilities &&
-                COMPACT_CAPABILITY !in state.unavailableCapabilities,
-            canCompact = state.connected && !state.loading && state.status == "idle" &&
-                !state.sending && state.answering.isEmpty() && !state.configurationChanging &&
-                !state.compactionRequesting &&
-                !compactionVisible(state.compaction, System.currentTimeMillis()),
+            showCompact = compactAvailable(state),
+            canCompact = canCompact(state, System.currentTimeMillis()),
             compacting = state.compactionRequesting ||
                 compactionVisible(state.compaction, System.currentTimeMillis()),
             onCompact = compactContext,

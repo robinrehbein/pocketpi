@@ -455,6 +455,29 @@ internal fun RemoteScreen(
         renameSessionId = sessionId
         renameDraft = TextFieldValue(title, TextRange(title.length))
     }
+    var modelPickerRequested by remember(key) { mutableStateOf(false) }
+    /**
+     * Runs the draft when it names an available [LocalCommand] and clears it; false leaves the draft
+     * for the normal send, which reports unknown or unavailable commands.
+     */
+    fun runLocalCommand(): Boolean {
+        val chat = key as? RemoteNavKey.Chat ?: return false
+        val invocation =
+            localInvocation(state, availableLocalCommands(state, true, System.currentTimeMillis()))
+                ?: return false
+        model.draft("")
+        when (invocation.command) {
+            LocalCommand.NEW -> navigator.createSession(chat.routeId, chat.projectId)
+            LocalCommand.COMPACT -> model.compactContext()
+            LocalCommand.MODEL -> modelPickerRequested = true
+            LocalCommand.NAME -> {
+                val session = state.session ?: return true
+                if (invocation.argument.isEmpty()) startRename(session.text("id"), session.text("title"))
+                else model.renameSession(session.text("id"), invocation.argument)
+            }
+        }
+        return true
+    }
     var abortTarget by remember { mutableStateOf<AbortRunTarget?>(null) }
     var disconnecting by rememberSaveable(key) { mutableStateOf(false) }
     val abortTargetIsCurrent =
@@ -511,11 +534,7 @@ internal fun RemoteScreen(
                     }
                 )
             val statusColor = chatStatusColor(state.status, state.connected)
-            val canRename =
-                state.connected && !state.loading &&
-                    RENAME_CAPABILITY in state.capabilities &&
-                    state.session?.text("origin") in setOf("tui", "rpc") &&
-                    state.status != "offline"
+            val canRename = canRenameSession(state)
             val hasTuiInfo =
                 state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
             val headerColor = floatingHeaderColor()
@@ -526,6 +545,7 @@ internal fun RemoteScreen(
                         if (canViewChanges(state) && state.connected) add(ChatAction.CHANGES)
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
                         if (canRename) add(ChatAction.RENAME)
+                        if (state.connected && !state.loading) add(ChatAction.NEW_SESSION)
                         add(ChatAction.REFRESH)
                         add(ChatAction.SETTINGS)
                     },
@@ -537,6 +557,7 @@ internal fun RemoteScreen(
                     ChatAction.FILES -> chatModel?.openFiles()
                     ChatAction.RENAME ->
                         state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
+                    ChatAction.NEW_SESSION -> navigator.createSession(key.routeId, key.projectId)
                     ChatAction.REFRESH -> model.refresh()
                     ChatAction.SETTINGS -> navigator.settings()
                 }
@@ -1544,7 +1565,7 @@ internal fun RemoteScreen(
                     ChatComposer(
                         state = state,
                         onDraft = model::draft,
-                        onSend = model::prompt,
+                        onSend = { if (!runLocalCommand()) model.prompt() },
                         onFollowUp = model::followUp,
                         onSteer = model::steer,
                         onStopChild = model::stopChild,
@@ -1573,6 +1594,13 @@ internal fun RemoteScreen(
                                 model::selectCommand,
                                 refreshJobs = { chatModel?.refreshJobs() },
                                 openJobs = chatModel?.let { chat -> chat::openJobs },
+                                localCommands =
+                                    availableLocalCommands(state, key is RemoteNavKey.Chat, System.currentTimeMillis()),
+                                selectLocalCommand = { command ->
+                                    model.draft(selectCommandName(state.draft, command.commandName))
+                                },
+                                modelPickerRequested = modelPickerRequested,
+                                onModelPickerRequestHandled = { modelPickerRequested = false },
                             )
                         },
                         onRemoveAttachment = model::removeAttachment,
