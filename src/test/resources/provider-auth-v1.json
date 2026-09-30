@@ -459,6 +459,19 @@
           ]
         }
       }
+    },
+    {
+      "name": "event-auth-url-canonical-query-fragment",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https://auth.example.com/x?a=1&b=%20c#frag",
+          "instructions": "Sign in in the browser."
+        }
+      }
     }
   ],
   "invalid": [
@@ -1395,6 +1408,84 @@
         "state": "succeeded",
         "modelSync": "ok",
         "credential": "x"
+      }
+    },
+    {
+      "name": "event-auth-url-uppercase-scheme",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "HTTPS://auth.example.com/x",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-no-slashes",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https:auth.example.com/x",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-triple-slash",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https:///auth.example.com",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-empty-userinfo",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https://@auth.example.com/",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-backslash",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https://auth.example.com\\\\@x/",
+          "instructions": "Sign in in the browser."
+        }
+      }
+    },
+    {
+      "name": "event-auth-url-no-path",
+      "payload": {
+        "type": "host.event",
+        "kind": "provider.auth.event",
+        "loginId": "TG9naW5JZC0wMTIzNDU2IQ",
+        "event": {
+          "kind": "auth_url",
+          "url": "https://auth.example.com",
+          "instructions": "Sign in in the browser."
+        }
       }
     }
   ]

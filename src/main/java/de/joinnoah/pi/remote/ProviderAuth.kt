@@ -224,7 +224,8 @@ internal fun canManageProviders(state: RemoteState): Boolean =
 
 private val UNSAFE_TEXT = Regex("[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]")
 private val URL_FORBIDDEN = Regex("[\\s\\p{Cc}\\p{Cf}\\p{Z}]")
-private val HTTPS_URL = Regex("^https://([^/?#@\\\\]+)([/?#].*)?$", RegexOption.DOT_MATCHES_ALL)
+// A canonical https URL (WHATWG href) always has a path, at least "/".
+private val HTTPS_URL = Regex("^https://([^/?#@\\\\]+)(/.*)$", RegexOption.DOT_MATCHES_ALL)
 
 private fun bytes(value: String) = value.toByteArray().size
 
