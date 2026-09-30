@@ -358,4 +358,25 @@ class ProviderAuthRepositoryTest {
         assertEquals(before, repository.providers())
     }
 
+
+    @Test
+    fun anInvalidLoginEventIsDroppedAndTriggersRecovery() = runTest {
+        val transport = Transport()
+        val repository = connected(transport)
+        repository.browseProviders("host")
+        runCurrent()
+        transport.replies["provider.auth.login.start"] = { data("login-result") }
+        repository.startLogin("anthropic", ProviderAuthMethod.OAUTH, false)
+        runCurrent()
+        transport.replies["provider.auth.login.status"] = { data("state-awaiting-input") }
+        val bad = fixture.getValue("invalid").jsonArray.map { it.jsonObject }
+            .first { it.text("name") == "event-auth-url-http" }.obj("payload")
+        transport.event(bad)
+        runCurrent()
+        // The connection stays up and the login is re-read from the host.
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertEquals(1, transport.of("provider.auth.login.status").size)
+        assertEquals(PromptType.MANUAL_CODE, repository.providers().flow?.prompt?.prompt?.type)
+    }
 }

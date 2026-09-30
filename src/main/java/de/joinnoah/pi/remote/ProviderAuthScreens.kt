@@ -11,6 +11,7 @@ import android.os.PersistableBundle
 import android.view.View
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -98,9 +99,15 @@ internal fun ProvidersScreen(
 /** Opens [url] in the browser, only when it is an `https:` address. Returns false when it did not open. */
 internal fun openHttpsLink(context: Context, url: String): Boolean {
     if (!validHttpsUrl(url)) return false
-    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
+    val uri = Uri.parse(url)
+    // A Custom Tab keeps the user in the app's task; a browser without support gets a plain view.
+    try {
+        CustomTabsIntent.Builder().build().launchUrl(context, uri)
+        return true
+    } catch (_: ActivityNotFoundException) {
+    }
     return try {
-        context.startActivity(intent)
+        context.startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
         true
     } catch (_: ActivityNotFoundException) {
         false
@@ -153,7 +160,7 @@ internal fun ProvidersContent(
     onRetry: () -> Unit,
     onStart: (providerId: String, method: ProviderAuthMethod, replace: Boolean) -> Unit,
     onLogout: (providerId: String) -> Unit,
-    onAnswer: (promptId: String, value: String) -> Unit,
+    onAnswer: (promptId: String, value: String) -> Boolean,
     onCancelLogin: () -> Unit,
     onDismissLogin: () -> Unit,
     onDismissNotice: () -> Unit,
@@ -521,7 +528,7 @@ internal fun LoginFlowScreen(
     connected: Boolean,
     connection: Int,
     onBack: () -> Unit,
-    onAnswer: (promptId: String, value: String) -> Unit,
+    onAnswer: (promptId: String, value: String) -> Boolean,
     onCancel: () -> Unit,
     onDone: () -> Unit,
     onOpenLink: (String) -> Boolean,
@@ -552,7 +559,7 @@ internal fun LoginFlowScreen(
                 flow.info?.let { InfoCard(it, open) }
                 val prompt = flow.prompt
                 if (prompt != null)
-                    PromptCard(prompt, sending = flow.answering, onAnswer = onAnswer)
+                    PromptCard(prompt, sending = flow.answering, connected = connected, onAnswer = onAnswer)
                 else ProgressLine(flow)
                 if (flow.needsSecureWindow())
                     Text(
@@ -720,7 +727,7 @@ private fun InfoCard(info: AuthEvent.Info, onOpen: (String) -> Unit) {
  * not in a draft or navigation snapshot, cleared after sending and when the prompt goes away.
  */
 @Composable
-private fun PromptCard(pending: PendingPrompt, sending: Boolean, onAnswer: (String, String) -> Unit) {
+private fun PromptCard(pending: PendingPrompt, sending: Boolean, connected: Boolean, onAnswer: (String, String) -> Boolean) {
     val prompt = pending.prompt
     key(pending.promptId) {
         Card(Modifier.fillMaxWidth().testTag("loginPrompt")) {
@@ -728,20 +735,21 @@ private fun PromptCard(pending: PendingPrompt, sending: Boolean, onAnswer: (Stri
                 if (prompt.type == PromptType.MANUAL_CODE)
                     Text(stringResource(R.string.providers_manual_code_hint), style = MaterialTheme.typography.bodyMedium)
                 Text(prompt.message, style = MaterialTheme.typography.bodyLarge)
-                if (prompt.type == PromptType.SELECT) SelectPrompt(pending, sending, onAnswer)
-                else TextPrompt(pending, sending, onAnswer)
+                if (prompt.type == PromptType.SELECT) SelectPrompt(pending, sending, connected, onAnswer)
+                else TextPrompt(pending, sending, connected, onAnswer)
             }
         }
     }
 }
 
 @Composable
-private fun TextPrompt(pending: PendingPrompt, sending: Boolean, onAnswer: (String, String) -> Unit) {
+private fun TextPrompt(pending: PendingPrompt, sending: Boolean, connected: Boolean, onAnswer: (String, String) -> Boolean) {
     val prompt = pending.prompt
     val secret = prompt.type == PromptType.SECRET
     val manual = prompt.type == PromptType.MANUAL_CODE
     var value by remember { mutableStateOf("") }
     var shown by remember { mutableStateOf(!secret) }
+    var notSent by remember { mutableStateOf(false) }
     DisposableEffect(Unit) { onDispose { value = "" } }
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
@@ -771,8 +779,8 @@ private fun TextPrompt(pending: PendingPrompt, sending: Boolean, onAnswer: (Stri
             KeyboardOptions(
                 keyboardType =
                     when {
-                        secret -> KeyboardType.Password
-                        manual -> KeyboardType.Uri
+                        // Password keeps the keyboard from learning or suggesting the value.
+                        secret || manual -> KeyboardType.Password
                         else -> KeyboardType.Text
                     },
                 autoCorrectEnabled = false,
@@ -807,21 +815,33 @@ private fun TextPrompt(pending: PendingPrompt, sending: Boolean, onAnswer: (Stri
         Button(
             onClick = {
                 val answer = if (secret || manual) value.trim() else value
-                value = ""
-                onAnswer(pending.promptId, answer)
+                // Cleared only once the answer was sent; otherwise the user keeps what they typed.
+                if (onAnswer(pending.promptId, answer)) {
+                    value = ""
+                    notSent = false
+                    if (secret || manual)
+                        scope.launch {
+                            // The pasted value must not linger on the clipboard.
+                            val onClipboard =
+                                clipboard.getClipEntry()?.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text
+                            if (onClipboard?.toString()?.trim() == answer) clipboard.setClipEntry(null)
+                        }
+                } else notSent = true
             },
-            enabled = !sending && !tooLong && (prompt.type == PromptType.TEXT || value.isNotBlank()),
+            enabled = !sending && connected && !tooLong && (prompt.type == PromptType.TEXT || value.isNotBlank()),
             modifier = Modifier.testTag("loginSend"),
         ) {
             if (sending) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
             else Text(stringResource(if (secret) R.string.providers_secret_save else R.string.providers_send))
         }
     }
+    if (notSent) Text(stringResource(R.string.providers_answer_not_sent), color = MaterialTheme.colorScheme.error)
 }
 
 @Composable
-private fun SelectPrompt(pending: PendingPrompt, sending: Boolean, onAnswer: (String, String) -> Unit) {
+private fun SelectPrompt(pending: PendingPrompt, sending: Boolean, connected: Boolean, onAnswer: (String, String) -> Boolean) {
     var selected by remember { mutableStateOf<String?>(null) }
+    var notSent by remember { mutableStateOf(false) }
     Column(Modifier.selectableGroup()) {
         pending.prompt.options.forEach { option ->
             Row(
@@ -848,11 +868,12 @@ private fun SelectPrompt(pending: PendingPrompt, sending: Boolean, onAnswer: (St
         }
     }
     Button(
-        onClick = { selected?.let { onAnswer(pending.promptId, it) } },
-        enabled = !sending && selected != null,
+        onClick = { selected?.let { notSent = !onAnswer(pending.promptId, it) } },
+        enabled = !sending && connected && selected != null,
         modifier = Modifier.testTag("loginSend"),
     ) {
         if (sending) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
         else Text(stringResource(R.string.providers_send))
     }
+    if (notSent) Text(stringResource(R.string.providers_answer_not_sent), color = MaterialTheme.colorScheme.error)
 }

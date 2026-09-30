@@ -192,6 +192,8 @@ data class LoginFlow(
     val answering: Boolean = false,
     val cancelling: Boolean = false,
     val notice: ProviderNotice? = null,
+    /** Counts live updates, so a status result requested earlier cannot overwrite newer state. */
+    val live: Int = 0,
 ) {
     val finished: Boolean
         get() = state.finished
@@ -501,7 +503,9 @@ internal fun providerAuthEvent(payload: JsonObject): ProviderAuthUpdate? {
 private fun LoginFlow.withEvent(event: AuthEvent, now: Long?): LoginFlow =
     when (event) {
         is AuthEvent.AuthUrl -> copy(authUrl = event)
-        is AuthEvent.DeviceCode -> copy(deviceCode = event, deviceCodeAt = now)
+        // The same code delivered again (a status after the browser trip) keeps its arrival time.
+        is AuthEvent.DeviceCode ->
+            copy(deviceCode = event, deviceCodeAt = if (event == deviceCode && deviceCodeAt != null) deviceCodeAt else now)
         is AuthEvent.Info -> copy(info = event)
         is AuthEvent.Progress -> copy(progress = event.message)
     }
@@ -512,6 +516,13 @@ private fun LoginFlow.withEvent(event: AuthEvent, now: Long?): LoginFlow =
  */
 internal fun LoginFlow.updatedBy(update: ProviderAuthUpdate, now: Long): LoginFlow {
     if (finished || update.loginId != loginId) return this
+    val next = applied(update, now)
+    return if (next == this) this else next.bumped()
+}
+
+private fun LoginFlow.bumped() = copy(live = live + 1)
+
+private fun LoginFlow.applied(update: ProviderAuthUpdate, now: Long): LoginFlow {
     return when (update) {
         is ProviderAuthUpdate.Event -> withEvent(update.event, now)
         is ProviderAuthUpdate.Prompt ->
@@ -536,8 +547,9 @@ internal fun LoginFlow.updatedBy(update: ProviderAuthUpdate, now: Long): LoginFl
  * Applies a `login.status` result, the recovery after an app switch or reconnect. A recovered
  * device code has no arrival time, so it shows no countdown.
  */
-internal fun LoginFlow.updatedBy(status: LoginStatus): LoginFlow {
-    if (finished || status.loginId != loginId) return this
+internal fun LoginFlow.updatedBy(status: LoginStatus, requestedAtLive: Int = live): LoginFlow {
+    // A live event since the request is newer than this snapshot.
+    if (finished || status.loginId != loginId || requestedAtLive != live) return this
     val base =
         copy(
             state = status.state,
@@ -553,7 +565,7 @@ internal fun LoginFlow.updatedBy(status: LoginStatus): LoginFlow {
 /** [promptId] was answered and accepted: no second answer for it, whatever the events say. */
 internal fun LoginFlow.answered(promptId: String): LoginFlow =
     if (finished || prompt?.promptId != promptId) copy(answering = false)
-    else copy(state = LoginState.RUNNING, prompt = null, answering = false)
+    else copy(state = LoginState.RUNNING, prompt = null, answering = false, live = live + 1)
 
 /** The flow of a login found in a list after the app lost it. */
 internal fun ActiveLogin.toFlow(): LoginFlow = LoginFlow(loginId, providerId, null, state)

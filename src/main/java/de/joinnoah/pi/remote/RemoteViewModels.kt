@@ -196,7 +196,11 @@ internal class ProvidersViewModel(
     fun startLogin(providerId: String, method: ProviderAuthMethod, replace: Boolean) =
         active { repository.startLogin(providerId, method, replace) }
 
-    fun answerLogin(promptId: String, value: String) = active { repository.answerLogin(promptId, value) }
+    fun answerLogin(promptId: String, value: String): Boolean {
+        var sent = false
+        active { sent = repository.answerLogin(promptId, value) }
+        return sent
+    }
 
     fun cancelLogin() = active(repository::cancelLogin)
 

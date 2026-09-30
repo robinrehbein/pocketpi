@@ -27,6 +27,7 @@ class ProviderAuthUiTest {
     private val logouts = mutableListOf<String>()
     private val answers = mutableListOf<Pair<String, String>>()
     private var cancels = 0
+    private var accept = true
     private var done = 0
     private val opened = mutableListOf<String>()
 
@@ -67,7 +68,10 @@ class ProviderAuthUiTest {
                     onRetry = {},
                     onStart = { id, method, replace -> starts += Triple(id, method, replace) },
                     onLogout = { logouts += it },
-                    onAnswer = { prompt, value -> answers += prompt to value },
+                    onAnswer = { prompt, value ->
+                        answers += prompt to value
+                        accept
+                    },
                     onCancelLogin = { cancels++ },
                     onDismissLogin = { done++ },
                     onDismissNotice = {},
@@ -218,5 +222,19 @@ class ProviderAuthUiTest {
     fun aRunningLoginOfThisDeviceCanBeReopenedFromTheList() {
         render(list(flow = flow({ it.copy(state = LoginState.RUNNING) })))
         compose.onNodeWithTag("loginFlow").assertIsDisplayed()
+    }
+
+    @Test
+    fun anAnswerThatCannotBeSentKeepsTheEntryAndSaysSo() {
+        accept = false
+        render(list(flow = flow({ it.copy(prompt = prompt(PromptType.SECRET)) })))
+        compose.onNodeWithTag("loginSecretField").performTextInput("sk-secret")
+        compose.onNodeWithTag("loginSend").performClick()
+        compose.onNodeWithText("Could not send", substring = true).assertIsDisplayed()
+        // The entry is still there, so Send stays available for a retry.
+        compose.onNodeWithTag("loginSend").assertIsEnabled()
+        accept = true
+        compose.onNodeWithTag("loginSend").performClick()
+        assertEquals(listOf(promptId to "sk-secret", promptId to "sk-secret"), answers)
     }
 }

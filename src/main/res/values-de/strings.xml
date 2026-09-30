@@ -356,7 +356,7 @@
     <string name="providers_auth_url_intro">Öffne die Anmeldeseite, melde dich an und komm dann hierher zurück.</string>
     <string name="providers_manual_code_hint">Nach der Anmeldung kann der Browser eine Seite auf localhost vermutlich nicht laden. Das ist zu erwarten. Kopiere die Adresse dieser Seite aus dem Browser und füge sie hier ein.</string>
     <string name="providers_manual_code_label">Adresse oder Code</string>
-    <string name="providers_secret_label">Geheimnis</string>
+    <string name="providers_secret_label">API-Schlüssel oder Token</string>
     <string name="providers_text_label">Antwort</string>
     <string name="providers_paste">Einfügen</string>
     <string name="providers_show">Anzeigen</string>
@@ -392,4 +392,5 @@
     <string name="providers_error_invalid">Der Mac hat diese Eingabe nicht akzeptiert.</string>
     <string name="providers_error_offline">Der Mac ist offline.</string>
     <string name="providers_error_internal">Der Mac konnte das nicht abschließen.</string>
+    <string name="providers_answer_not_sent">Senden nicht möglich. Prüfe die Verbindung und versuche es erneut; deine Eingabe bleibt erhalten.</string>
 </resources>

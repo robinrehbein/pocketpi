@@ -346,9 +346,10 @@ interface RemoteRepository {
 
     /**
      * Answers the pending prompt [promptId] with [value]. The value may be a secret: it is sent and
-     * dropped, never stored or logged.
+     * dropped, never stored or logged. Returns whether the answer was sent; on false the caller
+     * keeps what the user typed.
      */
-    fun answerLogin(promptId: String, value: String) {}
+    fun answerLogin(promptId: String, value: String): Boolean = false
 
     fun cancelLogin() {}
 

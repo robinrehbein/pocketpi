@@ -1016,9 +1016,12 @@ class DefaultRemoteRepository(
                     }
                 }
                 "host.event" ->
-                    cloneEvent(payload)?.let(::applyCloneUpdate)
-                        ?: providerAuthEvent(payload)?.let(::applyProviderAuthUpdate)
-                        ?: jobEvent(payload)?.let(jobsController::onEvent)
+                    if (payload.optionalText("kind")?.startsWith("provider.auth.") == true) {
+                        receiveProviderAuthEvent(payload)
+                    } else {
+                        cloneEvent(payload)?.let(::applyCloneUpdate)
+                            ?: jobEvent(payload)?.let(jobsController::onEvent)
+                    }
                 else -> error("Unknown payload")
             }
         } catch (_: Exception) {
@@ -3558,15 +3561,19 @@ class DefaultRemoteRepository(
         providerStatusJob = scope.launch {
             var attempt = 0
             while (true) {
-                if (session != folderSession || state.value.providerAuth.flow?.loginId != flow.loginId) return@launch
+                val current = state.value.providerAuth.flow
+                if (session != folderSession || current?.loginId != flow.loginId) return@launch
+                val live = current.live
                 try {
                     val status =
                         parseLoginStatus(folderRequest("provider.auth.login.status", "loginId" to flow.loginId))
                     require(status.loginId == flow.loginId)
                     providerWrite(routeId, session) { auth ->
-                        auth.copy(flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.updatedBy(status) ?: auth.flow)
+                        auth.copy(flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.updatedBy(status, live) ?: auth.flow)
                     }
                     if (status.state.finished) refreshProviders()
+                    // A live event overtook the snapshot: ask again for the current one.
+                    if (state.value.providerAuth.flow?.let { it.loginId == flow.loginId && it.live != live && !it.finished } == true) continue
                     return@launch
                 } catch (e: CancellationException) {
                     throw e
@@ -3583,6 +3590,21 @@ class DefaultRemoteRepository(
                 }
             }
         }
+    }
+
+    /**
+     * A provider login event that fails validation is dropped instead of closing the channel; the
+     * flow then reads its state from the host, which may have moved on.
+     */
+    private fun receiveProviderAuthEvent(payload: JsonObject) {
+        val update =
+            try {
+                providerAuthEvent(payload)
+            } catch (_: Exception) {
+                if (state.value.providerAuth.flow?.finished == false) recoverLogin()
+                return
+            }
+        update?.let(::applyProviderAuthUpdate)
     }
 
     /** Applies a validated login `host.event` to the flow it names. */
@@ -3636,13 +3658,13 @@ class DefaultRemoteRepository(
         }
     }
 
-    override fun answerLogin(promptId: String, value: String) {
-        val routeId = providerRoute() ?: return
-        val flow = state.value.providerAuth.flow ?: return
-        val prompt = flow.prompt?.takeIf { it.promptId == promptId } ?: return
-        if (flow.finished || flow.answering) return
-        if (value.toByteArray().size > MAX_PROVIDER_AUTH_ANSWER_BYTES) return
-        if (prompt.prompt.type == PromptType.SELECT && prompt.prompt.options.none { it.id == value }) return
+    override fun answerLogin(promptId: String, value: String): Boolean {
+        val routeId = providerRoute() ?: return false
+        val flow = state.value.providerAuth.flow ?: return false
+        val prompt = flow.prompt?.takeIf { it.promptId == promptId } ?: return false
+        if (flow.finished || flow.answering) return false
+        if (value.toByteArray().size > MAX_PROVIDER_AUTH_ANSWER_BYTES) return false
+        if (prompt.prompt.type == PromptType.SELECT && prompt.prompt.options.none { it.id == value }) return false
         val session = folderSession
         updateFlow(flow.loginId) { it.copy(answering = true, notice = null) }
         scope.launch {
@@ -3676,6 +3698,7 @@ class DefaultRemoteRepository(
                 if (e.message == "already_resolved" || e.message == "not_found") recoverLogin()
             }
         }
+        return true
     }
 
     override fun cancelLogin() {

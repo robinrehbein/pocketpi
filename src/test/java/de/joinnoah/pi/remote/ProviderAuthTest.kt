@@ -267,4 +267,35 @@ class ProviderAuthTest {
         }
     }
 
+
+    @Test
+    fun aStatusWithTheSameDeviceCodeKeepsItsCountdown() {
+        val live = LoginFlow(loginId, "github-copilot", null).updatedBy(update("event-device-code"), 5_000)
+        val status = parseLoginStatus(valid("state-running-device-code").obj("data"))
+        val same = (status.lastEvent as AuthEvent.DeviceCode)
+        val again = live.copy(deviceCode = same).updatedBy(status)
+        assertEquals(5_000L, again.deviceCodeAt)
+    }
+
+    @Test
+    fun aStatusRequestedBeforeALiveUpdateIsIgnored() {
+        val flow = LoginFlow(loginId, "anthropic", null)
+        val requestedAt = flow.live
+        val newer = flow.updatedBy(update("prompt-secret"), 0)
+        val stale = parseLoginStatus(valid("state-running-device-code").obj("data"))
+        // The snapshot has no prompt; applying it would drop the newer live prompt.
+        assertEquals(newer, newer.updatedBy(stale, requestedAt))
+        assertNotNull(newer.updatedBy(stale, requestedAt).prompt)
+        assertNull(newer.updatedBy(stale).prompt)
+    }
+
+    @Test
+    fun canonicalUrlsWithUnusualCharactersAreAccepted() {
+        assertTrue(validHttpsUrl("https://xn--bcher-kva.example/a|b^c{d}e[f]`g?q=|^{}[]`"))
+        assertTrue(validHttpsUrl("https://192.168.0.1/callback"))
+        assertTrue(validHttpsUrl("https://[2001:db8::1]:8443/path"))
+        assertTrue(validHttpsUrl("https://[::1]/"))
+        assertFalse(validHttpsUrl("https://user@[::1]/"))
+        assertFalse(validHttpsUrl("https://:443/"))
+    }
 }
