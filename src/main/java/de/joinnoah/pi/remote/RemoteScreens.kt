@@ -456,6 +456,7 @@ internal fun RemoteScreen(
         renameDraft = TextFieldValue(title, TextRange(title.length))
     }
     var modelPickerRequested by remember(key) { mutableStateOf(false) }
+    var settingsSheetRequested by remember(key) { mutableStateOf(false) }
     /**
      * Runs the draft when it names an available [LocalCommand] and clears it; false leaves the draft
      * for the normal send, which reports unknown or unavailable commands.
@@ -470,6 +471,7 @@ internal fun RemoteScreen(
             LocalCommand.NEW -> navigator.createSession(chat.routeId, chat.projectId)
             LocalCommand.COMPACT -> model.compactContext()
             LocalCommand.MODEL -> modelPickerRequested = true
+            LocalCommand.SETTINGS -> settingsSheetRequested = true
             LocalCommand.NAME -> {
                 val session = state.session ?: return true
                 if (invocation.argument.isEmpty()) startRename(session.text("id"), session.text("title"))
@@ -546,6 +548,9 @@ internal fun RemoteScreen(
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
                         if (canRename) add(ChatAction.RENAME)
                         if (state.connected && !state.loading) add(ChatAction.NEW_SESSION)
+                        // Offered while pi runs (the sheet then explains it is read-only); `/settings` is typed into an idle draft only.
+                        if (state.connected && !state.loading && sessionSettingsAvailable(state))
+                            add(ChatAction.SESSION_SETTINGS)
                         add(ChatAction.REFRESH)
                         add(ChatAction.SETTINGS)
                     },
@@ -559,6 +564,7 @@ internal fun RemoteScreen(
                         state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
                     ChatAction.NEW_SESSION -> navigator.createSession(key.routeId, key.projectId)
                     ChatAction.REFRESH -> model.refresh()
+                    ChatAction.SESSION_SETTINGS -> settingsSheetRequested = true
                     ChatAction.SETTINGS -> navigator.settings()
                 }
             }
@@ -1601,6 +1607,9 @@ internal fun RemoteScreen(
                                 },
                                 modelPickerRequested = modelPickerRequested,
                                 onModelPickerRequestHandled = { modelPickerRequested = false },
+                                changeSettings = model::changeSettings,
+                                settingsSheetRequested = settingsSheetRequested,
+                                onSettingsSheetRequestHandled = { settingsSheetRequested = false },
                             )
                         },
                         onRemoveAttachment = model::removeAttachment,

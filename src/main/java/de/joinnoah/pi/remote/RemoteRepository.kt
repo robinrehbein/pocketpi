@@ -189,6 +189,9 @@ interface RemoteRepository {
 
     fun setThinkingLevel(level: String) {}
 
+    /** Changes the given session settings; null leaves a setting as it is. */
+    fun changeSettings(autoCompaction: Boolean? = null, steeringMode: String? = null, followUpMode: String? = null) {}
+
     fun refreshCommands() {}
 
     fun selectCommand(command: RemoteCommand) {}

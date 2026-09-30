@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
@@ -42,6 +43,7 @@ private fun ChatAction.icon(): ImageVector =
         ChatAction.REFRESH -> Icons.Default.Refresh
         ChatAction.SETTINGS -> Icons.Default.Settings
         ChatAction.NEW_SESSION -> Icons.Default.Add
+        ChatAction.SESSION_SETTINGS -> Icons.Outlined.Tune
     }
 
 private fun ChatAction.label(): Int =
@@ -52,6 +54,7 @@ private fun ChatAction.label(): Int =
         ChatAction.REFRESH -> R.string.remote_refresh
         ChatAction.SETTINGS -> R.string.remote_settings
         ChatAction.NEW_SESSION -> R.string.remote_new_session
+        ChatAction.SESSION_SETTINGS -> R.string.remote_session_settings_title
     }
 
 /** The chat header pill: the most used actions as buttons, the rest behind a chevron. */

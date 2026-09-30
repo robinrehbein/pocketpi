@@ -413,7 +413,7 @@ class GitChangesTest {
         // Three uses 28 days ago weigh 0.75, less than one use today.
         assertEquals(0.75, checkNotNull(settings).decayed(28 * day), 1e-9)
         val ranked = rankChatActions(mapOf(ChatAction.SETTINGS to settings!!, ChatAction.RENAME to rename), 28 * day)
-        assertEquals(listOf(ChatAction.RENAME, ChatAction.SETTINGS, ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.NEW_SESSION), ranked)
+        assertEquals(listOf(ChatAction.RENAME, ChatAction.SETTINGS, ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.NEW_SESSION, ChatAction.SESSION_SETTINGS), ranked)
         // One half-life halves a use.
         assertEquals(0.5, null.used(0).decayed(14 * day), 1e-9)
     }

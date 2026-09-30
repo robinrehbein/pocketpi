@@ -102,6 +102,9 @@ internal open class DestinationViewModel(
 
     fun setThinkingLevel(level: String) = active { repository.setThinkingLevel(level) }
 
+    fun changeSettings(autoCompaction: Boolean?, steeringMode: String?, followUpMode: String?) =
+        active { repository.changeSettings(autoCompaction, steeringMode, followUpMode) }
+
     fun refreshCommands() = active(repository::refreshCommands)
 
     fun selectCommand(command: RemoteCommand) = active { repository.selectCommand(command) }

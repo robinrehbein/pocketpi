@@ -1,6 +1,8 @@
 package de.joinnoah.pi.remote
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.*
 import org.junit.Test
@@ -185,6 +187,58 @@ class SessionControlsTest {
         capabilities = setOf(CONFIGURATION_CAPABILITY, COMPACT_CAPABILITY, RENAME_CAPABILITY),
         session = Wire.objectOf("id" to "s1", "title" to "T", "origin" to "rpc"),
     )
+
+    private fun settingsJson(vararg overrides: Pair<String, Any?>) =
+        Wire.objectOf("autoCompaction" to true, "steeringMode" to "one-at-a-time", "followUpMode" to "all", *overrides)
+
+    private fun configurationWith(settings: JsonElement?) =
+        configuration(
+            Wire.objectOf(
+                "kind" to "configuration",
+                "sessionId" to "session",
+                "thinkingLevel" to "high",
+                "thinkingLevels" to JsonArray(listOf(JsonPrimitive("high"))),
+                "models" to JsonArray(emptyList()),
+                "modelsTruncated" to false,
+                *(if (settings == null) emptyArray() else arrayOf("settings" to settings)),
+            ),
+            "session",
+        )
+
+    @Test
+    fun configurationReadsOptionalSessionSettings() {
+        assertEquals(SessionSettings(true, "one-at-a-time", "all"), configurationWith(settingsJson()).settings)
+        assertNull(configurationWith(null).settings)
+        assertNull(configurationWith(JsonNull).settings)
+        assertNull(configurationWith(JsonPrimitive("on")).settings)
+        assertNull(configurationWith(settingsJson("steeringMode" to "sometimes")).settings)
+        assertNull(configurationWith(settingsJson("followUpMode" to 1)).settings)
+        assertNull(configurationWith(settingsJson("autoCompaction" to "true")).settings)
+        assertNull(configurationWith(settingsJson("autoCompaction" to null)).settings)
+        assertNull(configurationWith(Wire.objectOf("autoCompaction" to true)).settings)
+        // Invalid settings do not invalidate the rest of the configuration.
+        assertEquals("high", configurationWith(settingsJson("steeringMode" to "x")).thinkingLevel)
+    }
+
+    @Test
+    fun sessionSettingsNeedTheCapabilityAndReportedSettings() {
+        val withSettings = chatState.copy(
+            capabilities = chatState.capabilities + SETTINGS_CAPABILITY,
+            configuration = configurationWith(settingsJson()),
+        )
+        assertTrue(sessionSettingsAvailable(withSettings))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(configuration = configurationWith(null))))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(configuration = null)))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(capabilities = chatState.capabilities)))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(unavailableCapabilities = setOf(SETTINGS_CAPABILITY))))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(unavailableCapabilities = setOf(CONFIGURATION_CAPABILITY))))
+        assertEquals(
+            listOf(LocalCommand.NEW, LocalCommand.COMPACT, LocalCommand.MODEL, LocalCommand.SETTINGS, LocalCommand.NAME),
+            availableLocalCommands(withSettings, true, 0),
+        )
+        assertFalse(LocalCommand.SETTINGS in availableLocalCommands(withSettings.copy(status = "running"), true, 0))
+        assertFalse(LocalCommand.SETTINGS in availableLocalCommands(chatState, true, 0))
+    }
 
     @Test
     fun localCommandsFollowTheControlsTheyStandFor() {
