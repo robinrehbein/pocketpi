@@ -180,8 +180,8 @@ Keystore and encrypted file recreation. With an attached emulator, run
 Unit tests consume the seven JSON fixtures in `src/test/resources/`. Six are byte-for-byte copies
 of `packages/pi-remote/protocol/fixtures/` from noah-monorepo commit
 `1550dcc200459913b9b1dc9b16fc3439db341c68`. The seventh, `provider-auth-v1.json` (provider login),
-is a byte-for-byte copy from noah-monorepo commit `239a15412b9537ee7bfa120c0680a5ccb4e71d6a` on
-pull request #633, which is not merged yet; re-copy it from the merge commit once it lands. When the upstream protocol fixtures change,
+is a byte-for-byte copy from noah-monorepo commit `daca1ee562ca661fb76ce2d61a75ca2fc8c8059f`, the
+merge of pull request #633. When the upstream protocol fixtures change,
 copy the changed files into `src/test/resources/`, compare their bytes with the upstream source,
 and run `./gradlew testDebugUnitTest`. The fixtures cover byte-identical
 HKDF, AES-GCM and QR encoding, replay and tampering rejection, session request correlation, history
