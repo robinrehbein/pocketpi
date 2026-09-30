@@ -151,6 +151,16 @@ and slash commands remain idle-only. Interactive Mac TUI sessions do not accept 
 while busy; the information icon next to the chat title explains their local controls. Refresh
 reconnects an offline saved host. The Mac must remain awake with the host service running.
 
+With a host that advertises `provider.auth.v1`, the Projects screen has a Providers screen. It lists
+the Mac's pi providers and signs them in (OAuth device code, OAuth link plus a pasted address, API
+key or select prompts) or out; the Mac stores the credential in pi's `auth.json`. One login runs at
+a time and can be left and resumed, and PocketPi rebuilds its state from the host after a restart or
+reconnect. While a key, a pasted address or a device code is on screen, the window is marked secure
+(no screenshots or recents thumbnail) and autofill is off. Typed secrets stay in memory, are cleared
+after sending and never enter drafts, saved state or logs. Sign-out removes only the Mac's stored
+credential; it does not revoke anything at the provider. The channel has no forward secrecy, so a
+key typed on the phone is as exposed as a prompt or a file sent the same way.
+
 The interface follows the system language with English fallback and German resources. Appearance can
 follow the system or use the illustrated light or dark choices. QR recognition runs locally with
 CameraX and ZXing.
@@ -167,14 +177,16 @@ Keystore and encrypted file recreation. With an attached emulator, run
 `./gradlew connectedDebugAndroidTest`. For the managed API 36 device used by CI, run
 `./gradlew pixel2Api36DebugAndroidTest`.
 
-Unit tests consume the six JSON fixtures in `src/test/resources/`. These are byte-for-byte copies
+Unit tests consume the seven JSON fixtures in `src/test/resources/`. Six are byte-for-byte copies
 of `packages/pi-remote/protocol/fixtures/` from noah-monorepo commit
-`1550dcc200459913b9b1dc9b16fc3439db341c68`. When the upstream protocol fixtures change,
+`1550dcc200459913b9b1dc9b16fc3439db341c68`. The seventh, `provider-auth-v1.json` (provider login),
+is a byte-for-byte copy from noah-monorepo commit `daca1ee562ca661fb76ce2d61a75ca2fc8c8059f`, the
+merge of pull request #633. When the upstream protocol fixtures change,
 copy the changed files into `src/test/resources/`, compare their bytes with the upstream source,
 and run `./gradlew testDebugUnitTest`. The fixtures cover byte-identical
 HKDF, AES-GCM and QR encoding, replay and tampering rejection, session request correlation, history
 pagination, early events, questionnaire defaults and the project file browser's list and read
-results. A built APK does not establish Samsung device, TalkBack, mobile-network or real Firebase
+results, and the provider login commands, results and events. A built APK does not establish Samsung device, TalkBack, mobile-network or real Firebase
 delivery acceptance; those require the configured host, relay and device.
 
 ## Appearance

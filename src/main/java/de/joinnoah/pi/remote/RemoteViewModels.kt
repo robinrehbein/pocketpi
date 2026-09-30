@@ -24,6 +24,8 @@ internal open class DestinationViewModel(
             is RemoteNavKey.Projects -> state.selection.routeId == key.routeId
             is RemoteNavKey.FolderBrowser ->
                 state.selection.routeId == key.routeId && state.selection.projectId == null
+            is RemoteNavKey.Providers ->
+                state.selection.routeId == key.routeId && state.selection.projectId == null
             is RemoteNavKey.Sessions ->
                 state.selection.routeId == key.routeId && state.selection.projectId == key.projectId
             is RemoteNavKey.Chat -> state.selection == key.selection()
@@ -177,6 +179,36 @@ internal class FolderBrowserViewModel(
     fun dismissNotice() = repository.dismissFolderNotice()
 
     fun cancelTrust() = repository.cancelFolderTrust()
+}
+
+internal class ProvidersViewModel(
+    repository: RemoteRepository,
+    key: RemoteNavKey.Providers,
+) : DestinationViewModel(repository, key) {
+    private val routeId = key.routeId
+
+    /** Loads the list again, for retry, after a reconnect and when the app comes back. */
+    fun reload() = active {
+        if (repository.state.value.providerAuth.routeId == routeId) repository.refreshProviders()
+        else repository.browseProviders(routeId)
+    }
+
+    fun startLogin(providerId: String, method: ProviderAuthMethod, replace: Boolean) =
+        active { repository.startLogin(providerId, method, replace) }
+
+    fun answerLogin(promptId: String, value: String): Boolean {
+        var sent = false
+        active { sent = repository.answerLogin(promptId, value) }
+        return sent
+    }
+
+    fun cancelLogin() = active(repository::cancelLogin)
+
+    fun logout(providerId: String) = active { repository.logoutProvider(providerId) }
+
+    fun dismissLogin() = repository.dismissLogin()
+
+    fun dismissNotice() = repository.dismissProviderNotice()
 }
 
 internal class SessionsViewModel(

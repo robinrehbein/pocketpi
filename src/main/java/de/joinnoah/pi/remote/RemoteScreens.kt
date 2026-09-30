@@ -520,6 +520,7 @@ internal fun RemoteScreen(
                     is RemoteNavKey.Sessions -> R.string.remote_sessions
                     is RemoteNavKey.Chat -> R.string.remote_chat
                     is RemoteNavKey.FolderBrowser -> R.string.remote_folders_title
+                    is RemoteNavKey.Providers -> R.string.providers_title
                     RemoteNavKey.Settings -> R.string.remote_settings
                 }
         )
@@ -791,13 +792,23 @@ internal fun RemoteScreen(
                             is RemoteNavKey.Sessions -> Unit
                             is RemoteNavKey.Chat -> Unit
                             is RemoteNavKey.FolderBrowser -> Unit
-                            is RemoteNavKey.Projects ->
+                            is RemoteNavKey.Providers -> Unit
+                            is RemoteNavKey.Projects -> {
+                                if (canManageProviders(state))
+                                    OutlinedButton(
+                                        onClick = { navigator.openProviders(key.routeId) },
+                                        enabled = !state.loading,
+                                        modifier = Modifier.fillMaxWidth().testTag("providersButton"),
+                                    ) {
+                                        Text(stringResource(R.string.providers_open))
+                                    }
                                 OutlinedButton(
                                     onClick = { disconnecting = true },
                                     modifier = Modifier.fillMaxWidth(),
                                 ) {
                                     Text(stringResource(R.string.remote_disconnect))
                                 }
+                            }
                         }
                     }
                 }
@@ -1181,6 +1192,7 @@ internal fun RemoteScreen(
                 when (key) {
                     RemoteNavKey.Settings -> Unit
                     is RemoteNavKey.FolderBrowser -> Unit
+                    is RemoteNavKey.Providers -> Unit
                     RemoteNavKey.Hosts -> {
                         if (state.hosts.isEmpty()) {
                             item {
