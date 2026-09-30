@@ -61,6 +61,13 @@ sealed interface RemoteNavKey : NavKey {
      * Projects selection; the browsed path lives in [RemoteState.folders].
      */
     @Serializable data class FolderBrowser(val routeId: String) : RemoteNavKey
+
+    /**
+     * The providers of one host (`provider.auth.v1`), on top of that host's Projects like
+     * [FolderBrowser]. Only the route is saved; the login flow lives in [RemoteState.providerAuth]
+     * and is recovered from the host.
+     */
+    @Serializable data class Providers(val routeId: String) : RemoteNavKey
 }
 
 internal fun RemoteNavKey.selection(): RemoteSelection =
@@ -69,6 +76,7 @@ internal fun RemoteNavKey.selection(): RemoteSelection =
         RemoteNavKey.Settings -> RemoteSelection()
         is RemoteNavKey.Projects -> RemoteSelection(routeId)
         is RemoteNavKey.FolderBrowser -> RemoteSelection(routeId)
+        is RemoteNavKey.Providers -> RemoteSelection(routeId)
         is RemoteNavKey.Sessions -> RemoteSelection(routeId, projectId)
         is RemoteNavKey.Chat -> RemoteSelection(routeId, projectId, sessionId)
     }
@@ -161,7 +169,7 @@ internal class RemoteNavigator(
     ) {
         val keys = selection.keys()
         // The folder browser shares the Projects selection, so it survives a restore on top of it.
-        val folders = topKey() as? RemoteNavKey.FolderBrowser
+        val folders = topKey()?.takeIf { it is RemoteNavKey.FolderBrowser || it is RemoteNavKey.Providers }
         if (folders != null && selection == folders.selection()) {
             setStack(keys + folders, keepSettings)
             return
@@ -321,6 +329,14 @@ internal class RemoteNavigator(
         repository.dismissFolderNotice()
         repository.browseFolder(routeId, "")
         stack.add(RemoteNavKey.FolderBrowser(routeId))
+    }
+
+    /** Opens the providers of [routeId] on top of the host's Projects. */
+    fun openProviders(routeId: String) {
+        if (topKey() != RemoteNavKey.Projects(routeId)) return
+        repository.dismissProviderNotice()
+        repository.browseProviders(routeId)
+        stack.add(RemoteNavKey.Providers(routeId))
     }
 
     /** Shows [path] in the open folder browser; the breadcrumb jumps here. */
@@ -609,6 +625,10 @@ private fun RemoteNavDisplay(
                 entry<RemoteNavKey.FolderBrowser> { key ->
                     val model = viewModel { FolderBrowserViewModel(repository, key) }
                     FolderBrowserScreen(key, model, navigator)
+                }
+                entry<RemoteNavKey.Providers> { key ->
+                    val model = viewModel { ProvidersViewModel(repository, key) }
+                    ProvidersScreen(key, model, navigator)
                 }
                 entry<RemoteNavKey.Chat>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ChatViewModel(repository, key, settings) }

@@ -151,6 +151,16 @@ and slash commands remain idle-only. Interactive Mac TUI sessions do not accept 
 while busy; the information icon next to the chat title explains their local controls. Refresh
 reconnects an offline saved host. The Mac must remain awake with the host service running.
 
+With a host that advertises `provider.auth.v1`, the Projects screen has a Providers screen. It lists
+the Mac's pi providers and signs them in (OAuth device code, OAuth link plus a pasted address, API
+key or select prompts) or out; the Mac stores the credential in pi's `auth.json`. One login runs at
+a time and can be left and resumed, and PocketPi rebuilds its state from the host after a restart or
+reconnect. While a key, a pasted address or a device code is on screen, the window is marked secure
+(no screenshots or recents thumbnail) and autofill is off. Typed secrets stay in memory, are cleared
+after sending and never enter drafts, saved state or logs. Sign-out removes only the Mac's stored
+credential; it does not revoke anything at the provider. The channel has no forward secrecy, so a
+key typed on the phone is as exposed as a prompt or a file sent the same way.
+
 The interface follows the system language with English fallback and German resources. Appearance can
 follow the system or use the illustrated light or dark choices. QR recognition runs locally with
 CameraX and ZXing.
