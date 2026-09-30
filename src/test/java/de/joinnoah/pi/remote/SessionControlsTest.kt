@@ -191,11 +191,8 @@ class SessionControlsTest {
         val all = listOf(LocalCommand.NEW, LocalCommand.COMPACT, LocalCommand.MODEL, LocalCommand.NAME)
         assertEquals(all, availableLocalCommands(chatState, true, 0))
         assertFalse(LocalCommand.NEW in availableLocalCommands(chatState, false, 0))
-        val busy = chatState.copy(status = "running")
-        assertEquals(
-            listOf(LocalCommand.NEW, LocalCommand.MODEL, LocalCommand.NAME),
-            availableLocalCommands(busy, true, 0),
-        )
+        assertTrue(availableLocalCommands(chatState.copy(status = "running"), true, 0).isEmpty())
+        assertTrue(availableLocalCommands(chatState.copy(sending = true), true, 0).isEmpty())
         val bare = chatState.copy(capabilities = emptySet())
         assertEquals(listOf(LocalCommand.NEW), availableLocalCommands(bare, true, 0))
         assertTrue(availableLocalCommands(chatState.copy(loading = true), true, 0).isEmpty())
@@ -211,11 +208,14 @@ class SessionControlsTest {
     fun localInvocationParsesTheNameAndArgument() {
         val all = availableLocalCommands(chatState, true, 0)
         assertEquals(
-            LocalInvocation(LocalCommand.NAME, "My  new title"),
+            LocalInvocation(LocalCommand.NAME, "My new title"),
             localInvocation(chatState.copy(draft = "/name   My  new title \n"), all),
         )
         assertEquals(LocalInvocation(LocalCommand.NAME, ""), localInvocation(chatState.copy(draft = "/name"), all))
         assertEquals(LocalInvocation(LocalCommand.NEW, ""), localInvocation(chatState.copy(draft = "/new"), all))
+        assertEquals(LocalInvocation(LocalCommand.NEW, ""), localInvocation(chatState.copy(draft = "/New "), all))
+        assertNull(localInvocation(chatState.copy(draft = "/compact keep the plan"), all))
+        assertNull(localInvocation(chatState.copy(draft = "/name " + "x".repeat(4097)), all))
         assertNull(localInvocation(chatState.copy(draft = "/newer"), all))
         assertNull(localInvocation(chatState.copy(draft = "/review"), all))
         assertNull(localInvocation(chatState.copy(draft = "hello /new"), all))

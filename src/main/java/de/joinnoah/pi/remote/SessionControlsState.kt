@@ -212,16 +212,21 @@ internal enum class LocalCommand(val commandName: String, val description: Int) 
 
 /**
  * The [LocalCommand]s that can run now, in list order. [inChat] is false outside a chat route,
- * where a new session has no project to open in.
+ * where a new session has no project to open in. A command draft is sent only while the session
+ * is idle, so nothing is offered before.
  */
 internal fun availableLocalCommands(
     state: RemoteState,
     inChat: Boolean,
     nowMillis: Long,
-): List<LocalCommand> =
-    LocalCommand.entries.filter { command ->
+): List<LocalCommand> {
+    val sendable =
+        state.connected && !state.loading && state.status == "idle" && !state.sending &&
+            !state.importingAttachments && !state.configurationChanging
+    if (!sendable) return emptyList()
+    return LocalCommand.entries.filter { command ->
         when (command) {
-            LocalCommand.NEW -> inChat && state.connected && !state.loading
+            LocalCommand.NEW -> inChat
             LocalCommand.COMPACT -> compactAvailable(state) && canCompact(state, nowMillis)
             LocalCommand.MODEL ->
                 state.connected && !state.loading && !state.configurationChanging &&
@@ -229,19 +234,31 @@ internal fun availableLocalCommands(
             LocalCommand.NAME -> canRenameSession(state)
         }
     }
+}
 
-/** A draft that names an available [LocalCommand]; [argument] is the trimmed text after the name. */
+/**
+ * A draft that names an available [LocalCommand]; [argument] is the text after the name with its
+ * whitespace collapsed.
+ */
 internal data class LocalInvocation(val command: LocalCommand, val argument: String)
+
+/** The longest `/name` argument, the byte limit the rename request enforces. */
+private const val LOCAL_NAME_MAX_BYTES = 4096
 
 /**
  * The invocation the draft asks for, or null when it is no available local command. A quote or
- * attachments never run one: the send then fails as for any command with extra context.
+ * attachments never run one: the send then fails as for any command with extra context. Only
+ * `/name` takes an argument, so other commands with text after them are left to the normal send,
+ * as is a title longer than a rename accepts.
  */
 internal fun localInvocation(state: RemoteState, available: List<LocalCommand>): LocalInvocation? {
     if (state.quote != null || state.attachments.isNotEmpty()) return null
     val name = commandName(state.draft) ?: return null
-    val command = available.firstOrNull { it.commandName == name } ?: return null
-    return LocalInvocation(command, state.draft.drop(1 + name.length).trim())
+    val command = available.firstOrNull { it.commandName.equals(name, ignoreCase = true) } ?: return null
+    val argument = state.draft.drop(1 + name.length).trim().replace(Regex("\\s+"), " ")
+    if (argument.isNotEmpty() && command != LocalCommand.NAME) return null
+    if (argument.encodeToByteArray().size > LOCAL_NAME_MAX_BYTES) return null
+    return LocalInvocation(command, argument)
 }
 
 /** Host commands that a local command of the same name does not shadow. */
@@ -253,7 +270,7 @@ internal fun mergeCommandSuggestions(
     local.filter { it.commandName.startsWith(prefix, ignoreCase = true) } to
         host.filter { command ->
             command.name.startsWith(prefix, ignoreCase = true) &&
-                local.none { it.commandName == command.name }
+                local.none { it.commandName.equals(command.name, ignoreCase = true) }
         }
 
 /** Steer, follow-up, stop and resume for subagent children (`session.subagent_control.v1`). */
