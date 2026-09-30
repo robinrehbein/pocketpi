@@ -145,7 +145,14 @@ class RemoteRepositoryTest {
             "input" to JsonArray(listOf(JsonPrimitive("text"), JsonPrimitive("image"))),
         )
 
-    private fun configurationData(sessionId: String = "session", model: String = "model") =
+    private fun settingsData(auto: Boolean = true, steering: String = "one-at-a-time", followUp: String = "one-at-a-time") =
+        Wire.objectOf("autoCompaction" to auto, "steeringMode" to steering, "followUpMode" to followUp)
+
+    private fun configurationData(
+        sessionId: String = "session",
+        model: String = "model",
+        settings: JsonObject? = null,
+    ) =
         Wire.objectOf(
             "kind" to "configuration",
             "sessionId" to sessionId,
@@ -154,6 +161,7 @@ class RemoteRepositoryTest {
             "thinkingLevels" to JsonArray(listOf(JsonPrimitive("high"), JsonPrimitive("max"))),
             "models" to JsonArray(listOf(modelData(), modelData("other"))),
             "modelsTruncated" to false,
+            *(if (settings == null) emptyArray() else arrayOf("settings" to settings)),
         )
 
     private fun commandData(sessionId: String = "session") =
@@ -1468,6 +1476,74 @@ class RemoteRepositoryTest {
             before,
             transport.sent.count { it.text("type") == "session.configuration.set" },
         )
+    }
+
+    @Test
+    fun settingsChangeSendsOnlyTheGivenFieldsAndTakesTheRefreshedConfiguration() = runTest {
+        val transport = Transport().also(::capable)
+        transport.capabilities += SETTINGS_CAPABILITY
+        val original = transport.response
+        transport.response = {
+            when (it.text("type")) {
+                "session.configuration.get" -> configurationData(it.text("sessionId"), settings = settingsData())
+                "session.configuration.set" ->
+                    configurationData(it.text("sessionId"), settings = settingsData(auto = false, steering = "all"))
+                else -> original(it)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals(true, repository.state.value.configuration?.settings?.autoCompaction)
+        repository.changeSettings()
+        repository.changeSettings(steeringMode = "sometimes")
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.configuration.set" })
+        repository.changeSettings(autoCompaction = false, steeringMode = "all")
+        runCurrent()
+        val change = transport.sent.last { it.text("type") == "session.configuration.set" }.obj("change")
+        assertEquals(setOf("kind", "autoCompaction", "steeringMode"), change.keys)
+        assertEquals("settings", change.text("kind"))
+        assertEquals(SessionSettings(false, "all", "one-at-a-time"), repository.state.value.configuration?.settings)
+        assertFalse(repository.state.value.configurationChanging)
+    }
+
+    @Test
+    fun settingsChangeIsIgnoredWithoutTheCapabilityOrReportedSettings() = runTest {
+        val transport = Transport().also(::capable)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.changeSettings(autoCompaction = true)
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.configuration.set" })
+    }
+
+    @Test
+    fun failedSettingsChangeReadsTheConfigurationAgain() = runTest {
+        val transport = Transport().also(::capable)
+        transport.capabilities += SETTINGS_CAPABILITY
+        val original = transport.response
+        var held = settingsData()
+        transport.response = {
+            when (it.text("type")) {
+                "session.configuration.get" -> configurationData(it.text("sessionId"), settings = held)
+                "session.configuration.set" -> null
+                else -> original(it)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        held = settingsData(auto = false)
+        repository.changeSettings(autoCompaction = false)
+        runCurrent()
+        advanceTimeBy(30_001)
+        runCurrent()
+        assertEquals(R.string.remote_configuration_error, repository.state.value.error)
+        assertEquals("session.configuration.get", transport.sent.last().text("type"))
+        assertEquals(false, repository.state.value.configuration?.settings?.autoCompaction)
+        assertFalse(repository.state.value.configurationChanging)
     }
 
     @Test

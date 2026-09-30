@@ -2049,7 +2049,28 @@ class DefaultRemoteRepository(
         )
     }
 
-    private fun changeConfiguration(change: JsonObject) {
+    override fun changeSettings(autoCompaction: Boolean?, steeringMode: String?, followUpMode: String?) {
+        val current = state.value
+        if (SETTINGS_CAPABILITY !in current.capabilities ||
+            SETTINGS_CAPABILITY in current.unavailableCapabilities ||
+            current.configuration?.settings == null ||
+            (autoCompaction == null && steeringMode == null && followUpMode == null) ||
+            listOfNotNull(steeringMode, followUpMode).any { it != QUEUE_MODE_ONE_AT_A_TIME && it != QUEUE_MODE_ALL }
+        ) return
+        changeConfiguration(
+            JsonObject(
+                buildMap {
+                    put("kind", JsonPrimitive("settings"))
+                    autoCompaction?.let { put("autoCompaction", JsonPrimitive(it)) }
+                    steeringMode?.let { put("steeringMode", JsonPrimitive(it)) }
+                    followUpMode?.let { put("followUpMode", JsonPrimitive(it)) }
+                }
+            ),
+            rereadOnError = true,
+        )
+    }
+
+    private fun changeConfiguration(change: JsonObject, rereadOnError: Boolean = false) {
         if (!canChangeConfiguration()) return
         if (configurationNeedsRefresh) {
             refreshConfiguration()
@@ -2061,6 +2082,7 @@ class DefaultRemoteRepository(
         contextVersion++
         update { it.copy(configurationChanging = true, contextUsage = null, contextLoading = false) }
         scope.launch {
+            var failed = false
             try {
                 val confirmed =
                     configuration(
@@ -2075,6 +2097,7 @@ class DefaultRemoteRepository(
                 if (epoch == selectionEpoch && version == configurationVersion)
                     update { it.copy(configuration = confirmed, contextUsage = null) }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                failed = true
                 if (epoch == selectionEpoch && version == configurationVersion) {
                     configurationNeedsRefresh = true
                     if (e.message == "unsupported")
@@ -2090,6 +2113,9 @@ class DefaultRemoteRepository(
             } finally {
                 if (epoch == selectionEpoch && version == configurationVersion)
                     update { it.copy(configurationChanging = false) }
+                // A failed settings change may be partly applied: show what the host holds now.
+                if (failed && rereadOnError && epoch == selectionEpoch && version == configurationVersion)
+                    refreshConfiguration()
                 resumeDeferredRecovery()
             }
         }

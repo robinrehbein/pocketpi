@@ -8,6 +8,28 @@ const val RENAME_CAPABILITY = "session.rename.v1"
 const val CONTEXT_CAPABILITY = "session.context.v1"
 const val COMPACT_CAPABILITY = "session.compact.v1"
 const val ADVISOR_CAPABILITY = "session.advisor.v1"
+const val SETTINGS_CAPABILITY = "session.settings.v1"
+
+/** The queue modes the host accepts for [SessionSettings.steeringMode] and [SessionSettings.followUpMode]. */
+const val QUEUE_MODE_ONE_AT_A_TIME = "one-at-a-time"
+const val QUEUE_MODE_ALL = "all"
+private val QUEUE_MODES = setOf(QUEUE_MODE_ONE_AT_A_TIME, QUEUE_MODE_ALL)
+
+/** The host-owned pi settings of a session; they also apply to later sessions on that Mac. */
+data class SessionSettings(
+    val autoCompaction: Boolean,
+    val steeringMode: String,
+    val followUpMode: String,
+)
+
+/** Reads the optional `settings` object; anything missing, malformed or unknown reads as absent. */
+internal fun sessionSettings(value: JsonElement?): SessionSettings? {
+    val data = value as? JsonObject ?: return null
+    fun text(key: String): String? =
+        (data[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it in QUEUE_MODES }
+    val auto = (data["autoCompaction"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+    return SessionSettings(auto ?: return null, text("steeringMode") ?: return null, text("followUpMode") ?: return null)
+}
 
 data class AdvisorChoice(
     val provider: String,
@@ -120,6 +142,8 @@ data class SessionConfiguration(
     val thinkingLevels: List<String>,
     val models: List<RemoteModel>,
     val modelsTruncated: Boolean,
+    /** Null for sessions the host does not own, and when the host reports nothing usable. */
+    val settings: SessionSettings? = null,
 )
 
 data class RemoteCommand(val name: String, val description: String?, val source: String)
@@ -161,6 +185,7 @@ internal fun configuration(data: JsonObject, sessionId: String): SessionConfigur
         levels,
         models.map(::model),
         data.flag("modelsTruncated"),
+        sessionSettings(data["settings"]),
     )
 }
 
@@ -192,6 +217,15 @@ internal fun canCompact(state: RemoteState, nowMillis: Long): Boolean =
         !state.sending && state.answering.isEmpty() && !state.configurationChanging &&
         !state.compactionRequesting && !compactionVisible(state.compaction, nowMillis)
 
+/**
+ * The session settings sheet is offered: the host advertises [SETTINGS_CAPABILITY] next to the
+ * configuration controls and reported settings for this session (terminal sessions have none).
+ */
+internal fun sessionSettingsAvailable(state: RemoteState): Boolean =
+    SETTINGS_CAPABILITY in state.capabilities && SETTINGS_CAPABILITY !in state.unavailableCapabilities &&
+        configurationControlsAvailable(state.capabilities, state.unavailableCapabilities) &&
+        state.configuration?.settings != null
+
 /** The selected session can be renamed from the phone. */
 internal fun canRenameSession(state: RemoteState): Boolean =
     state.connected && !state.loading &&
@@ -207,6 +241,7 @@ internal enum class LocalCommand(val commandName: String, val description: Int) 
     NEW("new", R.string.remote_local_command_new),
     COMPACT("compact", R.string.remote_local_command_compact),
     MODEL("model", R.string.remote_local_command_model),
+    SETTINGS("settings", R.string.remote_local_command_settings),
     NAME("name", R.string.remote_local_command_name),
 }
 
@@ -231,6 +266,7 @@ internal fun availableLocalCommands(
             LocalCommand.MODEL ->
                 state.connected && !state.loading && !state.configurationChanging &&
                     configurationControlsAvailable(state.capabilities, state.unavailableCapabilities)
+            LocalCommand.SETTINGS -> !state.configurationLoading && sessionSettingsAvailable(state)
             LocalCommand.NAME -> canRenameSession(state)
         }
     }

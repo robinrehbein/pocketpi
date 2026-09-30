@@ -61,6 +61,10 @@ internal fun SessionControls(
     /** A typed `/model` asks for the model picker; [onModelPickerRequestHandled] acknowledges it. */
     modelPickerRequested: Boolean = false,
     onModelPickerRequestHandled: () -> Unit = {},
+    changeSettings: (Boolean?, String?, String?) -> Unit = { _, _, _ -> },
+    /** The header action or a typed `/settings` asks for the settings sheet; same handshake as the model picker. */
+    settingsSheetRequested: Boolean = false,
+    onSettingsSheetRequestHandled: () -> Unit = {},
 ) {
     var picker by remember { mutableStateOf<String?>(null) }
     val pickerSheet = rememberModalBottomSheetState()
@@ -69,6 +73,8 @@ internal fun SessionControls(
         pickerScope.launch { pickerSheet.hide() }.invokeOnCompletion { picker = null }
     }
     var showContext by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    LaunchedEffect(state.selection.sessionId) { showSettings = false }
     var showAdvisor by remember { mutableStateOf(false) }
     var advisorChoice by remember(state.selection.sessionId) { mutableStateOf<AdvisorChoice?>(null) }
     var advisorLevel by remember(state.selection.sessionId) { mutableStateOf("high") }
@@ -114,6 +120,15 @@ internal fun SessionControls(
                 refreshConfiguration()
             }
             onModelPickerRequestHandled()
+        }
+    }
+    LaunchedEffect(settingsSheetRequested) {
+        if (settingsSheetRequested) {
+            if (sessionSettingsAvailable(state)) {
+                showSettings = true
+                refreshConfiguration()
+            }
+            onSettingsSheetRequestHandled()
         }
     }
     val configurationChipColors =
@@ -348,6 +363,17 @@ internal fun SessionControls(
             onCompact = compactContext,
         )
     }
+    val sessionSettings = confirmed?.settings
+    if (showSettings && sessionSettings != null && sessionSettingsAvailable(state))
+        ModalBottomSheet(onDismissRequest = { showSettings = false }) {
+            SessionSettingsSheetBody(
+                settings = sessionSettings,
+                enabled = canChange,
+                busy = state.configurationLoading || state.configurationChanging,
+                working = state.connected && state.status in setOf("running", "waiting"),
+                onChange = changeSettings,
+            )
+        }
     if (showAdvisor) AdvisorPickerSheet(
         advisor = sessionAdvisor,
         selectedChoice = advisorChoice,
@@ -506,6 +532,114 @@ internal fun ContextSheetBody(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(8.dp))
+    }
+}
+
+/**
+ * The session settings sheet's content. Changes apply as soon as a control is used; the host
+ * answers with the refreshed settings, which [settings] then shows.
+ */
+@Composable
+internal fun SessionSettingsSheetBody(
+    settings: SessionSettings,
+    enabled: Boolean,
+    busy: Boolean,
+    working: Boolean,
+    onChange: (autoCompaction: Boolean?, steeringMode: String?, followUpMode: String?) -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth()
+            .heightIn(max = 560.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .navigationBarsPadding()
+            .testTag("sessionSettingsSheet"),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(stringResource(R.string.remote_session_settings_title), style = MaterialTheme.typography.titleLarge)
+        if (working)
+            Text(
+                stringResource(R.string.remote_session_settings_busy),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.remote_session_settings_auto_compact), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    stringResource(R.string.remote_session_settings_auto_compact_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = settings.autoCompaction,
+                onCheckedChange = { onChange(it, null, null) },
+                enabled = enabled,
+                modifier = Modifier.testTag("settingsAutoCompaction"),
+            )
+        }
+        QueueModeChoice(
+            title = R.string.remote_session_settings_steering,
+            hint = R.string.remote_session_settings_steering_hint,
+            tag = "settingsSteering",
+            selected = settings.steeringMode,
+            enabled = enabled,
+            onSelect = { onChange(null, it, null) },
+        )
+        QueueModeChoice(
+            title = R.string.remote_session_settings_follow_up,
+            hint = R.string.remote_session_settings_follow_up_hint,
+            tag = "settingsFollowUp",
+            selected = settings.followUpMode,
+            enabled = enabled,
+            onSelect = { onChange(null, null, it) },
+        )
+        Text(
+            stringResource(R.string.remote_session_settings_scope),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun QueueModeChoice(
+    title: Int,
+    hint: Int,
+    tag: String,
+    selected: String,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    val options =
+        listOf(
+            QUEUE_MODE_ONE_AT_A_TIME to R.string.remote_session_settings_one_at_a_time,
+            QUEUE_MODE_ALL to R.string.remote_session_settings_all_at_once,
+        )
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(stringResource(title), style = MaterialTheme.typography.titleMedium)
+        Text(
+            stringResource(hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+            options.forEachIndexed { index, (mode, text) ->
+                SegmentedButton(
+                    selected = selected == mode,
+                    onClick = { if (selected != mode) onSelect(mode) },
+                    enabled = enabled,
+                    shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                    modifier = Modifier.testTag("$tag-$mode"),
+                    icon = {},
+                ) {
+                    Text(stringResource(text), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
     }
 }
 

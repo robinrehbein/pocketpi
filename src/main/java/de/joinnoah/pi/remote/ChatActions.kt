@@ -10,6 +10,8 @@ enum class ChatAction {
     REFRESH,
     SETTINGS,
     NEW_SESSION,
+    /** The session's pi settings sheet; [SETTINGS] is the app's own settings. */
+    SESSION_SETTINGS,
 }
 
 /** How often an action was used, decayed to [at]. */
@@ -24,7 +26,7 @@ internal const val ACTION_USAGE_HALF_LIFE_MILLIS = 14L * 24 * 60 * 60 * 1000
  */
 internal val DEFAULT_CHAT_ACTIONS =
     listOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.RENAME, ChatAction.NEW_SESSION,
-        ChatAction.SETTINGS)
+        ChatAction.SESSION_SETTINGS, ChatAction.SETTINGS)
 
 internal fun ActionUsage.decayed(now: Long): Double =
     score * 0.5.pow((now - at).coerceAtLeast(0L) / ACTION_USAGE_HALF_LIFE_MILLIS.toDouble())
