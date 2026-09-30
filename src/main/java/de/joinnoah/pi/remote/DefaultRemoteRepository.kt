@@ -3572,8 +3572,6 @@ class DefaultRemoteRepository(
                         auth.copy(flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.updatedBy(status, live) ?: auth.flow)
                     }
                     if (status.state.finished) refreshProviders()
-                    // A live event overtook the snapshot: ask again for the current one.
-                    if (state.value.providerAuth.flow?.let { it.loginId == flow.loginId && it.live != live && !it.finished } == true) continue
                     return@launch
                 } catch (e: CancellationException) {
                     throw e

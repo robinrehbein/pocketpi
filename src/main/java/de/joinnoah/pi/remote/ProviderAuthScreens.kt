@@ -56,6 +56,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -750,8 +751,16 @@ private fun TextPrompt(pending: PendingPrompt, sending: Boolean, connected: Bool
     var value by remember { mutableStateOf("") }
     var shown by remember { mutableStateOf(!secret) }
     var notSent by remember { mutableStateOf(false) }
-    DisposableEffect(Unit) { onDispose { value = "" } }
+    var pasted by remember { mutableStateOf<String?>(null) }
+    var sentPasted by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
+    DisposableEffect(Unit) {
+        onDispose {
+            value = ""
+            // The prompt is gone once the host took the answer: a pasted value must not linger.
+            if (sentPasted) MainScope().launch { clipboard.setClipEntry(null) }
+        }
+    }
     val scope = rememberCoroutineScope()
     val tooLong = value.toByteArray().size > MAX_PROVIDER_AUTH_ANSWER_BYTES
     OutlinedTextField(
@@ -803,7 +812,10 @@ private fun TextPrompt(pending: PendingPrompt, sending: Boolean, connected: Bool
                 onClick = {
                     scope.launch {
                         clipboard.getClipEntry()?.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text
-                            ?.let { value = it.toString() }
+                            ?.let {
+                                value = it.toString()
+                                pasted = value
+                            }
                     }
                 },
                 modifier = Modifier.testTag("loginPaste"),
@@ -819,13 +831,8 @@ private fun TextPrompt(pending: PendingPrompt, sending: Boolean, connected: Bool
                 if (onAnswer(pending.promptId, answer)) {
                     value = ""
                     notSent = false
-                    if (secret || manual)
-                        scope.launch {
-                            // The pasted value must not linger on the clipboard.
-                            val onClipboard =
-                                clipboard.getClipEntry()?.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text
-                            if (onClipboard?.toString()?.trim() == answer) clipboard.setClipEntry(null)
-                        }
+                    // Cleared from the clipboard when the prompt goes away, not by reading it here.
+                    if (pasted?.trim() == answer) sentPasted = true
                 } else notSent = true
             },
             enabled = !sending && connected && !tooLong && (prompt.type == PromptType.TEXT || value.isNotBlank()),
@@ -835,7 +842,11 @@ private fun TextPrompt(pending: PendingPrompt, sending: Boolean, connected: Bool
             else Text(stringResource(if (secret) R.string.providers_secret_save else R.string.providers_send))
         }
     }
-    if (notSent) Text(stringResource(R.string.providers_answer_not_sent), color = MaterialTheme.colorScheme.error)
+    if (notSent) Text(
+            stringResource(R.string.providers_answer_not_sent),
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
 }
 
 @Composable
@@ -875,5 +886,9 @@ private fun SelectPrompt(pending: PendingPrompt, sending: Boolean, connected: Bo
         if (sending) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
         else Text(stringResource(R.string.providers_send))
     }
-    if (notSent) Text(stringResource(R.string.providers_answer_not_sent), color = MaterialTheme.colorScheme.error)
+    if (notSent) Text(
+            stringResource(R.string.providers_answer_not_sent),
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
 }
