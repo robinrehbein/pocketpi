@@ -211,19 +211,21 @@ transfer between the two applications. A previous debug installation under
 ## Play testing releases
 
 Follow the [Play testing runbook](docs/runbooks/play-testing-release.md) for first-release setup,
-verification, and recovery. The new Play app has not yet had a verified dual-track release; complete
-the Play, Firebase, signing, and GitHub environment setup before enabling automatic publishing.
+verification, and recovery. The first Console upload is available on Internal Testing; a dual-track
+release has not yet been verified. Complete the Firebase, signing, and GitHub environment setup
+before relying on automatic publishing.
 
 When enabled, `.github/workflows/release.yml` runs only after a successful `Android CI` push run on the current
-`main` commit. It builds one signed AAB, then submits it to Play Internal Testing (`qa`) and the
-configured Closed Alpha track in one Play edit. It stops if either track cannot accept the release.
+`main` commit. It builds one signed AAB, then submits it to Play Internal Testing (`qa`). When
+`POCKETPI_CLOSED_TRACK` is configured, the same edit also updates that Closed Alpha track. It stops
+if a configured track cannot accept the release.
 It never targets production. Play may still hold an accepted edit for app review; check the Play
 Console before telling testers that the update is available.
 
 Protect the `play-testing` GitHub environment so only `main` can use it. Set its variables
-`GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_PLAY_SERVICE_ACCOUNT`, and `POCKETPI_CLOSED_TRACK`. The last
-value must be the exact custom track identifier returned by the Play Developer API, not a display
-name. Set the Google Cloud workload identity provider's subject mapping to
+`GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_PLAY_SERVICE_ACCOUNT`. To add Closed Alpha, set
+`POCKETPI_CLOSED_TRACK` to the exact custom track identifier returned by the Play Developer API,
+not a display name. Set the Google Cloud workload identity provider's subject mapping to
 `google.subject=assertion.sub`, then restrict it with GitHub's OIDC claims:
 
 ```text
