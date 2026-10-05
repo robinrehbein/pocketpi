@@ -419,4 +419,6 @@
     <string name="remote_subagent_stop_label">Stop</string>
     <string name="remote_result_count">%1$d output entries</string>
     <string name="remote_result_preview_shortened">Preview shortened. Open raw output to read the full entry.</string>
+    <string name="performance_full_chat_title">Full chat fixture</string>
+    <string name="performance_full_chat_continue">Continue stream</string>
 </resources>

@@ -3,7 +3,10 @@ import sys
 import xml.etree.ElementTree as ET
 
 ANDROID = "{http://schemas.android.com/apk/res/android}"
-FIXTURE = "de.joinnoah.pi.remote.PerformanceFixtureActivity"
+FIXTURES = {
+    "de.joinnoah.pi.remote.PerformanceFixtureActivity",
+    "de.joinnoah.pi.remote.FullChatFixtureActivity",
+}
 
 
 def verify(regular_path, benchmark_path):
@@ -13,7 +16,7 @@ def verify(regular_path, benchmark_path):
         raise ValueError("Unexpected regular app ID")
     if benchmark.get("package") != "de.robinrehbein.pocketpi.benchmark":
         raise ValueError("Benchmark must have isolated app data")
-    if any(node.get(ANDROID + "name") == FIXTURE for node in regular.iter("activity")):
+    if any(node.get(ANDROID + "name") in FIXTURES for node in regular.iter("activity")):
         raise ValueError("Benchmark fixture leaked into the regular app")
     app = benchmark.find("application")
     if app is None or app.get(ANDROID + "debuggable", "false") != "false":
@@ -21,9 +24,10 @@ def verify(regular_path, benchmark_path):
     profileable = app.find("profileable")
     if profileable is None or profileable.get(ANDROID + "shell") != "true":
         raise ValueError("Benchmark target must be shell-profileable")
-    fixtures = [node for node in app.iter("activity") if node.get(ANDROID + "name") == FIXTURE]
-    if len(fixtures) != 1 or fixtures[0].get(ANDROID + "exported") != "true":
-        raise ValueError("Missing externally launchable benchmark-only fixture")
+    for name in FIXTURES:
+        fixtures = [node for node in app.iter("activity") if node.get(ANDROID + "name") == name]
+        if len(fixtures) != 1 or fixtures[0].get(ANDROID + "exported") != "true":
+            raise ValueError(f"Missing externally launchable benchmark-only fixture: {name}")
     print("Benchmark manifest isolation: passed")
 
 

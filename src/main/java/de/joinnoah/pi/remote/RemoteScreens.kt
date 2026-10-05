@@ -843,7 +843,7 @@ internal fun RemoteScreen(
         val timelineExpanded = chatKey?.let(timelineVisibility::expanded) ?: true
         val railShown = timelineControlsShown && timelineExpanded
         LazyColumn(
-            if (key is RemoteNavKey.Chat) Modifier.fillMaxSize().then(underlay)
+            if (key is RemoteNavKey.Chat) Modifier.fillMaxSize().testTag("conversationList").then(underlay)
             else Modifier.fillMaxSize(),
             state = listState,
             contentPadding =

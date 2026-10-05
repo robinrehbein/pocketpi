@@ -201,6 +201,12 @@ android {
     }
 }
 
+androidComponents {
+    beforeVariants(selector().withBuildType("benchmark")) { variant ->
+        variant.hostTests[com.android.build.api.variant.HostTestBuilder.UNIT_TEST_TYPE]?.enable = true
+    }
+}
+
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)

@@ -50,8 +50,9 @@ speedup has been established by the unit tests.
 ## Follow-up work requiring measurements or a separate design
 
 - Collect physical-device measurements using the setup in [macrobenchmarks.md](macrobenchmarks.md).
-  The initial fixture measures startup and synthetic Markdown rendering, not full chat navigation.
-- Baseline profiles and a full-chat Macrobenchmark fixture.
+  Fixtures cover startup, synthetic Markdown and the full chat/Timeline presentation path, but
+  exclude live transport, production repository/cache operations and navigation transitions.
+- Baseline profiles and broader workload coverage (questions, subagents and attachments).
 - Byte-weighted transcript caching if heap measurements show the entry limit is insufficient.
 - Incremental timeline presentation/Markdown parsing if streaming still dominates CPU time.
 - Per-session scroll restoration, including auto-follow and changing paginated item indexes.
