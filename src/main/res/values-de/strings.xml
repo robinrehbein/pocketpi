@@ -398,4 +398,8 @@
     <string name="providers_error_offline">Der Mac ist offline.</string>
     <string name="providers_error_internal">Der Mac konnte das nicht abschließen.</string>
     <string name="providers_answer_not_sent">Senden nicht möglich. Prüfe die Verbindung und versuche es erneut; deine Eingabe bleibt erhalten.</string>
+    <string name="performance_fixture_title">Performance-Testansicht</string>
+    <string name="performance_fixture_switch">Session wechseln</string>
+    <string name="performance_fixture_stream">Antwort streamen</string>
+    <string name="performance_fixture_session">Session %1$d</string>
 </resources>

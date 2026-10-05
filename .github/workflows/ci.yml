@@ -46,6 +46,12 @@ jobs:
         run: ./gradlew testDebugUnitTest assembleDebug
       - name: Android Lint
         run: ./gradlew lintDebug
+      - name: Compile benchmark APKs and verify isolation
+        run: |
+          ./gradlew :assembleBenchmark :benchmarks:assembleBenchmark
+          python3 scripts/check-benchmark-isolation.py \
+            build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml \
+            build/intermediates/merged_manifests/benchmark/processBenchmarkManifest/AndroidManifest.xml
       - name: Enable emulator acceleration
         run: |
           test -e /dev/kvm
