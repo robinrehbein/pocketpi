@@ -234,6 +234,12 @@
     <string name="remote_preview_attachment">%1$s ansehen</string>
     <string name="remote_close_preview">Fotovorschau schließen</string>
     <string name="remote_preview_unavailable">Fotovorschau nicht verfügbar</string>
+    <string name="remote_sent_preview_loading">Bild wird geladen…</string>
+    <string name="remote_sent_preview_connection_failure">Bild konnte nicht geladen werden. Prüfe deine Verbindung.</string>
+    <string name="remote_sent_preview_expired">Dieses Bild ist abgelaufen.</string>
+    <string name="remote_sent_preview_unsupported">Aktualisiere den Host, um gesendete Bilder anzusehen.</string>
+    <string name="remote_sent_preview_malformed">Dieses Bild kann nicht angezeigt werden.</string>
+    <string name="remote_sent_preview_retry">Erneut versuchen</string>
     <string name="remote_attachment_importing">Anhang wird importiert…</string>
     <string name="remote_attachment_uploading">Anhänge werden hochgeladen…</string>
     <string name="remote_cancel_attachment_work">Anhangübertragung abbrechen</string>
