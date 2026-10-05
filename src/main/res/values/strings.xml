@@ -16,6 +16,11 @@
     <string name="remote_advisor_busy">Advisor working</string>
     <string name="remote_advisor_error">Advisor blocked</string>
     <string name="remote_advisor_off">Advisor off</string>
+    <string name="remote_advisor_unavailable_label">Advisor unavailable</string>
+    <string name="remote_advisor_disconnected">Connect to your Mac to configure the advisor.</string>
+    <string name="remote_advisor_host_unsupported">This host does not advertise advisor support. Update pi Remote on your Mac, then reconnect.</string>
+    <string name="remote_advisor_extension_required">This session does not support the advisor. Load the advisor extension in pi on your Mac so the /advisor command is available, then check again. When supported, you can enable the advisor here without enabling it on your Mac first.</string>
+    <string name="remote_advisor_retry">Check again</string>
     <string name="remote_advisor_remaining">%1$d of %2$d consultations left</string>
     <string name="remote_advisor_unavailable">Advisor is unavailable in this session.</string>
     <string name="remote_advisor_current">%1$s · thinking %2$s</string>

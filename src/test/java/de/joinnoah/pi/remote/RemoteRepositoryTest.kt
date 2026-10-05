@@ -172,6 +172,77 @@ class RemoteRepositoryTest {
             "truncated" to false,
         )
 
+    private fun advisorData(enabled: Boolean = false) = Wire.objectOf(
+        "kind" to "advisor", "sessionId" to "session", "enabled" to enabled,
+        "model" to if (enabled) JsonPrimitive("provider/model") else JsonNull,
+        "reasoning" to "high", "pending" to false, "contextShared" to enabled,
+        "attempts" to 0, "maxAttempts" to 3, "remainingAttempts" to 3, "error" to JsonNull,
+        "choices" to JsonArray(listOf(Wire.objectOf(
+            "provider" to "provider", "id" to "model", "name" to "Advisor model",
+            "levels" to JsonArray(listOf(JsonPrimitive("high"))),
+        ))),
+    )
+
+    @Test
+    fun advisorCanRecoverFromUnsupportedAndBeEnabledFromTheApp() = runTest {
+        val transport = Transport().apply { capabilities = setOf(ADVISOR_CAPABILITY) }
+        configure(transport)
+        val original = transport.response
+        var supported = false
+        var enabled = false
+        transport.failure = { request ->
+            if (request.text("type") == "session.advisor.get" && !supported) "unsupported" else null
+        }
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.advisor.get" -> advisorData(enabled)
+                "session.command" -> {
+                    enabled = request.text("text") != "/advisor off"
+                    Wire.objectOf("kind" to "accepted")
+                }
+                else -> original(request)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(ADVISOR_CAPABILITY in repository.state.value.unavailableCapabilities)
+        repository.setAdvisor("provider", "model", "high")
+        runCurrent()
+        assertFalse(transport.sent.any { it.text("type") == "session.command" })
+
+        supported = true
+        repository.refreshAdvisor()
+        runCurrent()
+        assertTrue(advisorControlAvailable(repository.state.value))
+        assertEquals(false, repository.state.value.advisor?.enabled)
+        repository.setAdvisor("provider", "model", "high")
+        runCurrent()
+        assertEquals("/advisor provider/model --thinking high",
+            transport.sent.last { it.text("type") == "session.command" }.text("text"))
+        advanceTimeBy(1200)
+        runCurrent()
+        assertEquals(true, repository.state.value.advisor?.enabled)
+
+        repository.setAdvisor(null, null, null)
+        runCurrent()
+        advanceTimeBy(1200)
+        runCurrent()
+        assertEquals(false, repository.state.value.advisor?.enabled)
+        assertTrue(advisorControlAvailable(repository.state.value))
+    }
+
+    @Test
+    fun advisorRefreshDoesNotSendToAnUnadvertisedHost() = runTest {
+        val transport = Transport()
+        configure(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.refreshAdvisor()
+        runCurrent()
+        assertFalse(transport.sent.any { it.text("type") == "session.advisor.get" })
+    }
+
     @Test
     fun projectsDiscoveryOptsInWithoutBreakingAnOlderHost() = runTest {
         for (supportsSteer in listOf(false, true)) {

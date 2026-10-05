@@ -29,6 +29,8 @@ internal fun AdvisorPickerSheet(
     onApply: () -> Unit,
     onDisable: () -> Unit,
     onDismiss: () -> Unit,
+    unavailableReason: String? = null,
+    onRetry: (() -> Unit)? = null,
 ) {
     val currentChoice = advisor?.choices?.firstOrNull { choice ->
         advisor.model == "${choice.provider}/${choice.id}"
@@ -50,7 +52,14 @@ internal fun AdvisorPickerSheet(
             }
             if (loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
             if (advisor == null) {
-                item { Text(stringResource(R.string.remote_advisor_unavailable)) }
+                if (!loading) {
+                    item { Text(unavailableReason ?: stringResource(R.string.remote_advisor_unavailable)) }
+                    if (onRetry != null) item {
+                        OutlinedButton(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
+                            Text(stringResource(R.string.remote_advisor_retry))
+                        }
+                    }
+                }
             } else {
                 item {
                     Surface(

@@ -16,6 +16,11 @@
     <string name="remote_advisor_busy">Advisor arbeitet</string>
     <string name="remote_advisor_error">Advisor blockiert</string>
     <string name="remote_advisor_off">Advisor aus</string>
+    <string name="remote_advisor_unavailable_label">Advisor nicht verfügbar</string>
+    <string name="remote_advisor_disconnected">Verbinde dich mit deinem Mac, um den Advisor einzurichten.</string>
+    <string name="remote_advisor_host_unsupported">Dieser Host meldet keine Advisor-Unterstützung. Aktualisiere pi Remote auf deinem Mac und verbinde dich erneut.</string>
+    <string name="remote_advisor_extension_required">Diese Sitzung unterstützt den Advisor nicht. Lade die Advisor-Erweiterung in pi auf deinem Mac, damit der Befehl /advisor verfügbar ist, und prüfe dann erneut. Sobald die Unterstützung verfügbar ist, kannst du den Advisor hier einschalten, ohne ihn vorher auf dem Mac zu aktivieren.</string>
+    <string name="remote_advisor_retry">Erneut prüfen</string>
     <string name="remote_advisor_remaining">%1$d von %2$d Beratungen übrig</string>
     <string name="remote_advisor_unavailable">Advisor ist in dieser Sitzung nicht verfügbar.</string>
     <string name="remote_advisor_current">%1$s · Thinking %2$s</string>

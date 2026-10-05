@@ -175,11 +175,16 @@ internal fun SessionControls(
         (state.loading && (available || state.capabilities.isEmpty())) ||
             (available && confirmed == null && state.configurationLoading)
     val loadingContext = state.loading || (usage == null && state.contextLoading)
-    val advisorAvailable = ADVISOR_CAPABILITY in state.capabilities &&
-        ADVISOR_CAPABILITY !in state.unavailableCapabilities
+    val advisorAvailable = advisorControlAvailable(state)
+    val advisorUnavailableReason = when {
+        !state.connected -> stringResource(R.string.remote_advisor_disconnected)
+        ADVISOR_CAPABILITY !in state.capabilities -> stringResource(R.string.remote_advisor_host_unsupported)
+        !advisorAvailable -> stringResource(R.string.remote_advisor_extension_required)
+        else -> null
+    }
     val loadingAdvisor =
         (state.loading && (advisorAvailable || state.capabilities.isEmpty())) ||
-            (advisorAvailable && sessionAdvisor == null && state.advisorLoading)
+            (sessionAdvisor == null && state.advisorLoading)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
@@ -263,7 +268,7 @@ internal fun SessionControls(
                 },
             )
             if (loadingAdvisor) LoadingControlPill(140.dp)
-            else if (advisorAvailable) {
+            else {
                 AssistChip(
                     onClick = {
                         advisorChoice = sessionAdvisor?.choices?.firstOrNull { choice ->
@@ -278,7 +283,8 @@ internal fun SessionControls(
                         showAdvisor = true
                         refreshAdvisor()
                     },
-                    enabled = state.connected,
+                    // Keep the entry actionable even when unsupported: the sheet explains why.
+                    enabled = true,
                     shape = CircleShape,
                     colors = configurationChipColors,
                     border = null,
@@ -288,14 +294,16 @@ internal fun SessionControls(
                     },
                     label = {
                         Text(
-                            if (sessionAdvisor == null) stringResource(R.string.remote_advisor_title)
+                            if (!state.connected || !advisorAvailable) stringResource(R.string.remote_advisor_unavailable_label)
+                            else if (sessionAdvisor == null) stringResource(R.string.remote_advisor_title)
+                            else if (!sessionAdvisor.enabled) stringResource(R.string.remote_advisor_off)
                             else if (sessionAdvisor.pending) stringResource(R.string.remote_advisor_busy)
                             else if (sessionAdvisor.error != null) stringResource(R.string.remote_advisor_error)
                             else sessionAdvisor.model?.substringAfterLast('/') ?: stringResource(R.string.remote_advisor_off),
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
                     },
-                    modifier = Modifier.widthIn(max = 200.dp),
+                    modifier = Modifier.widthIn(max = 200.dp).testTag("advisorControl"),
                 )
             }
         }
@@ -381,11 +389,13 @@ internal fun SessionControls(
             )
         }
     if (showAdvisor) AdvisorPickerSheet(
-        advisor = sessionAdvisor,
+        advisor = sessionAdvisor.takeIf { advisorUnavailableReason == null },
+        unavailableReason = advisorUnavailableReason,
+        onRetry = if (state.connected && ADVISOR_CAPABILITY in state.capabilities) refreshAdvisor else null,
         selectedChoice = advisorChoice,
         selectedLevel = advisorLevel,
         loading = state.advisorLoading || state.advisorChanging,
-        canSelect = canChange && !state.advisorChanging && !state.advisorLoading,
+        canSelect = canChange && advisorAvailable && !state.advisorChanging && !state.advisorLoading,
         onSelectChoice = { choice ->
             advisorChoice = choice
             advisorLevel = if ("high" in choice.levels) "high" else choice.levels.first()

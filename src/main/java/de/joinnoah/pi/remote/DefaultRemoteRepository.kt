@@ -2150,8 +2150,9 @@ class DefaultRemoteRepository(
     override fun refreshAdvisor() {
         val current = state.value
         val sessionId = current.selection.sessionId ?: return
-        if (!current.connected || ADVISOR_CAPABILITY !in current.capabilities ||
-            ADVISOR_CAPABILITY in current.unavailableCapabilities || current.advisorLoading) return
+        // A session can gain support after its advisor extension is loaded. A previous
+        // unsupported response must not prevent a fresh read from the visible advisor entry.
+        if (!current.connected || ADVISOR_CAPABILITY !in current.capabilities || current.advisorLoading) return
         val epoch = selectionEpoch
         val version = ++advisorVersion
         update { it.copy(advisorLoading = true) }
@@ -2160,7 +2161,8 @@ class DefaultRemoteRepository(
                 val confirmed = advisor(request("session.advisor.get", epoch, "sessionId" to sessionId), sessionId)
                 if (epoch == selectionEpoch && version == advisorVersion &&
                     state.value.selection.sessionId == sessionId)
-                    update { it.copy(advisor = confirmed, advisorChanging = false) }
+                    update { it.copy(advisor = confirmed, advisorChanging = false,
+                        unavailableCapabilities = it.unavailableCapabilities - ADVISOR_CAPABILITY) }
             } catch (_: CancellationException) {} catch (e: Exception) {
                 if (epoch == selectionEpoch && version == advisorVersion) {
                     if (e.message == "unsupported")
