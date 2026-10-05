@@ -9,7 +9,6 @@ import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Configurator
-import androidx.test.uiautomator.Direction
 import androidx.test.uiautomator.Until
 import org.junit.After
 import org.junit.Before
@@ -53,13 +52,16 @@ class FullChatBenchmarks {
         device.waitForIdle(1_000)
     }
 
-    private fun MacrobenchmarkScope.conversationList() =
-        checkNotNull(device.findObject(By.res("conversationList"))).apply {
-            // The real floating header/composer overlap the list's accessibility bounds.
-            // Gesture only in its unobscured middle, not through the composer or insights pill.
-            val height = visibleBounds.height()
-            setGestureMargins(16, height / 5, 16, height * 2 / 5)
-        }
+    private fun MacrobenchmarkScope.swipeConversation(towardHistory: Boolean) {
+        // The floating header/composer overlap the list bounds. Inject a moderate-speed
+        // gesture in its unobscured middle instead of UiObject2's full-list default swipe.
+        val bounds = checkNotNull(device.findObject(By.res("conversationList"))).visibleBounds
+        val upper = bounds.top + bounds.height() / 4
+        val lower = bounds.top + bounds.height() / 2
+        check(device.swipe(bounds.centerX(), if (towardHistory) upper else lower,
+            bounds.centerX(), if (towardHistory) lower else upper, 40))
+        Thread.sleep(250)
+    }
 
     private fun MacrobenchmarkScope.streamAndWait(following: Boolean) {
         checkNotNull(device.findObject(By.desc("full-chat-stream"))).click()
@@ -83,11 +85,9 @@ class FullChatBenchmarks {
         iterations = 10,
         setupBlock = { openChat() },
     ) {
-        val list = conversationList()
-        repeat(4) { list.swipe(Direction.DOWN, 0.7f) }
-        device.waitForIdle(1_000)
-        check(!device.hasObject(By.text(TAIL_READY)))
-        repeat(4) { list.swipe(Direction.UP, 0.7f) }
+        repeat(4) { swipeConversation(towardHistory = true) }
+        check(device.wait(Until.gone(By.text(TAIL_READY)), 5_000))
+        repeat(4) { swipeConversation(towardHistory = false) }
         device.waitForIdle(1_000)
     }
 
@@ -112,11 +112,10 @@ class FullChatBenchmarks {
         iterations = 10,
         setupBlock = {
             openChat()
-            val list = conversationList()
-            repeat(4) { list.swipe(Direction.DOWN, 0.7f) }
+            repeat(4) { swipeConversation(towardHistory = true) }
+            check(device.wait(Until.gone(By.text(TAIL_READY)), 5_000))
             Thread.sleep(1_000)
             device.waitForIdle(1_000)
-            check(!device.hasObject(By.text(TAIL_READY)))
         },
     ) {
         streamAndWait(following = false)

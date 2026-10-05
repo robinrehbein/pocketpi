@@ -52,8 +52,10 @@ end-to-end stream-duration benchmark.
 
 Full-chat setup waits two seconds after the initial accessible tail so initial auto-follow and
 asynchronous touched-line projection settle; the scroll-away setup waits another second after its
-gestures. These fixed setup intervals are outside measurement. Gesture margins avoid the real
-floating header/composer that overlap the list bounds. Implicit UiAutomator idle waits are disabled
+gestures. These fixed setup intervals are outside measurement. Moderate-speed touch gestures use
+only the middle of the list bounds to avoid the real floating header/composer, with a fixed 250 ms
+settling pause per gesture. Gesture pauses in `fullChatScroll` are inside its measured trace; frame
+metrics do not represent overall gesture wall-clock latency. Implicit UiAutomator idle waits are disabled
 and restored per test; explicit settling waits remain.
 
 The full-chat driver publishes synthetic repository state, **not** the production repository:
