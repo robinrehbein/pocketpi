@@ -149,7 +149,8 @@ internal fun SessionControls(
             (advisorAvailable && sessionAdvisor == null && state.advisorLoading)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -268,12 +269,14 @@ internal fun SessionControls(
         if (configurationControlsNoticeVisible(state))
             Text(
                 stringResource(R.string.remote_configuration_unavailable),
+                modifier = Modifier.padding(horizontal = 8.dp),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         state.commandNotice?.let {
             Text(
                 stringResource(it),
+                modifier = Modifier.padding(horizontal = 8.dp),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -284,9 +287,9 @@ internal fun SessionControls(
                 COMMANDS_CAPABILITY !in state.unavailableCapabilities
         ) {
             val suggestions = state.commands.filter { it.name.startsWith(slash, ignoreCase = true) }
-            if (state.commandsLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (state.commandsLoading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 8.dp))
             else if (suggestions.isNotEmpty())
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 160.dp)) {
+                LazyColumn(Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(max = 160.dp)) {
                     items(suggestions, key = { it.name }) { command ->
                         ListItem(
                             headlineContent = { Text("/" + command.name) },
@@ -302,6 +305,7 @@ internal fun SessionControls(
             if (state.commandsTruncated)
                 Text(
                     stringResource(R.string.remote_catalog_truncated),
+                    modifier = Modifier.padding(horizontal = 8.dp),
                     style = MaterialTheme.typography.labelSmall,
                 )
         }
