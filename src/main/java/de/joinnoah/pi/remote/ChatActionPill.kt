@@ -145,6 +145,9 @@ internal fun filesActions(model: ChatViewModel, focusComposer: () -> Unit) =
         onOpenFile = model::openFilesFile,
         onLoadMore = model::loadMoreFiles,
         onReload = model::reloadFiles,
+        onRequestPreview = model::requestFilesPreview,
+        onShowPeek = model::showFilesPeek,
+        onDismissPeek = model::dismissFilesPeek,
         onSelectLines = model::selectFileLines,
         onSend = { prompt ->
             model.prefillPrompt(prompt).also {

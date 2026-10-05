@@ -287,6 +287,12 @@ interface RemoteRepository {
 
     fun reloadFiles() {}
 
+    fun requestFilesPreview(path: String) {}
+
+    fun showFilesPeek(path: String, type: FileEntryType) {}
+
+    fun dismissFilesPeek() {}
+
     fun selectFileLines(selection: LineSelection?) {}
 
     /**

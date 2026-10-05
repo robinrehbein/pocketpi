@@ -303,6 +303,12 @@ internal class ChatViewModel(
 
     fun reloadFiles() = active(repository::reloadFiles)
 
+    fun requestFilesPreview(path: String) = active { repository.requestFilesPreview(path) }
+
+    fun showFilesPeek(path: String, type: FileEntryType) = active { repository.showFilesPeek(path, type) }
+
+    fun dismissFilesPeek() = repository.dismissFilesPeek()
+
     fun selectFileLines(selection: LineSelection?) = active { repository.selectFileLines(selection) }
 
     /** False when the comment was not saved; the caller keeps the user's text on screen. */
