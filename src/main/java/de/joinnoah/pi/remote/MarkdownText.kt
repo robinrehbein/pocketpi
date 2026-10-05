@@ -42,7 +42,12 @@ fun MarkdownText(text: String) {
                     }
                 }
             } else
-                part.lines().forEach { line ->
+                markdownBlocks(part).forEach { block ->
+                    if (block is MarkdownBlock.Table) {
+                        MarkdownTable(block)
+                        return@forEach
+                    }
+                    val line = (block as MarkdownBlock.Line).text
                     val level =
                         line
                             .takeWhile { it == '#' }
