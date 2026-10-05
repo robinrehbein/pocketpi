@@ -56,6 +56,7 @@ abstract class ValidateUploadKey : DefaultTask() {
 
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.android.test) apply false
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
@@ -150,6 +151,17 @@ android {
         }
     }
     buildTypes {
+        create("benchmark") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".benchmark"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+            isDebuggable = false
+            // Isolated app data and no production push registration during measurements.
+            for (key in listOf("API_KEY", "APP_ID", "PROJECT_ID", "GCM_SENDER_ID")) {
+                buildConfigField("String", "PI_REMOTE_FIREBASE_$key", "\"\"")
+            }
+        }
         release {
             isMinifyEnabled = false
             if (uploadStorePath.isNotBlank() && uploadStorePassword.isNotBlank() &&
