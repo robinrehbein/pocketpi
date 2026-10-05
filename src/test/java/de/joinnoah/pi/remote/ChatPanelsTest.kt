@@ -2,6 +2,10 @@ package de.joinnoah.pi.remote
 
 import android.content.Context
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
@@ -55,6 +59,30 @@ class ChatPanelsTest {
         assertFalse(timelineRailVisible(emptyList()))
         assertFalse(timelineRailVisible(allKinds.take(1)))
         assertTrue(timelineRailVisible(allKinds.take(2)))
+    }
+
+    @Test
+    fun timelineHandleHidesAndRestoresMarkers() {
+        var expanded by mutableStateOf(true)
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.height(400.dp)) {
+                    TimelineRailControl(
+                        markers = allKinds,
+                        expanded = expanded,
+                        onToggle = { expanded = !expanded },
+                        onJump = {},
+                    )
+                }
+            }
+        }
+        compose.onNodeWithTag("timelineRail").assertExists()
+        compose.onAllNodesWithTag("timelineMarker").assertCountEquals(4)
+        compose.onNodeWithTag("timelineToggle").performClick()
+        compose.onNodeWithTag("timelineRail").assertDoesNotExist()
+        compose.onAllNodesWithTag("timelineMarker").assertCountEquals(0)
+        compose.onNodeWithTag("timelineToggle").performClick()
+        compose.onAllNodesWithTag("timelineMarker").assertCountEquals(4)
     }
 
     @Test

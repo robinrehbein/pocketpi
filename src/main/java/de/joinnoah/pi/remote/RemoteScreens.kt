@@ -119,6 +119,7 @@ internal fun RemoteScreen(
     pushConfigured: Boolean,
     pushEnabled: Boolean,
     enablePush: () -> Unit,
+    timelineVisibility: TimelineVisibility,
 ) {
     val state by model.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -454,6 +455,31 @@ internal fun RemoteScreen(
         renameSessionId = sessionId
         renameDraft = TextFieldValue(title, TextRange(title.length))
     }
+    var modelPickerRequested by remember(key) { mutableStateOf(false) }
+    var settingsSheetRequested by remember(key) { mutableStateOf(false) }
+    /**
+     * Runs the draft when it names an available [LocalCommand] and clears it; false leaves the draft
+     * for the normal send, which reports unknown or unavailable commands.
+     */
+    fun runLocalCommand(): Boolean {
+        val chat = key as? RemoteNavKey.Chat ?: return false
+        val invocation =
+            localInvocation(state, availableLocalCommands(state, true, System.currentTimeMillis()))
+                ?: return false
+        model.draft("")
+        when (invocation.command) {
+            LocalCommand.NEW -> navigator.createSession(chat.routeId, chat.projectId)
+            LocalCommand.COMPACT -> model.compactContext()
+            LocalCommand.MODEL -> modelPickerRequested = true
+            LocalCommand.SETTINGS -> settingsSheetRequested = true
+            LocalCommand.NAME -> {
+                val session = state.session ?: return true
+                if (invocation.argument.isEmpty()) startRename(session.text("id"), session.text("title"))
+                else model.renameSession(session.text("id"), invocation.argument)
+            }
+        }
+        return true
+    }
     var abortTarget by remember { mutableStateOf<AbortRunTarget?>(null) }
     var disconnecting by rememberSaveable(key) { mutableStateOf(false) }
     val abortTargetIsCurrent =
@@ -494,6 +520,7 @@ internal fun RemoteScreen(
                     is RemoteNavKey.Sessions -> R.string.remote_sessions
                     is RemoteNavKey.Chat -> R.string.remote_chat
                     is RemoteNavKey.FolderBrowser -> R.string.remote_folders_title
+                    is RemoteNavKey.Providers -> R.string.providers_title
                     RemoteNavKey.Settings -> R.string.remote_settings
                 }
         )
@@ -510,11 +537,7 @@ internal fun RemoteScreen(
                     }
                 )
             val statusColor = chatStatusColor(state.status, state.connected)
-            val canRename =
-                state.connected && !state.loading &&
-                    RENAME_CAPABILITY in state.capabilities &&
-                    state.session?.text("origin") in setOf("tui", "rpc") &&
-                    state.status != "offline"
+            val canRename = canRenameSession(state)
             val hasTuiInfo =
                 state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
             val headerColor = floatingHeaderColor()
@@ -525,6 +548,10 @@ internal fun RemoteScreen(
                         if (canViewChanges(state) && state.connected) add(ChatAction.CHANGES)
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
                         if (canRename) add(ChatAction.RENAME)
+                        if (state.connected && !state.loading) add(ChatAction.NEW_SESSION)
+                        // Offered while pi runs (the sheet then explains it is read-only); `/settings` is typed into an idle draft only.
+                        if (state.connected && !state.loading && sessionSettingsAvailable(state))
+                            add(ChatAction.SESSION_SETTINGS)
                         add(ChatAction.REFRESH)
                         add(ChatAction.SETTINGS)
                     },
@@ -536,7 +563,9 @@ internal fun RemoteScreen(
                     ChatAction.FILES -> chatModel?.openFiles()
                     ChatAction.RENAME ->
                         state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
+                    ChatAction.NEW_SESSION -> navigator.createSession(key.routeId, key.projectId)
                     ChatAction.REFRESH -> model.refresh()
+                    ChatAction.SESSION_SETTINGS -> settingsSheetRequested = true
                     ChatAction.SETTINGS -> navigator.settings()
                 }
             }
@@ -661,6 +690,7 @@ internal fun RemoteScreen(
                     files,
                     remember(chatModel) { filesActions(checkNotNull(chatModel)) { composerFocusRequest++ } },
                     Modifier.fillMaxSize(),
+                    projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
                 )
             }
         }
@@ -763,13 +793,23 @@ internal fun RemoteScreen(
                             is RemoteNavKey.Sessions -> Unit
                             is RemoteNavKey.Chat -> Unit
                             is RemoteNavKey.FolderBrowser -> Unit
-                            is RemoteNavKey.Projects ->
+                            is RemoteNavKey.Providers -> Unit
+                            is RemoteNavKey.Projects -> {
+                                if (canManageProviders(state))
+                                    OutlinedButton(
+                                        onClick = { navigator.openProviders(key.routeId) },
+                                        enabled = !state.loading,
+                                        modifier = Modifier.fillMaxWidth().testTag("providersButton"),
+                                    ) {
+                                        Text(stringResource(R.string.providers_open))
+                                    }
                                 OutlinedButton(
                                     onClick = { disconnecting = true },
                                     modifier = Modifier.fillMaxWidth(),
                                 ) {
                                     Text(stringResource(R.string.remote_disconnect))
                                 }
+                            }
                         }
                     }
                 }
@@ -786,7 +826,8 @@ internal fun RemoteScreen(
         val readingInset =
             if (key is RemoteNavKey.Chat) ((maxWidth - 40.dp - MAX_READING_WIDTH) / 2).coerceAtLeast(0.dp)
             else 0.dp
-        val railShown = key is RemoteNavKey.Chat && timelineRailVisible(markers) && listScrollable
+        val railAvailable = key is RemoteNavKey.Chat && timelineRailVisible(markers) && listScrollable
+        val timelineExpanded = chatKey?.let(timelineVisibility::expanded) ?: true
         LazyColumn(
             if (key is RemoteNavKey.Chat) Modifier.fillMaxSize().then(underlay)
             else Modifier.fillMaxSize(),
@@ -795,7 +836,7 @@ internal fun RemoteScreen(
                 PaddingValues(
                     start = 20.dp + readingInset,
                     // Room for the timeline rail, so it never covers a card's controls.
-                    end = maxOf(if (railShown) 52.dp else 20.dp, 20.dp + readingInset),
+                    end = maxOf(if (railAvailable) 76.dp else 20.dp, 20.dp + readingInset),
                     top = headerHeight + if (key is RemoteNavKey.Chat) 16.dp else 48.dp,
                     bottom =
                         if (
@@ -1152,6 +1193,7 @@ internal fun RemoteScreen(
                 when (key) {
                     RemoteNavKey.Settings -> Unit
                     is RemoteNavKey.FolderBrowser -> Unit
+                    is RemoteNavKey.Providers -> Unit
                     RemoteNavKey.Hosts -> {
                         if (state.hosts.isEmpty()) {
                             item {
@@ -1469,9 +1511,11 @@ internal fun RemoteScreen(
                 chatHeader()
             }
         }
-        if (railShown)
-            TimelineRail(
-                markers,
+        if (railAvailable)
+            TimelineRailControl(
+                markers = markers,
+                expanded = timelineExpanded,
+                onToggle = { chatKey?.let(timelineVisibility::toggle) },
                 onJump = ::jumpTo,
                 scrollState = listState,
                 // Between the header and the composer.
@@ -1481,6 +1525,7 @@ internal fun RemoteScreen(
                         .padding(
                             top = headerHeight + 8.dp,
                             bottom = composerHeight + 8.dp,
+                            end = 24.dp,
                         )
                         .then(underlay),
             )
@@ -1539,7 +1584,7 @@ internal fun RemoteScreen(
                     ChatComposer(
                         state = state,
                         onDraft = model::draft,
-                        onSend = model::prompt,
+                        onSend = { if (!runLocalCommand()) model.prompt() },
                         onFollowUp = model::followUp,
                         onSteer = model::steer,
                         onStopChild = model::stopChild,
@@ -1559,6 +1604,7 @@ internal fun RemoteScreen(
                                 state,
                                 model::refreshConfiguration,
                                 model::refreshContextUsage,
+                                model::compactContext,
                                 model::refreshAdvisor,
                                 model::setAdvisor,
                                 model::setModel,
@@ -1567,6 +1613,16 @@ internal fun RemoteScreen(
                                 model::selectCommand,
                                 refreshJobs = { chatModel?.refreshJobs() },
                                 openJobs = chatModel?.let { chat -> chat::openJobs },
+                                localCommands =
+                                    availableLocalCommands(state, key is RemoteNavKey.Chat, System.currentTimeMillis()),
+                                selectLocalCommand = { command ->
+                                    model.draft(selectCommandName(state.draft, command.commandName))
+                                },
+                                modelPickerRequested = modelPickerRequested,
+                                onModelPickerRequestHandled = { modelPickerRequested = false },
+                                changeSettings = model::changeSettings,
+                                settingsSheetRequested = settingsSheetRequested,
+                                onSettingsSheetRequestHandled = { settingsSheetRequested = false },
                             )
                         },
                         onRemoveAttachment = model::removeAttachment,

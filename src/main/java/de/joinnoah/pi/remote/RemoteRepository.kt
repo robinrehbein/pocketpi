@@ -102,6 +102,7 @@ data class RemoteState(
     val configurationChanging: Boolean = false,
     val contextUsage: SessionContextUsage? = null,
     val contextLoading: Boolean = false,
+    val compactionRequesting: Boolean = false,
     val advisor: SessionAdvisor? = null,
     val advisorLoading: Boolean = false,
     val advisorChanging: Boolean = false,
@@ -118,6 +119,8 @@ data class RemoteState(
     /** Background jobs of the selected session (`session.background_jobs.v1`); null until listed. */
     val jobs: JobsState? = null,
     val folders: FolderBrowserState = FolderBrowserState(),
+    /** The provider list and login flow of the host shown on the Providers screen. */
+    val providerAuth: ProviderAuthState = ProviderAuthState(),
 )
 
 interface RemoteRepository {
@@ -177,6 +180,8 @@ interface RemoteRepository {
 
     fun refreshContextUsage() {}
 
+    fun compactContext() {}
+
     fun refreshAdvisor() {}
 
     fun setAdvisor(provider: String?, id: String? = null, level: String? = null) {}
@@ -185,6 +190,9 @@ interface RemoteRepository {
     fun setModel(provider: String, id: String) {}
 
     fun setThinkingLevel(level: String) {}
+
+    /** Changes the given session settings; null leaves a setting as it is. */
+    fun changeSettings(autoCompaction: Boolean? = null, steeringMode: String? = null, followUpMode: String? = null) {}
 
     fun refreshCommands() {}
 
@@ -279,6 +287,12 @@ interface RemoteRepository {
 
     fun reloadFiles() {}
 
+    fun requestFilesPreview(path: String) {}
+
+    fun showFilesPeek(path: String, type: FileEntryType) {}
+
+    fun dismissFilesPeek() {}
+
     fun selectFileLines(selection: LineSelection?) {}
 
     /**
@@ -323,6 +337,35 @@ interface RemoteRepository {
      * selection, or null when it asked or failed.
      */
     suspend fun openFolder(routeId: String, path: String, openId: Long): RemoteSelection? = null
+
+    /** Shows [routeId]'s providers; sends `provider.auth.list` only with [PROVIDER_AUTH_CAPABILITY]. */
+    fun browseProviders(routeId: String) {}
+
+    /** Re-reads the provider list, which also recovers the login flow after a reconnect. */
+    fun refreshProviders() {}
+
+    /**
+     * Starts a login for [providerId]. [replace] is set only after the user confirmed replacing a
+     * stored credential.
+     */
+    fun startLogin(providerId: String, method: ProviderAuthMethod, replace: Boolean) {}
+
+    /**
+     * Answers the pending prompt [promptId] with [value]. The value may be a secret: it is sent and
+     * dropped, never stored or logged. Returns whether the answer was sent; on false the caller
+     * keeps what the user typed.
+     */
+    fun answerLogin(promptId: String, value: String): Boolean = false
+
+    fun cancelLogin() {}
+
+    /** Removes the stored credential of [providerId]; the caller confirmed it with the user. */
+    fun logoutProvider(providerId: String) {}
+
+    /** Hides the finished login's result. */
+    fun dismissLogin() {}
+
+    fun dismissProviderNotice() {}
 
     fun dismissError()
 

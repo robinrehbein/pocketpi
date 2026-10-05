@@ -105,6 +105,7 @@ class DefaultRemoteRepository(
             SESSION_FORK_CAPABILITY,
             GIT_CAPABILITY,
             FILES_CAPABILITY,
+            PROVIDER_AUTH_CAPABILITY,
         )
     private val mutable = MutableStateFlow(RemoteState())
     override val state = mutable.asStateFlow()
@@ -135,6 +136,10 @@ class DefaultRemoteRepository(
     /** Folder and clone requests; a selection change does not cancel them, a lost connection does. */
     private val folderCompletions = mutableMapOf<String, CompletableDeferred<JsonObject>>()
     private var openCounter = 0L
+    private var providerVersion = 0L
+    private var providerStatusJob: Job? = null
+    /** Login events that arrived before the start result created the flow they belong to. */
+    private val earlyProviderUpdates = mutableListOf<ProviderAuthUpdate>()
 
     /** An open begun by beginOpenFolder, with the flags of the prompt the user confirmed. */
     private data class PendingOpen(
@@ -736,6 +741,7 @@ class DefaultRemoteRepository(
         sessionRefreshJob?.cancel()
         selectionEpoch++
         configurationVersion++
+        configurationNeedsRefresh = false
         contextVersion++
         commandsVersion++
         if (pairing?.isActive == true) {
@@ -752,6 +758,7 @@ class DefaultRemoteRepository(
                 configurationLoading = false,
                 configurationChanging = false,
                 contextLoading = false,
+                compactionRequesting = false,
                 commandsLoading = false,
                 toolOutput = null,
             )
@@ -794,6 +801,9 @@ class DefaultRemoteRepository(
             generation++
             failFolderRequests()
             cloneStatusJob?.cancel()
+            providerStatusJob?.cancel()
+            providerVersion++
+            earlyProviderUpdates.clear()
             folderVersion++
             folderSession++
             activeOpen = null
@@ -810,6 +820,7 @@ class DefaultRemoteRepository(
                     connected = false,
                     connection = R.string.remote_connecting,
                     compaction = null,
+                    compactionRequesting = false,
                     toolOutput = null,
                     questions = emptyList(),
                     capabilities = emptySet(),
@@ -821,6 +832,10 @@ class DefaultRemoteRepository(
                     advisorChanging = false,
                     commands = emptyList(),
                     status = "offline",
+                    // A login goes on on the Mac; the same host recovers it once it is reachable.
+                    providerAuth =
+                        if (previousRoute != host.routeId) ProviderAuthState()
+                        else it.providerAuth.offline(),
                     folders = it.folders.copy(
                         loaded = it.folders.loaded && !it.folders.loading,
                         loading = false,
@@ -896,6 +911,7 @@ class DefaultRemoteRepository(
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
                 if (PROJECT_OPEN_CAPABILITY in merged) resumeClone()
+                if (PROVIDER_AUTH_CAPABILITY in merged) resumeProviderAuth()
             }
             return result
         } finally {
@@ -992,10 +1008,20 @@ class DefaultRemoteRepository(
                         JsonObject(payload + ("kind" to JsonPrimitive("command.status"))) else payload
                     if (timeline?.event(timelineEvent) == true && !resynchronizing) snapshotAsync()
                     publishTimeline()
+                    if (payload.text("kind") == "session.compaction" &&
+                        payload.text("sessionId") == state.value.selection.sessionId &&
+                        payload.text("state") == "done") {
+                        update { it.copy(contextUsage = null) }
+                        refreshContextUsage()
+                    }
                 }
                 "host.event" ->
-                    cloneEvent(payload)?.let(::applyCloneUpdate)
-                        ?: jobEvent(payload)?.let(jobsController::onEvent)
+                    if (payload.optionalText("kind")?.startsWith("provider.auth.") == true) {
+                        receiveProviderAuthEvent(payload)
+                    } else {
+                        cloneEvent(payload)?.let(::applyCloneUpdate)
+                            ?: jobEvent(payload)?.let(jobsController::onEvent)
+                    }
                 else -> error("Unknown payload")
             }
         } catch (_: Exception) {
@@ -1200,6 +1226,7 @@ class DefaultRemoteRepository(
             it.copy(
                 selection = selection,
                 compaction = null,
+                compactionRequesting = false,
                 toolOutput = null,
                 changes = null,
                 files = null,
@@ -1293,6 +1320,7 @@ class DefaultRemoteRepository(
                         connected = false,
                         connection = R.string.remote_connecting,
                         compaction = null,
+                        compactionRequesting = false,
                         toolOutput = null,
                         questions = emptyList(),
                         capabilities = emptySet(),
@@ -1712,6 +1740,9 @@ class DefaultRemoteRepository(
         folderSession++
         activeOpen = null
         cloneStatusJob?.cancel()
+        providerStatusJob?.cancel()
+        providerVersion++
+        earlyProviderUpdates.clear()
         failFolderRequests()
         transport.close()
         ready?.completeExceptionally(IllegalStateException("Disconnected"))
@@ -1735,6 +1766,7 @@ class DefaultRemoteRepository(
             it.copy(
                 connected = false,
                 compaction = null,
+                compactionRequesting = false,
                 toolOutput = null,
                 projectChats = it.projectChats.map { chat -> chat.copy(verified = false) },
                 followUps = currentDraftKey()?.let { key -> drafts[key]?.followUps }.orEmpty(),
@@ -1753,6 +1785,7 @@ class DefaultRemoteRepository(
                 advisorChanging = false,
                 commands = emptyList(),
                 status = "offline",
+                providerAuth = it.providerAuth.offline(),
                 // A listing lost with the connection loads again after the reconnect.
                 folders = it.folders.copy(
                     loaded = it.folders.loaded && !it.folders.loading,
@@ -1975,6 +2008,34 @@ class DefaultRemoteRepository(
         }
     }
 
+    override fun compactContext() {
+        val current = state.value
+        val sessionId = current.selection.sessionId ?: return
+        if (!current.connected || current.loading || current.status != "idle" ||
+            current.sending || current.answering.isNotEmpty() || current.configurationChanging ||
+            current.compactionRequesting || compactionVisible(current.compaction, now()) ||
+            COMPACT_CAPABILITY !in current.capabilities ||
+            COMPACT_CAPABILITY in current.unavailableCapabilities ||
+            activeHost?.routeId != current.selection.routeId
+        ) return
+        val epoch = selectionEpoch
+        update { it.copy(compactionRequesting = true) }
+        scope.launch {
+            try {
+                val result = request("session.compact", epoch, "sessionId" to sessionId)
+                require(result.text("kind") == "accepted" && result.text("sessionId") == sessionId)
+            } catch (_: CancellationException) {} catch (e: Exception) {
+                if (epoch == selectionEpoch) {
+                    if (e.message == "unsupported")
+                        update { it.copy(unavailableCapabilities = it.unavailableCapabilities + COMPACT_CAPABILITY) }
+                    reportError(R.string.remote_compact_error)
+                }
+            } finally {
+                if (epoch == selectionEpoch) update { it.copy(compactionRequesting = false) }
+            }
+        }
+    }
+
     private fun canChangeConfiguration(): Boolean =
         state.value.let {
             it.connected &&
@@ -2010,7 +2071,28 @@ class DefaultRemoteRepository(
         )
     }
 
-    private fun changeConfiguration(change: JsonObject) {
+    override fun changeSettings(autoCompaction: Boolean?, steeringMode: String?, followUpMode: String?) {
+        val current = state.value
+        if (SETTINGS_CAPABILITY !in current.capabilities ||
+            SETTINGS_CAPABILITY in current.unavailableCapabilities ||
+            current.configuration?.settings == null ||
+            (autoCompaction == null && steeringMode == null && followUpMode == null) ||
+            listOfNotNull(steeringMode, followUpMode).any { it != QUEUE_MODE_ONE_AT_A_TIME && it != QUEUE_MODE_ALL }
+        ) return
+        changeConfiguration(
+            JsonObject(
+                buildMap {
+                    put("kind", JsonPrimitive("settings"))
+                    autoCompaction?.let { put("autoCompaction", JsonPrimitive(it)) }
+                    steeringMode?.let { put("steeringMode", JsonPrimitive(it)) }
+                    followUpMode?.let { put("followUpMode", JsonPrimitive(it)) }
+                }
+            ),
+            rereadOnError = true,
+        )
+    }
+
+    private fun changeConfiguration(change: JsonObject, rereadOnError: Boolean = false) {
         if (!canChangeConfiguration()) return
         if (configurationNeedsRefresh) {
             refreshConfiguration()
@@ -2022,6 +2104,7 @@ class DefaultRemoteRepository(
         contextVersion++
         update { it.copy(configurationChanging = true, contextUsage = null, contextLoading = false) }
         scope.launch {
+            var failed = false
             try {
                 val confirmed =
                     configuration(
@@ -2036,9 +2119,14 @@ class DefaultRemoteRepository(
                 if (epoch == selectionEpoch && version == configurationVersion)
                     update { it.copy(configuration = confirmed, contextUsage = null) }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                failed = true
                 if (epoch == selectionEpoch && version == configurationVersion) {
                     configurationNeedsRefresh = true
-                    if (e.message == "unsupported")
+                    if (e.message == "unsupported" && rereadOnError) {
+                        // Only the settings change is unsupported; model and thinking still work.
+                        update { it.copy(unavailableCapabilities = it.unavailableCapabilities + SETTINGS_CAPABILITY) }
+                        reportError(R.string.remote_configuration_error)
+                    } else if (e.message == "unsupported")
                         update {
                             it.copy(
                                 configuration = null,
@@ -2051,6 +2139,9 @@ class DefaultRemoteRepository(
             } finally {
                 if (epoch == selectionEpoch && version == configurationVersion)
                     update { it.copy(configurationChanging = false) }
+                // A failed settings change may be partly applied: show what the host holds now.
+                if (failed && rereadOnError && epoch == selectionEpoch && version == configurationVersion)
+                    refreshConfiguration()
                 resumeDeferredRecovery()
             }
         }
@@ -3389,6 +3480,281 @@ class DefaultRemoteRepository(
 
     override fun dismissFolderNotice() = updateFolders { it.copy(notice = null) }
 
+    private fun ProviderAuthState.offline() =
+        copy(
+            loading = false,
+            working = false,
+            error = null,
+            notice = null,
+            flow = flow?.copy(answering = false, cancelling = false, notice = null),
+        )
+
+    private fun updateProviders(block: (ProviderAuthState) -> ProviderAuthState) =
+        update { it.copy(providerAuth = block(it.providerAuth)) }
+
+    /** Applies [block] unless the connection or the shown host changed since [session]. */
+    private fun providerWrite(routeId: String, session: Long, block: (ProviderAuthState) -> ProviderAuthState) {
+        if (session == folderSession && state.value.providerAuth.routeId == routeId) updateProviders(block)
+    }
+
+    private fun updateFlow(loginId: String, block: (LoginFlow) -> LoginFlow) =
+        updateProviders { auth ->
+            auth.flow?.takeIf { it.loginId == loginId }?.let { auth.copy(flow = block(it)) } ?: auth
+        }
+
+    /** The route whose providers this device may manage right now, or null. */
+    private fun providerRoute(routeId: String? = state.value.providerAuth.routeId): String? =
+        routeId?.takeIf { canManageProviders(state.value) && activeHost?.routeId == it }
+
+    private fun providerName(auth: ProviderAuthState, providerId: String) =
+        auth.providers.firstOrNull { it.id == providerId }?.name ?: providerId
+
+    override fun browseProviders(routeId: String) {
+        updateProviders {
+            if (it.routeId != routeId) ProviderAuthState(routeId = routeId)
+            else it.copy(notice = null, error = null)
+        }
+        refreshProviders()
+    }
+
+    override fun refreshProviders() {
+        val routeId = providerRoute() ?: return
+        val session = folderSession
+        val version = ++providerVersion
+        updateProviders { it.copy(loading = true, error = null) }
+        scope.launch {
+            try {
+                val list = parseProviderList(folderRequest("provider.auth.list"))
+                if (version != providerVersion) return@launch
+                providerWrite(routeId, session) { it.withList(list) }
+                // A login this device knows, or the host reports as ours, may have moved on.
+                if (state.value.providerAuth.flow?.finished == false) recoverLogin()
+            } catch (e: CancellationException) {
+                if (version == providerVersion) updateProviders { it.copy(loading = false) }
+                throw e
+            } catch (e: Exception) {
+                if (version == providerVersion)
+                    providerWrite(routeId, session) {
+                        it.copy(loading = false, error = providerErrorMessage(e))
+                    }
+            }
+        }
+    }
+
+    /** After a reconnect the host's events are lost, so the list and a running login are re-read. */
+    private fun resumeProviderAuth() {
+        val auth = state.value.providerAuth
+        if (auth.routeId != activeHost?.routeId) return
+        if (auth.loaded || auth.flow?.finished == false) refreshProviders()
+    }
+
+    /**
+     * Re-reads the running login with `provider.auth.login.status`: its prompt, latest event or
+     * outcome. Failures other than `not_found` retry with backoff while the connection lasts.
+     */
+    private fun recoverLogin() {
+        val routeId = activeHost?.routeId ?: return
+        val auth = state.value.providerAuth
+        val flow = auth.flow?.takeIf { !it.finished && auth.routeId == routeId } ?: return
+        if (providerStatusJob?.isActive == true || providerRoute(routeId) == null) return
+        val session = folderSession
+        providerStatusJob = scope.launch {
+            var attempt = 0
+            while (true) {
+                val current = state.value.providerAuth.flow
+                if (session != folderSession || current?.loginId != flow.loginId) return@launch
+                val live = current.live
+                try {
+                    val status =
+                        parseLoginStatus(folderRequest("provider.auth.login.status", "loginId" to flow.loginId))
+                    require(status.loginId == flow.loginId)
+                    providerWrite(routeId, session) { auth ->
+                        auth.copy(flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.updatedBy(status, live) ?: auth.flow)
+                    }
+                    if (status.state.finished) refreshProviders()
+                    return@launch
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (e.message == "not_found") {
+                        providerWrite(routeId, session) { auth ->
+                            if (auth.flow?.loginId != flow.loginId) auth
+                            else auth.copy(flow = null, notice = ProviderNotice(R.string.providers_login_lost))
+                        }
+                        return@launch
+                    }
+                    if (++attempt >= 5) return@launch
+                    delay(1000L shl attempt)
+                }
+            }
+        }
+    }
+
+    /**
+     * A provider login event that fails validation is dropped instead of closing the channel; the
+     * flow then reads its state from the host, which may have moved on.
+     */
+    private fun receiveProviderAuthEvent(payload: JsonObject) {
+        val update =
+            try {
+                providerAuthEvent(payload)
+            } catch (_: Exception) {
+                if (state.value.providerAuth.flow?.finished == false) recoverLogin()
+                return
+            }
+        update?.let(::applyProviderAuthUpdate)
+    }
+
+    /** Applies a validated login `host.event` to the flow it names. */
+    private fun applyProviderAuthUpdate(update: ProviderAuthUpdate) {
+        val auth = state.value.providerAuth
+        val flow = auth.flow
+        if (flow == null || flow.loginId != update.loginId) {
+            // The start result may still be on its way; keep a few events for it.
+            if (auth.working) {
+                earlyProviderUpdates += update
+                while (earlyProviderUpdates.size > 16) earlyProviderUpdates.removeAt(0)
+            }
+            return
+        }
+        updateFlow(flow.loginId) { it.updatedBy(update, now()) }
+        if (update is ProviderAuthUpdate.Finished) refreshProviders()
+    }
+
+    override fun startLogin(providerId: String, method: ProviderAuthMethod, replace: Boolean) {
+        val routeId = providerRoute() ?: return
+        val auth = state.value.providerAuth
+        if (auth.working || auth.busy) return
+        val provider = auth.providers.firstOrNull { it.id == providerId } ?: return
+        if (method !in provider.methods) return
+        val session = folderSession
+        earlyProviderUpdates.clear()
+        updateProviders { it.copy(working = true, notice = null, flow = null) }
+        scope.launch {
+            try {
+                val fields = mutableListOf<Pair<String, Any?>>("providerId" to providerId, "method" to method.wire)
+                if (replace) fields += "replace" to true
+                val started = parseLoginStarted(folderRequest("provider.auth.login.start", *fields.toTypedArray()))
+                require(started.providerId == providerId && started.method == method)
+                if (session != folderSession) return@launch
+                providerWrite(routeId, session) {
+                    it.copy(working = false, flow = LoginFlow(started.loginId, providerId, method))
+                }
+                val early = earlyProviderUpdates.filter { it.loginId == started.loginId }
+                earlyProviderUpdates.clear()
+                early.forEach(::applyProviderAuthUpdate)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                earlyProviderUpdates.clear()
+                providerWrite(routeId, session) {
+                    it.copy(working = false, notice = ProviderNotice(providerErrorMessage(e)))
+                }
+                // Another login or a credential we did not know: show what the host has now.
+                if (e.message == "login_in_progress" || e.message == "exists") refreshProviders()
+            }
+        }
+    }
+
+    override fun answerLogin(promptId: String, value: String): Boolean {
+        val routeId = providerRoute() ?: return false
+        val flow = state.value.providerAuth.flow ?: return false
+        val prompt = flow.prompt?.takeIf { it.promptId == promptId } ?: return false
+        if (flow.finished || flow.answering) return false
+        if (value.toByteArray().size > MAX_PROVIDER_AUTH_ANSWER_BYTES) return false
+        if (prompt.prompt.type == PromptType.SELECT && prompt.prompt.options.none { it.id == value }) return false
+        val session = folderSession
+        updateFlow(flow.loginId) { it.copy(answering = true, notice = null) }
+        scope.launch {
+            try {
+                requireAccepted(
+                    folderRequest(
+                        "provider.auth.login.answer",
+                        "loginId" to flow.loginId,
+                        "promptId" to promptId,
+                        "value" to value,
+                    )
+                )
+                providerWrite(routeId, session) { auth ->
+                    auth.copy(flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.answered(promptId) ?: auth.flow)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                providerWrite(routeId, session) { auth ->
+                    auth.copy(
+                        flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.let { current ->
+                            when (e.message) {
+                                // The prompt is gone; the status says what happened to the login.
+                                "already_resolved" -> current.answered(promptId)
+                                else ->
+                                    current.copy(answering = false, notice = ProviderNotice(providerErrorMessage(e)))
+                            }
+                        } ?: auth.flow
+                    )
+                }
+                if (e.message == "already_resolved" || e.message == "not_found") recoverLogin()
+            }
+        }
+        return true
+    }
+
+    override fun cancelLogin() {
+        val routeId = providerRoute() ?: return
+        val flow = state.value.providerAuth.flow ?: return
+        if (flow.finished || flow.cancelling) return
+        val session = folderSession
+        updateFlow(flow.loginId) { it.copy(cancelling = true, notice = null) }
+        scope.launch {
+            try {
+                requireAccepted(folderRequest("provider.auth.login.cancel", "loginId" to flow.loginId))
+                // The outcome arrives as the finished event, and it may still be a success.
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                providerWrite(routeId, session) { auth ->
+                    auth.copy(
+                        flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.copy(
+                            cancelling = false,
+                            notice = ProviderNotice(providerErrorMessage(e)),
+                        ) ?: auth.flow
+                    )
+                }
+                if (e.message == "already_resolved" || e.message == "not_found") recoverLogin()
+            }
+        }
+    }
+
+    override fun logoutProvider(providerId: String) {
+        val routeId = providerRoute() ?: return
+        val auth = state.value.providerAuth
+        if (auth.working || auth.providers.none { it.id == providerId }) return
+        val session = folderSession
+        updateProviders { it.copy(working = true, notice = null) }
+        scope.launch {
+            try {
+                parseLogout(folderRequest("provider.auth.logout", "providerId" to providerId), providerId)
+                providerWrite(routeId, session) {
+                    it.copy(working = false, notice = ProviderNotice(R.string.providers_logout_done, providerName(it, providerId)))
+                }
+                refreshProviders()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                providerWrite(routeId, session) {
+                    it.copy(working = false, notice = ProviderNotice(providerErrorMessage(e)))
+                }
+                if (e.message == "login_in_progress") refreshProviders()
+            }
+        }
+    }
+
+    override fun dismissLogin() = updateProviders {
+        if (it.flow?.finished == true) it.copy(flow = null) else it
+    }
+
+    override fun dismissProviderNotice() = updateProviders { it.copy(notice = null) }
+
     override fun cancelFolderTrust() = updateFolders { it.copy(trust = null) }
 
     /** Whether [path] came from [routeId]'s browser: the shown folder, a listed one or its clone. */
@@ -3712,6 +4078,12 @@ class DefaultRemoteRepository(
     override fun loadMoreFiles() = filesLoader.loadMore()
 
     override fun reloadFiles() = filesLoader.reload()
+
+    override fun requestFilesPreview(path: String) = filesLoader.requestPreview(path)
+
+    override fun showFilesPeek(path: String, type: FileEntryType) = filesLoader.showPeek(path, type)
+
+    override fun dismissFilesPeek() = filesLoader.dismissPeek()
 
     override fun selectFileLines(selection: LineSelection?) = filesLoader.selectLines(selection)
 

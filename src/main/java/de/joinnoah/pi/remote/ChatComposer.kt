@@ -167,6 +167,7 @@ internal fun ChatComposer(
     }
     val hasDraft = state.draft.isNotBlank() || state.attachments.isNotEmpty()
     val childResume = offersChildResume(state)
+    val childStatus = if (childControls) childControlStatus(state) else null
     val canQueue = state.connected && !state.loading && !state.sending &&
         !state.importingAttachments && !state.configurationChanging &&
         state.questions.isEmpty() && hasDraft &&
@@ -267,16 +268,13 @@ internal fun ChatComposer(
                 content = suggestions,
             )
             VoiceInputStatus(voiceInput, state)
-            if (childControls)
+            if (childControls && (childResume || childStatus != null))
                 ChildControlRow(
-                    status = childControlStatus(state),
+                    status = childStatus,
                     reason = control?.reason,
                     resume = childResume,
                     resumeEnabled = canResumeChild,
-                    stopEnabled = !childResume && !childBusy && state.connected && !state.loading &&
-                        state.status in setOf("running", "waiting"),
                     onResume = onResumeChild,
-                    onStop = stop,
                 )
             if (state.followUps.isNotEmpty()) {
                 Column(
@@ -518,9 +516,7 @@ private fun ChildControlRow(
     reason: String?,
     resume: Boolean,
     resumeEnabled: Boolean,
-    stopEnabled: Boolean,
     onResume: () -> Unit,
-    onStop: () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().testTag("childControls"),
@@ -546,12 +542,6 @@ private fun ChildControlRow(
                 enabled = resumeEnabled,
                 modifier = Modifier.testTag("resumeChild"),
             ) { Text(stringResource(R.string.remote_child_resume)) }
-        else
-            TextButton(
-                onClick = onStop,
-                enabled = stopEnabled,
-                modifier = Modifier.testTag("stopChild"),
-            ) { Text(stringResource(R.string.remote_child_stop)) }
     }
 }
 

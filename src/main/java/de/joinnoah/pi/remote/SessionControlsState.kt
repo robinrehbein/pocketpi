@@ -6,7 +6,30 @@ const val CONFIGURATION_CAPABILITY = "session.configuration.v1"
 const val COMMANDS_CAPABILITY = "session.commands.v1"
 const val RENAME_CAPABILITY = "session.rename.v1"
 const val CONTEXT_CAPABILITY = "session.context.v1"
+const val COMPACT_CAPABILITY = "session.compact.v1"
 const val ADVISOR_CAPABILITY = "session.advisor.v1"
+const val SETTINGS_CAPABILITY = "session.settings.v1"
+
+/** The queue modes the host accepts for [SessionSettings.steeringMode] and [SessionSettings.followUpMode]. */
+const val QUEUE_MODE_ONE_AT_A_TIME = "one-at-a-time"
+const val QUEUE_MODE_ALL = "all"
+private val QUEUE_MODES = setOf(QUEUE_MODE_ONE_AT_A_TIME, QUEUE_MODE_ALL)
+
+/** The host-owned pi settings of a session; they also apply to later sessions on that Mac. */
+data class SessionSettings(
+    val autoCompaction: Boolean,
+    val steeringMode: String,
+    val followUpMode: String,
+)
+
+/** Reads the optional `settings` object; anything missing, malformed or unknown reads as absent. */
+internal fun sessionSettings(value: JsonElement?): SessionSettings? {
+    val data = value as? JsonObject ?: return null
+    fun text(key: String): String? =
+        (data[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it in QUEUE_MODES }
+    val auto = (data["autoCompaction"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+    return SessionSettings(auto ?: return null, text("steeringMode") ?: return null, text("followUpMode") ?: return null)
+}
 
 data class AdvisorChoice(
     val provider: String,
@@ -119,6 +142,8 @@ data class SessionConfiguration(
     val thinkingLevels: List<String>,
     val models: List<RemoteModel>,
     val modelsTruncated: Boolean,
+    /** Null for sessions the host does not own, and when the host reports nothing usable. */
+    val settings: SessionSettings? = null,
 )
 
 data class RemoteCommand(val name: String, val description: String?, val source: String)
@@ -160,6 +185,7 @@ internal fun configuration(data: JsonObject, sessionId: String): SessionConfigur
         levels,
         models.map(::model),
         data.flag("modelsTruncated"),
+        sessionSettings(data["settings"]),
     )
 }
 
@@ -176,7 +202,112 @@ internal fun commandName(text: String): String? =
     text.takeIf { it.startsWith("/") }?.drop(1)?.takeWhile { !it.isWhitespace() }
 
 internal fun selectCommand(text: String, command: RemoteCommand): String =
-    "/" + command.name + text.dropWhile { !it.isWhitespace() }
+    selectCommandName(text, command.name)
+
+internal fun selectCommandName(text: String, name: String): String =
+    "/" + name + text.dropWhile { !it.isWhitespace() }
+
+/** The Compact action is offered: the host advertises [COMPACT_CAPABILITY] and did not withdraw it. */
+internal fun compactAvailable(state: RemoteState): Boolean =
+    COMPACT_CAPABILITY in state.capabilities && COMPACT_CAPABILITY !in state.unavailableCapabilities
+
+/** Compacting can start now: the session is idle and no compaction is running or showing. */
+internal fun canCompact(state: RemoteState, nowMillis: Long): Boolean =
+    state.connected && !state.loading && state.status == "idle" &&
+        !state.sending && state.answering.isEmpty() && !state.configurationChanging &&
+        !state.compactionRequesting && !compactionVisible(state.compaction, nowMillis)
+
+/**
+ * The session settings sheet is offered: the host advertises [SETTINGS_CAPABILITY] next to the
+ * configuration controls and reported settings for this session (terminal sessions have none).
+ */
+internal fun sessionSettingsAvailable(state: RemoteState): Boolean =
+    SETTINGS_CAPABILITY in state.capabilities && SETTINGS_CAPABILITY !in state.unavailableCapabilities &&
+        configurationControlsAvailable(state.capabilities, state.unavailableCapabilities) &&
+        state.configuration?.settings != null
+
+/** The selected session can be renamed from the phone. */
+internal fun canRenameSession(state: RemoteState): Boolean =
+    state.connected && !state.loading &&
+        RENAME_CAPABILITY in state.capabilities &&
+        state.session?.text("origin") in setOf("tui", "rpc") &&
+        state.status != "offline"
+
+/**
+ * pi's built-in slash commands are not in the host's catalog, so the app maps the ones it has a
+ * control for. [commandName] is what follows the slash.
+ */
+internal enum class LocalCommand(val commandName: String, val description: Int) {
+    NEW("new", R.string.remote_local_command_new),
+    COMPACT("compact", R.string.remote_local_command_compact),
+    MODEL("model", R.string.remote_local_command_model),
+    SETTINGS("settings", R.string.remote_local_command_settings),
+    NAME("name", R.string.remote_local_command_name),
+}
+
+/**
+ * The [LocalCommand]s that can run now, in list order. [inChat] is false outside a chat route,
+ * where a new session has no project to open in. A command draft is sent only while the session
+ * is idle, so nothing is offered before.
+ */
+internal fun availableLocalCommands(
+    state: RemoteState,
+    inChat: Boolean,
+    nowMillis: Long,
+): List<LocalCommand> {
+    val sendable =
+        state.connected && !state.loading && state.status == "idle" && !state.sending &&
+            !state.importingAttachments && !state.configurationChanging
+    if (!sendable) return emptyList()
+    return LocalCommand.entries.filter { command ->
+        when (command) {
+            LocalCommand.NEW -> inChat
+            LocalCommand.COMPACT -> compactAvailable(state) && canCompact(state, nowMillis)
+            LocalCommand.MODEL ->
+                state.connected && !state.loading && !state.configurationChanging &&
+                    configurationControlsAvailable(state.capabilities, state.unavailableCapabilities)
+            LocalCommand.SETTINGS -> !state.configurationLoading && sessionSettingsAvailable(state)
+            LocalCommand.NAME -> canRenameSession(state)
+        }
+    }
+}
+
+/**
+ * A draft that names an available [LocalCommand]; [argument] is the text after the name with its
+ * whitespace collapsed.
+ */
+internal data class LocalInvocation(val command: LocalCommand, val argument: String)
+
+/** The longest `/name` argument, the byte limit the rename request enforces. */
+private const val LOCAL_NAME_MAX_BYTES = 4096
+
+/**
+ * The invocation the draft asks for, or null when it is no available local command. A quote or
+ * attachments never run one: the send then fails as for any command with extra context. Only
+ * `/name` takes an argument, so other commands with text after them are left to the normal send,
+ * as is a title longer than a rename accepts.
+ */
+internal fun localInvocation(state: RemoteState, available: List<LocalCommand>): LocalInvocation? {
+    if (state.quote != null || state.attachments.isNotEmpty()) return null
+    val name = commandName(state.draft) ?: return null
+    val command = available.firstOrNull { it.commandName.equals(name, ignoreCase = true) } ?: return null
+    val argument = state.draft.drop(1 + name.length).trim().replace(Regex("\\s+"), " ")
+    if (argument.isNotEmpty() && command != LocalCommand.NAME) return null
+    if (argument.encodeToByteArray().size > LOCAL_NAME_MAX_BYTES) return null
+    return LocalInvocation(command, argument)
+}
+
+/** Host commands that a local command of the same name does not shadow. */
+internal fun mergeCommandSuggestions(
+    local: List<LocalCommand>,
+    host: List<RemoteCommand>,
+    prefix: String,
+): Pair<List<LocalCommand>, List<RemoteCommand>> =
+    local.filter { it.commandName.startsWith(prefix, ignoreCase = true) } to
+        host.filter { command ->
+            command.name.startsWith(prefix, ignoreCase = true) &&
+                local.none { it.commandName.equals(command.name, ignoreCase = true) }
+        }
 
 /** Steer, follow-up, stop and resume for subagent children (`session.subagent_control.v1`). */
 const val SUBAGENT_CONTROL_CAPABILITY = "session.subagent_control.v1"

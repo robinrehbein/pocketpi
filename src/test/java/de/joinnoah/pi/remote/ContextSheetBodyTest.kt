@@ -5,6 +5,9 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -40,5 +43,18 @@ class ContextSheetBodyTest {
     fun unavailableStateShowsTheUnavailableNotice() {
         compose.setContent { MaterialTheme { ContextSheetBody(usage = null, unavailable = true) } }
         compose.onNodeWithTag("contextSheet").assertExists()
+    }
+
+    @Test
+    fun compactButtonInvokesTheDirectAction() {
+        var clicks = 0
+        compose.setContent {
+            MaterialTheme {
+                ContextSheetBody(bigUsage, unavailable = false, showCompact = true,
+                    canCompact = true, onCompact = { clicks++ })
+            }
+        }
+        compose.onNodeWithTag("compactContextButton").performScrollTo().assertIsEnabled().performClick()
+        compose.runOnIdle { assertTrue(clicks == 1) }
     }
 }
