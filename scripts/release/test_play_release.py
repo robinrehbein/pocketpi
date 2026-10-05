@@ -48,18 +48,19 @@ class PlayReleaseTests(unittest.TestCase):
             packageName="de.robinrehbein.pocketpi", editId="edit-1"
         )
 
-    def test_closed_track_requires_exact_custom_id(self):
+    def test_closed_track_accepts_alpha_or_exact_custom_id(self):
         invalid = (
             "production", "wear:production", "automotive:production", "tv:production",
-            "qa", "alpha", "beta", "internal", "Production", "wear:alpha",
+            "qa", "beta", "internal", "Production", "wear:alpha",
             "closed/alpha", "closed alpha", "closed-alpha\nproduction",
         )
         for track in invalid:
             with self.subTest(track=track), patch.dict(os.environ, {"POCKETPI_CLOSED_TRACK": track}):
                 with self.assertRaises(ValueError):
                     play_release.closed_track()
-        with patch.dict(os.environ, {"POCKETPI_CLOSED_TRACK": "closed-alpha-id"}):
-            self.assertEqual(play_release.closed_track(), "closed-alpha-id")
+        for track in ("alpha", "closed-alpha-id"):
+            with self.subTest(track=track), patch.dict(os.environ, {"POCKETPI_CLOSED_TRACK": track}):
+                self.assertEqual(play_release.closed_track(), track)
 
     def test_missing_closed_track_selects_internal_only(self):
         with patch.dict(os.environ, {"POCKETPI_CLOSED_TRACK": ""}):
@@ -114,13 +115,13 @@ class PlayReleaseTests(unittest.TestCase):
         first = {
             "tracks": [
                 {"track": "qa", "releases": []},
-                {"track": "closed-alpha-id", "releases": []},
+                {"track": "alpha", "releases": []},
             ]
         }
         verified = {
             "tracks": [
                 {"track": "qa", "releases": [{"versionCodes": ["1"], "status": "completed"}]},
-                {"track": "closed-alpha-id", "releases": [{"versionCodes": ["1"], "status": "completed"}]},
+                {"track": "alpha", "releases": [{"versionCodes": ["1"], "status": "completed"}]},
             ]
         }
         edits.tracks.return_value.list.return_value.execute.side_effect = [first, verified]
@@ -134,8 +135,12 @@ class PlayReleaseTests(unittest.TestCase):
             bundle.write_bytes(b"signed-bundle-placeholder")
             with patch.dict(sys.modules, {"googleapiclient": types.ModuleType("googleapiclient"),
                                           "googleapiclient.http": media}):
-                play_release.publish(service, "closed-alpha-id", 1, bundle)
+                play_release.publish(service, "alpha", 1, bundle)
         self.assertEqual(edits.tracks.return_value.update.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["track"] for call in edits.tracks.return_value.update.call_args_list],
+            ["qa", "alpha"],
+        )
         edits.commit.assert_called_once_with(
             packageName=play_release.PACKAGE_NAME,
             editId="edit-1",

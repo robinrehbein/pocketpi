@@ -224,8 +224,8 @@ Console before telling testers that the update is available.
 
 Protect the `play-testing` GitHub environment so only `main` can use it. Set its variables
 `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_PLAY_SERVICE_ACCOUNT`. To add Closed Alpha, set
-`POCKETPI_CLOSED_TRACK` to the exact custom track identifier returned by the Play Developer API,
-not a display name. Set the Google Cloud workload identity provider's subject mapping to
+`POCKETPI_CLOSED_TRACK` to `alpha` for the default track, or to the exact custom track identifier
+returned by the Play Developer API. Set the Google Cloud workload identity provider's subject mapping to
 `google.subject=assertion.sub`, then restrict it with GitHub's OIDC claims:
 
 ```text

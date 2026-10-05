@@ -10,7 +10,7 @@ from pathlib import Path
 PACKAGE_NAME = "de.robinrehbein.pocketpi"
 INTERNAL_TRACK = "qa"
 MAX_VERSION_CODE = 2_100_000_000
-RESERVED_TRACKS = frozenset({INTERNAL_TRACK, "production", "beta", "alpha", "internal"})
+RESERVED_TRACKS = frozenset({INTERNAL_TRACK, "production", "beta", "internal"})
 CUSTOM_TRACK_ID = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 
 
@@ -22,11 +22,12 @@ def required_env(name):
 
 
 def validate_closed_track(track):
-    # Form-factor tracks use a colon (for example wear:production). Only a
-    # plain custom closed-test identifier may reach the release update loop.
+    # Form-factor tracks use a colon (for example wear:production). Only the
+    # default alpha track or a plain custom closed-test identifier may reach
+    # the release update loop.
     if (not CUSTOM_TRACK_ID.fullmatch(track) or track in RESERVED_TRACKS
             or "production" in track):
-        raise ValueError("POCKETPI_CLOSED_TRACK must be the exact custom closed-test track ID")
+        raise ValueError("POCKETPI_CLOSED_TRACK must be alpha or an exact custom closed-test track ID")
     return track
 
 
