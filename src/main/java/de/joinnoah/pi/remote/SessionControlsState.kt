@@ -10,6 +10,9 @@ const val COMPACT_CAPABILITY = "session.compact.v1"
 const val ADVISOR_CAPABILITY = "session.advisor.v1"
 const val SETTINGS_CAPABILITY = "session.settings.v1"
 
+internal fun advisorControlAvailable(state: RemoteState): Boolean =
+    ADVISOR_CAPABILITY in state.capabilities && ADVISOR_CAPABILITY !in state.unavailableCapabilities
+
 /** The queue modes the host accepts for [SessionSettings.steeringMode] and [SessionSettings.followUpMode]. */
 const val QUEUE_MODE_ONE_AT_A_TIME = "one-at-a-time"
 const val QUEUE_MODE_ALL = "all"
