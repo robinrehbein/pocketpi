@@ -31,6 +31,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -336,7 +339,11 @@ private fun ToolDetailContent(
     val numberWidth = remember(rows, charWidth) { charWidth * (rows.lastOrNull { it.number != null }?.number ?: 1).toString().length }
     val density = LocalDensity.current
     var searchBarHeight by remember { mutableIntStateOf(0) }
-    val firstRowIndex = 3 // arguments, output header, search bar
+    val cards = remember(output) { resultCards(output.orEmpty()) }
+    var showRaw by rememberSaveable { mutableStateOf(false) }
+    val useCards = item.name == "bash" && rows.isNotEmpty()
+    val rawVisible = !useCards || showRaw || query.isNotEmpty()
+    val firstRowIndex = if (useCards) 4 else 3 // includes the raw-output disclosure
 
     LaunchedEffect(query, navigation, matches.isNotEmpty()) {
         if (revealedNavigation == navigation) return@LaunchedEffect
@@ -389,16 +396,32 @@ private fun ToolDetailContent(
                             modifier = Modifier.onSizeChanged { searchBarHeight = it.height },
                         )
                 }
-                itemsIndexed(rows, contentType = { _, _ -> "row" }) { index, row ->
-                    OutputRowView(
-                        row = row,
-                        matches = matchesByRow[index].orEmpty(),
-                        current = current,
-                        numberWidth = numberWidth,
-                        contentWidth = contentWidth,
-                        scroll = outputScroll,
-                        style = style,
-                    )
+                if (useCards) {
+                    item(key = "rawToggle") {
+                        if (!rawVisible) Text(
+                            stringResource(R.string.remote_result_count, cards.size),
+                            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        TextButton(onClick = { showRaw = !showRaw }, Modifier.padding(horizontal = 16.dp).testTag("toolDetailRawToggle")) {
+                            Text(stringResource(if (showRaw) R.string.remote_result_hide_raw else R.string.remote_result_show_raw))
+                        }
+                    }
+                }
+                if (rawVisible) {
+                    itemsIndexed(rows, contentType = { _, _ -> "row" }) { index, row ->
+                        OutputRowView(
+                            row = row,
+                            matches = matchesByRow[index].orEmpty(),
+                            current = current,
+                            numberWidth = numberWidth,
+                            contentWidth = contentWidth,
+                            scroll = outputScroll,
+                            style = style,
+                        )
+                    }
+                } else {
+                    items(cards, contentType = { "resultCard" }) { card -> ResultCardView(card) }
                 }
                 item(key = "end") { Box(Modifier.heightIn(min = 16.dp)) }
             }
@@ -458,8 +481,8 @@ private fun ToolDetailTopBar(item: ConversationItem.Activity, onClose: () -> Uni
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            StateChip(item.state)
         }
-        StateChip(item.state)
     }
 }
 
@@ -654,7 +677,11 @@ private fun ArgumentsSection(item: ConversationItem.Activity, modifier: Modifier
         for (block in model.blocks) {
             when (block) {
                 is ArgumentBlock.Code -> {
-                    CodeBlock(block.text, block.numbered, limit = limits[at])
+                    if (item.name == "bash" && !item.argumentsTruncated && block.rows <= 16 && block.text.length <= RESULT_CARD_PREVIEW_CHARS) {
+                        Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.medium) {
+                            SelectionContainer { Text(block.text, Modifier.fillMaxWidth().padding(12.dp), style = monoTextStyle()) }
+                        }
+                    } else CodeBlock(block.text, block.numbered, limit = limits[at])
                     at += 1
                 }
                 is ArgumentBlock.Change -> {
@@ -878,17 +905,11 @@ private fun SearchBar(
                     value = query,
                     onValueChange = { onQuery(it.take(200)) },
                     modifier = Modifier.weight(1f).testTag("toolDetailSearch"),
-                    placeholder = { Text(stringResource(R.string.remote_tool_detail_search)) },
+                    placeholder = { Text(stringResource(R.string.remote_tool_detail_search), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     leadingIcon = { Icon(Icons.Default.Search, null) },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyMedium,
                 )
-                IconButton(onClick = onPrevious, enabled = matches > 0) {
-                    Icon(Icons.Default.KeyboardArrowUp, stringResource(R.string.remote_tool_detail_search_previous))
-                }
-                IconButton(onClick = onNext, enabled = matches > 0) {
-                    Icon(Icons.Default.KeyboardArrowDown, stringResource(R.string.remote_tool_detail_search_next))
-                }
                 IconButton(
                     onClick = {
                         scope.launch {
@@ -909,6 +930,14 @@ private fun SearchBar(
                     modifier = Modifier.testTag("toolDetailCopy"),
                 ) {
                     Icon(Icons.Default.ContentCopy, copyLabel)
+                }
+            }
+            if (query.isNotEmpty()) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onPrevious, enabled = matches > 0) {
+                    Icon(Icons.Default.KeyboardArrowUp, stringResource(R.string.remote_tool_detail_search_previous))
+                }
+                IconButton(onClick = onNext, enabled = matches > 0) {
+                    Icon(Icons.Default.KeyboardArrowDown, stringResource(R.string.remote_tool_detail_search_next))
                 }
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -981,6 +1010,41 @@ private fun OutputRowView(
         LineNumber(row.number, numberWidth, style)
         Box(Modifier.weight(1f).horizontalScroll(scroll).padding(end = 16.dp)) {
             Text(text, Modifier.width(contentWidth), style = style, softWrap = false, maxLines = 1, color = LocalContentColor.current)
+        }
+    }
+}
+
+@Composable
+private fun ResultCardView(card: ResultCard) {
+    val colors = MaterialTheme.colorScheme
+    val accent = when (card.kind) {
+        ResultKind.APPROVED -> diffAddedContent()
+        ResultKind.REVISION -> colors.tertiary
+        ResultKind.NEUTRAL -> colors.onSurfaceVariant
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).testTag("toolResultCard"),
+        shape = MaterialTheme.shapes.medium,
+        color = colors.surfaceContainer,
+        border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = .35f)),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(when (card.kind) {
+                    ResultKind.APPROVED -> Icons.Default.CheckCircle
+                    ResultKind.REVISION -> Icons.Default.Warning
+                    ResultKind.NEUTRAL -> Icons.Default.Info
+                }, null, tint = accent, modifier = Modifier.size(20.dp))
+                Text(stringResource(when (card.kind) {
+                    ResultKind.APPROVED -> R.string.remote_result_approved
+                    ResultKind.REVISION -> R.string.remote_result_revision
+                    ResultKind.NEUTRAL -> R.string.remote_result_output
+                }), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, color = accent)
+            }
+            card.timestamp?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant) }
+            val body = if (card.timestamp != null) card.text.substringAfter("\n", "") else card.text
+            SelectionContainer { Text(resultCardPreview(body), style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)) }
+            if (body.length > RESULT_CARD_PREVIEW_CHARS) Notice(stringResource(R.string.remote_result_preview_shortened))
         }
     }
 }
