@@ -87,9 +87,13 @@ internal fun inlineMarkdown(text: String, linkColor: androidx.compose.ui.graphic
                     append(match.groupValues[1])
                 }
             match.groups[2] != null ->
-                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(match.groupValues[2]) }
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                    append(inlineMarkdown(match.groupValues[2], linkColor))
+                }
             match.groups[3] != null ->
-                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(match.groupValues[3]) }
+                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                    append(inlineMarkdown(match.groupValues[3], linkColor))
+                }
             else -> {
                 val bare = match.groups[4] == null
                 val rawUrl = if (bare) match.value else match.groupValues[5]
