@@ -216,7 +216,7 @@ release has not yet been verified. Complete the Firebase, signing, and GitHub en
 before relying on automatic publishing.
 
 When enabled, `.github/workflows/release.yml` runs only after a successful `Android CI` push run on the current
-`main` commit. It builds one signed AAB, then submits it to Play Internal Testing (`qa`). When
+`main` commit. It builds one signed AAB, then submits it to Play Internal Testing (`internal`). When
 `POCKETPI_CLOSED_TRACK` is configured, the same edit also updates that Closed Alpha track. It stops
 if a configured track cannot accept the release.
 It never targets production. Play may still hold an accepted edit for app review; check the Play

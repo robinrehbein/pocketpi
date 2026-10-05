@@ -8,9 +8,9 @@ import sys
 from pathlib import Path
 
 PACKAGE_NAME = "de.robinrehbein.pocketpi"
-INTERNAL_TRACK = "qa"
+INTERNAL_TRACK = "internal"
 MAX_VERSION_CODE = 2_100_000_000
-RESERVED_TRACKS = frozenset({INTERNAL_TRACK, "production", "beta", "internal"})
+RESERVED_TRACKS = frozenset({INTERNAL_TRACK, "production", "beta", "qa"})
 CUSTOM_TRACK_ID = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 
 
@@ -54,7 +54,10 @@ def track_map(tracks, closed):
     by_name = {track["track"]: track for track in tracks}
     for name in target_tracks(closed):
         if name not in by_name:
-            raise ValueError(f"Required Play track {name!r} does not exist")
+            raise ValueError(
+                f"Required Play track {name!r} does not exist; "
+                f"available tracks: {', '.join(sorted(by_name))}"
+            )
     return by_name
 
 
