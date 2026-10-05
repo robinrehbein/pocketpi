@@ -2164,6 +2164,31 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun statusEventsUpdatePreviouslyVisitedProjectCache() = runTest {
+        val transport = Transport().also { configure(it) }
+        val normal = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "projects.list" -> data("projects", listOf(project, Wire.objectOf("id" to "other-project")))
+                "sessions.list" -> if (request.text("projectId") == "project")
+                    data("sessions", listOf(session(status = "offline")))
+                else data("sessions", listOf(session("other", projectId = "other-project")))
+                else -> normal(request)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        repository.activate(RemoteSelection("host", "other-project"))
+        transport.listener.message(Wire.objectOf(
+            "type" to "event", "kind" to "session.status", "sessionId" to "session",
+            "revision" to 1, "status" to "idle",
+        ))
+        val target = RemoteSelection("host", "project", "session")
+        assertEquals(target, repository.activate(target, ActivationMode.RESTORE))
+        assertEquals("idle", repository.state.value.session?.text("status"))
+    }
+
+    @Test
     fun returningToEarlierChatShowsCachedMessagesBeforeSnapshotCompletes() = runTest {
         val transport = Transport().also {
             configure(it, sessions = listOf(session(), session("other")))

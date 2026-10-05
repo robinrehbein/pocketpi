@@ -1099,6 +1099,14 @@ class DefaultRemoteRepository(
                 }
                 publishProjectChats(routeId)
             }
+            sessionCache.transformValues { cached ->
+                if (cached.routeId == routeId) cached.copy(sessions = cached.sessions.map(::renamed))
+                else cached
+            }
+            chatCache.transformValues { cached ->
+                if (cached.selection.routeId == routeId) cached.copy(session = renamed(cached.session))
+                else cached
+            }
             cachedSessions?.takeIf { it.routeId == routeId }?.let { cached ->
                 cachedSessions = cached.copy(sessions = cached.sessions.map(::renamed))
             }
@@ -1142,6 +1150,16 @@ class DefaultRemoteRepository(
                     }
                 }
                 publishProjectChats(routeId)
+            }
+            sessionCache.transformValues { cached ->
+                if (cached.routeId == routeId)
+                    cached.copy(sessions = cached.sessions.map(::withSessionStatus))
+                else cached
+            }
+            chatCache.transformValues { cached ->
+                if (cached.selection.routeId == routeId && cached.selection.sessionId == id)
+                    cached.copy(session = withSessionStatus(cached.session), status = status)
+                else cached
             }
             cachedSessions?.takeIf { it.routeId == routeId }?.let { cached ->
                 cachedSessions = cached.copy(sessions = cached.sessions.map(::withSessionStatus))

@@ -17,5 +17,10 @@ internal class NavigationMemoryCache<K, V>(private val capacity: Int) {
         while (entries.size > capacity) entries.remove(entries.keys.first())
     }
 
+    /** Update cached metadata without changing access order. */
+    fun transformValues(transform: (V) -> V) {
+        entries.replaceAll { _, value -> transform(value) }
+    }
+
     fun clear() = entries.clear()
 }
