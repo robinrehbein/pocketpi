@@ -193,8 +193,20 @@ class DefaultRemoteRepository(
     private var projectChatsJob: Job? = null
     private var attentionRefreshJob: Job? = null
     private var lastProjectChatsRefreshAt: Long? = null
+    private val sessionCache = NavigationMemoryCache<Pair<String, String>, CachedSessions>(8)
+    private val chatCache = NavigationMemoryCache<RemoteSelection, CachedChat>(8)
     private var cachedSessions: CachedSessions? = null
+        set(value) {
+            field = value
+            if (value == null) sessionCache.clear()
+            else sessionCache[value.routeId to value.projectId] = value
+        }
     private var cachedChat: CachedChat? = null
+        set(value) {
+            field = value
+            if (value == null) chatCache.clear()
+            else chatCache[value.selection] = value
+        }
     private val savedNavigation = linkedMapOf<String, NavigationSnapshot>()
     private data class NavigationWrite(
         val version: Long,
@@ -234,6 +246,12 @@ class DefaultRemoteRepository(
 
     init {
         scope.launch {
+            // Independent disk reads overlap. Capture failures so one corrupt store does not
+            // cancel initialization or prevent another store from being recovered.
+            val loadedNavigation = async(io) {
+                runCatching { navigationStorage?.load().orEmpty() }
+            }
+            val loadedDrafts = async(io) { runCatching { draftStorage.load() } }
             val hosts =
                 try {
                     withContext(io) { pairings.load() }.also { pairingsLoaded = true }
@@ -243,11 +261,11 @@ class DefaultRemoteRepository(
                 }
             if (hosts != null) {
                 update { it.copy(hosts = hosts.filterNot { host -> host.routeId in removedRoutes }) }
-                navigationStorage?.let { storage ->
+                navigationStorage?.let {
                     try {
                         val allowed = hosts.mapTo(mutableSetOf()) { it.routeId }
                         savedNavigation.putAll(
-                            withContext(io) { storage.load() }
+                            loadedNavigation.await().getOrThrow()
                                 .filterKeys { it in allowed && it !in removedRoutes }
                         )
                         navigationLoaded = true
@@ -257,7 +275,7 @@ class DefaultRemoteRepository(
                 }
             }
             try {
-                drafts.putAll(withContext(io) { draftStorage.load() }.mapValues { (_, value) ->
+                drafts.putAll(loadedDrafts.await().getOrThrow().mapValues { (_, value) ->
                     value.copy(followUps = value.followUps.map { entry ->
                         if (entry.status in setOf("pending", "accepted")) entry.copy(status = "uncertain") else entry
                     })
@@ -594,7 +612,7 @@ class DefaultRemoteRepository(
             return
         }
         val sessions =
-            cachedSessions?.takeIf { it.routeId == host.routeId && it.projectId == projectId }
+            sessionCache[host.routeId to projectId]
                 ?: run {
                     val project = projects.find { it.text("id") == projectId } ?: return
                     val summaries = cachedProjectChats?.takeIf { it.first == host.routeId }
@@ -606,7 +624,7 @@ class DefaultRemoteRepository(
             select(RemoteSelection(host.routeId, projectId), host, projects, sessions.project, sessions.sessions)
             return
         }
-        val chat = cachedChat?.takeIf { it.selection == selection }
+        val chat = chatCache[selection]
         val session = chat?.session ?: sessions.sessions.find { it.text("id") == selection.sessionId }
             ?: return
         select(selection, host, projects, sessions.project, sessions.sessions, session, chat)
@@ -1301,6 +1319,7 @@ class DefaultRemoteRepository(
                     (state.value.connected && activeHost?.routeId == selection.routeId))
         )
             return selection
+        cacheCurrentScreen()
         if (!force) cancelSelection()
         if (!useCache) clearNavigationCache()
         val epoch = selectionEpoch
@@ -1337,6 +1356,8 @@ class DefaultRemoteRepository(
                     )
                 }
             }
+            // Explicit opens can fork historical sessions: wait for canonical IDs before
+            // changing selection, but retain cached content while the snapshot refreshes.
             if (useCache && mode == ActivationMode.RESTORE) showCachedSelection(selection, host)
             connect(host, epoch)
             if (useCache && mode == ActivationMode.RESTORE) showCachedSelection(selection, host)
@@ -1355,14 +1376,8 @@ class DefaultRemoteRepository(
                 return parent
             }
             val cached =
-                cachedSessions
-                    ?.takeIf {
-                        useCache &&
-                            !force &&
-                            alreadyConnected &&
-                            it.routeId == host.routeId &&
-                            it.projectId == project.text("id")
-                    }
+                sessionCache[host.routeId to project.text("id")]
+                    ?.takeIf { useCache && !force && alreadyConnected }
                     ?.sessions
             // A session opened by hand may have registered after the cached list was fetched
             // (a subagent child, for example), so a miss there asks the host again.
@@ -1405,7 +1420,7 @@ class DefaultRemoteRepository(
                 canonicalProject,
                 sessions,
                 chosen,
-                cachedChat?.takeIf { useCache && it.selection == canonical },
+                chatCache[canonical]?.takeIf { useCache },
                 sessionsFresh = sessionsFetchedNow,
             )
             try {
@@ -1414,7 +1429,7 @@ class DefaultRemoteRepository(
                 throw e
             } catch (_: Exception) {
                 checkEpoch(epoch)
-                if (cachedChat?.selection == canonical) {
+                if (chatCache[canonical] != null) {
                     reportError(R.string.remote_request_error)
                     return canonical
                 }

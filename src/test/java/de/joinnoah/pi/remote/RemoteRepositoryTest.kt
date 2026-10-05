@@ -2164,6 +2164,30 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun returningToEarlierChatShowsCachedMessagesBeforeSnapshotCompletes() = runTest {
+        val transport = Transport().also {
+            configure(it, sessions = listOf(session(), session("other")))
+            quoteMessages(it)
+        }
+        val repository = repository(transport)
+        val first = RemoteSelection("host", "project", "session")
+        repository.activate(first)
+        val messages = repository.state.value.messages
+        assertTrue(messages.isNotEmpty())
+        repository.activate(RemoteSelection("host", "project", "other"))
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") null else normal(request)
+        }
+        val returning = async { repository.activate(first) }
+        runCurrent()
+        assertEquals(first, repository.state.value.selection)
+        assertEquals(messages, repository.state.value.messages)
+        assertTrue(repository.state.value.loading)
+        returning.cancel()
+    }
+
+    @Test
     fun unchangedQuoteAndBodyClearTogetherAfterAcknowledgment() = runTest {
         val drafts = Drafts()
         val transport =

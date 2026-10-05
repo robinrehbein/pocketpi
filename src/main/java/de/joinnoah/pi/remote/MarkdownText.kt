@@ -17,8 +17,9 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun MarkdownText(text: String) {
+    val linkColor = MaterialTheme.colorScheme.primary
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        markdownSegments(text).forEach { segment ->
+        remember(text) { markdownSegments(text) }.forEach { segment ->
             val part = segment.text
             if (segment.code) {
                 val code = part.trimEnd()
@@ -40,7 +41,7 @@ fun MarkdownText(text: String) {
                     }
                 }
             } else
-                markdownBlocks(part).forEach { block ->
+                remember(part) { markdownBlocks(part) }.forEach { block ->
                     if (block is MarkdownBlock.Table) {
                         MarkdownTable(block)
                         return@forEach
@@ -53,11 +54,13 @@ fun MarkdownText(text: String) {
                             .takeIf { it in 1..6 && line.getOrNull(it) == ' ' }
                     val content =
                         if (level != null) line.drop(level + 1)
-                        else line.replace(Regex("^[-*] "), "• ")
+                        else line.replace(markdownBulletRegex, "• ")
                     if (line.trim() == "---") HorizontalDivider()
                     else if (content.isNotEmpty())
                         Text(
-                            inlineMarkdown(content, MaterialTheme.colorScheme.primary),
+                            remember(content, linkColor) {
+                                inlineMarkdown(content, linkColor)
+                            },
                             style =
                                 when (level) {
                                     1 -> MaterialTheme.typography.headlineSmall
@@ -72,3 +75,5 @@ fun MarkdownText(text: String) {
         }
     }
 }
+
+private val markdownBulletRegex = Regex("^[-*] ")
