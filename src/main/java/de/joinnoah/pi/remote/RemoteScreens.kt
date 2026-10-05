@@ -32,6 +32,8 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FilterAlt
@@ -247,8 +249,18 @@ internal fun RemoteScreen(
     val headerHeight = with(LocalDensity.current) { headerSize.height.toDp() }
     val listScope = rememberCoroutineScope()
     var autoFollow by remember { mutableStateOf(true) }
+    var timelineScrollActive by remember(key) { mutableStateOf(false) }
     var tuiInfoOpen by remember { mutableStateOf(false) }
     var scrollingProgrammatically by remember { mutableStateOf(false) }
+    LaunchedEffect(key, listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) {
+            if (!scrollingProgrammatically) timelineScrollActive = true
+        } else {
+            // Leave time to tap a marker or the collapse button after lifting a finger.
+            delay(1500)
+            timelineScrollActive = false
+        }
+    }
     var waitingForOutput by remember { mutableStateOf(false) }
     LaunchedEffect(sessionActive, state.status, state.questions, conversation) {
         waitingForOutput = false
@@ -826,8 +838,10 @@ internal fun RemoteScreen(
         val readingInset =
             if (key is RemoteNavKey.Chat) ((maxWidth - 40.dp - MAX_READING_WIDTH) / 2).coerceAtLeast(0.dp)
             else 0.dp
-        val railAvailable = key is RemoteNavKey.Chat && timelineRailVisible(markers) && listScrollable
+        val timelineControlsShown = key is RemoteNavKey.Chat && timelineRailVisible(markers) &&
+            listScrollable && timelineScrollActive
         val timelineExpanded = chatKey?.let(timelineVisibility::expanded) ?: true
+        val railShown = timelineControlsShown && timelineExpanded
         LazyColumn(
             if (key is RemoteNavKey.Chat) Modifier.fillMaxSize().then(underlay)
             else Modifier.fillMaxSize(),
@@ -836,7 +850,7 @@ internal fun RemoteScreen(
                 PaddingValues(
                     start = 20.dp + readingInset,
                     // Room for the timeline rail, so it never covers a card's controls.
-                    end = maxOf(if (railAvailable) 76.dp else 20.dp, 20.dp + readingInset),
+                    end = maxOf(if (railShown) 76.dp else 20.dp, 20.dp + readingInset),
                     top = headerHeight + if (key is RemoteNavKey.Chat) 16.dp else 48.dp,
                     bottom =
                         if (
@@ -1515,11 +1529,9 @@ internal fun RemoteScreen(
                 chatHeader()
             }
         }
-        if (railAvailable)
-            TimelineRailControl(
+        if (railShown)
+            TimelineRail(
                 markers = markers,
-                expanded = timelineExpanded,
-                onToggle = { chatKey?.let(timelineVisibility::toggle) },
                 onJump = ::jumpTo,
                 scrollState = listState,
                 // Between the header and the composer.
@@ -1584,7 +1596,7 @@ internal fun RemoteScreen(
                         }
                     }
                     if (touched.total > 0 || errorCount > 0 || onlyErrorsShown ||
-                        strip.entries.isNotEmpty() || !autoFollow
+                        strip.entries.isNotEmpty() || !autoFollow || timelineControlsShown
                     )
                         Row(
                             Modifier.fillMaxWidth().testTag("chatInsights"),
@@ -1615,13 +1627,33 @@ internal fun RemoteScreen(
                                     onAbort = { entry -> if (entry.sessionId != null) abortChild = entry },
                                 )
                             }
-                            if (!autoFollow) {
+                            if (timelineControlsShown || !autoFollow) {
                                 Spacer(Modifier.width(8.dp))
-                                SmallFloatingActionButton(onClick = ::scrollToLatestItem) {
-                                    Icon(
-                                        Icons.Default.ArrowDownward,
-                                        stringResource(R.string.remote_scroll_to_bottom),
-                                    )
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                ) {
+                                    if (timelineControlsShown)
+                                        SmallFloatingActionButton(
+                                            onClick = { chatKey?.let(timelineVisibility::toggle) },
+                                            modifier = Modifier.testTag("timelineToggle"),
+                                        ) {
+                                            Icon(
+                                                if (timelineExpanded) Icons.Default.ChevronRight
+                                                else Icons.Default.ChevronLeft,
+                                                stringResource(
+                                                    if (timelineExpanded) R.string.remote_panel_timeline_hide
+                                                    else R.string.remote_panel_timeline_show,
+                                                ),
+                                            )
+                                        }
+                                    if (!autoFollow)
+                                        SmallFloatingActionButton(onClick = ::scrollToLatestItem) {
+                                            Icon(
+                                                Icons.Default.ArrowDownward,
+                                                stringResource(R.string.remote_scroll_to_bottom),
+                                            )
+                                        }
                                 }
                             }
                         }

@@ -7,11 +7,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.contentColorFor
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.dropShadow
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.shadow.Shadow
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 
 /**
@@ -36,21 +34,13 @@ internal fun FloatingSurface(
 ) {
     Box(
         modifier
-            .dropShadow(
-                shape,
-                Shadow(
-                    radius = 24.dp,
-                    color = Color.Black.copy(alpha = 0.10f),
-                    offset = DpOffset(0.dp, 10.dp),
-                ),
-            )
-            .dropShadow(
-                shape,
-                Shadow(
-                    radius = 8.dp,
-                    color = Color.Black.copy(alpha = 0.07f),
-                    offset = DpOffset(0.dp, 3.dp),
-                ),
+            // Keep the shadow outside the surface's rounded clipping layer.
+            .shadow(
+                elevation = 8.dp,
+                shape = shape,
+                clip = false,
+                ambientColor = Color.Black.copy(alpha = 0.18f),
+                spotColor = Color.Black.copy(alpha = 0.18f),
             )
     ) {
         Surface(shape = shape, color = color, contentColor = contentColor, shadowElevation = 0.dp, content = content)
