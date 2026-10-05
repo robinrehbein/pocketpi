@@ -45,7 +45,7 @@ jobs:
           PLAY_SERVICE_ACCOUNT: ${{ vars.GCP_PLAY_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
-          for name in WIF_PROVIDER PLAY_SERVICE_ACCOUNT POCKETPI_CLOSED_TRACK; do
+          for name in WIF_PROVIDER PLAY_SERVICE_ACCOUNT; do
             test -n "${!name:-}" || { echo "Missing release setting: $name"; exit 1; }
           done
           python3 scripts/release/play_release.py validate-track
@@ -134,7 +134,7 @@ jobs:
           token_format: access_token
           access_token_scopes: https://www.googleapis.com/auth/androidpublisher
           create_credentials_file: false
-      - name: Commit one Play edit for Internal and Closed Alpha
+      - name: Commit one Play edit for configured testing tracks
         env:
           GOOGLE_ACCESS_TOKEN: ${{ steps.publish_auth.outputs.access_token }}
           VERSION_CODE: ${{ steps.version.outputs.code }}
