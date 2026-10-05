@@ -2,7 +2,7 @@
 
 This runbook covers the standalone repository `robinrehbein/pocketpi` and the new Google Play app
 `de.robinrehbein.pocketpi`. It does not update the previous Play app `de.joinnoah.pocketpi`.
-The target tracks are Internal Testing (`qa`) and the default Closed Alpha track (`alpha`) or one
+The target tracks are Internal Testing (`internal`) and the default Closed Alpha track (`alpha`) or one
 custom closed track. Production is outside the release workflow.
 
 The first AAB (versionCode 1) is available to internal testers. Closed Alpha versionCode 1 is
@@ -82,7 +82,7 @@ setup test; a green `main` run may publish immediately.
    unused version code after this Console upload. This step was completed on 29 September 2026:
    versionCode 1 is available to internal testers.
 9. Verify service-account permissions, Firebase configuration, upload key, and that the Publisher
-   API can read the app and Internal Testing (`qa`). The workflow is currently active; the next
+   API can read the app and Internal Testing (`internal`). The workflow is currently active; the next
    successful `main` push CI run may publish to the configured tracks. Before adding Closed Alpha,
    verify its exact API track ID and Play review readiness, then set `POCKETPI_CLOSED_TRACK` in the
    protected environment. If a run fails, inspect Play before retrying. Record the first
@@ -106,7 +106,7 @@ setup test; a green `main` run may publish immediately.
    other than the fingerprint above.
 4. `python scripts/release/play_release.py publish --version-code <code> --bundle
    build/outputs/bundle/release/pocketpi-release.aab` rechecks the code, uploads one AAB, and
-   updates `qa` in one Play edit. If `POCKETPI_CLOSED_TRACK` is set, the same edit also updates
+   updates `internal` in one Play edit. If `POCKETPI_CLOSED_TRACK` is set, the same edit also updates
    that track; every configured track must already exist.
    `ERROR_IF_IN_REVIEW` stops the commit if Play already has an in-progress review. A fresh edit
    then checks that every configured track reports the new code as `completed`.
@@ -119,7 +119,7 @@ rerun can allocate another version.
 
 In GitHub Actions, match the successful `Android CI` push run and `Publish PocketPi to Play
 testing` run to the same current `main` commit. The publish step should report
-`Committed versionCode <code> to qa` or `Committed versionCode <code> to qa and <closed-track-id>`.
+`Committed versionCode <code> to qa` or `Committed versionCode <code> to internal and <closed-track-id>`.
 
 In Play Console, inspect each configured track for package `de.robinrehbein.pocketpi`, the version
 code, and its review and availability state. A

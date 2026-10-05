@@ -19,7 +19,7 @@ def service_with_snapshot(version=1):
     edits.insert.return_value.execute.return_value = {"id": "edit-1"}
     edits.tracks.return_value.list.return_value.execute.return_value = {
         "tracks": [
-            {"track": "qa", "releases": [{"versionCodes": [str(version)], "status": "completed"}]},
+            {"track": "internal", "releases": [{"versionCodes": [str(version)], "status": "completed"}]},
             {"track": "closed-alpha-id", "releases": []},
         ]
     }
@@ -37,7 +37,7 @@ class PlayReleaseTests(unittest.TestCase):
         edits = service.edits.return_value
         edits.tracks.return_value.list.return_value.execute.return_value = {
             "tracks": [
-                {"track": "qa", "releases": []},
+                {"track": "internal", "releases": []},
                 {"track": "closed-alpha-id", "releases": []},
             ]
         }
@@ -67,15 +67,15 @@ class PlayReleaseTests(unittest.TestCase):
             self.assertIsNone(play_release.closed_track())
         service = service_with_snapshot()
         self.assertEqual(play_release.prepare(service, None), 2)
-        self.assertEqual(tuple(play_release.target_tracks(None)), ("qa",))
+        self.assertEqual(tuple(play_release.target_tracks(None)), ("internal",))
 
-    def test_internal_only_publish_updates_and_verifies_qa(self):
+    def test_internal_only_publish_updates_and_verifies_internal(self):
         service = service_with_snapshot()
         edits = service.edits.return_value
         edits.insert.return_value.execute.side_effect = [{"id": "edit-1"}, {"id": "edit-2"}]
         edits.tracks.return_value.list.return_value.execute.side_effect = [
-            {"tracks": [{"track": "qa", "releases": []}]},
-            {"tracks": [{"track": "qa", "releases": [
+            {"tracks": [{"track": "internal", "releases": []}]},
+            {"tracks": [{"track": "internal", "releases": [
                 {"versionCodes": ["2"], "status": "completed"}
             ]}]},
         ]
@@ -91,7 +91,7 @@ class PlayReleaseTests(unittest.TestCase):
                                           "googleapiclient.http": media}):
                 play_release.publish(service, None, 2, bundle)
         edits.tracks.return_value.update.assert_called_once()
-        self.assertEqual(edits.tracks.return_value.update.call_args.kwargs["track"], "qa")
+        self.assertEqual(edits.tracks.return_value.update.call_args.kwargs["track"], "internal")
 
     def test_prepare_uses_maximum_across_tracks_bundles_and_apks(self):
         service = service_with_snapshot()
@@ -114,13 +114,13 @@ class PlayReleaseTests(unittest.TestCase):
         edits.insert.return_value.execute.side_effect = [{"id": "edit-1"}, {"id": "edit-2"}]
         first = {
             "tracks": [
-                {"track": "qa", "releases": []},
+                {"track": "internal", "releases": []},
                 {"track": "alpha", "releases": []},
             ]
         }
         verified = {
             "tracks": [
-                {"track": "qa", "releases": [{"versionCodes": ["1"], "status": "completed"}]},
+                {"track": "internal", "releases": [{"versionCodes": ["1"], "status": "completed"}]},
                 {"track": "alpha", "releases": [{"versionCodes": ["1"], "status": "completed"}]},
             ]
         }
@@ -139,7 +139,7 @@ class PlayReleaseTests(unittest.TestCase):
         self.assertEqual(edits.tracks.return_value.update.call_count, 2)
         self.assertEqual(
             [call.kwargs["track"] for call in edits.tracks.return_value.update.call_args_list],
-            ["qa", "alpha"],
+            ["internal", "alpha"],
         )
         edits.commit.assert_called_once_with(
             packageName=play_release.PACKAGE_NAME,
