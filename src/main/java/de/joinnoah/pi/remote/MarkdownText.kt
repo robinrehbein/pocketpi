@@ -13,17 +13,15 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 
 @Composable
 fun MarkdownText(text: String) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        text.split("```").forEachIndexed { index, part ->
-            if (index % 2 == 1) {
-                val code = if (part.contains('\n')) part.substringAfter('\n').trimEnd() else part
+        markdownSegments(text).forEach { segment ->
+            val part = segment.text
+            if (segment.code) {
+                val code = part.trimEnd()
                 val clipboard = LocalClipboardManager.current
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainer,
@@ -42,7 +40,12 @@ fun MarkdownText(text: String) {
                     }
                 }
             } else
-                part.lines().forEach { line ->
+                markdownBlocks(part).forEach { block ->
+                    if (block is MarkdownBlock.Table) {
+                        MarkdownTable(block)
+                        return@forEach
+                    }
+                    val line = (block as MarkdownBlock.Line).text
                     val level =
                         line
                             .takeWhile { it == '#' }
@@ -68,39 +71,4 @@ fun MarkdownText(text: String) {
                 }
         }
     }
-}
-
-internal fun inlineMarkdown(text: String, linkColor: androidx.compose.ui.graphics.Color): AnnotatedString = buildAnnotatedString {
-    val regex =
-        Regex("`([^`]+)`|\\*\\*([^*]+)\\*\\*|\\*([^*]+)\\*|\\[([^]]+)]\\((https?://[^)]+)\\)|https?://[^\\s<>()]+")
-    var offset = 0
-    regex.findAll(text).forEach { match ->
-        append(text.substring(offset, match.range.first))
-        when {
-            match.groups[1] != null ->
-                withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) {
-                    append(match.groupValues[1])
-                }
-            match.groups[2] != null ->
-                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(match.groupValues[2]) }
-            match.groups[3] != null ->
-                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(match.groupValues[3]) }
-            else -> {
-                val bare = match.groups[4] == null
-                val rawUrl = if (bare) match.value else match.groupValues[5]
-                val url = if (bare) rawUrl.trimEnd('.', ',', '!', '?', ';', ':') else rawUrl
-                if (url.isEmpty()) append(match.value)
-                else {
-                    withLink(LinkAnnotation.Url(url)) {
-                        withStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)) {
-                            append(if (bare) url else match.groupValues[4])
-                        }
-                    }
-                    if (bare) append(rawUrl.substring(url.length))
-                }
-            }
-        }
-        offset = match.range.last + 1
-    }
-    append(text.substring(offset))
 }
