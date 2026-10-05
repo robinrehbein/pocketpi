@@ -419,4 +419,6 @@
     <string name="remote_subagent_stop_label">Stoppen</string>
     <string name="remote_result_count">%1$d Ausgabeeinträge</string>
     <string name="remote_result_preview_shortened">Vorschau gekürzt. Der vollständige Eintrag steht in den Rohdaten.</string>
+    <string name="performance_full_chat_title">Vollständige Chat-Testansicht</string>
+    <string name="performance_full_chat_continue">Stream fortsetzen</string>
 </resources>
