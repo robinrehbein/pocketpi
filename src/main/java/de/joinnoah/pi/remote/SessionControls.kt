@@ -182,7 +182,8 @@ internal fun SessionControls(
             (advisorAvailable && sessionAdvisor == null && state.advisorLoading)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -301,12 +302,14 @@ internal fun SessionControls(
         if (configurationControlsNoticeVisible(state))
             Text(
                 stringResource(R.string.remote_configuration_unavailable),
+                modifier = Modifier.padding(horizontal = 8.dp),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         state.commandNotice?.let {
             Text(
                 stringResource(it),
+                modifier = Modifier.padding(horizontal = 8.dp),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -317,9 +320,9 @@ internal fun SessionControls(
             val (localSuggestions, hostSuggestions) =
                 mergeCommandSuggestions(localCommands, if (hostCommands) state.commands else emptyList(), slash)
             if (hostCommands && state.commandsLoading && localSuggestions.isEmpty())
-                LinearProgressIndicator(Modifier.fillMaxWidth())
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 8.dp))
             else if (localSuggestions.isNotEmpty() || hostSuggestions.isNotEmpty())
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 160.dp)) {
+                LazyColumn(Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(max = 160.dp)) {
                     items(localSuggestions, key = { "local:" + it.commandName }) { command ->
                         ListItem(
                             headlineContent = { Text("/" + command.commandName) },
@@ -348,6 +351,7 @@ internal fun SessionControls(
             if (hostCommands && state.commandsTruncated)
                 Text(
                     stringResource(R.string.remote_catalog_truncated),
+                    modifier = Modifier.padding(horizontal = 8.dp),
                     style = MaterialTheme.typography.labelSmall,
                 )
         }
