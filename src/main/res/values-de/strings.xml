@@ -402,4 +402,15 @@
     <string name="performance_fixture_switch">Session wechseln</string>
     <string name="performance_fixture_stream">Antwort streamen</string>
     <string name="performance_fixture_session">Session %1$d</string>
+    <string name="remote_result_show_raw">Rohdaten anzeigen</string>
+    <string name="remote_result_hide_raw">Rohdaten ausblenden</string>
+    <string name="remote_result_approved">Plan freigegeben</string>
+    <string name="remote_result_revision">Überarbeitung erforderlich</string>
+    <string name="remote_result_output">Ausgabe</string>
+    <string name="remote_subagent_popover_title">Unteragenten</string>
+    <string name="remote_subagent_popover_close">Unteragenten schließen</string>
+    <string name="remote_subagent_open_details">Details öffnen</string>
+    <string name="remote_subagent_stop_label">Stoppen</string>
+    <string name="remote_result_count">%1$d Ausgabeeinträge</string>
+    <string name="remote_result_preview_shortened">Vorschau gekürzt. Der vollständige Eintrag steht in den Rohdaten.</string>
 </resources>

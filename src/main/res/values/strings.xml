@@ -402,4 +402,15 @@
     <string name="performance_fixture_switch">Switch session</string>
     <string name="performance_fixture_stream">Stream response</string>
     <string name="performance_fixture_session">Session %1$d</string>
+    <string name="remote_result_show_raw">Show raw output</string>
+    <string name="remote_result_hide_raw">Hide raw output</string>
+    <string name="remote_result_approved">Plan approved</string>
+    <string name="remote_result_revision">Revision required</string>
+    <string name="remote_result_output">Output</string>
+    <string name="remote_subagent_popover_title">Subagents</string>
+    <string name="remote_subagent_popover_close">Close subagents</string>
+    <string name="remote_subagent_open_details">Open details</string>
+    <string name="remote_subagent_stop_label">Stop</string>
+    <string name="remote_result_count">%1$d output entries</string>
+    <string name="remote_result_preview_shortened">Preview shortened. Open raw output to read the full entry.</string>
 </resources>

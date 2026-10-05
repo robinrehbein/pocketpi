@@ -19,6 +19,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandLess
@@ -60,6 +62,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
@@ -251,7 +257,11 @@ internal fun SubagentStrip(
             pluralStringResource(R.plurals.remote_panel_subagents_running, strip.running, strip.running)
         else pluralStringResource(R.plurals.remote_panel_subagents_queued, strip.entries.size, strip.entries.size)
     Box {
-        FloatingSurface(shape = CircleShape) {
+        Surface(
+            shape = CircleShape,
+            color = if (expanded) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+            border = if (expanded) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+        ) {
             Row(
                 Modifier.clickable(role = Role.Button) { expanded = !expanded }
                     .testTag("subagentStrip")
@@ -281,18 +291,36 @@ internal fun SubagentStrip(
                 )
             }
         }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.widthIn(min = 240.dp, max = 320.dp).heightIn(max = 280.dp),
-        ) {
-            for (entry in strip.entries)
-                SubagentStripRow(
-                    entry,
-                    canAbort(entry),
-                    onOpen = onOpen,
-                    onAbort = onAbort,
-                )
+        if (expanded) {
+            val margin = with(LocalDensity.current) { 12.dp.roundToPx() }
+            Popup(
+                popupPositionProvider = remember(margin) { SubagentPopoverPosition(margin) },
+                onDismissRequest = { expanded = false },
+                properties = PopupProperties(focusable = true),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    shadowElevation = 8.dp,
+                    modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth().testTag("subagentPopover"),
+                ) {
+                    Column {
+                        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(stringResource(R.string.remote_subagent_popover_title), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                            IconButton(onClick = { expanded = false }) {
+                                Icon(Icons.Default.Close, stringResource(R.string.remote_subagent_popover_close))
+                            }
+                        }
+                        LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                            items(strip.entries) { entry ->
+                                SubagentStripRow(entry, canAbort(entry),
+                                    onOpen = { expanded = false; onOpen(it) }, onAbort = onAbort)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -310,47 +338,35 @@ private fun SubagentStripRow(
     onAbort: (SubagentStripEntry) -> Unit,
 ) {
     val openable = entry.openable && entry.sessionId != null
-    Row(
-        Modifier.fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .then(if (openable) Modifier.clickable(role = Role.Button) { onOpen(entry) } else Modifier)
-            .testTag("subagentStripEntry")
-            .padding(start = 28.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    entry.agent ?: entry.title,
-                    Modifier.weight(1f, fill = false),
-                    style = MaterialTheme.typography.labelLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    stringResource(subagentStateLabel(entry.state)),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+    Column(Modifier.fillMaxWidth().testTag("subagentStripEntry").padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainerHighest) {
+                Icon(Icons.Default.Terminal, null, Modifier.padding(12.dp).size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            entry.activity?.takeIf(String::isNotBlank)?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(entry.agent ?: entry.title, style = MaterialTheme.typography.titleSmall)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    StatusDot(sessionStatusColor(if (entry.state == "running") SessionAvailability.RUNNING else SessionAvailability.IDLE))
+                    Text(stringResource(subagentStateLabel(entry.state)), style = MaterialTheme.typography.labelMedium)
+                }
+                entry.activity?.takeIf(String::isNotBlank)?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
-        if (entry.abortable && allowAbort)
-            IconButton(onClick = { onAbort(entry) }) {
-                Icon(
-                    Icons.Default.Stop,
-                    contentDescription = stringResource(R.string.remote_panel_subagent_abort),
-                    tint = MaterialTheme.colorScheme.error,
-                )
+        if (openable || (entry.abortable && allowAbort)) {
+            HorizontalDivider()
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                if (openable) TextButton(onClick = { onOpen(entry) }) {
+                    Text(stringResource(R.string.remote_subagent_open_details))
+                }
+                if (entry.abortable && allowAbort) TextButton(onClick = { onAbort(entry) }) {
+                    Icon(Icons.Default.Stop, stringResource(R.string.remote_panel_subagent_abort), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.remote_subagent_stop_label), color = MaterialTheme.colorScheme.error)
+                }
             }
+        }
     }
 }
 
@@ -744,5 +760,21 @@ internal fun UsageSummary(totals: SessionUsageTotals) {
                 )
                 Text(value, style = MaterialTheme.typography.bodyMedium)
             }
+    }
+}
+
+
+/** Anchors the panel above the pill, clamped inside the visible window. */
+internal class SubagentPopoverPosition(private val margin: Int) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset {
+        val desiredX = if (layoutDirection == LayoutDirection.Ltr) anchorBounds.right - popupContentSize.width else anchorBounds.left
+        val maxX = (windowSize.width - popupContentSize.width - margin).coerceAtLeast(margin)
+        val maxY = (windowSize.height - popupContentSize.height - margin).coerceAtLeast(margin)
+        return IntOffset(desiredX.coerceIn(margin, maxX), (anchorBounds.top - popupContentSize.height - margin).coerceIn(margin, maxY))
     }
 }
