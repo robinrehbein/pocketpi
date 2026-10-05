@@ -96,7 +96,9 @@ internal fun markdownBlocks(text: String): List<MarkdownBlock> {
             index += 2
             val rows = mutableListOf<List<String>>()
             while (index < lines.size) {
-                val row = tableCells(lines[index]) ?: break
+                val line = lines[index]
+                if (line.isBlank() || line.matches(Regex(" {0,3}(#{1,6} .*|>.*|[-+*] .*|[0-9]+[.)] .*|(?:-{3,}|\\*{3,}|_{3,})\\s*)"))) break
+                val row = tableCells(line) ?: listOf(line.trim())
                 rows.add(row)
                 index++
             }

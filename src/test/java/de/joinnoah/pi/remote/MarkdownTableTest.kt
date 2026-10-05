@@ -40,7 +40,7 @@ class MarkdownTableTest {
         for (length in 0..row.length) {
             val blocks = markdownBlocks(prefix + row.take(length))
             val table = blocks.first() as MarkdownBlock.Table
-            if (length > 1) assertEquals(tableCells(row.take(length)), table.rows.firstOrNull())
+            if (length > 1) assertEquals(tableCells(row.take(length)) ?: listOf(row.take(length).trim()), table.rows.firstOrNull())
         }
         val table = markdownBlocks(prefix + "eins | zwei | drei\nvier |\n\nNachher").first() as MarkdownBlock.Table
         assertEquals(listOf(listOf("eins", "zwei", "drei"), listOf("vier")), table.rows)
