@@ -2,8 +2,8 @@
 
 This runbook covers the standalone repository `robinrehbein/pocketpi` and the new Google Play app
 `de.robinrehbein.pocketpi`. It does not update the previous Play app `de.joinnoah.pocketpi`.
-The target tracks are Internal Testing (`qa`) and one custom Closed Alpha track. Production is
-outside the release workflow.
+The target tracks are Internal Testing (`qa`) and the default Closed Alpha track (`alpha`) or one
+custom closed track. Production is outside the release workflow.
 
 The new Play app is still in setup. No AAB or dual-track release has been verified for it. Keep
 automatic publishing disabled until every first-release prerequisite below is complete. Disable
@@ -20,9 +20,11 @@ test.
    Require its `PocketPi checks` job before merging. CI checks resource parity, unit tests, the
    debug APK, lint, and API 36 instrumentation tests. It has no Play or release-signing access.
 2. Complete the new Play app's store listing, app-content declarations, privacy link, reviewer
-   access, countries, and tester lists. Create Internal Testing and the custom Closed Alpha track.
-   Obtain the custom track's exact identifier from the Play Developer API after the first Console
-   upload. The display name and Console URL number are not valid `POCKETPI_CLOSED_TRACK` values.
+   access, countries, and tester lists. Create Internal Testing and Closed Alpha. Use `alpha` for
+   the default Closed Alpha track.
+   For a custom closed track, obtain its exact identifier from the Play Developer API after the
+   first Console upload. The display name and Console URL number are not valid
+   `POCKETPI_CLOSED_TRACK` values.
    A video of a paired Mac can support reviewer instructions, but check the Console for any further
    access requirement and review status.
 3. Register a separate Firebase Android app with package `de.robinrehbein.pocketpi`. Confirm its
@@ -47,13 +49,13 @@ test.
    workflow uses short-lived tokens and needs no downloaded service-account key.
 6. Create and protect the GitHub environment `play-testing`. Allow deployments only from `main`.
    Set its OIDC variables now; set `POCKETPI_CLOSED_TRACK` after the first Console upload in
-   step 8, once the Publisher API can read the exact custom track identifier:
+   step 8, using `alpha` for the default track or the exact custom track identifier:
 
    | Variable | Value |
    | --- | --- |
    | `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full resource name of the PocketPi GitHub OIDC provider. |
    | `GCP_PLAY_SERVICE_ACCOUNT` | Email of the dedicated Play service account. |
-   | `POCKETPI_CLOSED_TRACK` | Exact custom Closed Alpha track ID from the Play Developer API. |
+   | `POCKETPI_CLOSED_TRACK` | `alpha` for default Closed Alpha, or the exact custom closed-track ID from the Play Developer API. |
 
    Set `POCKETPI_UPLOAD_KEYSTORE_B64`, `POCKETPI_UPLOAD_STORE_PASSWORD`,
    `POCKETPI_UPLOAD_KEY_ALIAS`, `POCKETPI_UPLOAD_KEY_PASSWORD`, and the four
