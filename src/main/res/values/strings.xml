@@ -234,6 +234,12 @@
     <string name="remote_preview_attachment">View %1$s</string>
     <string name="remote_close_preview">Close photo preview</string>
     <string name="remote_preview_unavailable">Photo preview unavailable</string>
+    <string name="remote_sent_preview_loading">Loading image…</string>
+    <string name="remote_sent_preview_connection_failure">Could not load image. Check your connection.</string>
+    <string name="remote_sent_preview_expired">This image has expired.</string>
+    <string name="remote_sent_preview_unsupported">Update the host to view sent images.</string>
+    <string name="remote_sent_preview_malformed">This image cannot be displayed.</string>
+    <string name="remote_sent_preview_retry">Retry</string>
     <string name="remote_attachment_importing">Importing attachment…</string>
     <string name="remote_attachment_uploading">Uploading attachments…</string>
     <string name="remote_cancel_attachment_work">Cancel attachment transfer</string>
