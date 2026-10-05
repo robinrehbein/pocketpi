@@ -926,8 +926,12 @@ internal fun RemoteScreen(
                         }
                     }
                 }
-            // Beside an open chat, the chat pane shows the error; the list does not repeat it.
-            if (state.error != null && listPane?.selectedSessionId == null) {
+            // Chat feedback belongs beside the composer, not above the conversation.
+            // Do not carry an unavailable-command warning into the session overview.
+            if (state.error != null && key !is RemoteNavKey.Chat &&
+                state.error != R.string.remote_command_unknown &&
+                listPane?.selectedSessionId == null
+            ) {
                 leading++
                 item {
                     Card(
@@ -1539,6 +1543,46 @@ internal fun RemoteScreen(
                     .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    state.error?.let { error ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().testTag("errorCard"),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            ),
+                        ) {
+                            Column(Modifier.padding(16.dp)) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    verticalAlignment = Alignment.Top,
+                                ) {
+                                    Icon(Icons.Default.ErrorOutline, contentDescription = null)
+                                    Text(stringResource(error), Modifier.weight(1f))
+                                }
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    TextButton(
+                                        onClick = model::dismissError,
+                                        colors = ButtonDefaults.textButtonColors(
+                                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                                        ),
+                                    ) {
+                                        Text(stringResource(R.string.remote_error_close))
+                                    }
+                                    if (!state.loading && error in RETRYABLE_ERRORS)
+                                        FilledTonalButton(onClick = {
+                                            model.dismissError()
+                                            model.refresh()
+                                        }) {
+                                            Text(stringResource(R.string.remote_error_retry))
+                                        }
+                                }
+                            }
+                        }
+                    }
                     if (touched.total > 0 || errorCount > 0 || onlyErrorsShown ||
                         strip.entries.isNotEmpty() || !autoFollow
                     )
