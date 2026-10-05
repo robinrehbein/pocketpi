@@ -55,7 +55,8 @@ speedup has been established by the unit tests.
 - Baseline profiles and broader workload coverage (questions, subagents and attachments).
 - Byte-weighted transcript caching if heap measurements show the entry limit is insufficient.
 - Incremental timeline presentation/Markdown parsing if streaming still dominates CPU time.
-- Per-session scroll restoration, including auto-follow and changing paginated item indexes.
+- Validate [per-session scroll restoration](chat-scroll-restoration.md) on real devices,
+  including rotation, reconnect and changing paginated item indexes.
 - Request coalescing and selective prefetch after identifying duplicated calls in traces.
 - Optimistic send status: preserve mutation IDs, uncertain-delivery handling and retries; never
   introduce a second send path that can duplicate prompts after reconnect.

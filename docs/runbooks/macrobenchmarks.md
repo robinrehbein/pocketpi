@@ -142,5 +142,5 @@ small baseline; collect more repeated runs before drawing conclusions about tail
    identify whether projection, layout, Markdown or auto-follow dominates.
 3. Use those traces to prioritize incremental streaming processing and frame-aligned auto-follow;
    retain the full-chat workloads and their follow/no-follow assertions as regression checks.
-4. Add per-session scroll restoration as a separate correctness-focused PR.
+4. Validate [per-session scroll restoration](chat-scroll-restoration.md) on physical devices.
 5. Add Baseline Profile generation and a matching compilation-mode comparison in a later PR.
