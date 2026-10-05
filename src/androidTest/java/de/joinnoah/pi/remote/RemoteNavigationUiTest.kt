@@ -258,6 +258,21 @@ class RemoteNavigationUiTest {
         compose.onNodeWithText("Scroll message 06").assertIsDisplayed()
     }
 
+    private fun enterReadingPosition() {
+        compose.waitForIdle()
+        Thread.sleep(300) // Let the navigation transition and initial follow settle before dragging.
+        compose.onNodeWithTag("conversationList").performTouchInput {
+            swipe(
+                start = androidx.compose.ui.geometry.Offset(center.x, height / 4f),
+                end = androidx.compose.ui.geometry.Offset(center.x, height / 2f),
+                durationMillis = 500,
+            )
+        }
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription(label(R.string.remote_scroll_to_bottom)).assertIsDisplayed()
+        showEarlyConversationMessages()
+    }
+
     private fun assertMessageMovedUp(before: androidx.compose.ui.geometry.Rect) {
         val after = compose.onNodeWithText("Scroll message 06").fetchSemanticsNode().boundsInRoot
         assertTrue(
@@ -956,6 +971,120 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    fun returningToChatRestoresAnchorAfterHistoryIsPrepended() {
+        repositoryFactory = { activity ->
+            UiRemoteRepository(isolatedDrafts(activity)).apply {
+                messagesForSession = { longConversation() }
+            }
+        }
+        // The activity is already created by the rule: apply the same fixture to its repository.
+        compose.runOnIdle { repository.messagesForSession = { longConversation() } }
+        openChat()
+        enterReadingPosition()
+        val before = compose.onNodeWithText("Scroll message 06").fetchSemanticsNode().boundsInRoot.top
+        back()
+        compose.onNodeWithText("Historical session").performClick()
+        compose.waitForIdle()
+        assertLatestMessageIsAboveComposer() // Another session has its own follow/scroll state.
+        back()
+        back() // Return to projects so the previous chat entry is removed.
+        compose.onNodeWithText("Project one").performClick()
+        compose.runOnIdle {
+            repository.messagesForSession = {
+                (1..20).map { index -> Wire.objectOf("id" to "older-$index", "role" to "user", "text" to "Older $index") } + longConversation()
+            }
+        }
+        compose.onNodeWithText("Live session").performClick()
+        compose.waitForIdle()
+        val after = compose.onNodeWithText("Scroll message 06").assertIsDisplayed().fetchSemanticsNode().boundsInRoot.top
+        assertEquals(before, after, 2 * compose.activity.resources.displayMetrics.density)
+        compose.onNodeWithContentDescription(label(R.string.remote_scroll_to_bottom)).assertIsDisplayed()
+    }
+
+    @Test
+    fun activityRecreationKeepsReadingPositionAndDoesNotFollowNewMessages() {
+        repositoryFactory = { activity ->
+            UiRemoteRepository(isolatedDrafts(activity)).apply { messagesForSession = { longConversation() } }
+        }
+        compose.runOnIdle { repository.messagesForSession = { longConversation() } }
+        openChat()
+        enterReadingPosition()
+        val before = compose.onNodeWithText("Scroll message 06").fetchSemanticsNode().boundsInRoot.top
+        compose.activityRule.scenario.recreate()
+        compose.waitForIdle()
+        val restored = compose.onNodeWithText("Scroll message 06").assertIsDisplayed().fetchSemanticsNode().boundsInRoot.top
+        assertEquals(before, restored, 2 * compose.activity.resources.displayMetrics.density)
+        compose.runOnIdle {
+            repository.state.value = repository.state.value.copy(
+                status = "running",
+                messages = repository.state.value.messages + Wire.objectOf(
+                    "id" to "new-stream", "role" to "assistant", "text" to "New streamed message", "state" to "streaming",
+                ),
+            )
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("Scroll message 06").assertIsDisplayed()
+        compose.onNodeWithText("New streamed message").assertDoesNotExist()
+    }
+
+    @Test
+    fun filteredRecreationDoesNotConsumeNormalReadingAnchor() {
+        val messages = longConversation().mapIndexed { index, message ->
+            JsonObject(message + ("state" to kotlinx.serialization.json.JsonPrimitive(
+                if (index % 10 == 9) "error" else "complete"
+            )))
+        }
+        repositoryFactory = { activity ->
+            UiRemoteRepository(isolatedDrafts(activity)).apply { messagesForSession = { messages } }
+        }
+        compose.runOnIdle { repository.messagesForSession = { messages } }
+        openChat()
+        enterReadingPosition()
+        val before = compose.onNodeWithText("Scroll message 06").fetchSemanticsNode().boundsInRoot.top
+        compose.onNodeWithTag("errorFilterChip").performClick()
+        compose.onNodeWithText("Scroll message 06").assertDoesNotExist()
+        compose.activityRule.scenario.recreate()
+        compose.waitForIdle()
+        compose.onNodeWithTag("errorFilterChip").assertIsSelected().performClick()
+        compose.waitForIdle()
+        val after = compose.onNodeWithText("Scroll message 06").assertIsDisplayed().fetchSemanticsNode().boundsInRoot.top
+        assertEquals(before, after, 2 * compose.activity.resources.displayMetrics.density)
+    }
+
+    @Test
+    fun scrollToLatestWhileLoadingCancelsPendingReadingRestore() {
+        compose.runOnIdle { repository.messagesForSession = { longConversation() } }
+        openChat()
+        enterReadingPosition()
+        back()
+        compose.runOnIdle { repository.chatLoading = true }
+        compose.onNodeWithText("Live session").performClick()
+        compose.onNodeWithContentDescription(label(R.string.remote_scroll_to_bottom)).performClick()
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(loading = false) }
+        compose.waitForIdle()
+        assertLatestMessageIsAboveComposer()
+        compose.onNodeWithText("Scroll message 06").assertDoesNotExist()
+    }
+
+    @Test
+    fun returningToFollowingChatShowsItsNewTail() {
+        compose.runOnIdle { repository.messagesForSession = { longConversation() } }
+        openChat()
+        compose.waitForIdle()
+        assertLatestMessageIsAboveComposer()
+        back()
+        compose.runOnIdle {
+            repository.messagesForSession = { longConversation() + Wire.objectOf(
+                "id" to "new-tail", "role" to "assistant", "text" to "New tail after navigation",
+            ) }
+        }
+        compose.onNodeWithText("Live session").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("New tail after navigation").assertIsDisplayed()
+        compose.onNodeWithContentDescription(label(R.string.remote_scroll_to_bottom)).assertDoesNotExist()
+    }
+
+    @Test
     fun longConversationFollowsViewportResizeUnlessScrolledUp() {
         openChat()
         compose.runOnIdle {
@@ -984,14 +1113,13 @@ class RemoteNavigationUiTest {
             assertLatestMessageIsAboveComposer()
 
             val message = compose.onNodeWithText("Scroll message 40").fetchSemanticsNode().boundsInRoot
-            val start = message.center
-            swipeUp(
-                start,
-                androidx.compose.ui.geometry.Offset(
-                    start.x,
-                    start.y + 200 * compose.activity.resources.displayMetrics.density,
-                ),
-            )
+            val viewport = compose.onNodeWithTag("conversationList").fetchSemanticsNode().boundsInRoot
+            val start = message.center - viewport.topLeft
+            val distance = 200 * compose.activity.resources.displayMetrics.density
+            compose.onNodeWithTag("conversationList").performTouchInput {
+                swipe(start, androidx.compose.ui.geometry.Offset(start.x, start.y + distance), durationMillis = 500)
+            }
+            compose.waitForIdle()
             compose.onNodeWithContentDescription(label(R.string.remote_scroll_to_bottom))
                 .assertIsDisplayed()
             compose.onNode(hasSetTextAction()).performTextInput("\nLine five\nLine six")
@@ -1822,6 +1950,10 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
     val sessionAborts = mutableListOf<String>()
     val toolOutputLoads = mutableListOf<String>()
     var restoreGate: CompletableDeferred<Unit>? = null
+    var chatLoading = false
+    var messagesForSession: (String) -> List<JsonObject> = { id ->
+        listOf(Wire.objectOf("id" to "message-$id", "role" to "assistant", "text" to "Message for $id"))
+    }
     private var epoch = 0
 
     private fun update(selection: RemoteSelection) {
@@ -1830,6 +1962,7 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
             RemoteState(
                 hosts = listOf(host),
                 host = if (selection.routeId != null) host else null,
+                loading = chatLoading && selection.sessionId != null,
                 selection = selection,
                 connected = selection.routeId != null,
                 connection = R.string.remote_connected,
@@ -1868,13 +2001,7 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
                 messages =
                     selection.sessionId
                         ?.let {
-                            listOf(
-                                Wire.objectOf(
-                                    "id" to "message-$it",
-                                    "role" to "assistant",
-                                    "text" to "Message for $it",
-                                )
-                            ) + if (insights) insightMessages() else emptyList()
+                            messagesForSession(it) + if (insights) insightMessages() else emptyList()
                         }
                         .orEmpty(),
                 draft = stored?.text.orEmpty(),

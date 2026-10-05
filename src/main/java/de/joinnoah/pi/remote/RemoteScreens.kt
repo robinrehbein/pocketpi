@@ -232,6 +232,13 @@ internal fun RemoteScreen(
             chatModel?.refreshSessions()
         }
     }
+    val viewportPositions = LocalChatViewportPositions.current
+    var savedViewport by remember(chatKey, viewportPositions) {
+        mutableStateOf(chatKey?.let { viewportPositions?.get(it) })
+    }
+    var viewportRestorePending by remember(key) {
+        mutableStateOf(savedViewport?.following == false)
+    }
     val listState = rememberLazyListState()
     val sessionSearchFocus = remember { FocusRequester() }
     if (listPane != null && twoPane != null)
@@ -248,7 +255,7 @@ internal fun RemoteScreen(
     val composerHeight = with(LocalDensity.current) { composerSize.height.toDp() }
     val headerHeight = with(LocalDensity.current) { headerSize.height.toDp() }
     val listScope = rememberCoroutineScope()
-    var autoFollow by remember { mutableStateOf(true) }
+    var autoFollow by rememberSaveable(key) { mutableStateOf(savedViewport?.following ?: true) }
     var timelineScrollActive by remember(key) { mutableStateOf(false) }
     var tuiInfoOpen by remember { mutableStateOf(false) }
     var scrollingProgrammatically by remember { mutableStateOf(false) }
@@ -273,17 +280,19 @@ internal fun RemoteScreen(
         if (key is RemoteNavKey.Chat)
             snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
                 .collect { (scrolling, canScrollForward) ->
-                    if (scrolling && !scrollingProgrammatically)
+                    if (scrolling && !scrollingProgrammatically) {
+                        if (!onlyErrorsShown) viewportRestorePending = false
                         autoFollow = !canScrollForward
+                    }
                 }
     }
     val viewportHeight = listState.layoutInfo.viewportSize.height
     LaunchedEffect(
         key, conversation, state.questions, state.error, waitingForOutput,
-        viewportHeight, composerHeight, headerHeight, onlyErrorsShown,
+        viewportHeight, composerHeight, headerHeight, onlyErrorsShown, autoFollow,
     ) {
         // The error filter shows a fixed selection; following new output would only jump around.
-        if (key is RemoteNavKey.Chat && autoFollow && !onlyErrorsShown) {
+        if (key is RemoteNavKey.Chat && autoFollow && !onlyErrorsShown && !viewportRestorePending) {
             withFrameNanos { }
             if (!autoFollow || onlyErrorsShown) return@LaunchedEffect
             scrollingProgrammatically = true
@@ -295,6 +304,43 @@ internal fun RemoteScreen(
         }
     }
     val leadingItems = remember { LeadingItems() }
+    LaunchedEffect(key, state.loading, shownItems, viewportHeight, composerHeight, headerHeight,
+        viewportRestorePending, onlyErrorsShown, savedViewport) {
+        val position = savedViewport ?: return@LaunchedEffect
+        if (!viewportRestorePending || state.loading || onlyErrorsShown ||
+            viewportHeight <= 0 || composerHeight == 0.dp || headerHeight == 0.dp) return@LaunchedEffect
+        val index = restoredChatIndex(position, shownItems.map { it.id }, leadingItems.count)
+            ?: return@LaunchedEffect
+        withFrameNanos { }
+        // User intent can change while waiting for the layout frame.
+        if (!viewportRestorePending || onlyErrorsShown || state.loading) return@LaunchedEffect
+        scrollingProgrammatically = true
+        try {
+            listState.scrollToItem(index, position.offset)
+            viewportRestorePending = false
+        } finally {
+            scrollingProgrammatically = false
+        }
+    }
+    val viewportSaveBlocked by rememberUpdatedState(
+        viewportRestorePending || state.loading || onlyErrorsShown || shownItems.isEmpty()
+    )
+    LaunchedEffect(chatKey, viewportPositions, listState) {
+        if (chatKey == null || viewportPositions == null) return@LaunchedEffect
+        snapshotFlow {
+            if (viewportSaveBlocked || listState.layoutInfo.totalItemsCount == 0) null
+            else {
+                val first = listState.firstVisibleItemIndex
+                val anchor = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == first }?.key as? String
+                ChatViewportPosition(
+                    anchor, (first - leadingItems.count).coerceAtLeast(0),
+                    listState.firstVisibleItemScrollOffset, autoFollow,
+                )
+            }
+        }.collect { position ->
+            if (position != null) viewportPositions[chatKey] = position
+        }
+    }
     var jumpRequest by remember { mutableStateOf<JumpRequest?>(null) }
     var highlightedId by remember { mutableStateOf<String?>(null) }
     val jumpFocus = remember { FocusRequester() }
@@ -306,6 +352,7 @@ internal fun RemoteScreen(
     }
     val currentShownItems by rememberUpdatedState(shownItems)
     fun scrollToLatestItem() {
+        viewportRestorePending = false
         autoFollow = true
         listScope.launch {
             scrollingProgrammatically = true
@@ -322,6 +369,7 @@ internal fun RemoteScreen(
             return
         }
         if (onlyErrorsShown && shownItems.none { it.id == itemId }) onlyErrorsShown = false
+        viewportRestorePending = false
         autoFollow = false
         jumpRequest = JumpRequest(itemId, (jumpRequest?.nonce ?: 0L) + 1)
     }
@@ -1617,6 +1665,11 @@ internal fun RemoteScreen(
                                 ErrorFilterChip(errorCount, onlyErrorsShown) {
                                     onlyErrorsShown = !onlyErrorsShown
                                     if (onlyErrorsShown) autoFollow = false
+                                    else if (chatKey != null && viewportPositions != null) {
+                                        savedViewport = viewportPositions[chatKey]
+                                        viewportRestorePending = savedViewport?.following == false
+                                        autoFollow = savedViewport?.following ?: false
+                                    }
                                 }
                                 SubagentStrip(
                                     strip,

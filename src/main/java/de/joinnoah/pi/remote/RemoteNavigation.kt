@@ -499,6 +499,7 @@ internal fun RemoteNavigation(
     val scope = rememberCoroutineScope()
     val navigator = remember(repository, stack) { RemoteNavigator(repository, stack, scope) }
     val timelineVisibility = rememberSaveable(saver = TimelineVisibility.Saver) { TimelineVisibility() }
+    val chatViewports = rememberSaveable(saver = ChatViewportPositions.Saver) { ChatViewportPositions() }
     LaunchedEffect(navigator) {
         navigator.restore()
         repository.state.collect { navigator.reconcile(it) }
@@ -550,6 +551,7 @@ internal fun RemoteNavigation(
                 onDispose { ViewCompat.removeOnUnhandledKeyEventListener(view, listener) }
             }
         CompositionLocalProvider(
+            LocalChatViewportPositions provides chatViewports,
             LocalPaneLayout provides layout,
             LocalTwoPane provides twoPane.takeIf { layout.twoPane },
             LocalHardwareKeyboard provides hardwareKeyboard,
