@@ -38,6 +38,11 @@ internal class NavigationFakeRepository : RemoteRepository {
     val toolOutputRequests = mutableListOf<String>()
     var sessionRefreshes = 0
     val browsed = mutableListOf<Pair<String, String>>()
+    val providersBrowsed = mutableListOf<String>()
+
+    override fun browseProviders(routeId: String) {
+        providersBrowsed += routeId
+    }
     val folderOpens = mutableListOf<Triple<String, String, Boolean>>()
     var folderOpen: suspend (String, String, Boolean) -> RemoteSelection? = { routeId, _, _ ->
         RemoteSelection(routeId, "opened", "fresh")

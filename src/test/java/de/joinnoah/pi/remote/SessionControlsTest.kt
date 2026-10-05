@@ -1,6 +1,8 @@
 package de.joinnoah.pi.remote
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.*
 import org.junit.Test
@@ -177,5 +179,119 @@ class SessionControlsTest {
             SessionContextUsage(data.text("sessionId"), "anthropic", "model-a", 50000, 200000, 25.0),
             usage,
         )
+    }
+
+    private val chatState = RemoteState(
+        connected = true,
+        status = "idle",
+        capabilities = setOf(CONFIGURATION_CAPABILITY, COMPACT_CAPABILITY, RENAME_CAPABILITY),
+        session = Wire.objectOf("id" to "s1", "title" to "T", "origin" to "rpc"),
+    )
+
+    private fun settingsJson(vararg overrides: Pair<String, Any?>) =
+        Wire.objectOf("autoCompaction" to true, "steeringMode" to "one-at-a-time", "followUpMode" to "all", *overrides)
+
+    private fun configurationWith(settings: JsonElement?) =
+        configuration(
+            Wire.objectOf(
+                "kind" to "configuration",
+                "sessionId" to "session",
+                "thinkingLevel" to "high",
+                "thinkingLevels" to JsonArray(listOf(JsonPrimitive("high"))),
+                "models" to JsonArray(emptyList()),
+                "modelsTruncated" to false,
+                *(if (settings == null) emptyArray() else arrayOf("settings" to settings)),
+            ),
+            "session",
+        )
+
+    @Test
+    fun configurationReadsOptionalSessionSettings() {
+        assertEquals(SessionSettings(true, "one-at-a-time", "all"), configurationWith(settingsJson()).settings)
+        assertNull(configurationWith(null).settings)
+        assertNull(configurationWith(JsonNull).settings)
+        assertNull(configurationWith(JsonPrimitive("on")).settings)
+        assertNull(configurationWith(settingsJson("steeringMode" to "sometimes")).settings)
+        assertNull(configurationWith(settingsJson("followUpMode" to 1)).settings)
+        assertNull(configurationWith(settingsJson("autoCompaction" to "true")).settings)
+        assertNull(configurationWith(settingsJson("autoCompaction" to null)).settings)
+        assertNull(configurationWith(Wire.objectOf("autoCompaction" to true)).settings)
+        // Invalid settings do not invalidate the rest of the configuration.
+        assertEquals("high", configurationWith(settingsJson("steeringMode" to "x")).thinkingLevel)
+    }
+
+    @Test
+    fun sessionSettingsNeedTheCapabilityAndReportedSettings() {
+        val withSettings = chatState.copy(
+            capabilities = chatState.capabilities + SETTINGS_CAPABILITY,
+            configuration = configurationWith(settingsJson()),
+        )
+        assertTrue(sessionSettingsAvailable(withSettings))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(configuration = configurationWith(null))))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(configuration = null)))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(capabilities = chatState.capabilities)))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(unavailableCapabilities = setOf(SETTINGS_CAPABILITY))))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(unavailableCapabilities = setOf(CONFIGURATION_CAPABILITY))))
+        assertEquals(
+            listOf(LocalCommand.NEW, LocalCommand.COMPACT, LocalCommand.MODEL, LocalCommand.SETTINGS, LocalCommand.NAME),
+            availableLocalCommands(withSettings, true, 0),
+        )
+        assertFalse(LocalCommand.SETTINGS in availableLocalCommands(withSettings.copy(status = "running"), true, 0))
+        assertFalse(LocalCommand.SETTINGS in availableLocalCommands(chatState, true, 0))
+    }
+
+    @Test
+    fun localCommandsFollowTheControlsTheyStandFor() {
+        val all = listOf(LocalCommand.NEW, LocalCommand.COMPACT, LocalCommand.MODEL, LocalCommand.NAME)
+        assertEquals(all, availableLocalCommands(chatState, true, 0))
+        assertFalse(LocalCommand.NEW in availableLocalCommands(chatState, false, 0))
+        assertTrue(availableLocalCommands(chatState.copy(status = "running"), true, 0).isEmpty())
+        assertTrue(availableLocalCommands(chatState.copy(sending = true), true, 0).isEmpty())
+        val bare = chatState.copy(capabilities = emptySet())
+        assertEquals(listOf(LocalCommand.NEW), availableLocalCommands(bare, true, 0))
+        assertTrue(availableLocalCommands(chatState.copy(loading = true), true, 0).isEmpty())
+        assertEquals(
+            listOf(LocalCommand.NEW, LocalCommand.MODEL, LocalCommand.NAME),
+            availableLocalCommands(chatState.copy(unavailableCapabilities = setOf(COMPACT_CAPABILITY)), true, 0),
+        )
+        val tuiOffline = chatState.copy(session = Wire.objectOf("id" to "s1", "title" to "T", "origin" to "web"))
+        assertFalse(LocalCommand.NAME in availableLocalCommands(tuiOffline, true, 0))
+    }
+
+    @Test
+    fun localInvocationParsesTheNameAndArgument() {
+        val all = availableLocalCommands(chatState, true, 0)
+        assertEquals(
+            LocalInvocation(LocalCommand.NAME, "My new title"),
+            localInvocation(chatState.copy(draft = "/name   My  new title \n"), all),
+        )
+        assertEquals(LocalInvocation(LocalCommand.NAME, ""), localInvocation(chatState.copy(draft = "/name"), all))
+        assertEquals(LocalInvocation(LocalCommand.NEW, ""), localInvocation(chatState.copy(draft = "/new"), all))
+        assertEquals(LocalInvocation(LocalCommand.NEW, ""), localInvocation(chatState.copy(draft = "/New "), all))
+        assertNull(localInvocation(chatState.copy(draft = "/compact keep the plan"), all))
+        assertNull(localInvocation(chatState.copy(draft = "/name " + "x".repeat(4097)), all))
+        assertNull(localInvocation(chatState.copy(draft = "/newer"), all))
+        assertNull(localInvocation(chatState.copy(draft = "/review"), all))
+        assertNull(localInvocation(chatState.copy(draft = "hello /new"), all))
+        assertNull(localInvocation(chatState.copy(draft = "/compact"), availableLocalCommands(chatState.copy(status = "running"), true, 0)))
+        assertNull(localInvocation(chatState.copy(draft = "/new", quote = MessageQuote("m", "user", "x")), all))
+    }
+
+    @Test
+    fun localCommandsShadowHostCommandsOfTheSameName() {
+        val host = listOf(
+            RemoteCommand("compact", "host compact", "extension"),
+            RemoteCommand("review", null, "prompt"),
+            RemoteCommand("news", null, "skill"),
+        )
+        val (local, remote) =
+            mergeCommandSuggestions(listOf(LocalCommand.NEW, LocalCommand.COMPACT), host, "")
+        assertEquals(listOf(LocalCommand.NEW, LocalCommand.COMPACT), local)
+        assertEquals(listOf("review", "news"), remote.map { it.name })
+        val (filteredLocal, filteredRemote) =
+            mergeCommandSuggestions(listOf(LocalCommand.NEW, LocalCommand.COMPACT), host, "NE")
+        assertEquals(listOf(LocalCommand.NEW), filteredLocal)
+        assertEquals(listOf("news"), filteredRemote.map { it.name })
+        assertEquals("/name  x", selectCommandName("/na  x", "name"))
     }
 }

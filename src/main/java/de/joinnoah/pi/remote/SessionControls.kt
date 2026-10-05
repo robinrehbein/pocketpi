@@ -46,6 +46,7 @@ internal fun SessionControls(
     state: RemoteState,
     refreshConfiguration: () -> Unit,
     refreshContextUsage: () -> Unit,
+    compactContext: () -> Unit,
     refreshAdvisor: () -> Unit,
     setAdvisor: (String?, String?, String?) -> Unit,
     setModel: (String, String) -> Unit,
@@ -54,6 +55,16 @@ internal fun SessionControls(
     selectCommand: (RemoteCommand) -> Unit,
     refreshJobs: () -> Unit = {},
     openJobs: (() -> Unit)? = null,
+    /** The [LocalCommand]s that can run now; they lead the slash suggestions and shadow host commands. */
+    localCommands: List<LocalCommand> = emptyList(),
+    selectLocalCommand: (LocalCommand) -> Unit = {},
+    /** A typed `/model` asks for the model picker; [onModelPickerRequestHandled] acknowledges it. */
+    modelPickerRequested: Boolean = false,
+    onModelPickerRequestHandled: () -> Unit = {},
+    changeSettings: (Boolean?, String?, String?) -> Unit = { _, _, _ -> },
+    /** The header action or a typed `/settings` asks for the settings sheet; same handshake as the model picker. */
+    settingsSheetRequested: Boolean = false,
+    onSettingsSheetRequestHandled: () -> Unit = {},
 ) {
     var picker by remember { mutableStateOf<String?>(null) }
     val pickerSheet = rememberModalBottomSheetState()
@@ -62,6 +73,10 @@ internal fun SessionControls(
         pickerScope.launch { pickerSheet.hide() }.invokeOnCompletion { picker = null }
     }
     var showContext by remember { mutableStateOf(false) }
+    var showSettings by remember(state.selection.sessionId) { mutableStateOf(false) }
+    // The flag must not outlive the sheet's visibility, or it reopens unprompted later.
+    val settingsVisible = state.connected && sessionSettingsAvailable(state)
+    LaunchedEffect(settingsVisible) { if (!settingsVisible) showSettings = false }
     var showAdvisor by remember { mutableStateOf(false) }
     var advisorChoice by remember(state.selection.sessionId) { mutableStateOf<AdvisorChoice?>(null) }
     var advisorLevel by remember(state.selection.sessionId) { mutableStateOf("high") }
@@ -100,6 +115,24 @@ internal fun SessionControls(
             !state.configurationLoading &&
             !state.configurationChanging
     val slash = commandName(state.draft)
+    LaunchedEffect(modelPickerRequested) {
+        if (modelPickerRequested) {
+            if (available) {
+                picker = "model"
+                refreshConfiguration()
+            }
+            onModelPickerRequestHandled()
+        }
+    }
+    LaunchedEffect(settingsSheetRequested) {
+        if (settingsSheetRequested) {
+            if (sessionSettingsAvailable(state)) {
+                showSettings = true
+                refreshConfiguration()
+            }
+            onSettingsSheetRequestHandled()
+        }
+    }
     val configurationChipColors =
         AssistChipDefaults.assistChipColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -278,16 +311,29 @@ internal fun SessionControls(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (
-            slash != null &&
-                COMMANDS_CAPABILITY in state.capabilities &&
-                COMMANDS_CAPABILITY !in state.unavailableCapabilities
-        ) {
-            val suggestions = state.commands.filter { it.name.startsWith(slash, ignoreCase = true) }
-            if (state.commandsLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            else if (suggestions.isNotEmpty())
+        val hostCommands =
+            COMMANDS_CAPABILITY in state.capabilities && COMMANDS_CAPABILITY !in state.unavailableCapabilities
+        if (slash != null && (hostCommands || localCommands.isNotEmpty())) {
+            val (localSuggestions, hostSuggestions) =
+                mergeCommandSuggestions(localCommands, if (hostCommands) state.commands else emptyList(), slash)
+            if (hostCommands && state.commandsLoading && localSuggestions.isEmpty())
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+            else if (localSuggestions.isNotEmpty() || hostSuggestions.isNotEmpty())
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 160.dp)) {
-                    items(suggestions, key = { it.name }) { command ->
+                    items(localSuggestions, key = { "local:" + it.commandName }) { command ->
+                        ListItem(
+                            headlineContent = { Text("/" + command.commandName) },
+                            supportingContent = {
+                                Text(
+                                    stringResource(command.description),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                            modifier = Modifier.clickable { selectLocalCommand(command) },
+                        )
+                    }
+                    items(hostSuggestions, key = { it.name }) { command ->
                         ListItem(
                             headlineContent = { Text("/" + command.name) },
                             supportingContent = {
@@ -299,7 +345,7 @@ internal fun SessionControls(
                         )
                     }
                 }
-            if (state.commandsTruncated)
+            if (hostCommands && state.commandsTruncated)
                 Text(
                     stringResource(R.string.remote_catalog_truncated),
                     style = MaterialTheme.typography.labelSmall,
@@ -312,8 +358,24 @@ internal fun SessionControls(
             unavailable =
                 !state.connected || CONTEXT_CAPABILITY !in state.capabilities ||
                     CONTEXT_CAPABILITY in state.unavailableCapabilities,
+            showCompact = compactAvailable(state),
+            canCompact = canCompact(state, System.currentTimeMillis()),
+            compacting = state.compactionRequesting ||
+                compactionVisible(state.compaction, System.currentTimeMillis()),
+            onCompact = compactContext,
         )
     }
+    val sessionSettings = confirmed?.settings
+    if (showSettings && sessionSettings != null && settingsVisible)
+        ModalBottomSheet(onDismissRequest = { showSettings = false }) {
+            SessionSettingsSheetBody(
+                settings = sessionSettings,
+                enabled = canChange,
+                busy = state.configurationLoading || state.configurationChanging,
+                working = state.connected && state.status in setOf("running", "waiting"),
+                onChange = changeSettings,
+            )
+        }
     if (showAdvisor) AdvisorPickerSheet(
         advisor = sessionAdvisor,
         selectedChoice = advisorChoice,
@@ -430,7 +492,14 @@ internal fun SessionControls(
  * long usage breakdown never clips against the sheet's edge instead of scrolling.
  */
 @Composable
-internal fun ContextSheetBody(usage: SessionContextUsage?, unavailable: Boolean) {
+internal fun ContextSheetBody(
+    usage: SessionContextUsage?,
+    unavailable: Boolean,
+    showCompact: Boolean = false,
+    canCompact: Boolean = false,
+    compacting: Boolean = false,
+    onCompact: () -> Unit = {},
+) {
     Column(
         Modifier.fillMaxWidth()
             .heightIn(max = 480.dp)
@@ -451,12 +520,130 @@ internal fun ContextSheetBody(usage: SessionContextUsage?, unavailable: Boolean)
             } else Text(stringResource(R.string.remote_context_unknown))
             usage.totals?.let { UsageSummary(it) }
         }
+        if (showCompact)
+            Button(
+                onClick = onCompact,
+                enabled = canCompact,
+                modifier = Modifier.fillMaxWidth().testTag("compactContextButton"),
+            ) {
+                Text(stringResource(if (compacting) R.string.remote_context_compacting else R.string.remote_context_compact))
+            }
         Text(
             stringResource(R.string.remote_context_estimate),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(8.dp))
+    }
+}
+
+/**
+ * The session settings sheet's content. Changes apply as soon as a control is used; the host
+ * answers with the refreshed settings, which [settings] then shows.
+ */
+@Composable
+internal fun SessionSettingsSheetBody(
+    settings: SessionSettings,
+    enabled: Boolean,
+    busy: Boolean,
+    working: Boolean,
+    onChange: (autoCompaction: Boolean?, steeringMode: String?, followUpMode: String?) -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth()
+            .heightIn(max = 560.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .navigationBarsPadding()
+            .testTag("sessionSettingsSheet"),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(stringResource(R.string.remote_session_settings_title), style = MaterialTheme.typography.titleLarge)
+        if (working || (!enabled && !busy))
+            Text(
+                stringResource(
+                    if (working) R.string.remote_session_settings_busy else R.string.remote_session_settings_disabled
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.remote_session_settings_auto_compact), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    stringResource(R.string.remote_session_settings_auto_compact_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = settings.autoCompaction,
+                onCheckedChange = { onChange(it, null, null) },
+                enabled = enabled,
+                modifier = Modifier.testTag("settingsAutoCompaction"),
+            )
+        }
+        QueueModeChoice(
+            title = R.string.remote_session_settings_steering,
+            hint = R.string.remote_session_settings_steering_hint,
+            tag = "settingsSteering",
+            selected = settings.steeringMode,
+            enabled = enabled,
+            onSelect = { onChange(null, it, null) },
+        )
+        QueueModeChoice(
+            title = R.string.remote_session_settings_follow_up,
+            hint = R.string.remote_session_settings_follow_up_hint,
+            tag = "settingsFollowUp",
+            selected = settings.followUpMode,
+            enabled = enabled,
+            onSelect = { onChange(null, null, it) },
+        )
+        Text(
+            stringResource(R.string.remote_session_settings_scope),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun QueueModeChoice(
+    title: Int,
+    hint: Int,
+    tag: String,
+    selected: String,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    val options =
+        listOf(
+            QUEUE_MODE_ONE_AT_A_TIME to R.string.remote_session_settings_one_at_a_time,
+            QUEUE_MODE_ALL to R.string.remote_session_settings_all_at_once,
+        )
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(stringResource(title), style = MaterialTheme.typography.titleMedium)
+        Text(
+            stringResource(hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+            options.forEachIndexed { index, (mode, text) ->
+                SegmentedButton(
+                    selected = selected == mode,
+                    onClick = { if (selected != mode) onSelect(mode) },
+                    enabled = enabled,
+                    shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                    modifier = Modifier.testTag("$tag-$mode"),
+                    icon = {},
+                ) {
+                    Text(stringResource(text), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
     }
 }
 

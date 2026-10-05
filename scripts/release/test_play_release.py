@@ -52,7 +52,7 @@ class PlayReleaseTests(unittest.TestCase):
         invalid = (
             "production", "wear:production", "automotive:production", "tv:production",
             "qa", "beta", "internal", "Production", "wear:alpha",
-            "closed/alpha", "closed alpha", "closed-alpha\nproduction", "",
+            "closed/alpha", "closed alpha", "closed-alpha\nproduction",
         )
         for track in invalid:
             with self.subTest(track=track), patch.dict(os.environ, {"POCKETPI_CLOSED_TRACK": track}):
@@ -61,6 +61,37 @@ class PlayReleaseTests(unittest.TestCase):
         for track in ("alpha", "closed-alpha-id"):
             with self.subTest(track=track), patch.dict(os.environ, {"POCKETPI_CLOSED_TRACK": track}):
                 self.assertEqual(play_release.closed_track(), track)
+
+    def test_missing_closed_track_selects_internal_only(self):
+        with patch.dict(os.environ, {"POCKETPI_CLOSED_TRACK": ""}):
+            self.assertIsNone(play_release.closed_track())
+        service = service_with_snapshot()
+        self.assertEqual(play_release.prepare(service, None), 2)
+        self.assertEqual(tuple(play_release.target_tracks(None)), ("qa",))
+
+    def test_internal_only_publish_updates_and_verifies_qa(self):
+        service = service_with_snapshot()
+        edits = service.edits.return_value
+        edits.insert.return_value.execute.side_effect = [{"id": "edit-1"}, {"id": "edit-2"}]
+        edits.tracks.return_value.list.return_value.execute.side_effect = [
+            {"tracks": [{"track": "qa", "releases": []}]},
+            {"tracks": [{"track": "qa", "releases": [
+                {"versionCodes": ["2"], "status": "completed"}
+            ]}]},
+        ]
+        edits.bundles.return_value.list.return_value.execute.return_value = {"bundles": []}
+        edits.bundles.return_value.upload.return_value.execute.return_value = {"versionCode": 2}
+        edits.apks.return_value.list.return_value.execute.return_value = {"apks": []}
+        media = types.ModuleType("googleapiclient.http")
+        media.MediaFileUpload = lambda *args, **kwargs: object()
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / "app.aab"
+            bundle.write_bytes(b"signed-bundle-placeholder")
+            with patch.dict(sys.modules, {"googleapiclient": types.ModuleType("googleapiclient"),
+                                          "googleapiclient.http": media}):
+                play_release.publish(service, None, 2, bundle)
+        edits.tracks.return_value.update.assert_called_once()
+        self.assertEqual(edits.tracks.return_value.update.call_args.kwargs["track"], "qa")
 
     def test_prepare_uses_maximum_across_tracks_bundles_and_apks(self):
         service = service_with_snapshot()
