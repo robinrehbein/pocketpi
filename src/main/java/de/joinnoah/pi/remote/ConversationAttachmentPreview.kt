@@ -57,6 +57,7 @@ internal fun ConversationAttachmentPreview(
     onOpen: (String) -> Unit,
     onRetry: (String, ConversationAttachmentPreviewTarget) -> Unit,
     modifier: Modifier = Modifier,
+    onClose: (String) -> Unit = {},
 ) {
     require(items.map { it.id }.distinct().size == items.size) { "Attachment IDs must be unique" }
     var openId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -89,7 +90,10 @@ internal fun ConversationAttachmentPreview(
     }
     selected?.let { item ->
         Dialog(
-            onDismissRequest = { openId = null },
+            onDismissRequest = {
+                openId = null
+                onClose(item.id)
+            },
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
             val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.6f).dp
@@ -101,7 +105,10 @@ internal fun ConversationAttachmentPreview(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) { AttachmentCaption(item) }
                         IconButton(
-                            onClick = { openId = null },
+                            onClick = {
+                                openId = null
+                                onClose(item.id)
+                            },
                             modifier = Modifier.testTag("closeConversationAttachmentPreview"),
                         ) {
                             Icon(Icons.Default.Close, stringResource(R.string.remote_close_preview))

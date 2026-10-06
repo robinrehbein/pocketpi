@@ -96,6 +96,8 @@ data class RemoteState(
     val childControlUnsupported: Set<String> = emptySet(),
     val answering: Set<String> = emptySet(),
     val capabilities: Set<String> = emptySet(),
+    /** True once the connection's `projects.list` reply has added its route capabilities. */
+    val capabilitiesKnown: Boolean = false,
     val unavailableCapabilities: Set<String> = emptySet(),
     val configuration: SessionConfiguration? = null,
     val configurationLoading: Boolean = false,
@@ -270,6 +272,13 @@ interface RemoteRepository {
     /** `session.files.read` of one page; a later page carries the first page's version. */
     suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?): FileChunk =
         throw RemoteRequestException("unsupported")
+
+    /**
+     * The bytes of an image this device sent in [sessionId]'s chat, from memory or read from the
+     * host in chunks (`session.attachments.get`, only with [ATTACHMENT_READ_CAPABILITY]).
+     */
+    suspend fun readAttachment(sessionId: String, attachment: RemoteAttachment): AttachmentReadResult =
+        AttachmentReadResult.Unsupported
 
     /** Opens [RemoteState.files] for the selected session at its folder. */
     fun openFiles() {}

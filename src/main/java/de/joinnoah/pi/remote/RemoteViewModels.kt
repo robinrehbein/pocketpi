@@ -17,7 +17,7 @@ internal open class DestinationViewModel(
     internal var cleared = false
         private set
 
-    private fun matches(state: RemoteState): Boolean =
+    protected fun matches(state: RemoteState): Boolean =
         when (key) {
             RemoteNavKey.Hosts,
             RemoteNavKey.Settings -> true
@@ -262,6 +262,11 @@ internal class ChatViewModel(
     fun loadToolOutput(toolCallId: String) = active { repository.loadToolOutput(toolCallId) }
 
     fun cancelToolOutput() = active(repository::cancelToolOutput)
+
+    /** Reads an image this chat sent; a destination that is no longer the shown chat gets nothing. */
+    suspend fun readAttachment(sessionId: String, attachment: RemoteAttachment): AttachmentReadResult =
+        if (cleared || !matches(repository.state.value)) AttachmentReadResult.Unavailable
+        else repository.readAttachment(sessionId, attachment)
 
     /** Quotes the message and offers [prompt] as the draft unless the user already typed one. */
     fun askToFix(messageId: String, prompt: String) = active {

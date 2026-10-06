@@ -202,6 +202,8 @@ internal fun ConversationMessage(
     highlighted: Boolean = false,
     /** Set only for the first bubble of a user message when the chat can be rewound. */
     fork: MessageFork? = null,
+    /** Without a source, sent images show as plain text like any other attachment. */
+    images: SentImageSource? = null,
 ) {
     Box(Modifier.jumpHighlight(highlighted)) {
         ConversationMessageContent(
@@ -213,6 +215,7 @@ internal fun ConversationMessage(
             onOpenAgent,
             onAskToFix,
             fork,
+            images,
         )
     }
 }
@@ -227,6 +230,7 @@ private fun ConversationMessageContent(
     onOpenAgent: ((ConversationItem.Subagent, Int) -> Unit)?,
     onAskToFix: ((messageId: String) -> Unit)?,
     fork: MessageFork?,
+    images: SentImageSource?,
 ) {
     val quoteLabel = stringResource(R.string.remote_quote)
     val forkLabel = stringResource(R.string.remote_fork_action)
@@ -297,35 +301,40 @@ private fun ConversationMessageContent(
                                 verticalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                                     item.quote?.let { QuotePreview(it) }
-                                    for (attachment in item.attachments) {
-                                        Column(Modifier.padding(vertical = 4.dp)) {
-                                            Text(
-                                                attachment.name,
-                                                style = MaterialTheme.typography.labelLarge,
-                                            )
-                                            Text(
-                                                Formatter.formatShortFileSize(
-                                                    LocalContext.current,
-                                                    attachment.size,
-                                                ),
-                                                style = MaterialTheme.typography.labelSmall,
-                                            )
-                                            Text(
-                                                stringResource(
-                                                    if (
-                                                        attachment.expiresAt <=
-                                                            System.currentTimeMillis()
-                                                    )
-                                                        R.string.remote_attachment_expired
-                                                    else R.string.remote_attachment_expires,
-                                                    java.text.DateFormat.getDateTimeInstance(
-                                                            java.text.DateFormat.SHORT,
-                                                            java.text.DateFormat.SHORT,
+                                    // Runs of images go through the preview, other attachments stay in place.
+                                    for (run in attachmentRuns(item.attachments, images != null)) {
+                                        if (images != null && run.first().kind == "image")
+                                            SentImageAttachments(run, images)
+                                        else for (attachment in run) {
+                                            Column(Modifier.padding(vertical = 4.dp)) {
+                                                Text(
+                                                    attachment.name,
+                                                    style = MaterialTheme.typography.labelLarge,
+                                                )
+                                                Text(
+                                                    Formatter.formatShortFileSize(
+                                                        LocalContext.current,
+                                                        attachment.size,
+                                                    ),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                )
+                                                Text(
+                                                    stringResource(
+                                                        if (
+                                                            attachment.expiresAt <=
+                                                                System.currentTimeMillis()
                                                         )
-                                                        .format(java.util.Date(attachment.expiresAt)),
-                                                ),
-                                                style = MaterialTheme.typography.labelSmall,
-                                            )
+                                                            R.string.remote_attachment_expired
+                                                        else R.string.remote_attachment_expires,
+                                                        java.text.DateFormat.getDateTimeInstance(
+                                                                java.text.DateFormat.SHORT,
+                                                                java.text.DateFormat.SHORT,
+                                                            )
+                                                            .format(java.util.Date(attachment.expiresAt)),
+                                                    ),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                )
+                                            }
                                         }
                                     }
                                     if (item.text.isNotEmpty())

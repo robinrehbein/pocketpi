@@ -42,8 +42,9 @@ private const val MAX_TOOL_OUTPUT_BYTES = 1_048_576L
 private const val TOOL_OUTPUT_CHUNK_BYTES = 49_152
 private const val MAX_TOOL_OUTPUT_DATA_CHARS = 65_536
 private const val SESSION_REFRESH_INTERVAL_MILLIS = 5_000L
+private const val ATTACHMENT_READ_SPACING_MILLIS = 200L
 
-private fun opaqueId(value: String): Boolean =
+internal fun opaqueId(value: String): Boolean =
     value.isNotEmpty() &&
         value.encodeToByteArray().size <= 256 &&
         value.none { it.isWhitespace() || it.code < 0x20 || it.code == 0x7f }
@@ -106,6 +107,7 @@ class DefaultRemoteRepository(
             GIT_CAPABILITY,
             FILES_CAPABILITY,
             PROVIDER_AUTH_CAPABILITY,
+            ATTACHMENT_READ_CAPABILITY,
         )
     private val mutable = MutableStateFlow(RemoteState())
     override val state = mutable.asStateFlow()
@@ -332,6 +334,7 @@ class DefaultRemoteRepository(
                         it.copy(
                             connected = true,
                             capabilities = capabilities,
+                            capabilitiesKnown = false,
                             connection = R.string.remote_connected,
                             error = null,
                         )
@@ -810,7 +813,11 @@ class DefaultRemoteRepository(
             if (previousRoute != host.routeId && markPendingFollowUpsUncertain(previousRoute)) {
                 persist().await()
             }
-            if (previousRoute != host.routeId) clearNavigationCache()
+            if (previousRoute != host.routeId) {
+                clearNavigationCache()
+                attachmentBytes.clear()
+                SentImageThumbnails.clear()
+            }
             cachedProjectChats = cachedProjectChats?.takeIf { it.first == host.routeId }
                 ?.let { it.first to it.second.map { chat -> chat.copy(verified = false) } }
             projectChatCandidates.replaceAll { _, chats ->
@@ -842,6 +849,7 @@ class DefaultRemoteRepository(
                     toolOutput = null,
                     questions = emptyList(),
                     capabilities = emptySet(),
+                    capabilitiesKnown = false,
                     unavailableCapabilities = emptySet(),
                     childControlUnsupported = emptySet(),
                     configuration = null,
@@ -928,6 +936,7 @@ class DefaultRemoteRepository(
                     update { it.copy(capabilities = it.capabilities + merged) }
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
+                update { it.copy(capabilitiesKnown = true) }
                 if (PROJECT_OPEN_CAPABILITY in merged) resumeClone()
                 if (PROVIDER_AUTH_CAPABILITY in merged) resumeProviderAuth()
             }
@@ -1361,6 +1370,7 @@ class DefaultRemoteRepository(
                         toolOutput = null,
                         questions = emptyList(),
                         capabilities = emptySet(),
+                        capabilitiesKnown = false,
                         unavailableCapabilities = emptySet(),
                         childControlUnsupported = emptySet(),
                         configuration = null,
@@ -1728,6 +1738,8 @@ class DefaultRemoteRepository(
         ) clearNavigationCache()
         if (activeHost?.routeId == routeId) reconnectEnabled = false
         if (activeHost?.routeId == routeId) disconnect()
+        attachmentBytes.clear()
+        SentImageThumbnails.clear()
         removedRoutes += routeId
         savedNavigation.remove(routeId)
         queueNavigationWrite(immediate = true)
@@ -1810,6 +1822,7 @@ class DefaultRemoteRepository(
                 answering = emptySet(),
                 questions = emptyList(),
                 capabilities = emptySet(),
+                capabilitiesKnown = false,
                 unavailableCapabilities = emptySet(),
                 childControlUnsupported = emptySet(),
                 configuration = null,
@@ -4083,6 +4096,119 @@ class DefaultRemoteRepository(
             )
         val data = request("session.files.read", selectionEpoch, *fields.toTypedArray())
         return parseFilesRead(data, sessionId, path, offset, version)
+    }
+
+    // ---- Sent attachment content (session.attachments.read.v1) ---------------------------
+
+    private class AttachmentRead {
+        lateinit var job: Deferred<AttachmentReadResult>
+        var waiters = 0
+    }
+
+    private val attachmentBytes = AttachmentByteCache()
+    private val attachmentReads = mutableMapOf<AttachmentByteCache.Key, AttachmentRead>()
+    private val attachmentReadMutex = Mutex()
+    private var lastAttachmentReadStart: Long? = null
+
+    override suspend fun readAttachment(
+        sessionId: String,
+        attachment: RemoteAttachment,
+    ): AttachmentReadResult {
+        if (
+            attachment.kind != "image" ||
+                attachment.size !in 0..MAX_ATTACHMENT_IMAGE_BYTES ||
+                !canonicalAttachmentId(attachment.id) ||
+                !opaqueId(sessionId) ||
+                sessionId != state.value.selection.sessionId
+        ) return AttachmentReadResult.Unavailable
+        val key = AttachmentByteCache.Key(sessionId, attachment.id, attachment.sha256)
+        attachmentBytes[key]?.let { return AttachmentReadResult.Loaded(it) }
+        val current = state.value
+        if (!current.connected) return AttachmentReadResult.Failed
+        if (ATTACHMENT_READ_CAPABILITY !in current.capabilities)
+            // Until projects.list has been answered the host's capabilities are not known yet.
+            return if (current.capabilitiesKnown) AttachmentReadResult.Unsupported
+            else AttachmentReadResult.Failed
+        val epoch = selectionEpoch
+        // Concurrent callers for one image share a single read; it stops when the last one leaves.
+        val read =
+            synchronized(attachmentReads) {
+                attachmentReads
+                    .getOrPut(key) {
+                        val entry = AttachmentRead()
+                        entry.job =
+                            scope.async(start = CoroutineStart.LAZY) {
+                                try {
+                                    fetchAttachment(epoch, sessionId, attachment, key)
+                                } finally {
+                                    // Only this read's own entry: a newer one may have replaced it.
+                                    synchronized(attachmentReads) { attachmentReads.remove(key, entry) }
+                                }
+                            }
+                        entry
+                    }
+                    .also { it.waiters++ }
+            }
+        read.job.start()
+        try {
+            return read.job.await()
+        } catch (e: CancellationException) {
+            // The shared read was cancelled; a caller that is still active should see a failure
+            // it can retry rather than wait forever.
+            currentCoroutineContext().ensureActive()
+            return AttachmentReadResult.Failed
+        } finally {
+            synchronized(attachmentReads) {
+                if (--read.waiters == 0 && read.job.isActive) {
+                    read.job.cancel()
+                    attachmentReads.remove(key, read)
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchAttachment(
+        epoch: Long,
+        sessionId: String,
+        attachment: RemoteAttachment,
+        key: AttachmentByteCache.Key,
+    ): AttachmentReadResult {
+        val reassembler = AttachmentReassembler(sessionId, attachment)
+        try {
+            while (true) {
+                val data =
+                    // One read at a time, each start at least 200 ms after the last, retries included.
+                    attachmentReadMutex.withLock {
+                        lastAttachmentReadStart?.let {
+                            val wait = ATTACHMENT_READ_SPACING_MILLIS - (now() - it)
+                            if (wait > 0) delay(wait.coerceAtMost(ATTACHMENT_READ_SPACING_MILLIS))
+                        }
+                        lastAttachmentReadStart = now()
+                        // Once sent, the request is awaited even if the caller leaves, so the next
+                        // read never starts while the host may still be answering this one.
+                        withContext(NonCancellable) {
+                            request(
+                                "session.attachments.get",
+                                epoch,
+                                *attachmentGetFields(sessionId, attachment.id, reassembler.offset),
+                            )
+                        }
+                    }
+                if (reassembler.accept(data)) break
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: RemoteRequestException) {
+            return when (e.code) {
+                "not_found", "forbidden", "invalid_request" -> AttachmentReadResult.Unavailable
+                else -> AttachmentReadResult.Failed
+            }
+        } catch (e: AttachmentProtocolException) {
+            return AttachmentReadResult.Unavailable
+        } catch (e: Exception) {
+            return AttachmentReadResult.Failed
+        }
+        return AttachmentReadResult.Loaded(reassembler.bytes().also { attachmentBytes[key] = it })
     }
 
     private val filesLoader =

@@ -183,6 +183,16 @@ internal fun RemoteScreen(
         }
     val chatKey = key as? RemoteNavKey.Chat
     val chatModel = model as? ChatViewModel
+    val sentImages =
+        state.selection.sessionId?.takeIf { chatModel != null }?.let { sessionId ->
+            val supported = ATTACHMENT_READ_CAPABILITY in state.capabilities
+            remember(chatModel, sessionId, state.connected, state.capabilitiesKnown, supported) {
+                SentImageSource(
+                    sessionId, state.connected, state.capabilitiesKnown, supported,
+                    checkNotNull(chatModel)::readAttachment,
+                )
+            }
+        }
     val touched = remember(conversation) { touchedFiles(conversation) }
     // Diffing every edit can take a moment in a long chat; keep it off the main thread.
     val touchedLines by
@@ -1475,6 +1485,7 @@ internal fun RemoteScreen(
                                     onAskToFix = if (acceptsPrompts) ::askToFix else null,
                                     highlighted = highlighted,
                                     fork = messageFork?.takeIf { item.id in forkableIds },
+                                    images = sentImages,
                                 )
                             }
                         }
