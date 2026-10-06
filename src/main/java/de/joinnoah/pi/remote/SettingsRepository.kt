@@ -20,6 +20,11 @@ data class RemoteSettings(
     val swipeStartToEnd: SwipeAction = SwipeAction.RENAME,
     /** With a hardware keyboard, Enter sends and Shift+Enter inserts a newline. */
     val enterSends: Boolean = true,
+    /**
+     * Push was switched off in the app, as opposed to never switched on. The Mac may still hold
+     * this phone's token, so every connection tells it to forget it until push is on again.
+     */
+    val pushOptedOut: Boolean = false,
 )
 
 interface SettingsRepository {
@@ -60,6 +65,7 @@ class DefaultSettingsRepository(context: Context) : SettingsRepository {
                 swipeAction("swipe_end_to_start", SwipeAction.CLOSE),
                 swipeAction("swipe_start_to_end", SwipeAction.RENAME),
                 preferences.getBoolean("enter_sends", true),
+                preferences.getBoolean("push_opted_out", false),
             )
         )
     override val state = mutable.asStateFlow()
@@ -71,8 +77,12 @@ class DefaultSettingsRepository(context: Context) : SettingsRepository {
     }
 
     override fun setPushEnabled(enabled: Boolean) {
-        preferences.edit().putBoolean("push_enabled", enabled).apply()
-        mutable.value = mutable.value.copy(pushEnabled = enabled)
+        preferences
+            .edit()
+            .putBoolean("push_enabled", enabled)
+            .putBoolean("push_opted_out", !enabled)
+            .apply()
+        mutable.value = mutable.value.copy(pushEnabled = enabled, pushOptedOut = !enabled)
     }
 
     override fun setThinkingDisplay(display: String) {

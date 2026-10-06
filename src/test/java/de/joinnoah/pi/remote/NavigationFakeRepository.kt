@@ -209,7 +209,7 @@ internal class FakeSettingsRepository : SettingsRepository {
     }
 
     override fun setPushEnabled(enabled: Boolean) {
-        state.value = state.value.copy(pushEnabled = enabled)
+        state.value = state.value.copy(pushEnabled = enabled, pushOptedOut = !enabled)
     }
 
     override fun setThinkingDisplay(display: String) {

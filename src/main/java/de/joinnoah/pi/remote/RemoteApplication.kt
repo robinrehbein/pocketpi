@@ -87,11 +87,13 @@ class RemoteApplication : Application() {
                             .addOnFailureListener { failure() }
                     },
                     register = repository::setPushToken,
+                    unregister = { repository.setPushToken(null) },
+                    optedOut = { settings.state.value.pushOptedOut },
                 )
             if (settings.state.value.pushEnabled) {
                 FirebaseMessaging.getInstance().isAutoInitEnabled = true
-                pushRegistration.onStartup()
             }
+            pushRegistration.onStartup()
         }
     }
 
@@ -100,6 +102,17 @@ class RemoteApplication : Application() {
         settings.setPushEnabled(true)
         FirebaseMessaging.getInstance().isAutoInitEnabled = true
         pushRegistration.onEnabled()
+    }
+
+    /**
+     * Switches push off: no more pushes are posted, and the Mac is told to forget this phone's
+     * token (now if connected, otherwise on the next connection, including after a restart).
+     */
+    fun disablePush() {
+        if (!pushConfigured) return
+        settings.setPushEnabled(false)
+        FirebaseMessaging.getInstance().isAutoInitEnabled = false
+        pushRegistration.onDisabled()
     }
 
     /** Forgets everything the home surfaces, suggestions and notifications knew about a host. */

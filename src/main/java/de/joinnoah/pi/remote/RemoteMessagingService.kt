@@ -25,7 +25,7 @@ class RemoteMessagingService : FirebaseMessagingService() {
             }
         if (!paired) return
         val app = application as RemoteApplication
-        if (!app.settings.state.value.pushEnabled) return
+        if (!postsPushes(app.settings.state.value)) return
         if (!firstDelivery(payload.eventId)) return
         if (payload.event.attention) {
             // A child or shell says nothing about its session's state or questions.
@@ -67,6 +67,9 @@ class RemoteMessagingService : FirebaseMessagingService() {
         val lock = Any()
     }
 }
+
+/** With push switched off in the app, an incoming push posts nothing and starts no lookup. */
+internal fun postsPushes(settings: RemoteSettings): Boolean = settings.pushEnabled
 
 internal fun notificationTitle(event: String?): Int =
     if (event == "question") R.string.remote_notification_question

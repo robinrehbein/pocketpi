@@ -3069,6 +3069,24 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun aClearedPushTokenIsRegisteredAsNullAgainAfterReconnecting() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        val selection = RemoteSelection("host", "project", "session")
+        repository.activate(selection)
+        repository.setPushToken(null)
+        runCurrent()
+
+        transport.listener.failed(false, R.string.remote_connection_error)
+        repository.activate(selection)
+        runCurrent()
+
+        val registrations = transport.sent.filter { it.text("type") == "push.register" }
+        assertEquals(2, registrations.size)
+        assertTrue(registrations.all { it["token"] == JsonNull })
+    }
+
+    @Test
     fun removePurgesHostDraftsAndSerializedWritesRetainLatestEdit() = runTest {
         val drafts = Drafts()
         val transport = Transport().also { configure(it) }

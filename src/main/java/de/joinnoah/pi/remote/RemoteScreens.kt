@@ -150,6 +150,7 @@ internal fun RemoteScreen(
     pushEnabled: Boolean,
     enablePush: () -> Unit,
     timelineVisibility: TimelineVisibility,
+    disablePush: () -> Unit = {},
 ) {
     val state by model.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -1241,9 +1242,28 @@ internal fun RemoteScreen(
                                 }
                             ),
                         ) {}
-                        if (pushConfigured && !pushEnabled) {
-                            Button(onClick = { enableNotifications() }) {
-                                Text(stringResource(R.string.remote_notification_allow))
+                        if (pushConfigured) {
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .toggleable(value = pushEnabled, role = Role.Switch) {
+                                        if (it) enableNotifications() else disablePush()
+                                    }
+                                    .testTag("pushSwitch")
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    stringResource(R.string.remote_notification_toggle),
+                                    Modifier.weight(1f),
+                                )
+                                Switch(checked = pushEnabled, onCheckedChange = null)
+                            }
+                            if (!pushEnabled) {
+                                Text(
+                                    stringResource(R.string.remote_notification_toggle_off),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
                         }
                     }

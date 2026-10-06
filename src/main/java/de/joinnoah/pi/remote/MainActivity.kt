@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
                     app::enablePush,
                     notification,
                     { if (notification == it) notification = null },
+                    app::disablePush,
                 )
             }
         }
@@ -114,6 +115,7 @@ internal fun RemoteApp(
     enablePush: () -> Unit,
     notification: RemoteNotification? = null,
     consumeNotification: (RemoteNotification) -> Unit = {},
+    disablePush: () -> Unit = {},
 ) {
     val preferences by settings.state.collectAsStateWithLifecycle()
     val theme = preferences.theme
@@ -156,6 +158,7 @@ internal fun RemoteApp(
             enablePush,
             notification,
             consumeNotification,
+            disablePush,
         )
     }
 }
