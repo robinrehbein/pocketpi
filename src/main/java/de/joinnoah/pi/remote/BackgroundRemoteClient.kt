@@ -1,12 +1,15 @@
 package de.joinnoah.pi.remote
 
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import okhttp3.OkHttpClient
@@ -113,6 +116,68 @@ internal suspend fun RemoteCommands.pendingQuestions(sessionId: String): List<Js
     request("session.snapshot", "sessionId" to sessionId).let { data ->
         require(data.text("kind") == "snapshot" && data.text("sessionId") == sessionId)
         data.array("pendingQuestions").take(16)
+    }
+
+/** A session's title and project. */
+internal data class SessionName(val title: String?, val project: String?)
+
+/** What a notification names a session by. Every field is optional: a host may not know it. */
+internal data class SessionLabel(
+    val title: String?,
+    val project: String?,
+    /** The last words of the session's final assistant message, for a completion. */
+    val preview: String?,
+)
+
+/**
+ * At most this many projects are searched for a session, one `sessions.list` each. This bounds the
+ * walk on a host with very many projects: a session in a later project simply stays unnamed, and
+ * its generic notification stands.
+ */
+private const val MAX_LABEL_PROJECTS = 24
+
+/**
+ * Finds a session's title and project, and for [withPreview] the end of its last answer. The host
+ * lists sessions per project, so this walks the projects until one holds [sessionId]. A missing
+ * title is not an error; a failing connection is.
+ */
+internal suspend fun RemoteCommands.sessionLabel(
+    sessionId: String,
+    withPreview: Boolean,
+    /** A title and project already known, which skips the walk over the projects. */
+    known: SessionName? = null,
+): SessionLabel = coroutineScope {
+    val preview =
+        if (withPreview)
+            async {
+                try {
+                    lastAssistantPreview(snapshotMessages(sessionId))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        else null
+    var title: String? = known?.title
+    var project: String? = known?.project
+    if (known == null) for (candidate in request("projects.list").array("items").take(MAX_LABEL_PROJECTS)) {
+        val projectId = candidate.optionalText("id") ?: continue
+        val found =
+            request("sessions.list", "projectId" to projectId)
+                .array("items")
+                .find { it.optionalText("id") == sessionId } ?: continue
+        title = found.optionalText("title")?.trim()?.takeIf { it.isNotEmpty() }
+        project = candidate.optionalText("name")?.trim()?.takeIf { it.isNotEmpty() }
+        break
+    }
+    SessionLabel(title, project, preview?.await())
+}
+
+private suspend fun RemoteCommands.snapshotMessages(sessionId: String): List<JsonObject> =
+    request("session.snapshot", "sessionId" to sessionId).let { data ->
+        require(data.text("kind") == "snapshot" && data.text("sessionId") == sessionId)
+        data.array("messages")
     }
 
 internal suspend fun RemoteCommands.answerQuestion(

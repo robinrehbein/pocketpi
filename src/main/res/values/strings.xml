@@ -169,6 +169,13 @@
     <string name="remote_camera_aim">Point the camera at the QR code on your Mac</string>
     <string name="remote_notifications">Notifications</string>
     <string name="remote_notification_help">Receive a notification when pi finishes or needs an answer. Questions are read directly from your Mac and never pass through the push service; you can answer simple ones from the notification.</string>
+    <string name="remote_notification_toggle">Notifications from your Mac</string>
+    <string name="remote_notification_toggle_off">Off. Your Mac sends no push notifications to this phone.</string>
+    <string name="remote_notification_prompt_title">Stay in the loop</string>
+    <string name="remote_notification_prompt_text">Allow notifications so pi can tell you when a session finishes or needs an answer.</string>
+    <string name="remote_notification_prompt_allow">Allow</string>
+    <string name="remote_notification_prompt_later">Not now</string>
+    <string name="remote_notification_open_settings">Open notification settings</string>
     <string name="remote_notification_allow">Enable notifications</string>
     <string name="remote_notification_unconfigured">This build cannot register for push notifications, so it shows none.</string>
     <string name="remote_notification_denied">Notifications are off. You can enable them in Android settings.</string>

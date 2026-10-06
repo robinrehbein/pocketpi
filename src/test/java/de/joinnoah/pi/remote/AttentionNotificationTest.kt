@@ -97,4 +97,24 @@ class AttentionNotificationTest {
         assertEquals(session.data, plain.data)
         assertFalse(plain.hasExtra(RemoteNotifications.EXTRA_JOBS))
     }
+
+    @Test
+    fun eachKindPostsOnItsOwnChannel() {
+        RemoteNotifications.postComplete(context, push("event" to "complete"))
+        RemoteNotifications.postAttention(context, push("event" to "job.done", "jobId" to "j"))
+        RemoteNotifications.postGenericQuestion(context, push("event" to "question"))
+        val byId = manager.activeNotifications.groupBy { it.id }
+        // Complete and a question share id 1 under the session tag; the question replaced it.
+        assertEquals(RemoteNotifications.QUESTIONS_CHANNEL, byId.getValue(1).single().notification.channelId)
+        assertEquals(RemoteNotifications.UPDATES_CHANNEL, posted(2).notification.channelId)
+        assertEquals(
+            RemoteNotifications.UPDATES_CHANNEL,
+            posted(2).notification.publicVersion.channelId,
+        )
+        RemoteNotifications.postComplete(context, push("event" to "complete"))
+        assertEquals(
+            RemoteNotifications.UPDATES_CHANNEL,
+            manager.activeNotifications.single { it.id == 1 }.notification.channelId,
+        )
+    }
 }

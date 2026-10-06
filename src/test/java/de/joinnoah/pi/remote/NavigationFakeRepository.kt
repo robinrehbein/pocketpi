@@ -148,7 +148,9 @@ internal class NavigationFakeRepository : RemoteRepository {
 
     override suspend fun openNotification(routeId: String, sessionId: String) = notificationLookup()
 
-    override suspend fun pair(text: String): RemoteSelection? = null
+    var pairResult: RemoteSelection? = null
+
+    override suspend fun pair(text: String): RemoteSelection? = pairResult
 
     override fun cancelSelection() {}
 
@@ -209,7 +211,11 @@ internal class FakeSettingsRepository : SettingsRepository {
     }
 
     override fun setPushEnabled(enabled: Boolean) {
-        state.value = state.value.copy(pushEnabled = enabled)
+        state.value = state.value.copy(pushEnabled = enabled, pushOptedOut = !enabled)
+    }
+
+    override fun markNotificationPromptShown() {
+        state.value = state.value.copy(notificationPromptShown = true)
     }
 
     override fun setThinkingDisplay(display: String) {

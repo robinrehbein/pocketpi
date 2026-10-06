@@ -323,3 +323,46 @@ internal fun answerOutcome(error: Throwable?): AnswerOutcome =
 internal fun isPlanApproval(answer: JsonObject): Boolean =
     answer.optionalText("kind") == "plan" &&
         (answer["action"] as? JsonPrimitive)?.content == "approve"
+
+/** What to do about notifications right after a pairing succeeded. */
+internal enum class PairingNotificationStep {
+    NOTHING,
+
+    /** Android 13+: explain, then request POST_NOTIFICATIONS. */
+    ASK,
+
+    /** Below Android 13 no permission exists, so push can simply be switched on. */
+    ENABLE,
+}
+
+/**
+ * The step after a pairing: once ever, and only while push is configured, off, not switched off by
+ * the user and not yet allowed. A denial counts as an answer, so nothing is offered again on its
+ * own; the buttons in the app stay.
+ */
+internal fun pairingNotificationStep(
+    sdk: Int,
+    granted: Boolean,
+    pushConfigured: Boolean,
+    settings: RemoteSettings,
+): PairingNotificationStep =
+    when {
+        !pushConfigured ||
+            settings.pushEnabled ||
+            settings.pushOptedOut ||
+            settings.notificationPromptShown -> PairingNotificationStep.NOTHING
+        sdk < 33 -> PairingNotificationStep.ENABLE
+        granted -> PairingNotificationStep.NOTHING
+        else -> PairingNotificationStep.ASK
+    }
+
+/** [pairingNotificationStep], recorded before the dialog shows so a restart never asks twice. */
+internal fun offerNotificationPermission(
+    sdk: Int,
+    granted: Boolean,
+    pushConfigured: Boolean,
+    settings: SettingsRepository,
+): PairingNotificationStep =
+    pairingNotificationStep(sdk, granted, pushConfigured, settings.state.value).also {
+        if (it != PairingNotificationStep.NOTHING) settings.markNotificationPromptShown()
+    }
