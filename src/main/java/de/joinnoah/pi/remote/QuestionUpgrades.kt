@@ -190,10 +190,13 @@ internal object QuestionUpgrades {
     private const val KEY_SESSION = "sessionId"
     private const val KEY_EVENT = "eventId"
 
-    private fun routeTag(routeId: String) = "route:$routeId"
+    internal fun routeTag(routeId: String) = "route:$routeId"
 
     /** Records the newest event of a session; a completion cancels a pending upgrade. */
     fun onEvent(context: Context, payload: PushPayload) {
+        // The question's notice takes the completion's place, so naming the completion is moot.
+        if (payload.event == PushEvent.QUESTION)
+            CompletionUpgrades.cancelCompletion(context, payload.routeId, payload.sessionId)
         if (recordPushEvent(PreferenceUpgradeState(context), payload)) {
             WorkManager.getInstance(context)
                 .cancelUniqueWork(RemoteNotifications.tag(payload.routeId, payload.sessionId))

@@ -19,4 +19,5 @@
     <string name="remote_notification_empty_reply">Die Antwort war leer und wurde nicht gesendet.</string>
     <string name="remote_notification_sync_channel">Hintergrundabfragen</string>
     <string name="remote_notification_checking">Frage wird vom Mac gelesen …</string>
+    <string name="remote_notification_checking_session">Sitzung wird auf dem Mac geprüft …</string>
 </resources>

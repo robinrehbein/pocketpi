@@ -20,4 +20,5 @@
     <string name="remote_notification_empty_reply">The answer was empty and was not sent.</string>
     <string name="remote_notification_sync_channel">Background checks</string>
     <string name="remote_notification_checking">Reading the question from your Mac…</string>
+    <string name="remote_notification_checking_session">Checking the session on your Mac…</string>
 </resources>

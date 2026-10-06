@@ -32,6 +32,7 @@ class RemoteMessagingService : FirebaseMessagingService() {
             if (!RemoteNotifications.canPost(this)) return
             if (app.isShowing(payload.routeId, payload.sessionId)) return
             RemoteNotifications.postAttention(this, payload)
+            CompletionUpgrades.schedule(applicationContext, payload)
             return
         }
         app.onPushEvent(payload)
@@ -41,6 +42,7 @@ class RemoteMessagingService : FirebaseMessagingService() {
         if (app.isShowing(payload.routeId, payload.sessionId)) return
         if (payload.event == PushEvent.COMPLETE) {
             RemoteNotifications.postComplete(this, payload)
+            CompletionUpgrades.schedule(applicationContext, payload)
             return
         }
         // Shown at once, then replaced in place by the question itself, which is read over the

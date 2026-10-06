@@ -130,28 +130,48 @@ internal object RemoteNotifications {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-    fun postComplete(context: Context, payload: PushPayload) {
+    /**
+     * The generic completion notice. With a [label] (read from the Mac afterwards) it names the
+     * session instead, replacing the notice in place without alerting again. The lock screen
+     * version stays generic either way.
+     */
+    fun postComplete(context: Context, payload: PushPayload, label: SessionLabel? = null) {
         val localized = localized(context)
-        post(
-            context,
-            payload.routeId,
-            payload.sessionId,
-            base(context, payload.routeId, payload.sessionId, channel = UPDATES_CHANNEL)
-                .setContentTitle(localized.getString(R.string.remote_notification_complete))
-                .setContentText(localized.getString(R.string.remote_notification_open))
-                .setPublicVersion(
-                    publicVersion(
-                        context,
-                        localized.getString(R.string.remote_notification_complete),
-                        UPDATES_CHANNEL,
-                    )
+        val generic = localized.getString(R.string.remote_notification_complete)
+        val builder =
+            base(
+                    context,
+                    payload.routeId,
+                    payload.sessionId,
+                    alert = label == null,
+                    channel = UPDATES_CHANNEL,
                 )
-                .build(),
-        )
+                .setContentTitle(generic)
+                .setContentText(localized.getString(R.string.remote_notification_open))
+                .setPublicVersion(publicVersion(context, generic, UPDATES_CHANNEL))
+        if (label != null) {
+            label.title?.let {
+                builder.setContentTitle(
+                    localized.getString(R.string.remote_notification_complete_named, it)
+                )
+            }
+            val text = label.project ?: label.preview
+            if (text != null) builder.setContentText(text)
+            if (label.preview != null) {
+                builder.setStyle(
+                    NotificationCompat.BigTextStyle()
+                        .bigText(listOfNotNull(label.project, label.preview).joinToString("\n"))
+                )
+            }
+        }
+        post(context, payload.routeId, payload.sessionId, builder.build())
     }
 
-    /** A background subagent or job finished or stalled; the payload carries no text. */
-    fun postAttention(context: Context, payload: PushPayload) {
+    /**
+     * A background subagent or job finished or stalled; the payload carries no text. A [label]
+     * adds the session's name below the title and keeps the notice quiet.
+     */
+    fun postAttention(context: Context, payload: PushPayload, label: SessionLabel? = null) {
         val localized = localized(context)
         val title =
             when (val value = attentionTitle(payload)) {
@@ -160,17 +180,31 @@ internal object RemoteNotifications {
                     localized.resources.getQuantityString(value.plural, value.count, value.count)
             }
         val target = notificationTarget(payload)
+        val named = label?.let { listOfNotNull(it.title, it.project).joinToString(" \u00b7 ") }
         val notification =
-            base(context, payload.routeId, payload.sessionId, channel = UPDATES_CHANNEL)
+            base(
+                    context,
+                    payload.routeId,
+                    payload.sessionId,
+                    alert = label == null,
+                    channel = UPDATES_CHANNEL,
+                )
                 .setContentIntent(openIntent(context, target))
                 .setContentTitle(title)
-                .setContentText(localized.getString(R.string.remote_notification_open))
+                .setContentText(
+                    named?.takeIf { it.isNotEmpty() }
+                        ?: localized.getString(R.string.remote_notification_open)
+                )
                 // A status update about background work, not a chat message.
                 .setCategory(NotificationCompat.CATEGORY_STATUS)
                 .setPublicVersion(publicVersion(context, title, UPDATES_CHANNEL))
                 .build()
         post(context, payload.routeId, payload.sessionId, notification, attentionId(payload.event))
     }
+
+    /** The id the notice of [event] is posted under for its session. */
+    fun idFor(event: PushEvent): Int =
+        if (event.attention) attentionId(event) else NOTIFICATION_ID
 
     /** `*.done` and `*.stuck` post under separate ids, so one never replaces the other. */
     private fun attentionId(event: PushEvent): Int =
@@ -320,10 +354,10 @@ internal object RemoteNotifications {
     }
 
     /** True while the session's notification is still showing (not dismissed or opened). */
-    fun isActive(context: Context, tag: String): Boolean =
+    fun isActive(context: Context, tag: String, id: Int = NOTIFICATION_ID): Boolean =
         try {
             context.getSystemService(NotificationManager::class.java).activeNotifications.any {
-                it.tag == tag && it.id == NOTIFICATION_ID
+                it.tag == tag && it.id == id
             }
         } catch (_: Exception) {
             false
