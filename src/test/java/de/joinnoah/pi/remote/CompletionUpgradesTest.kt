@@ -229,6 +229,16 @@ class CompletionUpgradesTest {
     }
 
     @Test
+    fun forgettingARouteDropsOnlyItsNames() {
+        val cache = SessionNameCache(now = { 0L })
+        cache.put("r", "s", SessionName("T", "P"))
+        cache.put("r2", "s", SessionName("U", "Q"))
+        cache.forgetRoute("r")
+        assertNull(cache.get("r", "s"))
+        assertEquals(SessionName("U", "Q"), cache.get("r2", "s"))
+    }
+
+    @Test
     fun lookupsOfOneRouteRunOneAtATime() = runTest {
         var running = 0
         var peak = 0

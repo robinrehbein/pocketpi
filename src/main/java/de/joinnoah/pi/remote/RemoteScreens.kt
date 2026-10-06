@@ -1286,11 +1286,14 @@ internal fun RemoteScreen(
                                 // After a denial or two Android no longer shows its own prompt.
                                 TextButton(
                                     onClick = {
-                                        context.startActivity(
-                                            Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                                                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
-                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                        )
+                                        // Some OEM builds have no per-app notification screen.
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            )
+                                        }
                                     }
                                 ) {
                                     Text(stringResource(R.string.remote_notification_open_settings))

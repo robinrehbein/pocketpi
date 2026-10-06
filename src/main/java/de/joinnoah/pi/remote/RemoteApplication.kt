@@ -120,6 +120,7 @@ class RemoteApplication : Application() {
         home.forgetRoute(routeId)
         predictions.forgetRoute(routeId)
         QuestionUpgrades.forgetRoute(this, routeId)
+        CompletionUpgrades.names.forgetRoute(routeId)
         RemoteNotifications.cancelRoute(this, routeId)
     }
 

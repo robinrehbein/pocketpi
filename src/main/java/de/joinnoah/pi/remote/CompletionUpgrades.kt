@@ -68,6 +68,10 @@ internal class SessionNameCache(
         if (entries.size >= maxEntries) entries.clear()
         entries["$routeId\u0000$sessionId"] = Entry(name, now())
     }
+    /** Drops every name of [routeId], for a host the user unpaired. */
+    fun forgetRoute(routeId: String) {
+        entries.keys.removeIf { it.startsWith("$routeId\u0000") }
+    }
 }
 
 /**
