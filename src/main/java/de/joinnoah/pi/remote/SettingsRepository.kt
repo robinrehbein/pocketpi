@@ -25,6 +25,8 @@ data class RemoteSettings(
      * this phone's token, so every connection tells it to forget it until push is on again.
      */
     val pushOptedOut: Boolean = false,
+    /** The notification permission was offered after pairing; it is never offered again. */
+    val notificationPromptShown: Boolean = false,
 )
 
 interface SettingsRepository {
@@ -33,6 +35,9 @@ interface SettingsRepository {
     fun setTheme(theme: String)
 
     fun setPushEnabled(enabled: Boolean)
+
+    /** Remembers that the permission was offered, whatever the answer was. */
+    fun markNotificationPromptShown() {}
 
     fun setThinkingDisplay(display: String)
 
@@ -66,6 +71,7 @@ class DefaultSettingsRepository(context: Context) : SettingsRepository {
                 swipeAction("swipe_start_to_end", SwipeAction.RENAME),
                 preferences.getBoolean("enter_sends", true),
                 preferences.getBoolean("push_opted_out", false),
+                preferences.getBoolean("notification_prompt_shown", false),
             )
         )
     override val state = mutable.asStateFlow()
@@ -83,6 +89,11 @@ class DefaultSettingsRepository(context: Context) : SettingsRepository {
             .putBoolean("push_opted_out", !enabled)
             .apply()
         mutable.value = mutable.value.copy(pushEnabled = enabled, pushOptedOut = !enabled)
+    }
+
+    override fun markNotificationPromptShown() {
+        preferences.edit().putBoolean("notification_prompt_shown", true).apply()
+        mutable.value = mutable.value.copy(notificationPromptShown = true)
     }
 
     override fun setThinkingDisplay(display: String) {

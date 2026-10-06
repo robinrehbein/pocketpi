@@ -8,7 +8,18 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
@@ -116,6 +127,8 @@ internal class RemoteNavigator(
     private val repository: RemoteRepository,
     private val stack: MutableList<NavKey>,
     private val scope: CoroutineScope,
+    /** Called after a pairing succeeded and its selection was opened. */
+    private val onPaired: () -> Unit = {},
 ) {
     private var request = 0L
     private var activation: Job? = null
@@ -367,6 +380,7 @@ internal class RemoteNavigator(
         activation = scope.launch {
             val selection = repository.pair(text)
             if (current == request && selection != null) replace(selection, keepSettings = false)
+            if (selection != null) onPaired()
         }
     }
 
@@ -498,7 +512,54 @@ internal fun RemoteNavigation(
     val pushSettings by settings.state.collectAsStateWithLifecycle()
     val stack = rememberNavBackStack(RemoteNavKey.Hosts)
     val scope = rememberCoroutineScope()
-    val navigator = remember(repository, stack) { RemoteNavigator(repository, stack, scope) }
+    val context = LocalContext.current
+    var askForNotifications by rememberSaveable { mutableStateOf(false) }
+    val navigator =
+        remember(repository, stack) {
+            RemoteNavigator(repository, stack, scope) {
+                val granted =
+                    Build.VERSION.SDK_INT < 33 ||
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.POST_NOTIFICATIONS,
+                        ) == PackageManager.PERMISSION_GRANTED
+                if (
+                    offerNotificationPermission(
+                        Build.VERSION.SDK_INT,
+                        granted,
+                        pushConfigured,
+                        settings,
+                    )
+                )
+                    askForNotifications = true
+            }
+        }
+    val notificationPermission =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) enablePush()
+        }
+    if (askForNotifications) {
+        AlertDialog(
+            onDismissRequest = { askForNotifications = false },
+            title = { Text(stringResource(R.string.remote_notification_prompt_title)) },
+            text = { Text(stringResource(R.string.remote_notification_prompt_text)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        askForNotifications = false
+                        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                ) {
+                    Text(stringResource(R.string.remote_notification_prompt_allow))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { askForNotifications = false }) {
+                    Text(stringResource(R.string.remote_notification_prompt_later))
+                }
+            },
+        )
+    }
     val timelineVisibility = rememberSaveable(saver = TimelineVisibility.Saver) { TimelineVisibility() }
     val chatViewports = rememberSaveable(saver = ChatViewportPositions.Saver) { ChatViewportPositions() }
     LaunchedEffect(navigator) {

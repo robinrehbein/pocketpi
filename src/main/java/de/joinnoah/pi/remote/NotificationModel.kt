@@ -323,3 +323,35 @@ internal fun answerOutcome(error: Throwable?): AnswerOutcome =
 internal fun isPlanApproval(answer: JsonObject): Boolean =
     answer.optionalText("kind") == "plan" &&
         (answer["action"] as? JsonPrimitive)?.content == "approve"
+
+/**
+ * Whether to offer the notification permission right after a pairing: on Android 13+, once ever,
+ * and only while push is configured, off and not yet allowed. A denial counts as an answer, so it
+ * is never offered again on its own; the buttons in the app stay.
+ */
+internal fun shouldAskForNotifications(
+    sdk: Int,
+    granted: Boolean,
+    pushConfigured: Boolean,
+    settings: RemoteSettings,
+): Boolean =
+    sdk >= 33 &&
+        pushConfigured &&
+        !granted &&
+        !settings.pushEnabled &&
+        !settings.notificationPromptShown
+
+/**
+ * Decides whether to offer the permission now and, if so, records that it was offered before the
+ * dialog shows, so a process death or a denial never leads to a second offer.
+ */
+internal fun offerNotificationPermission(
+    sdk: Int,
+    granted: Boolean,
+    pushConfigured: Boolean,
+    settings: SettingsRepository,
+): Boolean {
+    if (!shouldAskForNotifications(sdk, granted, pushConfigured, settings.state.value)) return false
+    settings.markNotificationPromptShown()
+    return true
+}
