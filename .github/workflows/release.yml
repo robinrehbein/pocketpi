@@ -1,11 +1,12 @@
 name: Publish PocketPi to Play testing
 
+# Releases are deliberate: run this workflow by hand on main once the Android CI push run for the
+# current main commit is green. Merging alone no longer publishes.
 on:
-  workflow_run:
-    workflows: ["Android CI"]
-    types: [completed]
+  workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   id-token: write
 
@@ -15,11 +16,7 @@ concurrency:
 
 jobs:
   publish:
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: play-testing
@@ -28,16 +25,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Require CI success for the current main commit
         env:
-          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          current="$(git ls-remote origin refs/heads/main | cut -f1)"
-          test -n "$current" && test "$current" = "$CI_SHA" || {
-            echo 'The green CI run does not match current main'; exit 1;
+          current="$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          test -n "$current" && test "$current" = "$RELEASE_SHA" || {
+            echo 'main moved since this run started; run the release again on the new head'; exit 1;
+          }
+          green="$(gh api "repos/$REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$RELEASE_SHA&status=success" --jq '.total_count')"
+          test "$green" -ge 1 || {
+            echo 'No successful Android CI push run for this main commit yet'; exit 1;
           }
       - name: Require protected release configuration
         env:

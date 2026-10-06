@@ -7,10 +7,11 @@ custom closed track. Production is outside the release workflow.
 
 The first AAB (versionCode 1) is available to internal testers. Closed Alpha versionCode 1 is
 also available to its selected testers. No automated release
-has been verified. The [release workflow](../../.github/workflows/release.yml) runs after green
-`main` CI and publishes to Internal Testing alone while `POCKETPI_CLOSED_TRACK` is unset. Once
-that variable is configured, it updates both tracks in one Play edit. Do not use a merge as a
-setup test; a green `main` run may publish immediately.
+has been verified. The [release workflow](../../.github/workflows/release.yml) publishes only
+when Robin starts it by hand on `main`, and only after a green `Android CI` push run for that
+commit. It publishes to Internal Testing alone while `POCKETPI_CLOSED_TRACK` is unset. Once that
+variable is configured, it updates both tracks in one Play edit. Do not use a dispatch as a setup
+test; it publishes as soon as the checks pass.
 
 ## First-release setup
 
@@ -46,7 +47,7 @@ setup test; a green `main` run may publish immediately.
    Grant the GitHub OIDC principal Workload Identity User access on the service account. The
    workflow uses short-lived tokens and needs no downloaded service-account key.
 6. Create and protect the GitHub environment `play-testing`. Allow deployments only from `main`.
-   Set its OIDC variables now; add `POCKETPI_CLOSED_TRACK` when Alpha is ready for automatic
+   Set its OIDC variables now; add `POCKETPI_CLOSED_TRACK` when Alpha is ready for release
    updates, using `alpha` for the default track or the exact custom track identifier:
 
    | Variable | Value |
@@ -82,18 +83,19 @@ setup test; a green `main` run may publish immediately.
    unused version code after this Console upload. This step was completed on 29 September 2026:
    versionCode 1 is available to internal testers.
 9. Verify service-account permissions, Firebase configuration, upload key, and that the Publisher
-   API can read the app and Internal Testing (`internal`). The workflow is currently active; the next
-   successful `main` push CI run may publish to the configured tracks. Before adding Closed Alpha,
+   API can read the app and Internal Testing (`internal`). The workflow runs only when started by hand
+   on `main` and only after a successful `main` push CI run for that commit. Before adding Closed Alpha,
    verify its exact API track ID and Play review readiness, then set `POCKETPI_CLOSED_TRACK` in the
    protected environment. If a run fails, inspect Play before retrying. Record the first
    successful Internal and Closed Alpha releases separately from API edit acceptance.
 
 ## Normal release after setup
 
-1. Merge a change into `main`, including a documentation change. [Android CI](../../.github/workflows/ci.yml)
-   runs on the push. The [release workflow](../../.github/workflows/release.yml) proceeds only
-   after that push run succeeds for the current `main` commit. A failed, stale, pull-request, or
-   non-`main` run does not publish.
+1. Merge the changes to release into `main`. [Android CI](../../.github/workflows/ci.yml) runs on
+   the push; merging does not publish. When that push run is green, start the
+   [release workflow](../../.github/workflows/release.yml) by hand on `main` (Actions → "Publish
+   PocketPi to Play testing" → Run workflow). It refuses to run when `main` moved since it started
+   or when no successful Android CI push run exists for the current `main` commit.
 2. The release job authenticates through OIDC and calls
    `python scripts/release/play_release.py prepare`. It reads Play track, bundle, and APK version
    codes and chooses the next integer. The initial Console upload uses `versionCode` 1; the first
@@ -111,7 +113,7 @@ setup test; a green `main` run may publish immediately.
    `ERROR_IF_IN_REVIEW` stops the commit if Play already has an in-progress review. A fresh edit
    then checks that every configured track reports the new code as `completed`.
 
-The workflow has no manual `workflow_dispatch` trigger. Do not rerun a failed release job until
+The workflow runs only when started by hand on `main`. Do not rerun a failed release job until
 you have checked the actual Play track state. A job can fail after Play accepted the edit; a
 rerun can allocate another version.
 
@@ -119,7 +121,7 @@ rerun can allocate another version.
 
 In GitHub Actions, match the successful `Android CI` push run and `Publish PocketPi to Play
 testing` run to the same current `main` commit. The publish step should report
-`Committed versionCode <code> to qa` or `Committed versionCode <code> to internal and <closed-track-id>`.
+`Committed versionCode <code> to internal` or `Committed versionCode <code> to internal and <closed-track-id>`.
 
 In Play Console, inspect each configured track for package `de.robinrehbein.pocketpi`, the version
 code, and its review and availability state. A
@@ -150,7 +152,7 @@ gh run view <run-id> --repo robinrehbein/pocketpi --log-failed
 - If upload or commit fails, inspect both tracks before retrying. The script deletes an
   uncommitted edit; it cannot undo a committed release. A failure during post-commit verification
   may mean that both tracks already contain the code.
-- If testers receive a bad release, stop further merges and halt the affected testing release in
+- If testers receive a bad release, stop further release dispatches and halt the affected testing release in
   Play Console where that control exists. Fix the app, pass CI, and publish a higher version code
   to both tracks. Play does not accept a downgrade to an older AAB with a lower code. Do not use
   production as a recovery path.

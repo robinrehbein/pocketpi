@@ -215,10 +215,10 @@ transfer between the two applications. A previous debug installation under
 Follow the [Play testing runbook](docs/runbooks/play-testing-release.md) for first-release setup,
 verification, and recovery. The first Console upload is available on Internal Testing; a dual-track
 release has not yet been verified. Complete the Firebase, signing, and GitHub environment setup
-before relying on automatic publishing.
+before the first release dispatch.
 
-When enabled, `.github/workflows/release.yml` runs only after a successful `Android CI` push run on the current
-`main` commit. It builds one signed AAB, then submits it to Play Internal Testing (`internal`). When
+When enabled, `.github/workflows/release.yml` runs only when started by hand on `main`, and only
+after a successful `Android CI` push run on that commit. It builds one signed AAB, then submits it to Play Internal Testing (`internal`). When
 `POCKETPI_CLOSED_TRACK` is configured, the same edit also updates that Closed Alpha track. It stops
 if a configured track cannot accept the release.
 It never targets production. Play may still hold an accepted edit for app review; check the Play
