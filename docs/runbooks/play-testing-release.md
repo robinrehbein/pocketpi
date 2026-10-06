@@ -82,18 +82,19 @@ setup test; a green `main` run may publish immediately.
    unused version code after this Console upload. This step was completed on 29 September 2026:
    versionCode 1 is available to internal testers.
 9. Verify service-account permissions, Firebase configuration, upload key, and that the Publisher
-   API can read the app and Internal Testing (`internal`). The workflow is currently active; the next
-   successful `main` push CI run may publish to the configured tracks. Before adding Closed Alpha,
+   API can read the app and Internal Testing (`internal`). The workflow runs only when started by hand
+   on `main` and only after a successful `main` push CI run for that commit. Before adding Closed Alpha,
    verify its exact API track ID and Play review readiness, then set `POCKETPI_CLOSED_TRACK` in the
    protected environment. If a run fails, inspect Play before retrying. Record the first
    successful Internal and Closed Alpha releases separately from API edit acceptance.
 
 ## Normal release after setup
 
-1. Merge a change into `main`, including a documentation change. [Android CI](../../.github/workflows/ci.yml)
-   runs on the push. The [release workflow](../../.github/workflows/release.yml) proceeds only
-   after that push run succeeds for the current `main` commit. A failed, stale, pull-request, or
-   non-`main` run does not publish.
+1. Merge the changes to release into `main`. [Android CI](../../.github/workflows/ci.yml) runs on
+   the push; merging does not publish. When that push run is green, start the
+   [release workflow](../../.github/workflows/release.yml) by hand on `main` (Actions → "Publish
+   PocketPi to Play testing" → Run workflow). It refuses to run when `main` moved since it started
+   or when no successful Android CI push run exists for the current `main` commit.
 2. The release job authenticates through OIDC and calls
    `python scripts/release/play_release.py prepare`. It reads Play track, bundle, and APK version
    codes and chooses the next integer. The initial Console upload uses `versionCode` 1; the first
