@@ -208,6 +208,21 @@ class SecureRemoteTransport(
                                         webSocket.close(1000, "paired")
                                     }
                                     "authentication" -> {
+                                        if (payload.text("type") == "device.denied") {
+                                            // Strict: exactly `type` and a known `reason`; anything
+                                            // else throws into the generic connection error.
+                                            Wire.keys(payload, setOf("type", "reason"))
+                                            val message =
+                                                when (payload.text("reason")) {
+                                                    "revoked" -> R.string.remote_device_revoked
+                                                    "paused" -> R.string.remote_device_paused
+                                                    else -> error("Unknown denial reason")
+                                                }
+                                            close()
+                                            // No automatic reconnect: the user has to act first.
+                                            listener.failed(false, message)
+                                            return@launch
+                                        }
                                         require(payload.text("type") == "device.authenticated")
                                         phase = "active"
                                         handshakeTimeout?.cancel()

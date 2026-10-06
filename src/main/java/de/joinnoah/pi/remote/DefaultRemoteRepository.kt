@@ -1863,7 +1863,11 @@ class DefaultRemoteRepository(
             )
         }
         val host = activeHost
-        if (error == R.string.remote_denied) reconnectEnabled = false
+        if (
+            error == R.string.remote_denied ||
+                error == R.string.remote_device_revoked ||
+                error == R.string.remote_device_paused
+        ) reconnectEnabled = false
         val restart = serviceRestart
         serviceRestart = false
         if (reconnect && error == R.string.remote_connection_error) {

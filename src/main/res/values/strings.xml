@@ -139,6 +139,8 @@
     <string name="remote_connected">Connected</string>
     <string name="remote_denied">Pairing was declined or expired. Scan a new code.</string>
     <string name="remote_connection_error">Connection failed. Check that your Mac is awake and pi Remote is running.</string>
+    <string name="remote_device_revoked">This phone was removed on the Mac. Pair it again to reconnect.</string>
+    <string name="remote_device_paused">This phone is paused on the Mac. Resume it there, then tap to retry.</string>
     <string name="remote_unreachable">Can\'t reach your Mac. Make sure it\'s awake and pi Remote is running. If this phone\'s access was revoked on the Mac, pair again.</string>
     <string name="remote_reconnecting_in">Reconnecting in %1$d s</string>
     <string name="remote_reconnect_now">Reconnect now</string>
