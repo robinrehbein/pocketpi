@@ -1084,7 +1084,7 @@ internal fun RemoteScreen(
                                     Text(stringResource(R.string.remote_error_close))
                                 }
                                 if (state.error == R.string.remote_device_revoked)
-                                    state.hosts.find { it.routeId == state.selection.routeId }?.let { host ->
+                                    state.hosts.find { it.routeId == state.deniedRouteId }?.let { host ->
                                         FilledTonalButton(
                                             onClick = { removing = host },
                                             modifier = Modifier.testTag("removePairing"),
@@ -1750,7 +1750,7 @@ internal fun RemoteScreen(
                                         Text(stringResource(R.string.remote_error_close))
                                     }
                                     if (error == R.string.remote_device_revoked)
-                                        state.hosts.find { it.routeId == state.selection.routeId }?.let { host ->
+                                        state.hosts.find { it.routeId == state.deniedRouteId }?.let { host ->
                                             FilledTonalButton(
                                                 onClick = { removing = host },
                                                 modifier = Modifier.testTag("removePairing"),

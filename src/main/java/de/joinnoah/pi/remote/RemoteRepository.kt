@@ -66,6 +66,8 @@ data class RemoteState(
     val error: Int? = null,
     /** Epoch millis of the next automatic reconnect attempt, or null when none is scheduled. */
     val reconnectAt: Long? = null,
+    /** The host whose device was denied (paused or revoked) by the current [error], if any. */
+    val deniedRouteId: String? = null,
     val projects: List<JsonObject> = emptyList(),
     val projectChats: List<ProjectChatSummary> = emptyList(),
     val project: JsonObject? = null,

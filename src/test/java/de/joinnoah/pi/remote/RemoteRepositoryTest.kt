@@ -1935,12 +1935,73 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun deniedDeviceKeepsItsErrorThroughActivationAndRetriesOnlyOnRefresh() = runTest {
+        val full = RemoteSelection("host", "project", "session")
+        for (error in listOf(R.string.remote_device_revoked, R.string.remote_device_paused)) {
+            val transport = Transport().also { configure(it) }
+            val repository = repository(transport)
+            transport.failureOnConnect = error
+            repository.activate(full)
+            runCurrent()
+            assertEquals(error, repository.state.value.error)
+            assertEquals("host", repository.state.value.deniedRouteId)
+            assertNull(repository.state.value.reconnectAt)
+            val connects = transport.connects
+            advanceTimeBy(120_000)
+            runCurrent()
+            assertEquals(connects, transport.connects)
+            assertEquals(error, repository.state.value.error)
+
+            // Navigation restores must not retry it either, even after the card is dismissed.
+            repository.dismissError()
+            repository.activate(full, ActivationMode.RESTORE)
+            runCurrent()
+            assertEquals(connects, transport.connects)
+
+            repository.refresh()
+            runCurrent()
+            assertEquals(connects + 1, transport.connects)
+            assertEquals(error, repository.state.value.error)
+
+            transport.failureOnConnect = null
+            repository.refresh()
+            runCurrent()
+            assertTrue(repository.state.value.connected)
+            assertNull(repository.state.value.deniedRouteId)
+            assertEquals(full, repository.state.value.selection)
+        }
+    }
+
+    @Test
+    fun deniedHostOpenedFromTheListIsTargetedByRouteAndRetried() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        transport.failureOnConnect = R.string.remote_device_revoked
+        repository.activate(RemoteSelection("host"))
+        runCurrent()
+        // Nothing was selected yet, so the error card cannot rely on the selection.
+        assertNull(repository.state.value.selection.routeId)
+        assertEquals("host", repository.state.value.deniedRouteId)
+
+        transport.failureOnConnect = null
+        repository.refresh()
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals("host", repository.state.value.selection.routeId)
+        assertNull(repository.state.value.deniedRouteId)
+    }
+
+    @Test
     fun pausedDeviceReconnectsOnlyWhenTheUserRetries() = runTest {
         val transport = Transport().also { configure(it) }
         val repository = offlineRepository(transport)
         transport.listener.failed(false, R.string.remote_device_paused)
         val connects = transport.connects
         advanceTimeBy(120_000)
+        runCurrent()
+        repository.setValidatedNetwork("cellular")
+        repository.setForeground(false)
+        repository.setForeground(true)
         runCurrent()
         assertEquals(connects, transport.connects)
 

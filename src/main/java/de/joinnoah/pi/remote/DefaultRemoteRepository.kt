@@ -44,7 +44,10 @@ private const val TOOL_OUTPUT_CHUNK_BYTES = 49_152
 private const val MAX_TOOL_OUTPUT_DATA_CHARS = 65_536
 private const val SESSION_REFRESH_INTERVAL_MILLIS = 5_000L
 private const val ATTACHMENT_READ_SPACING_MILLIS = 200L
-private val CONNECTION_ERRORS = setOf(R.string.remote_connection_error, R.string.remote_unreachable)
+private val DENIED_DEVICE_ERRORS =
+    setOf(R.string.remote_device_revoked, R.string.remote_device_paused)
+private val CONNECTION_ERRORS =
+    setOf(R.string.remote_connection_error, R.string.remote_unreachable) + DENIED_DEVICE_ERRORS
 private const val RECONNECT_BASE_MILLIS = 1_000L
 private const val RECONNECT_MAX_MILLIS = 30_000L
 private const val RECONNECT_JITTER = 0.2
@@ -184,6 +187,8 @@ class DefaultRemoteRepository(
     private var serviceRestart = false
     private var restartRetryUsed = false
     private var reconnectEnabled = true
+    /** The selection the latest activation was opening, whether or not it got selected. */
+    private var requestedSelection: RemoteSelection? = null
     private val recovery = RemoteRecovery()
     private var timeline: Timeline? = null
     private data class CachedSessions(
@@ -1344,6 +1349,9 @@ class DefaultRemoteRepository(
     ): RemoteSelection {
         cancelRecovery()
         if (mode == ActivationMode.USER_OPEN) reconnectEnabled = true
+        // A restore on navigation must not retry a paused or revoked device behind the user's back.
+        if (mode == ActivationMode.RESTORE && !reconnectEnabled && state.value.deniedRouteId != null)
+            return state.value.selection
         return activate(selection, mode, force = false)
     }
 
@@ -1368,7 +1376,8 @@ class DefaultRemoteRepository(
         if (!useCache) clearNavigationCache()
         val epoch = selectionEpoch
         stopReconnectTimer()
-        update { it.copy(loading = true) }
+        requestedSelection = selection
+        update { it.copy(loading = true, deniedRouteId = null) }
         try {
             val host = state.value.hosts.find { it.routeId == selection.routeId }
             if (host == null) {
@@ -1863,11 +1872,9 @@ class DefaultRemoteRepository(
             )
         }
         val host = activeHost
-        if (
-            error == R.string.remote_denied ||
-                error == R.string.remote_device_revoked ||
-                error == R.string.remote_device_paused
-        ) reconnectEnabled = false
+        if (error == R.string.remote_denied || error in DENIED_DEVICE_ERRORS) reconnectEnabled = false
+        // The host this denial belongs to, for the error card's actions.
+        update { it.copy(deniedRouteId = if (error in DENIED_DEVICE_ERRORS) host?.routeId else null) }
         val restart = serviceRestart
         serviceRestart = false
         if (reconnect && error == R.string.remote_connection_error) {
@@ -1928,7 +1935,10 @@ class DefaultRemoteRepository(
 
     override fun refresh() {
         reconnectEnabled = true
-        val selection = state.value.selection
+        // Retrying a denied device reopens what was being opened, which may not be selected yet.
+        val selection =
+            if (state.value.deniedRouteId != null) requestedSelection ?: state.value.selection
+            else state.value.selection
         clearNavigationCache()
         if (selection.sessionId != null && state.value.connected) {
             snapshotAsync()
