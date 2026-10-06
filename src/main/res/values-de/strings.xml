@@ -12,6 +12,16 @@
     <string name="remote_sessions">Sitzungen</string>
     <string name="remote_chat">Gespräch</string>
     <string name="remote_context_title">Kontextauslastung</string>
+    <string name="remote_session_info_title">Sitzung</string>
+    <string name="remote_session_info_name">Name</string>
+    <string name="remote_session_info_no_name">Kein Name</string>
+    <string name="remote_session_info_model">Modell</string>
+    <string name="remote_session_info_thinking">Denkstufe</string>
+    <string name="remote_session_info_project">Projekt</string>
+    <string name="remote_session_info_id">Sitzungs-ID</string>
+    <string name="remote_session_info_copy_id">Sitzungs-ID kopieren</string>
+    <string name="remote_copy_message">Antwort kopieren</string>
+    <string name="remote_copied">Kopiert</string>
     <string name="remote_advisor_title">Advisor</string>
     <string name="remote_advisor_busy">Advisor arbeitet</string>
     <string name="remote_advisor_error">Advisor blockiert</string>

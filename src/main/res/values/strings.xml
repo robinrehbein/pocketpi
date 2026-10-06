@@ -12,6 +12,16 @@
     <string name="remote_sessions">Sessions</string>
     <string name="remote_chat">Conversation</string>
     <string name="remote_context_title">Context usage</string>
+    <string name="remote_session_info_title">Session</string>
+    <string name="remote_session_info_name">Name</string>
+    <string name="remote_session_info_no_name">No name</string>
+    <string name="remote_session_info_model">Model</string>
+    <string name="remote_session_info_thinking">Thinking level</string>
+    <string name="remote_session_info_project">Project</string>
+    <string name="remote_session_info_id">Session ID</string>
+    <string name="remote_session_info_copy_id">Copy session ID</string>
+    <string name="remote_copy_message">Copy answer</string>
+    <string name="remote_copied">Copied</string>
     <string name="remote_advisor_title">Advisor</string>
     <string name="remote_advisor_busy">Advisor working</string>
     <string name="remote_advisor_error">Advisor blocked</string>

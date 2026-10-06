@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Psychology
@@ -26,6 +27,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -367,6 +369,15 @@ internal fun SessionControls(
     if (showContext) ModalBottomSheet(onDismissRequest = { showContext = false }) {
         ContextSheetBody(
             usage = usage,
+            info =
+                SessionInfo(
+                    name = state.session?.optionalText("title")?.takeIf(String::isNotBlank),
+                    model = confirmed?.model?.let { "${it.name} (${it.provider}/${it.id})" }
+                        ?: usage?.modelId?.let { id -> usage.modelProvider?.let { "$it/$id" } ?: id },
+                    thinkingLevel = confirmed?.thinkingLevel?.takeIf { thinking != null },
+                    project = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
+                    sessionId = state.selection.sessionId,
+                ),
             unavailable =
                 !state.connected || CONTEXT_CAPABILITY !in state.capabilities ||
                     CONTEXT_CAPABILITY in state.unavailableCapabilities,
@@ -501,14 +512,24 @@ internal fun SessionControls(
         }
 }
 
+/** What the app already knows about the open session; shown at the top of the session sheet. */
+internal data class SessionInfo(
+    val name: String?,
+    val model: String?,
+    val thinkingLevel: String?,
+    val project: String?,
+    val sessionId: String?,
+)
+
 /**
- * The context usage sheet's content. Scrollable and height-bounded, so a large font scale or a
+ * The session sheet's content: [info] on top, then the context usage. Scrollable and height-bounded, so a large font scale or a
  * long usage breakdown never clips against the sheet's edge instead of scrolling.
  */
 @Composable
 internal fun ContextSheetBody(
     usage: SessionContextUsage?,
     unavailable: Boolean,
+    info: SessionInfo? = null,
     showCompact: Boolean = false,
     canCompact: Boolean = false,
     compacting: Boolean = false,
@@ -523,7 +544,9 @@ internal fun ContextSheetBody(
             .testTag("contextSheet"),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(stringResource(R.string.remote_context_title), style = MaterialTheme.typography.titleLarge)
+        Text(stringResource(R.string.remote_session_info_title), style = MaterialTheme.typography.titleLarge)
+        if (info != null) SessionInfoSection(info)
+        Text(stringResource(R.string.remote_context_title), style = MaterialTheme.typography.titleMedium)
         if (unavailable || usage == null) {
             Text(stringResource(R.string.remote_context_unavailable))
         } else {
@@ -548,6 +571,59 @@ internal fun ContextSheetBody(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun SessionInfoSection(info: SessionInfo) {
+    val copyLabel = stringResource(R.string.remote_session_info_copy_id)
+    val copyToClipboard = rememberCopyToClipboard(copyLabel)
+    Column(Modifier.testTag("sessionInfo"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        InfoRow(
+            R.string.remote_session_info_name,
+            info.name ?: stringResource(R.string.remote_session_info_no_name),
+            "sessionInfoName",
+        )
+        info.model?.let { InfoRow(R.string.remote_session_info_model, it, "sessionInfoModel") }
+        info.thinkingLevel?.let {
+            InfoRow(R.string.remote_session_info_thinking, thinkingLevelLabel(it), "sessionInfoThinking")
+        }
+        info.project?.let { InfoRow(R.string.remote_session_info_project, it, "sessionInfoProject") }
+        info.sessionId?.let { id ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.remote_session_info_id),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        id,
+                        modifier = Modifier.testTag("sessionInfoId"),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+                IconButton(
+                    onClick = { copyToClipboard(id) },
+                    modifier = Modifier.testTag("copySessionId"),
+                ) {
+                    Icon(Icons.Outlined.ContentCopy, copyLabel)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InfoRow(label: Int, value: String, tag: String) {
+    Column {
+        Text(
+            stringResource(label),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(value, modifier = Modifier.testTag(tag), style = MaterialTheme.typography.bodyMedium)
     }
 }
 

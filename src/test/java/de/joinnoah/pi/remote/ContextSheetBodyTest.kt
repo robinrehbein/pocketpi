@@ -1,6 +1,11 @@
 package de.joinnoah.pi.remote
 
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.test.assertTextEquals
+import androidx.test.core.app.ApplicationProvider
+import org.junit.Assert.assertEquals
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -56,5 +61,41 @@ class ContextSheetBodyTest {
         }
         compose.onNodeWithTag("compactContextButton").performScrollTo().assertIsEnabled().performClick()
         compose.runOnIdle { assertTrue(clicks == 1) }
+    }
+
+    private val info =
+        SessionInfo(
+            name = "Refactor plan",
+            model = "Claude (anthropic/claude-x)",
+            thinkingLevel = "high",
+            project = "pocketpi",
+            sessionId = "sess-1234",
+        )
+
+    @Test
+    fun sessionInfoShowsNameModelAndId() {
+        compose.setContent { MaterialTheme { ContextSheetBody(bigUsage, unavailable = false, info = info) } }
+        compose.onNodeWithTag("sessionInfoName").assertTextEquals("Refactor plan")
+        compose.onNodeWithTag("sessionInfoModel").assertTextEquals("Claude (anthropic/claude-x)")
+        compose.onNodeWithTag("sessionInfoProject").assertTextEquals("pocketpi")
+        compose.onNodeWithTag("sessionInfoId").assertTextEquals("sess-1234")
+    }
+
+    @Test
+    fun unnamedSessionShowsAFallback() {
+        compose.setContent {
+            MaterialTheme { ContextSheetBody(bigUsage, unavailable = false, info = info.copy(name = null)) }
+        }
+        compose.onNodeWithTag("sessionInfoName").assertTextEquals("No name")
+    }
+
+    @Test
+    fun copyIdButtonPutsTheIdOnTheClipboard() {
+        compose.setContent { MaterialTheme { ContextSheetBody(bigUsage, unavailable = false, info = info) } }
+        compose.onNodeWithTag("copySessionId").performScrollTo().performClick()
+        compose.waitForIdle()
+        val clipboard = ApplicationProvider.getApplicationContext<Context>()
+            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        assertEquals("sess-1234", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
     }
 }
