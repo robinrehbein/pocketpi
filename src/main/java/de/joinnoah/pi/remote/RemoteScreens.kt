@@ -113,11 +113,11 @@ private fun retryLabel(reconnectAt: Long?): String =
 
 /** Live "Reconnecting in N s" line for the next automatic reconnect attempt. */
 @Composable
-private fun ReconnectCountdown(reconnectAt: Long?) {
+private fun ReconnectCountdown(reconnectAt: Long?, now: () -> Long = System::currentTimeMillis) {
     if (reconnectAt == null) return
-    val seconds by produceState(reconnectSeconds(reconnectAt), reconnectAt) {
+    val seconds by produceState(reconnectSeconds(reconnectAt, now), reconnectAt) {
         while (true) {
-            value = reconnectSeconds(reconnectAt)
+            value = reconnectSeconds(reconnectAt, now)
             delay(250)
         }
     }
@@ -128,8 +128,8 @@ private fun ReconnectCountdown(reconnectAt: Long?) {
     )
 }
 
-private fun reconnectSeconds(reconnectAt: Long): Int =
-    ((reconnectAt - System.currentTimeMillis() + 999) / 1000).toInt().coerceAtLeast(0)
+private fun reconnectSeconds(reconnectAt: Long, now: () -> Long): Int =
+    ((reconnectAt - now() + 999) / 1000).toInt().coerceAtLeast(0)
 
 /** Errors a reload can plausibly fix; only these offer "Try again" on the error card. */
 private val RETRYABLE_ERRORS =

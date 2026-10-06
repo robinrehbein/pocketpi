@@ -1849,7 +1849,7 @@ class RemoteRepositoryTest {
         transport.listener.failed(true, R.string.remote_connection_error)
 
         var elapsed = 0L
-        for ((index, delay) in listOf(1, 2, 4, 8, 16, 30, 30, 30).map { it * 1_000L }.withIndex()) {
+        for ((index, delay) in listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 27_000L, 27_000L, 27_000L).withIndex()) {
             advanceTimeBy(delay - 1)
             runCurrent()
             assertEquals(start + index, transport.connects)
@@ -1977,6 +1977,85 @@ class RemoteRepositoryTest {
         runCurrent()
         assertEquals(connects + 1, transport.connects)
         assertNotNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun repeatedServiceRestartClosesRetryImmediatelyOnlyOncePerStreak() = runTest {
+        val transport = Transport().also { configure(it) }
+        offlineRepository(transport)
+        val start = transport.connects
+        repeat(3) {
+            transport.listener.closed(1012)
+            transport.listener.failed(true, R.string.remote_connection_error)
+            runCurrent()
+        }
+        // The first close retried at once (and its retry failed the same way, without the flag).
+        assertEquals(start + 1, transport.connects)
+    }
+
+    @Test
+    fun reconnectCapSpreadsDownwardOnly() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = DefaultRemoteRepository(
+            Pairings(listOf(host)), Drafts(), transport, backgroundScope,
+            StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
+            jitter = { 1.0 },
+        )
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        // 1.2 s, 2.4 s, 4.8 s, 9.6 s, 19.2 s, then the capped 24 s.
+        for (wait in listOf(1_200L, 2_400L, 4_800L, 9_600L, 19_200L)) {
+            advanceTimeBy(wait)
+            runCurrent()
+        }
+        assertEquals(24_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+    }
+
+    @Test
+    fun connectTimeoutGoesOfflineAndSchedulesAReconnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        transport.readyOnConnect = false
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        val activation = async { repository.activate(RemoteSelection("host", "project", "session")) }
+        advanceTimeBy(30_001)
+        runCurrent()
+        activation.await()
+        assertFalse(repository.state.value.connected)
+        assertNotNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun activateCatchKeepsTheConnectionError() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+    }
+
+    @Test
+    fun networkLossAndRefreshClearReconnectAt() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+        repository.setValidatedNetwork(null)
+        assertNull(repository.state.value.reconnectAt)
+
+        repository.setValidatedNetwork("cell")
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+        transport.failureOnConnect = null
+        repository.refresh()
+        assertNull(repository.state.value.reconnectAt)
     }
 
     @Test

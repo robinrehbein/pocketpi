@@ -182,6 +182,7 @@ class DefaultRemoteRepository(
     private var reconnectAttempts = 0
     private var failureStreak = 0
     private var serviceRestart = false
+    private var restartRetryUsed = false
     private var reconnectEnabled = true
     private val recovery = RemoteRecovery()
     private var timeline: Timeline? = null
@@ -830,6 +831,7 @@ class DefaultRemoteRepository(
                 persist().await()
             }
             if (previousRoute != host.routeId) {
+                resetReconnect()
                 clearNavigationCache()
                 attachmentBytes.clear()
                 SentImageThumbnails.clear()
@@ -892,12 +894,11 @@ class DefaultRemoteRepository(
         }
         if (withTimeoutOrNull(30000) { checkNotNull(ready).await() } == null) {
             if (epoch == selectionEpoch) {
-                generation++
-                transport.close()
+                // Goes offline and schedules the next attempt like any transport failure.
+                failed(true, R.string.remote_connection_error)
                 ready?.cancel()
                 ready = null
                 activeHost = null
-                update { it.copy(connected = false, connection = R.string.remote_offline) }
             }
             throw IllegalStateException("Connection timed out")
         }
@@ -1366,7 +1367,7 @@ class DefaultRemoteRepository(
         if (!force) cancelSelection()
         if (!useCache) clearNavigationCache()
         val epoch = selectionEpoch
-        retry?.cancel()
+        stopReconnectTimer()
         update { it.copy(loading = true) }
         try {
             val host = state.value.hosts.find { it.routeId == selection.routeId }
@@ -1877,9 +1878,13 @@ class DefaultRemoteRepository(
                 host != null
         ) {
             val generationAtFailure = generation
-            // The relay announced a restart, so the first retry does not wait.
-            if (restart) reconnectAttempts = 0
-            val wait = reconnectDelay(reconnectAttempts++, restart)
+            // The relay announced a restart, so one retry per failure streak does not wait.
+            val immediate = restart && !restartRetryUsed
+            if (immediate) {
+                restartRetryUsed = true
+                reconnectAttempts = 0
+            }
+            val wait = reconnectDelay(reconnectAttempts++, immediate)
             retry?.cancel()
             update { it.copy(reconnectAt = now() + wait) }
             retry = scope.launch {
@@ -1896,14 +1901,19 @@ class DefaultRemoteRepository(
 
     private fun reconnectDelay(attempt: Int, immediate: Boolean): Long {
         if (immediate) return 0
-        val base = (RECONNECT_BASE_MILLIS shl attempt.coerceAtMost(6)).coerceAtMost(RECONNECT_MAX_MILLIS)
-        val spread = 1.0 + RECONNECT_JITTER * (2 * jitter().coerceIn(0.0, 1.0) - 1)
-        return (base * spread).toLong().coerceIn(0, RECONNECT_MAX_MILLIS)
+        val base = RECONNECT_BASE_MILLIS shl attempt.coerceAtMost(6)
+        val unit = jitter().coerceIn(0.0, 1.0)
+        // At the cap the delay only spreads downward, so it never exceeds the cap.
+        val spread =
+            if (base >= RECONNECT_MAX_MILLIS) 1.0 - RECONNECT_JITTER * unit
+            else 1.0 + RECONNECT_JITTER * (2 * unit - 1)
+        return (base.coerceAtMost(RECONNECT_MAX_MILLIS) * spread).toLong()
     }
 
     private fun resetReconnect() {
         reconnectAttempts = 0
         failureStreak = 0
+        restartRetryUsed = false
     }
 
     private fun stopReconnectTimer() {
