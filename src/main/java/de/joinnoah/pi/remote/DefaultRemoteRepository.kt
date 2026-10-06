@@ -10,6 +10,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
+import kotlin.random.Random
 
 internal fun canAbortRemoteRun(state: RemoteState, activeRouteId: String?): Boolean =
     state.connected &&
@@ -43,6 +44,12 @@ private const val TOOL_OUTPUT_CHUNK_BYTES = 49_152
 private const val MAX_TOOL_OUTPUT_DATA_CHARS = 65_536
 private const val SESSION_REFRESH_INTERVAL_MILLIS = 5_000L
 private const val ATTACHMENT_READ_SPACING_MILLIS = 200L
+private val CONNECTION_ERRORS = setOf(R.string.remote_connection_error, R.string.remote_unreachable)
+private const val RECONNECT_BASE_MILLIS = 1_000L
+private const val RECONNECT_MAX_MILLIS = 30_000L
+private const val RECONNECT_JITTER = 0.2
+private const val UNREACHABLE_AFTER_FAILURES = 3
+private const val SERVICE_RESTART_CLOSE_CODE = 1012
 
 internal fun opaqueId(value: String): Boolean =
     value.isNotEmpty() &&
@@ -92,6 +99,8 @@ class DefaultRemoteRepository(
     private val navigationStorage: NavigationSnapshotStorage? = null,
     /** Called once a pairing is removed, so stores outside the repository can forget the host. */
     private val onUnpaired: (String) -> Unit = {},
+    /** Uniform value in [0, 1) that spreads reconnect delays; injectable for tests. */
+    private val jitter: () -> Double = { Random.nextDouble() },
 ) : RemoteRepository {
     private val routeCapabilities =
         setOf(
@@ -171,6 +180,9 @@ class DefaultRemoteRepository(
     private var recoveryJob: Job? = null
     private var deferredRecovery: RemoteRecovery.Signal? = null
     private var reconnectAttempts = 0
+    private var failureStreak = 0
+    private var serviceRestart = false
+    private var restartRetryUsed = false
     private var reconnectEnabled = true
     private val recovery = RemoteRecovery()
     private var timeline: Timeline? = null
@@ -328,8 +340,12 @@ class DefaultRemoteRepository(
         }
         transport.listener =
             object : RemoteTransport.Listener {
+                override fun closed(code: Int) {
+                    serviceRestart = code == SERVICE_RESTART_CLOSE_CODE
+                }
+
                 override fun ready(capabilities: Set<String>) {
-                    reconnectAttempts = 0
+                    resetReconnect()
                     update {
                         it.copy(
                             connected = true,
@@ -337,6 +353,7 @@ class DefaultRemoteRepository(
                             capabilitiesKnown = false,
                             connection = R.string.remote_connected,
                             error = null,
+                            reconnectAt = null,
                         )
                     }
                     ready?.complete(Unit)
@@ -814,6 +831,7 @@ class DefaultRemoteRepository(
                 persist().await()
             }
             if (previousRoute != host.routeId) {
+                resetReconnect()
                 clearNavigationCache()
                 attachmentBytes.clear()
                 SentImageThumbnails.clear()
@@ -876,12 +894,11 @@ class DefaultRemoteRepository(
         }
         if (withTimeoutOrNull(30000) { checkNotNull(ready).await() } == null) {
             if (epoch == selectionEpoch) {
-                generation++
-                transport.close()
+                // Goes offline and schedules the next attempt like any transport failure.
+                failed(true, R.string.remote_connection_error)
                 ready?.cancel()
                 ready = null
                 activeHost = null
-                update { it.copy(connected = false, connection = R.string.remote_offline) }
             }
             throw IllegalStateException("Connection timed out")
         }
@@ -1350,7 +1367,7 @@ class DefaultRemoteRepository(
         if (!force) cancelSelection()
         if (!useCache) clearNavigationCache()
         val epoch = selectionEpoch
-        retry?.cancel()
+        stopReconnectTimer()
         update { it.copy(loading = true) }
         try {
             val host = state.value.hosts.find { it.routeId == selection.routeId }
@@ -1474,7 +1491,9 @@ class DefaultRemoteRepository(
             throw e
         } catch (_: Exception) {
             checkEpoch(epoch)
-            reportError(R.string.remote_request_error)
+            // A lost connection already set its own, more specific error.
+            if (state.value.error !in CONNECTION_ERRORS || state.value.connected)
+                reportError(R.string.remote_request_error)
             return if (mode == ActivationMode.USER_OPEN) previousSelection else state.value.selection
         } finally {
             if (epoch == selectionEpoch) {
@@ -1845,24 +1864,62 @@ class DefaultRemoteRepository(
         }
         val host = activeHost
         if (error == R.string.remote_denied) reconnectEnabled = false
+        val restart = serviceRestart
+        serviceRestart = false
+        if (reconnect && error == R.string.remote_connection_error) {
+            failureStreak++
+            if (failureStreak >= UNREACHABLE_AFTER_FAILURES)
+                update { it.copy(error = R.string.remote_unreachable) }
+        }
         if (
             reconnect &&
                 reconnectEnabled &&
                 recovery.canRecover &&
-                host != null &&
-                reconnectAttempts < 5
+                host != null
         ) {
             val generationAtFailure = generation
+            // The relay announced a restart, so one retry per failure streak does not wait.
+            val immediate = restart && !restartRetryUsed
+            if (immediate) {
+                restartRetryUsed = true
+                reconnectAttempts = 0
+            }
+            val wait = reconnectDelay(reconnectAttempts++, immediate)
             retry?.cancel()
+            update { it.copy(reconnectAt = now() + wait) }
             retry = scope.launch {
-                delay((1000L shl reconnectAttempts++).coerceAtMost(30000))
+                delay(wait)
                 if (generationAtFailure == generation && recovery.canRecover && reconnectEnabled) {
                     val selection = state.value.selection
                     retry = null
+                    update { it.copy(reconnectAt = null) }
                     activate(selection, ActivationMode.RESTORE)
                 }
             }
-        }
+        } else update { it.copy(reconnectAt = null) }
+    }
+
+    private fun reconnectDelay(attempt: Int, immediate: Boolean): Long {
+        if (immediate) return 0
+        val base = RECONNECT_BASE_MILLIS shl attempt.coerceAtMost(6)
+        val unit = jitter().coerceIn(0.0, 1.0)
+        // At the cap the delay only spreads downward, so it never exceeds the cap.
+        val spread =
+            if (base >= RECONNECT_MAX_MILLIS) 1.0 - RECONNECT_JITTER * unit
+            else 1.0 + RECONNECT_JITTER * (2 * unit - 1)
+        return (base.coerceAtMost(RECONNECT_MAX_MILLIS) * spread).toLong()
+    }
+
+    private fun resetReconnect() {
+        reconnectAttempts = 0
+        failureStreak = 0
+        restartRetryUsed = false
+    }
+
+    private fun stopReconnectTimer() {
+        retry?.cancel()
+        retry = null
+        if (state.value.reconnectAt != null) update { it.copy(reconnectAt = null) }
     }
 
     override fun refresh() {
@@ -1876,7 +1933,8 @@ class DefaultRemoteRepository(
             refreshCommands()
             return
         }
-        reconnectAttempts = 0
+        resetReconnect()
+        stopReconnectTimer()
         scope.launch {
             update { it.copy(loading = true) }
             activate(selection, ActivationMode.RESTORE, force = false, useCache = false)
@@ -1921,28 +1979,26 @@ class DefaultRemoteRepository(
         val signal = recovery.foreground(foreground)
         if (!foreground) {
             queueNavigationWrite(immediate = true)
-            retry?.cancel()
-            retry = null
+            stopReconnectTimer()
             cancelRecovery()
             return
         }
         signal ?: return
         onRecoverySignal(signal)
-        reconnectAttempts = 0
+        resetReconnect()
         recover(signal)
     }
 
     override fun setValidatedNetwork(identity: String?) {
         val signal = recovery.network(identity)
         if (identity == null) {
-            retry?.cancel()
-            retry = null
+            stopReconnectTimer()
             cancelRecovery()
             return
         }
         signal ?: return
         onRecoverySignal(signal)
-        reconnectAttempts = 0
+        resetReconnect()
         recover(signal)
     }
 
@@ -1957,8 +2013,7 @@ class DefaultRemoteRepository(
             deferredRecovery = signal
             return
         }
-        retry?.cancel()
-        retry = null
+        stopReconnectTimer()
         if (recoveryJob?.isActive == true) return
         val selection = state.value.selection
         val epoch = selectionEpoch

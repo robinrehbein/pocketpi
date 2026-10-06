@@ -79,9 +79,12 @@ class RemoteTransportTest {
 
         override fun message(payload: JsonObject) {}
 
+        val reconnects = mutableListOf<Boolean>()
+
         override fun failed(reconnect: Boolean, error: Int) {
             failed = true
             failureCount++
+            reconnects += reconnect
         }
     }
 
@@ -167,6 +170,40 @@ class RemoteTransportTest {
             "capabilities" to JsonArray(capabilities.map(::JsonPrimitive)))))
         runCurrent()
         return listener
+    }
+
+    @Test
+    fun stalledDeviceHandshakeTimesOutAsRetryable() = runTest {
+        val socket = Socket()
+        val listener = Listener { }
+        val transport = SecureRemoteTransport(backgroundScope, socket) { "Test device" }
+            .also { it.listener = listener }
+        transport.connect(PairedHost(Wire.random(), "https://relay.test", Wire.random(), Wire.random(32), "Host"))
+        socket.open()
+        advanceTimeBy(20001)
+        runCurrent()
+        assertEquals(listOf(true), listener.reconnects)
+    }
+
+    @Test
+    fun stalledPairingHandshakeTimesOutWithoutRetry() = runTest {
+        val socket = Socket()
+        val listener = Listener { }
+        val transport = SecureRemoteTransport(backgroundScope, socket) { "Test device" }
+            .also { it.listener = listener }
+        transport.pair(
+            Wire.objectOf(
+                "relay" to "https://relay.test",
+                "routeId" to Wire.random(),
+                "pairId" to Wire.random(),
+                "secret" to Wire.random(32),
+                "expiresAt" to System.currentTimeMillis() + 120000,
+            )
+        )
+        socket.open()
+        advanceTimeBy(20001)
+        runCurrent()
+        assertEquals(listOf(false), listener.reconnects)
     }
 
     @Test
