@@ -124,10 +124,11 @@ class RemoteRepositoryTest {
         transport: Transport,
         drafts: Drafts = Drafts(),
         attachmentStorage: AttachmentStorage? = null,
+        hosts: List<PairedHost> = listOf(host),
         attachmentImporter: (suspend (String, Boolean) -> LocalAttachment)? = null,
     ) =
         DefaultRemoteRepository(
-            Pairings(listOf(host)),
+            Pairings(hosts),
             drafts,
             transport,
             backgroundScope,
@@ -1989,6 +1990,48 @@ class RemoteRepositoryTest {
         assertTrue(repository.state.value.connected)
         assertEquals("host", repository.state.value.selection.routeId)
         assertNull(repository.state.value.deniedRouteId)
+    }
+
+    @Test
+    fun restoringTheHostsListLeavesADeniedHostAndReenablesReconnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        transport.failureOnConnect = R.string.remote_device_paused
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.dismissError()
+
+        repository.activate(RemoteSelection(), ActivationMode.RESTORE)
+        runCurrent()
+        assertNull(repository.state.value.selection.routeId)
+
+        // Reconnect is enabled again, so a failure on another host schedules a retry.
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun restoringAHealthyHostIgnoresAnotherHostsDenial() = runTest {
+        val other = PairedHost("other", "https://relay.test", "device2", "secret2", "Other")
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, hosts = listOf(host, other))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        transport.failureOnConnect = R.string.remote_device_revoked
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.dismissError()
+
+        transport.failureOnConnect = null
+        repository.activate(RemoteSelection("other", "project"), ActivationMode.RESTORE)
+        runCurrent()
+        assertEquals("other", transport.route)
+        assertTrue(repository.state.value.connected)
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
     }
 
     @Test

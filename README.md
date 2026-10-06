@@ -183,7 +183,7 @@ of `packages/pi-remote/protocol/fixtures/` from noah-monorepo commit
 byte-for-byte copy from noah-monorepo commit `daca1ee562ca661fb76ce2d61a75ca2fc8c8059f`, the
 merge of pull request #633, and `attachments-v1.json` (sent attachments and reading them back) from
 commit `4783a9fb2a54ed0e22c72ffa029d9cf8b9aac85e`. `device-access-v1.json` (a paused or revoked
-device is denied) comes from commit `1a0cd69f3` on the branch of noah-monorepo pull request #642,
+device is denied) comes from noah-monorepo commit `be68189bc` on the branch of pull request #642,
 which is not merged yet; replace it with the merge commit. When the upstream protocol fixtures
 change, copy the changed files into `src/test/resources/`, compare their bytes with the upstream
 source, and run `./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and

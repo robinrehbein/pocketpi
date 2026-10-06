@@ -1349,9 +1349,12 @@ class DefaultRemoteRepository(
     ): RemoteSelection {
         cancelRecovery()
         if (mode == ActivationMode.USER_OPEN) reconnectEnabled = true
-        // A restore on navigation must not retry a paused or revoked device behind the user's back.
-        if (mode == ActivationMode.RESTORE && !reconnectEnabled && state.value.deniedRouteId != null)
-            return state.value.selection
+        if (mode == ActivationMode.RESTORE && state.value.deniedRouteId != null) {
+            // A restore on navigation must not retry the paused or revoked device behind the
+            // user's back; any other route, the Hosts list included, is unaffected by it.
+            if (selection.routeId == state.value.deniedRouteId) return state.value.selection
+            reconnectEnabled = true
+        }
         return activate(selection, mode, force = false)
     }
 
