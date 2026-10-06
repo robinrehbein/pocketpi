@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import androidx.core.app.NotificationCompat
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
@@ -52,7 +53,7 @@ class CompletionUpgradesTest {
         RemoteNotifications.postComplete(context, complete)
         assertEquals("pi has finished", title())
         val result =
-            LabelUpgrader { _, _, preview ->
+            LabelUpgrader { _, _, preview, _ ->
                     assertTrue("A completion asks for the preview", preview)
                     SessionLabel("Fix the login bug", "pocketpi", "All tests pass now.")
                 }
@@ -82,7 +83,7 @@ class CompletionUpgradesTest {
     fun aTimeoutKeepsTheGenericNotification() = runTest {
         RemoteNotifications.postComplete(context, complete)
         val result =
-            LabelUpgrader { _, _, _ -> awaitCancellation() }.run(host, complete) { true }
+            LabelUpgrader { _, _, _, _ -> awaitCancellation() }.run(host, complete) { true }
         assertEquals(LabelResult.Unavailable, result)
         assertEquals(LABEL_TIMEOUT_MILLIS, currentTime)
         apply(result)
@@ -94,7 +95,7 @@ class CompletionUpgradesTest {
     fun anErrorKeepsTheGenericNotification() = runTest {
         RemoteNotifications.postComplete(context, complete)
         val result =
-            LabelUpgrader { _, _, _ -> throw RemoteConnectionException() }.run(host, complete) { true }
+            LabelUpgrader { _, _, _, _ -> throw RemoteConnectionException() }.run(host, complete) { true }
         assertEquals(LabelResult.Unavailable, result)
         apply(result)
         assertEquals("pi has finished", title())
@@ -103,14 +104,14 @@ class CompletionUpgradesTest {
     @Test
     fun aDismissedNotificationIsNotBroughtBack() = runTest {
         val result =
-            LabelUpgrader { _, _, _ -> SessionLabel("T", "P", null) }.run(host, complete) { false }
+            LabelUpgrader { _, _, _, _ -> SessionLabel("T", "P", null) }.run(host, complete) { false }
         assertEquals(LabelResult.NotWanted, result)
     }
 
     @Test
     fun aLabelWithoutAnyTextChangesNothing() = runTest {
         val result =
-            LabelUpgrader { _, _, _ -> SessionLabel(null, null, null) }.run(host, complete) { true }
+            LabelUpgrader { _, _, _, _ -> SessionLabel(null, null, null) }.run(host, complete) { true }
         assertEquals(LabelResult.Unavailable, result)
     }
 
@@ -119,7 +120,7 @@ class CompletionUpgradesTest {
         val payload = PushPayload("r", "s", "e", PushEvent.SUBAGENT_DONE)
         RemoteNotifications.postAttention(context, payload)
         val result =
-            LabelUpgrader { _, _, preview ->
+            LabelUpgrader { _, _, preview, _ ->
                     assertEquals("Only a completion reads the last answer", false, preview)
                     SessionLabel("Refactor parser", "pocketpi", null)
                 }
@@ -134,7 +135,7 @@ class CompletionUpgradesTest {
     fun anAttentionNoticeWithoutATitleStaysGeneric() = runTest {
         val payload = PushPayload("r", "s", "e", PushEvent.JOB_DONE)
         val result =
-            LabelUpgrader { _, _, _ -> SessionLabel(null, "pocketpi", null) }.run(host, payload) { true }
+            LabelUpgrader { _, _, _, _ -> SessionLabel(null, "pocketpi", null) }.run(host, payload) { true }
         assertEquals(LabelResult.Unavailable, result)
     }
 
@@ -176,13 +177,95 @@ class CompletionUpgradesTest {
     }
 
     @Test
-    fun aLongPreviewIsCutAtTheLimitWithoutSplittingACharacter() {
-        val long = lastAssistantPreview(listOf(message("assistant", "text" to "a".repeat(500))))!!
-        assertEquals(PREVIEW_MAX_CHARS, long.length)
-        assertTrue(long.endsWith("…"))
-        val emoji = lastAssistantPreview(listOf(message("assistant", "text" to "a".repeat(118) + "😀😀")))!!
-        assertTrue(emoji.length <= PREVIEW_MAX_CHARS)
-        assertTrue(!Character.isHighSurrogate(emoji[emoji.length - 2]))
+    fun aLongPreviewKeepsTheEndOfTheAnswerWithALeadingEllipsis() {
+        val text = (0 until 50).joinToString(" ") { "w$it" } + " the result is 42"
+        val preview = lastAssistantPreview(listOf(message("assistant", "text" to text)))!!
+        assertTrue(preview.startsWith("…"))
+        assertTrue(preview.length <= PREVIEW_MAX_CHARS)
+        assertTrue(preview.endsWith("the result is 42"))
+        assertTrue(text.endsWith(preview.removePrefix("…")))
+    }
+
+    @Test
+    fun cuttingTheStartNeverSplitsASurrogatePair() {
+        for (extra in 0..3) {
+            val text = "a".repeat(extra) + "😀".repeat(80)
+            val preview = lastAssistantPreview(listOf(message("assistant", "text" to text)))!!
+            assertTrue(preview.length <= PREVIEW_MAX_CHARS)
+            val body = preview.removePrefix("…")
+            assertTrue(!Character.isLowSurrogate(body.first()))
+            assertTrue(body.endsWith("😀"))
+        }
+    }
+
+    @Test
+    fun aShortPreviewIsKeptWhole() {
+        assertEquals("Done.", lastAssistantPreview(listOf(message("assistant", "text" to "Done."))))
+    }
+
+    @Test
+    fun repeatedPushesForASessionWalkTheProjectsOnce() = runTest {
+        val cache = SessionNameCache(now = { currentTime })
+        val seen = mutableListOf<SessionName?>()
+        val upgrader =
+            LabelUpgrader(cache = cache) { _, _, _, known ->
+                seen += known
+                SessionLabel("T", "P", null)
+            }
+        upgrader.run(host, complete) { true }
+        upgrader.run(host, complete) { true }
+        assertEquals(listOf(null, SessionName("T", "P")), seen)
+    }
+
+    @Test
+    fun aCachedNameExpiresAfterTenMinutes() {
+        var now = 0L
+        val cache = SessionNameCache(now = { now })
+        cache.put("r", "s", SessionName("T", "P"))
+        now = NAME_CACHE_MILLIS - 1
+        assertEquals(SessionName("T", "P"), cache.get("r", "s"))
+        now = NAME_CACHE_MILLIS
+        assertNull(cache.get("r", "s"))
+    }
+
+    @Test
+    fun lookupsOfOneRouteRunOneAtATime() = runTest {
+        var running = 0
+        var peak = 0
+        val upgrader =
+            LabelUpgrader(gate = LabelGate()) { _, _, _, _ ->
+                running++
+                peak = maxOf(peak, running)
+                kotlinx.coroutines.delay(100)
+                running--
+                SessionLabel("T", null, null)
+            }
+        (1..3).map { this.async { upgrader.run(host, complete) { true } } }
+            .forEach { it.await() }
+        assertEquals(1, peak)
+    }
+
+    @Test
+    fun aQuestionPushCancelsThePendingCompletionWork() {
+        // The worker never starts, so the work stays queued and its state is observable.
+        androidx.work.WorkManager.initialize(
+            context,
+            androidx.work.Configuration.Builder().setExecutor { }.setTaskExecutor(java.util.concurrent.Executors.newSingleThreadExecutor()).build(),
+        )
+        val work = androidx.work.WorkManager.getInstance(context)
+        CompletionUpgrades.schedule(context, complete)
+        val name = CompletionUpgrades.workName(complete)
+        assertEquals(
+            androidx.work.WorkInfo.State.ENQUEUED,
+            work.getWorkInfosForUniqueWork(name).get().single().state,
+        )
+
+        QuestionUpgrades.onEvent(context, PushPayload("r", "s", "q1", PushEvent.QUESTION))
+
+        assertEquals(
+            androidx.work.WorkInfo.State.CANCELLED,
+            work.getWorkInfosForUniqueWork(name).get().single().state,
+        )
     }
 
     private fun commands(sessions: Map<String, List<JsonObject>>, log: MutableList<String> = mutableListOf()) =

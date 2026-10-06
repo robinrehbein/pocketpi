@@ -259,22 +259,29 @@ class QuestionUpgradeWorker(context: Context, parameters: WorkerParameters) :
             ) { pairedHost, sessionId ->
                 BackgroundRemoteClient().use(pairedHost) { it.pendingQuestions(sessionId) }
             }
+        val wanted = {
+            app.settings.state.value.pushEnabled &&
+                app.isPaired(payload.routeId) &&
+                paired() != null &&
+                RemoteNotifications.canPost(context) &&
+                RemoteNotifications.isActive(context, tag) &&
+                !app.isShowing(payload.routeId, payload.sessionId)
+        }
         val result =
             try {
-                upgrader.run(host, payload) {
-                    app.settings.state.value.pushEnabled &&
-                        app.isPaired(payload.routeId) &&
-                        paired() != null &&
-                        RemoteNotifications.canPost(context) &&
-                        RemoteNotifications.isActive(context, tag) &&
-                        !app.isShowing(payload.routeId, payload.sessionId)
-                }
+                upgrader.run(host, payload, wanted)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
                 UpgradeResult.Unreachable
             }
-        if (result is UpgradeResult.Post) {
+        // Checked again right before posting, so a notification dismissed or replaced while the
+        // result was being built is not overwritten.
+        if (
+            result is UpgradeResult.Post &&
+                wanted() &&
+                PreferenceUpgradeState(context).latestEvent(tag) == payload.eventId
+        ) {
             RemoteNotifications.postQuestion(context, payload, result.content, alert = false)
         }
         // The generic notification already offers Open, so a failed upgrade is not retried.

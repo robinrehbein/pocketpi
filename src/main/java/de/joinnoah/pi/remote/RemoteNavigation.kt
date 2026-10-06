@@ -513,6 +513,7 @@ internal fun RemoteNavigation(
     val stack = rememberNavBackStack(RemoteNavKey.Hosts)
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val currentEnablePush by rememberUpdatedState(enablePush)
     var askForNotifications by rememberSaveable { mutableStateOf(false) }
     val navigator =
         remember(repository, stack) {
@@ -523,15 +524,18 @@ internal fun RemoteNavigation(
                             context,
                             Manifest.permission.POST_NOTIFICATIONS,
                         ) == PackageManager.PERMISSION_GRANTED
-                if (
+                when (
                     offerNotificationPermission(
                         Build.VERSION.SDK_INT,
                         granted,
                         pushConfigured,
                         settings,
                     )
-                )
-                    askForNotifications = true
+                ) {
+                    PairingNotificationStep.ASK -> askForNotifications = true
+                    PairingNotificationStep.ENABLE -> currentEnablePush()
+                    PairingNotificationStep.NOTHING -> {}
+                }
             }
         }
     val notificationPermission =

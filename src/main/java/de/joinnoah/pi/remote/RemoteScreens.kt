@@ -64,6 +64,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import android.content.Intent
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -79,6 +80,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -599,9 +602,18 @@ internal fun RemoteScreen(
                 ) == PackageManager.PERMISSION_GRANTED
         )
     }
+    // The user can change this in Android's settings while the app is in the background.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        notificationGranted =
+            Build.VERSION.SDK_INT < 33 ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                    PackageManager.PERMISSION_GRANTED
+    }
+    var notificationDenied by remember { mutableStateOf(false) }
     val notificationPermission =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             notificationGranted = granted
+            if (!granted) notificationDenied = true
             if (granted) enablePush()
         }
     fun enableNotifications() {
@@ -1231,40 +1243,65 @@ internal fun RemoteScreen(
                 item { PredictionSettingsSection() }
                 item {
                     Section(stringResource(R.string.remote_notifications)) {
-                        SettingsOption(
-                            Icons.Default.Notifications,
-                            stringResource(R.string.remote_notifications),
+                        val hint =
                             stringResource(
                                 when {
                                     !pushConfigured -> R.string.remote_notification_unconfigured
                                     !notificationGranted -> R.string.remote_notification_denied
+                                    !pushEnabled -> R.string.remote_notification_toggle_off
                                     else -> R.string.remote_notification_help
                                 }
-                            ),
-                        ) {}
+                            )
                         if (pushConfigured) {
-                            Row(
+                            // One focusable row: TalkBack reads the label, the state and the hint.
+                            Column(
                                 Modifier.fillMaxWidth()
                                     .toggleable(value = pushEnabled, role = Role.Switch) {
                                         if (it) enableNotifications() else disablePush()
                                     }
                                     .testTag("pushSwitch")
-                                    .padding(vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                                    .padding(vertical = 8.dp)
                             ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Notifications, contentDescription = null)
+                                    Spacer(Modifier.width(14.dp))
+                                    Text(
+                                        stringResource(R.string.remote_notification_toggle),
+                                        Modifier.weight(1f),
+                                        style = MaterialTheme.typography.titleSmall,
+                                    )
+                                    Switch(checked = pushEnabled, onCheckedChange = null)
+                                }
                                 Text(
-                                    stringResource(R.string.remote_notification_toggle),
-                                    Modifier.weight(1f),
-                                )
-                                Switch(checked = pushEnabled, onCheckedChange = null)
-                            }
-                            if (!pushEnabled) {
-                                Text(
-                                    stringResource(R.string.remote_notification_toggle_off),
+                                    hint,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
+                            if (
+                                Build.VERSION.SDK_INT >= 33 &&
+                                    !notificationGranted &&
+                                    (notificationDenied || preferences?.notificationPromptShown == true)
+                            ) {
+                                // After a denial or two Android no longer shows its own prompt.
+                                TextButton(
+                                    onClick = {
+                                        context.startActivity(
+                                            Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        )
+                                    }
+                                ) {
+                                    Text(stringResource(R.string.remote_notification_open_settings))
+                                }
+                            }
+                        } else {
+                            Text(
+                                hint,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }

@@ -11,7 +11,10 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 
@@ -37,16 +40,72 @@ internal sealed interface LabelResult {
     data object NotWanted : LabelResult
 }
 
+internal const val NAME_CACHE_MILLIS = 10 * 60_000L
+
+/**
+ * Titles and projects read recently, in memory only, so a burst of pushes for one session walks the
+ * projects once. Titles can change; ten minutes of staleness is fine for a notification.
+ */
+internal class SessionNameCache(
+    private val now: () -> Long = System::currentTimeMillis,
+    private val maxEntries: Int = 256,
+) {
+    private class Entry(val name: SessionName, val at: Long)
+
+    private val entries = ConcurrentHashMap<String, Entry>()
+
+    fun get(routeId: String, sessionId: String): SessionName? {
+        val key = "$routeId\u0000$sessionId"
+        val entry = entries[key] ?: return null
+        if (now() - entry.at !in 0 until NAME_CACHE_MILLIS) {
+            entries.remove(key)
+            return null
+        }
+        return entry.name
+    }
+
+    fun put(routeId: String, sessionId: String, name: SessionName) {
+        if (entries.size >= maxEntries) entries.clear()
+        entries["$routeId\u0000$sessionId"] = Entry(name, now())
+    }
+}
+
+/**
+ * One label lookup per route at a time: a burst of finishing subagents would otherwise open a
+ * connection each. Waiters queue inside their own timeout, so they give up (generic notice) or
+ * find the cache filled. Question upgrades never use this and are never delayed by it.
+ */
+internal class LabelGate {
+    private val locks = ConcurrentHashMap<String, Mutex>()
+
+    suspend fun <T> withRoute(routeId: String, block: suspend () -> T): T =
+        locks.getOrPut(routeId) { Mutex() }.withLock { block() }
+}
+
 /** The upgrade logic without Android: an injected fetch. */
 internal class LabelUpgrader(
     private val timeoutMillis: Long = LABEL_TIMEOUT_MILLIS,
-    private val fetch: suspend (PairedHost, String, Boolean) -> SessionLabel,
+    private val cache: SessionNameCache = SessionNameCache(),
+    private val gate: LabelGate = LabelGate(),
+    /** Host, session, whether to read the preview, and the cached name if there is one. */
+    private val fetch: suspend (PairedHost, String, Boolean, SessionName?) -> SessionLabel,
 ) {
     suspend fun run(host: PairedHost, payload: PushPayload, wanted: () -> Boolean): LabelResult {
         val label =
             withTimeoutOrNull(timeoutMillis) {
                 try {
-                    fetch(host, payload.sessionId, payload.event == PushEvent.COMPLETE)
+                    gate.withRoute(payload.routeId) {
+                        val known = cache.get(payload.routeId, payload.sessionId)
+                        fetch(host, payload.sessionId, payload.event == PushEvent.COMPLETE, known)
+                            .also {
+                                if (known == null && (it.title != null || it.project != null))
+                                    cache.put(
+                                        payload.routeId,
+                                        payload.sessionId,
+                                        SessionName(it.title, it.project),
+                                    )
+                            }
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -85,15 +144,18 @@ internal fun lastAssistantPreview(messages: List<JsonObject>): String? {
     return null
 }
 
+/** The END of the answer, which is where its result is: a leading ellipsis, [PREVIEW_MAX_CHARS] at most. */
 private fun shortened(text: String): String {
     if (text.length <= PREVIEW_MAX_CHARS) return text
-    var end = PREVIEW_MAX_CHARS - 1
+    var start = text.length - (PREVIEW_MAX_CHARS - 1)
     // Never cut a surrogate pair in half.
-    if (Character.isHighSurrogate(text[end - 1])) end--
-    return text.take(end).trimEnd() + "…"
+    if (Character.isLowSurrogate(text[start])) start++
+    return "\u2026" + text.substring(start).trimStart()
 }
 
 internal object CompletionUpgrades {
+    internal val names = SessionNameCache()
+    internal val gate = LabelGate()
     private val keys = listOf("routeId", "target", "eventId", "event", "parent", "jobId", "count")
 
     fun workName(payload: PushPayload) =
@@ -149,31 +211,34 @@ class LabelUpgradeWorker(context: Context, parameters: WorkerParameters) :
         }
         val host = paired() ?: return Result.success()
         val tag = RemoteNotifications.tag(payload.routeId, payload.sessionId)
+        val wanted = {
+            app.settings.state.value.pushEnabled &&
+                app.isPaired(payload.routeId) &&
+                paired() != null &&
+                RemoteNotifications.canPost(context) &&
+                RemoteNotifications.isActive(context, tag, RemoteNotifications.idFor(payload.event)) &&
+                !app.isShowing(payload.routeId, payload.sessionId)
+        }
         val result =
             try {
-                LabelUpgrader { pairedHost, sessionId, withPreview ->
-                        BackgroundRemoteClient().use(pairedHost) {
-                            it.sessionLabel(sessionId, withPreview)
-                        }
+                LabelUpgrader(cache = CompletionUpgrades.names, gate = CompletionUpgrades.gate) {
+                        pairedHost, sessionId, withPreview, known ->
+                        // A known name with no preview to read needs no connection at all.
+                        if (known != null && !withPreview) SessionLabel(known.title, known.project, null)
+                        else
+                            BackgroundRemoteClient().use(pairedHost) {
+                                it.sessionLabel(sessionId, withPreview, known)
+                            }
                     }
-                    .run(host, payload) {
-                        app.settings.state.value.pushEnabled &&
-                            app.isPaired(payload.routeId) &&
-                            paired() != null &&
-                            RemoteNotifications.canPost(context) &&
-                            RemoteNotifications.isActive(
-                                context,
-                                tag,
-                                RemoteNotifications.idFor(payload.event),
-                            ) &&
-                            !app.isShowing(payload.routeId, payload.sessionId)
-                    }
+                    .run(host, payload, wanted)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
                 LabelResult.Unavailable
             }
-        if (result is LabelResult.Post) {
+        // Checked again right before posting: the lookup may have outlived the notification, and
+        // a question or newer push may have replaced it in the meantime.
+        if (result is LabelResult.Post && wanted()) {
             if (payload.event == PushEvent.COMPLETE)
                 RemoteNotifications.postComplete(context, payload, result.label)
             else RemoteNotifications.postAttention(context, payload, result.label)

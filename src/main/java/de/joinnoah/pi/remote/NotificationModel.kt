@@ -324,34 +324,45 @@ internal fun isPlanApproval(answer: JsonObject): Boolean =
     answer.optionalText("kind") == "plan" &&
         (answer["action"] as? JsonPrimitive)?.content == "approve"
 
+/** What to do about notifications right after a pairing succeeded. */
+internal enum class PairingNotificationStep {
+    NOTHING,
+
+    /** Android 13+: explain, then request POST_NOTIFICATIONS. */
+    ASK,
+
+    /** Below Android 13 no permission exists, so push can simply be switched on. */
+    ENABLE,
+}
+
 /**
- * Whether to offer the notification permission right after a pairing: on Android 13+, once ever,
- * and only while push is configured, off and not yet allowed. A denial counts as an answer, so it
- * is never offered again on its own; the buttons in the app stay.
+ * The step after a pairing: once ever, and only while push is configured, off, not switched off by
+ * the user and not yet allowed. A denial counts as an answer, so nothing is offered again on its
+ * own; the buttons in the app stay.
  */
-internal fun shouldAskForNotifications(
+internal fun pairingNotificationStep(
     sdk: Int,
     granted: Boolean,
     pushConfigured: Boolean,
     settings: RemoteSettings,
-): Boolean =
-    sdk >= 33 &&
-        pushConfigured &&
-        !granted &&
-        !settings.pushEnabled &&
-        !settings.notificationPromptShown
+): PairingNotificationStep =
+    when {
+        !pushConfigured ||
+            settings.pushEnabled ||
+            settings.pushOptedOut ||
+            settings.notificationPromptShown -> PairingNotificationStep.NOTHING
+        sdk < 33 -> PairingNotificationStep.ENABLE
+        granted -> PairingNotificationStep.NOTHING
+        else -> PairingNotificationStep.ASK
+    }
 
-/**
- * Decides whether to offer the permission now and, if so, records that it was offered before the
- * dialog shows, so a process death or a denial never leads to a second offer.
- */
+/** [pairingNotificationStep], recorded before the dialog shows so a restart never asks twice. */
 internal fun offerNotificationPermission(
     sdk: Int,
     granted: Boolean,
     pushConfigured: Boolean,
     settings: SettingsRepository,
-): Boolean {
-    if (!shouldAskForNotifications(sdk, granted, pushConfigured, settings.state.value)) return false
-    settings.markNotificationPromptShown()
-    return true
-}
+): PairingNotificationStep =
+    pairingNotificationStep(sdk, granted, pushConfigured, settings.state.value).also {
+        if (it != PairingNotificationStep.NOTHING) settings.markNotificationPromptShown()
+    }

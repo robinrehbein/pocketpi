@@ -118,6 +118,9 @@ internal suspend fun RemoteCommands.pendingQuestions(sessionId: String): List<Js
         data.array("pendingQuestions").take(16)
     }
 
+/** A session's title and project. */
+internal data class SessionName(val title: String?, val project: String?)
+
 /** What a notification names a session by. Every field is optional: a host may not know it. */
 internal data class SessionLabel(
     val title: String?,
@@ -126,7 +129,11 @@ internal data class SessionLabel(
     val preview: String?,
 )
 
-/** At most this many projects are searched for a session, one `sessions.list` each. */
+/**
+ * At most this many projects are searched for a session, one `sessions.list` each. This bounds the
+ * walk on a host with very many projects: a session in a later project simply stays unnamed, and
+ * its generic notification stands.
+ */
 private const val MAX_LABEL_PROJECTS = 24
 
 /**
@@ -137,6 +144,8 @@ private const val MAX_LABEL_PROJECTS = 24
 internal suspend fun RemoteCommands.sessionLabel(
     sessionId: String,
     withPreview: Boolean,
+    /** A title and project already known, which skips the walk over the projects. */
+    known: SessionName? = null,
 ): SessionLabel = coroutineScope {
     val preview =
         if (withPreview)
@@ -150,9 +159,9 @@ internal suspend fun RemoteCommands.sessionLabel(
                 }
             }
         else null
-    var title: String? = null
-    var project: String? = null
-    for (candidate in request("projects.list").array("items").take(MAX_LABEL_PROJECTS)) {
+    var title: String? = known?.title
+    var project: String? = known?.project
+    if (known == null) for (candidate in request("projects.list").array("items").take(MAX_LABEL_PROJECTS)) {
         val projectId = candidate.optionalText("id") ?: continue
         val found =
             request("sessions.list", "projectId" to projectId)

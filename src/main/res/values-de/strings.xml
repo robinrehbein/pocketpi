@@ -175,6 +175,7 @@
     <string name="remote_notification_prompt_text">Erlaube Benachrichtigungen, damit pi dir sagen kann, wenn eine Sitzung fertig ist oder eine Antwort braucht.</string>
     <string name="remote_notification_prompt_allow">Erlauben</string>
     <string name="remote_notification_prompt_later">Nicht jetzt</string>
+    <string name="remote_notification_open_settings">Benachrichtigungseinstellungen öffnen</string>
     <string name="remote_notification_allow">Benachrichtigungen aktivieren</string>
     <string name="remote_notification_unconfigured">Dieser Build kann sich nicht für Push-Benachrichtigungen registrieren und zeigt daher keine an.</string>
     <string name="remote_notification_denied">Benachrichtigungen sind aus. Du kannst sie in den Android-Einstellungen aktivieren.</string>
