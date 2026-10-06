@@ -104,10 +104,38 @@ private const val COMPACTION_TICK_MILLIS = 30_000L
 private const val PRIVACY_POLICY_URL = "https://robinrehbein.de/privacy"
 private val LIST_TO_HEADER_END_SHIFT = 4.dp
 
+/** "Try again", or "Reconnect now" while an automatic reconnect is scheduled. */
+@Composable
+private fun retryLabel(reconnectAt: Long?): String =
+    stringResource(
+        if (reconnectAt != null) R.string.remote_reconnect_now else R.string.remote_error_retry
+    )
+
+/** Live "Reconnecting in N s" line for the next automatic reconnect attempt. */
+@Composable
+private fun ReconnectCountdown(reconnectAt: Long?) {
+    if (reconnectAt == null) return
+    val seconds by produceState(reconnectSeconds(reconnectAt), reconnectAt) {
+        while (true) {
+            value = reconnectSeconds(reconnectAt)
+            delay(250)
+        }
+    }
+    Text(
+        stringResource(R.string.remote_reconnecting_in, seconds),
+        Modifier.testTag("reconnectCountdown"),
+        style = MaterialTheme.typography.bodySmall,
+    )
+}
+
+private fun reconnectSeconds(reconnectAt: Long): Int =
+    ((reconnectAt - System.currentTimeMillis() + 999) / 1000).toInt().coerceAtLeast(0)
+
 /** Errors a reload can plausibly fix; only these offer "Try again" on the error card. */
 private val RETRYABLE_ERRORS =
     setOf(
         R.string.remote_connection_error,
+        R.string.remote_unreachable,
         R.string.remote_request_error,
         R.string.remote_configuration_error,
         R.string.remote_commands_error,
@@ -1025,6 +1053,7 @@ internal fun RemoteScreen(
                                 Icon(Icons.Default.ErrorOutline, contentDescription = null)
                                 Text(stringResource(state.error!!), Modifier.weight(1f))
                             }
+                            ReconnectCountdown(state.reconnectAt)
                             Row(
                                 Modifier.fillMaxWidth(),
                                 horizontalArrangement =
@@ -1046,6 +1075,7 @@ internal fun RemoteScreen(
                                             model.dismissError()
                                             model.refresh()
                                         },
+                                        modifier = Modifier.testTag("reconnectNow"),
                                     ) {
                                         Icon(
                                             Icons.Default.Refresh,
@@ -1053,7 +1083,7 @@ internal fun RemoteScreen(
                                             modifier = Modifier.size(ButtonDefaults.IconSize),
                                         )
                                         Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                                        Text(stringResource(R.string.remote_error_retry))
+                                        Text(retryLabel(state.reconnectAt))
                                     }
                             }
                         }
@@ -1635,6 +1665,7 @@ internal fun RemoteScreen(
                                     Icon(Icons.Default.ErrorOutline, contentDescription = null)
                                     Text(stringResource(error), Modifier.weight(1f))
                                 }
+                                ReconnectCountdown(state.reconnectAt)
                                 Row(
                                     Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
@@ -1649,11 +1680,14 @@ internal fun RemoteScreen(
                                         Text(stringResource(R.string.remote_error_close))
                                     }
                                     if (!state.loading && error in RETRYABLE_ERRORS)
-                                        FilledTonalButton(onClick = {
-                                            model.dismissError()
-                                            model.refresh()
-                                        }) {
-                                            Text(stringResource(R.string.remote_error_retry))
+                                        FilledTonalButton(
+                                            onClick = {
+                                                model.dismissError()
+                                                model.refresh()
+                                            },
+                                            modifier = Modifier.testTag("reconnectNow"),
+                                        ) {
+                                            Text(retryLabel(state.reconnectAt))
                                         }
                                 }
                             }

@@ -139,6 +139,9 @@
     <string name="remote_connected">Verbunden</string>
     <string name="remote_denied">Kopplung abgelehnt oder abgelaufen. Scanne einen neuen Code.</string>
     <string name="remote_connection_error">Verbindung fehlgeschlagen. Prüfe, ob dein Mac wach ist und pi Remote läuft.</string>
+    <string name="remote_unreachable">Dein Mac ist nicht erreichbar. Prüfe, ob er wach ist und pi Remote läuft. Wurde der Zugriff dieses Telefons auf dem Mac widerrufen, koppele es erneut.</string>
+    <string name="remote_reconnecting_in">Verbindung wird in %1$d s neu aufgebaut</string>
+    <string name="remote_reconnect_now">Jetzt verbinden</string>
     <string name="remote_invalid_qr">Dieser Kopplungscode ist ungültig oder abgelaufen.</string>
     <string name="remote_request_error">Die Anfrage konnte nicht abgeschlossen werden. Aktualisiere die Ansicht und versuche es erneut.</string>
     <string name="remote_storage_error">Die gespeicherte Kopplung konnte nicht geöffnet werden. Kopple diesen Rechner erneut.</string>

@@ -19,6 +19,9 @@ interface RemoteTransport {
         fun message(payload: JsonObject)
 
         fun failed(reconnect: Boolean, error: Int)
+
+        /** The relay closed the socket with [code]; delivered just before [failed]. */
+        fun closed(code: Int) {}
     }
 
     var listener: Listener
@@ -245,11 +248,13 @@ class SecureRemoteTransport(
                                 val approved = approvedHost
                                 close()
                                 if (approved != null) listener.paired(approved)
-                                else
+                                else {
+                                    listener.closed(code)
                                     listener.failed(
                                         pairing == null,
                                         R.string.remote_connection_error,
                                     )
+                                }
                             }
                         }
                     }

@@ -64,6 +64,8 @@ data class RemoteState(
     val connection: Int = R.string.remote_offline,
     val connected: Boolean = false,
     val error: Int? = null,
+    /** Epoch millis of the next automatic reconnect attempt, or null when none is scheduled. */
+    val reconnectAt: Long? = null,
     val projects: List<JsonObject> = emptyList(),
     val projectChats: List<ProjectChatSummary> = emptyList(),
     val project: JsonObject? = null,

@@ -139,6 +139,9 @@
     <string name="remote_connected">Connected</string>
     <string name="remote_denied">Pairing was declined or expired. Scan a new code.</string>
     <string name="remote_connection_error">Connection failed. Check that your Mac is awake and pi Remote is running.</string>
+    <string name="remote_unreachable">Can\'t reach your Mac. Make sure it\'s awake and pi Remote is running. If this phone\'s access was revoked on the Mac, pair again.</string>
+    <string name="remote_reconnecting_in">Reconnecting in %1$d s</string>
+    <string name="remote_reconnect_now">Reconnect now</string>
     <string name="remote_invalid_qr">This pairing code is invalid or expired.</string>
     <string name="remote_request_error">The request could not be completed. Refresh and try again.</string>
     <string name="remote_storage_error">Saved pairing could not be opened. Pair this computer again.</string>
