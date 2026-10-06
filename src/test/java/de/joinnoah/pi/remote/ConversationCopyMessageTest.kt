@@ -27,9 +27,11 @@ class ConversationCopyMessageTest {
             quote = null, truncated = false, timestamp = 1_000L, streaming = streaming, error = error,
         )
 
-    private fun show(item: ConversationItem.Bubble) =
+    private fun show(item: ConversationItem.Bubble, copyButton: Boolean = true) =
         compose.setContent {
-            MaterialTheme { ConversationMessage(item, "hidden", thinkingActive = false, onQuote = {}) }
+            MaterialTheme {
+                ConversationMessage(item, "hidden", thinkingActive = false, onQuote = {}, copyButton = copyButton)
+            }
         }
 
     @Test fun completeAssistantBubbleCopiesItsRawMarkdown() {
@@ -39,6 +41,11 @@ class ConversationCopyMessageTest {
         val clipboard = ApplicationProvider.getApplicationContext<Context>()
             .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         assertEquals("**Hello** `world`", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+    }
+
+    @Test fun olderAssistantBubbleHasNoCopyButton() {
+        show(bubble("assistant"), copyButton = false)
+        compose.onAllNodesWithTag("copyMessage-b1").assertCountEquals(0)
     }
 
     @Test fun userBubbleHasNoCopyButton() {

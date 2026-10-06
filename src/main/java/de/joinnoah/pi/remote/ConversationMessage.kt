@@ -205,6 +205,8 @@ internal fun ConversationMessage(
     fork: MessageFork? = null,
     /** Without a source, sent images show as plain text like any other attachment. */
     images: SentImageSource? = null,
+    /** Set only for the newest assistant bubble, like pi's `/copy`; others copy through accessibility. */
+    copyButton: Boolean = false,
 ) {
     Box(Modifier.jumpHighlight(highlighted)) {
         ConversationMessageContent(
@@ -217,6 +219,7 @@ internal fun ConversationMessage(
             onAskToFix,
             fork,
             images,
+            copyButton,
         )
     }
 }
@@ -232,6 +235,7 @@ private fun ConversationMessageContent(
     onAskToFix: ((messageId: String) -> Unit)?,
     fork: MessageFork?,
     images: SentImageSource?,
+    copyButton: Boolean,
 ) {
     val quoteLabel = stringResource(R.string.remote_quote)
     val forkLabel = stringResource(R.string.remote_fork_action)
@@ -356,7 +360,7 @@ private fun ConversationMessageContent(
                                             stringResource(R.string.remote_truncated),
                                             style = MaterialTheme.typography.labelSmall,
                                         )
-                                    if (canCopy)
+                                    if (canCopy && copyButton)
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             IconButton(
                                                 onClick = { copyToClipboard(item.text) },
