@@ -80,8 +80,10 @@ class RemoteTransportTest {
         override fun message(payload: JsonObject) {}
 
         val reconnects = mutableListOf<Boolean>()
+        val errors = mutableListOf<Int>()
 
         override fun failed(reconnect: Boolean, error: Int) {
+            errors += error
             failed = true
             failureCount++
             reconnects += reconnect
@@ -170,6 +172,59 @@ class RemoteTransportTest {
             "capabilities" to JsonArray(capabilities.map(::JsonPrimitive)))))
         runCurrent()
         return listener
+    }
+
+    private fun TestScope.authenticateReplying(reply: JsonObject): Listener {
+        val socket = Socket()
+        val listener = Listener { }
+        val transport = SecureRemoteTransport(backgroundScope, socket) { "Test device" }
+            .also { it.listener = listener }
+        val deviceKey = Wire.random(32)
+        transport.connect(PairedHost(Wire.random(), "https://relay.test", Wire.random(), deviceKey, "Host"))
+        socket.open()
+        runCurrent()
+        val hello = Wire.parse(socket.sent.single())
+        val nonce = Wire.random(32)
+        socket.receive(Wire.objectOf("v" to 1, "type" to "challenge",
+            "connectionId" to hello.text("connectionId"), "serverNonce" to nonce))
+        runCurrent()
+        val server = SecureChannel(deviceKey, JsonObject(hello + ("serverNonce" to JsonPrimitive(nonce))), false)
+        socket.receive(server.seal(Wire.objectOf("type" to "ready", "mode" to "device")))
+        runCurrent()
+        assertEquals("device.authenticate", server.open(Wire.parse(socket.sent.last())).text("type"))
+        socket.receive(server.seal(reply))
+        runCurrent()
+        return listener
+    }
+
+    private val deviceAccess =
+        Wire.json.parseToJsonElement(javaClass.getResource("/device-access-v1.json")!!.readText()).jsonObject
+
+    @Test
+    fun deniedDeviceStopsWithoutReconnectForEveryValidFixtureEntry() = runTest {
+        val expected =
+            mapOf("revoked" to R.string.remote_device_revoked, "paused" to R.string.remote_device_paused)
+        val entries = deviceAccess.getValue("wireValid").jsonArray.map { it.jsonObject }
+        assertEquals(2, entries.size)
+        for (entry in entries) {
+            val payload = entry.getValue("payload").jsonObject
+            val listener = authenticateReplying(payload)
+            assertEquals(entry.text("name"), listOf(false), listener.reconnects)
+            assertEquals(entry.text("name"), listOf(expected.getValue(payload.text("reason"))), listener.errors)
+            assertNull(listener.capabilities)
+        }
+    }
+
+    @Test
+    fun malformedDeniedDeviceStaysTheGenericConnectionError() = runTest {
+        val entries = deviceAccess.getValue("wireInvalid").jsonArray.map { it.jsonObject }
+        assertTrue(entries.isNotEmpty())
+        for (entry in entries) {
+            val listener = authenticateReplying(entry.getValue("payload").jsonObject)
+            assertEquals(entry.text("name"), listOf(R.string.remote_connection_error), listener.errors)
+            assertEquals(entry.text("name"), listOf(false), listener.reconnects)
+            assertNull(listener.capabilities)
+        }
     }
 
     @Test

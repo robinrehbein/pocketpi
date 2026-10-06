@@ -124,10 +124,11 @@ class RemoteRepositoryTest {
         transport: Transport,
         drafts: Drafts = Drafts(),
         attachmentStorage: AttachmentStorage? = null,
+        hosts: List<PairedHost> = listOf(host),
         attachmentImporter: (suspend (String, Boolean) -> LocalAttachment)? = null,
     ) =
         DefaultRemoteRepository(
-            Pairings(listOf(host)),
+            Pairings(hosts),
             drafts,
             transport,
             backgroundScope,
@@ -1912,6 +1913,146 @@ class RemoteRepositoryTest {
         advanceTimeBy(120_000)
         runCurrent()
         assertEquals(connects, transport.connects)
+    }
+
+    @Test
+    fun deniedDeviceStopsReconnectEvenWhenTheTransportAsksForOne() = runTest {
+        for (error in listOf(R.string.remote_device_revoked, R.string.remote_device_paused)) {
+            val transport = Transport().also { configure(it) }
+            val repository = offlineRepository(transport)
+            transport.listener.failed(true, R.string.remote_connection_error)
+            assertNotNull(repository.state.value.reconnectAt)
+            transport.listener.failed(true, error)
+            assertNull(repository.state.value.reconnectAt)
+            assertEquals(error, repository.state.value.error)
+            val connects = transport.connects
+            advanceTimeBy(120_000)
+            runCurrent()
+            repository.setValidatedNetwork("cellular")
+            runCurrent()
+            assertEquals(connects, transport.connects)
+            assertEquals(error, repository.state.value.error)
+        }
+    }
+
+    @Test
+    fun deniedDeviceKeepsItsErrorThroughActivationAndRetriesOnlyOnRefresh() = runTest {
+        val full = RemoteSelection("host", "project", "session")
+        for (error in listOf(R.string.remote_device_revoked, R.string.remote_device_paused)) {
+            val transport = Transport().also { configure(it) }
+            val repository = repository(transport)
+            transport.failureOnConnect = error
+            repository.activate(full)
+            runCurrent()
+            assertEquals(error, repository.state.value.error)
+            assertEquals("host", repository.state.value.deniedRouteId)
+            assertNull(repository.state.value.reconnectAt)
+            val connects = transport.connects
+            advanceTimeBy(120_000)
+            runCurrent()
+            assertEquals(connects, transport.connects)
+            assertEquals(error, repository.state.value.error)
+
+            // Navigation restores must not retry it either, even after the card is dismissed.
+            repository.dismissError()
+            repository.activate(full, ActivationMode.RESTORE)
+            runCurrent()
+            assertEquals(connects, transport.connects)
+
+            repository.refresh()
+            runCurrent()
+            assertEquals(connects + 1, transport.connects)
+            assertEquals(error, repository.state.value.error)
+
+            transport.failureOnConnect = null
+            repository.refresh()
+            runCurrent()
+            assertTrue(repository.state.value.connected)
+            assertNull(repository.state.value.deniedRouteId)
+            assertEquals(full, repository.state.value.selection)
+        }
+    }
+
+    @Test
+    fun deniedHostOpenedFromTheListIsTargetedByRouteAndRetried() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        transport.failureOnConnect = R.string.remote_device_revoked
+        repository.activate(RemoteSelection("host"))
+        runCurrent()
+        // Nothing was selected yet, so the error card cannot rely on the selection.
+        assertNull(repository.state.value.selection.routeId)
+        assertEquals("host", repository.state.value.deniedRouteId)
+
+        transport.failureOnConnect = null
+        repository.refresh()
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals("host", repository.state.value.selection.routeId)
+        assertNull(repository.state.value.deniedRouteId)
+    }
+
+    @Test
+    fun restoringTheHostsListLeavesADeniedHostAndReenablesReconnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        transport.failureOnConnect = R.string.remote_device_paused
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.dismissError()
+
+        repository.activate(RemoteSelection(), ActivationMode.RESTORE)
+        runCurrent()
+        assertNull(repository.state.value.selection.routeId)
+
+        // Reconnect is enabled again, so a failure on another host schedules a retry.
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun restoringAHealthyHostIgnoresAnotherHostsDenial() = runTest {
+        val other = PairedHost("other", "https://relay.test", "device2", "secret2", "Other")
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, hosts = listOf(host, other))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        transport.failureOnConnect = R.string.remote_device_revoked
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.dismissError()
+
+        transport.failureOnConnect = null
+        repository.activate(RemoteSelection("other", "project"), ActivationMode.RESTORE)
+        runCurrent()
+        assertEquals("other", transport.route)
+        assertTrue(repository.state.value.connected)
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun pausedDeviceReconnectsOnlyWhenTheUserRetries() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(false, R.string.remote_device_paused)
+        val connects = transport.connects
+        advanceTimeBy(120_000)
+        runCurrent()
+        repository.setValidatedNetwork("cellular")
+        repository.setForeground(false)
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        transport.failureOnConnect = null
+        repository.refresh()
+        runCurrent()
+        assertTrue(transport.connects > connects)
+        assertTrue(repository.state.value.connected)
     }
 
     @Test

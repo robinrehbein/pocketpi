@@ -142,6 +142,7 @@ private val RETRYABLE_ERRORS =
         R.string.remote_request_error,
         R.string.remote_configuration_error,
         R.string.remote_commands_error,
+        R.string.remote_device_paused,
     )
 
 @Composable
@@ -1082,6 +1083,15 @@ internal fun RemoteScreen(
                                 ) {
                                     Text(stringResource(R.string.remote_error_close))
                                 }
+                                if (state.error == R.string.remote_device_revoked)
+                                    state.hosts.find { it.routeId == state.deniedRouteId }?.let { host ->
+                                        FilledTonalButton(
+                                            onClick = { removing = host },
+                                            modifier = Modifier.testTag("removePairing"),
+                                        ) {
+                                            Text(stringResource(R.string.remote_remove))
+                                        }
+                                    }
                                 if (!state.loading && state.error in RETRYABLE_ERRORS)
                                     FilledTonalButton(
                                         onClick = {
@@ -1739,6 +1749,15 @@ internal fun RemoteScreen(
                                     ) {
                                         Text(stringResource(R.string.remote_error_close))
                                     }
+                                    if (error == R.string.remote_device_revoked)
+                                        state.hosts.find { it.routeId == state.deniedRouteId }?.let { host ->
+                                            FilledTonalButton(
+                                                onClick = { removing = host },
+                                                modifier = Modifier.testTag("removePairing"),
+                                            ) {
+                                                Text(stringResource(R.string.remote_remove))
+                                            }
+                                        }
                                     if (!state.loading && error in RETRYABLE_ERRORS)
                                         FilledTonalButton(
                                             onClick = {
