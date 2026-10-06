@@ -177,16 +177,18 @@ Keystore and encrypted file recreation. With an attached emulator, run
 `./gradlew connectedDebugAndroidTest`. For the managed API 36 device used by CI, run
 `./gradlew pixel2Api36DebugAndroidTest`.
 
-Unit tests consume the seven JSON fixtures in `src/test/resources/`. Six are byte-for-byte copies
+Unit tests consume the seven JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
 of `packages/pi-remote/protocol/fixtures/` from noah-monorepo commit
-`1550dcc200459913b9b1dc9b16fc3439db341c68`. The seventh, `provider-auth-v1.json` (provider login),
-is a byte-for-byte copy from noah-monorepo commit `daca1ee562ca661fb76ce2d61a75ca2fc8c8059f`, the
-merge of pull request #633. When the upstream protocol fixtures change,
+`1550dcc200459913b9b1dc9b16fc3439db341c68`. `provider-auth-v1.json` (provider login) is a
+byte-for-byte copy from noah-monorepo commit `daca1ee562ca661fb76ce2d61a75ca2fc8c8059f`, the
+merge of pull request #633, and `attachments-v1.json` (sent attachments and reading them back) from
+commit `4783a9fb2a54ed0e22c72ffa029d9cf8b9aac85e`. When the upstream protocol fixtures change,
 copy the changed files into `src/test/resources/`, compare their bytes with the upstream source,
 and run `./gradlew testDebugUnitTest`. The fixtures cover byte-identical
 HKDF, AES-GCM and QR encoding, replay and tampering rejection, session request correlation, history
 pagination, early events, questionnaire defaults and the project file browser's list and read
-results, and the provider login commands, results and events. A built APK does not establish Samsung device, TalkBack, mobile-network or real Firebase
+results, the provider login commands, results and events, and the attachment manifest and content reads.
+A built APK does not establish Samsung device, TalkBack, mobile-network or real Firebase
 delivery acceptance; those require the configured host, relay and device.
 
 ## Appearance

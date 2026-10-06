@@ -271,6 +271,13 @@ interface RemoteRepository {
     suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?): FileChunk =
         throw RemoteRequestException("unsupported")
 
+    /**
+     * The bytes of an image this device sent in [sessionId]'s chat, from memory or read from the
+     * host in chunks (`session.attachments.get`, only with [ATTACHMENT_READ_CAPABILITY]).
+     */
+    suspend fun readAttachment(sessionId: String, attachment: RemoteAttachment): AttachmentReadResult =
+        AttachmentReadResult.Unsupported
+
     /** Opens [RemoteState.files] for the selected session at its folder. */
     fun openFiles() {}
 

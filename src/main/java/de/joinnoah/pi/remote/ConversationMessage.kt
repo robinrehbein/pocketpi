@@ -202,6 +202,8 @@ internal fun ConversationMessage(
     highlighted: Boolean = false,
     /** Set only for the first bubble of a user message when the chat can be rewound. */
     fork: MessageFork? = null,
+    /** Without a source, sent images show as plain text like any other attachment. */
+    images: SentImageSource? = null,
 ) {
     Box(Modifier.jumpHighlight(highlighted)) {
         ConversationMessageContent(
@@ -213,6 +215,7 @@ internal fun ConversationMessage(
             onOpenAgent,
             onAskToFix,
             fork,
+            images,
         )
     }
 }
@@ -227,6 +230,7 @@ private fun ConversationMessageContent(
     onOpenAgent: ((ConversationItem.Subagent, Int) -> Unit)?,
     onAskToFix: ((messageId: String) -> Unit)?,
     fork: MessageFork?,
+    images: SentImageSource?,
 ) {
     val quoteLabel = stringResource(R.string.remote_quote)
     val forkLabel = stringResource(R.string.remote_fork_action)
@@ -297,7 +301,12 @@ private fun ConversationMessageContent(
                                 verticalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                                     item.quote?.let { QuotePreview(it) }
-                                    for (attachment in item.attachments) {
+                                    val sentImages =
+                                        if (images == null) emptyList()
+                                        else item.attachments.filter { it.kind == "image" }
+                                    if (images != null && sentImages.isNotEmpty())
+                                        SentImageAttachments(sentImages, images)
+                                    for (attachment in item.attachments - sentImages.toSet()) {
                                         Column(Modifier.padding(vertical = 4.dp)) {
                                             Text(
                                                 attachment.name,
