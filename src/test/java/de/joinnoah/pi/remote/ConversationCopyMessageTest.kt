@@ -21,10 +21,10 @@ import org.robolectric.annotation.Config
 class ConversationCopyMessageTest {
     @get:Rule val compose = createComposeRule()
 
-    private fun bubble(role: String, streaming: Boolean = false) =
+    private fun bubble(role: String, streaming: Boolean = false, error: Boolean = false, text: String = "**Hello** `world`") =
         ConversationItem.Bubble(
-            id = "b1", sourceId = "m1", role = role, author = null, text = "**Hello** `world`",
-            quote = null, truncated = false, timestamp = 1_000L, streaming = streaming,
+            id = "b1", sourceId = "m1", role = role, author = null, text = text,
+            quote = null, truncated = false, timestamp = 1_000L, streaming = streaming, error = error,
         )
 
     private fun show(item: ConversationItem.Bubble) =
@@ -41,13 +41,23 @@ class ConversationCopyMessageTest {
         assertEquals("**Hello** `world`", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
     }
 
-    @Test fun userAndStreamingBubblesHaveNoCopyButton() {
+    @Test fun userBubbleHasNoCopyButton() {
         show(bubble("user"))
         compose.onAllNodesWithTag("copyMessage-b1").assertCountEquals(0)
     }
 
     @Test fun streamingAssistantBubbleHasNoCopyButton() {
         show(bubble("assistant", streaming = true))
+        compose.onAllNodesWithTag("copyMessage-b1").assertCountEquals(0)
+    }
+
+    @Test fun errorAssistantBubbleHasNoCopyButton() {
+        show(bubble("assistant", error = true))
+        compose.onAllNodesWithTag("copyMessage-b1").assertCountEquals(0)
+    }
+
+    @Test fun completeBlankAssistantBubbleHasNoCopyButton() {
+        show(bubble("assistant", text = "  "))
         compose.onAllNodesWithTag("copyMessage-b1").assertCountEquals(0)
     }
 }

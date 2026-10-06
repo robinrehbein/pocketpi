@@ -236,14 +236,14 @@ private fun ConversationMessageContent(
     val quoteLabel = stringResource(R.string.remote_quote)
     val forkLabel = stringResource(R.string.remote_fork_action)
     val copyLabel = stringResource(R.string.remote_copy_message)
-    val copyToClipboard = rememberCopyToClipboard(copyLabel)
     when (item) {
         is ConversationItem.Bubble -> {
             val outgoing = item.role == "user"
             val canQuote = item.text.isNotBlank()
             val forkShown = fork != null && outgoing
             // Only a finished assistant text can be copied; a streaming one is still changing.
-            val canCopy = item.role == "assistant" && !item.streaming && item.text.isNotBlank()
+            val canCopy = item.role == "assistant" && !item.streaming && !item.error && item.text.isNotBlank()
+            val copyToClipboard = rememberCopyToClipboard(copyLabel)
             var forkMenu by remember(item.id) { mutableStateOf(false) }
             var forkConfirming by remember(item.id) { mutableStateOf<ForkMode?>(null) }
             BoxWithConstraints(Modifier.fillMaxWidth()) {

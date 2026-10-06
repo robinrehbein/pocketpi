@@ -366,18 +366,24 @@ internal fun SessionControls(
                 )
         }
     }
+    val sessionTitle = state.session?.optionalText("title")?.takeIf(String::isNotBlank)
+    val projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank)
+    val confirmedModel = confirmed?.model
+    val sessionInfo =
+        remember(sessionTitle, projectName, confirmedModel, thinking?.thinkingLevel, usage?.modelProvider, usage?.modelId, state.selection.sessionId) {
+            SessionInfo(
+                name = sessionTitle,
+                model = confirmedModel?.let { "${it.name} (${it.provider}/${it.id})" }
+                    ?: usage?.modelId?.let { id -> usage.modelProvider?.let { "$it/$id" } ?: id },
+                thinkingLevel = thinking?.thinkingLevel,
+                project = projectName,
+                sessionId = state.selection.sessionId,
+            )
+        }
     if (showContext) ModalBottomSheet(onDismissRequest = { showContext = false }) {
         ContextSheetBody(
             usage = usage,
-            info =
-                SessionInfo(
-                    name = state.session?.optionalText("title")?.takeIf(String::isNotBlank),
-                    model = confirmed?.model?.let { "${it.name} (${it.provider}/${it.id})" }
-                        ?: usage?.modelId?.let { id -> usage.modelProvider?.let { "$it/$id" } ?: id },
-                    thinkingLevel = confirmed?.thinkingLevel?.takeIf { thinking != null },
-                    project = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
-                    sessionId = state.selection.sessionId,
-                ),
+            info = sessionInfo,
             unavailable =
                 !state.connected || CONTEXT_CAPABILITY !in state.capabilities ||
                     CONTEXT_CAPABILITY in state.unavailableCapabilities,
