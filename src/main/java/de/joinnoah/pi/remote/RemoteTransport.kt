@@ -107,7 +107,9 @@ class SecureRemoteTransport(
             delay(20000)
             if (epoch == generation) {
                 close()
-                listener.failed(false, R.string.remote_connection_error)
+                // A paired device retries, since a sleeping Mac never answers the hello; a
+                // pairing code is single-use, so a stalled pairing stops.
+                listener.failed(pairing == null, R.string.remote_connection_error)
             }
         }
         if (pairing != null) {
