@@ -186,8 +186,11 @@ internal fun RemoteScreen(
     val sentImages =
         state.selection.sessionId?.takeIf { chatModel != null }?.let { sessionId ->
             val supported = ATTACHMENT_READ_CAPABILITY in state.capabilities
-            remember(chatModel, sessionId, state.connected, supported) {
-                SentImageSource(sessionId, state.connected, supported, checkNotNull(chatModel)::readAttachment)
+            remember(chatModel, sessionId, state.connected, state.capabilitiesKnown, supported) {
+                SentImageSource(
+                    sessionId, state.connected, state.capabilitiesKnown, supported,
+                    checkNotNull(chatModel)::readAttachment,
+                )
             }
         }
     val touched = remember(conversation) { touchedFiles(conversation) }

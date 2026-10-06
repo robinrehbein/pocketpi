@@ -96,6 +96,8 @@ data class RemoteState(
     val childControlUnsupported: Set<String> = emptySet(),
     val answering: Set<String> = emptySet(),
     val capabilities: Set<String> = emptySet(),
+    /** True once the connection's `projects.list` reply has added its route capabilities. */
+    val capabilitiesKnown: Boolean = false,
     val unavailableCapabilities: Set<String> = emptySet(),
     val configuration: SessionConfiguration? = null,
     val configurationLoading: Boolean = false,

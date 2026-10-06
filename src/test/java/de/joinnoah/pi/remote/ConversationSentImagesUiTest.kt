@@ -2,6 +2,7 @@ package de.joinnoah.pi.remote
 
 import android.graphics.Bitmap
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import java.io.ByteArrayOutputStream
@@ -17,6 +18,8 @@ import org.robolectric.annotation.Config
 class ConversationSentImagesUiTest {
     @get:Rule val compose = createComposeRule()
 
+    @org.junit.Before fun emptyThumbnailCache() = SentImageThumbnails.clear()
+
     private val image = attachment("AAAAAAAAAAAAAAAAAAAAAA", "photo.jpg", "image", "image/jpeg")
     private val file = attachment("BBBBBBBBBBBBBBBBBBBBBA", "notes.txt", "file", "text/plain")
 
@@ -30,7 +33,7 @@ class ConversationSentImagesUiTest {
         )
 
     private fun source(read: suspend (String, RemoteAttachment) -> AttachmentReadResult) =
-        SentImageSource("session", connected = true, supported = true, read = read)
+        SentImageSource("session", connected = true, capabilitiesKnown = true, supported = true, read = read)
 
     private fun show(item: ConversationItem.Bubble, images: SentImageSource?) =
         compose.setContent {
@@ -93,5 +96,34 @@ class ConversationSentImagesUiTest {
         compose.onNodeWithText("photo.jpg").assertIsDisplayed()
         compose.onNodeWithText("notes.txt").assertIsDisplayed()
         compose.onNodeWithTag("conversationAttachmentThumbnail-${image.id}").assertDoesNotExist()
+    }
+
+    @Test fun unknownCapabilitiesStayLoadingWithoutARequest() {
+        val reads = mutableListOf<String>()
+        show(bubble(image), SentImageSource("session", true, false, false) { _, a -> reads += a.id; AttachmentReadResult.Unsupported })
+        compose.waitForIdle()
+        compose.onNodeWithText("Loading image…").assertIsDisplayed()
+        assertEquals(emptyList<String>(), reads)
+    }
+
+    @Test fun aReadyThumbnailSurvivesAConnectionChange() {
+        var calls = 0
+        val current = androidx.compose.runtime.mutableStateOf(source { _, _ -> calls++; AttachmentReadResult.Loaded(png()) })
+        compose.setContent {
+            MaterialTheme { ConversationMessage(bubble(image), "hidden", thinkingActive = false, onQuote = {}, images = current.value) }
+        }
+        val tag = "conversationAttachmentImage-Thumbnail-${image.id}"
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag(tag, true).fetchSemanticsNodes().isNotEmpty() }
+        compose.runOnIdle { current.value = SentImageSource("session", false, true, true, current.value.read) }
+        compose.waitForIdle()
+        compose.onNodeWithTag(tag, true).assertExists()
+        assertEquals(1, calls)
+    }
+
+    @Test fun imagesAndFilesKeepTheirOrderInTheBubble() {
+        show(bubble(file, image), source { _, _ -> AttachmentReadResult.Unsupported })
+        val file = compose.onNodeWithText("notes.txt").fetchSemanticsNode().positionInRoot.y
+        val image = compose.onNodeWithTag("conversationAttachmentThumbnail-${image.id}").fetchSemanticsNode().positionInRoot.y
+        org.junit.Assert.assertTrue(file < image)
     }
 }

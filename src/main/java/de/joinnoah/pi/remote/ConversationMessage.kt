@@ -301,40 +301,40 @@ private fun ConversationMessageContent(
                                 verticalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                                     item.quote?.let { QuotePreview(it) }
-                                    val sentImages =
-                                        if (images == null) emptyList()
-                                        else item.attachments.filter { it.kind == "image" }
-                                    if (images != null && sentImages.isNotEmpty())
-                                        SentImageAttachments(sentImages, images)
-                                    for (attachment in item.attachments - sentImages.toSet()) {
-                                        Column(Modifier.padding(vertical = 4.dp)) {
-                                            Text(
-                                                attachment.name,
-                                                style = MaterialTheme.typography.labelLarge,
-                                            )
-                                            Text(
-                                                Formatter.formatShortFileSize(
-                                                    LocalContext.current,
-                                                    attachment.size,
-                                                ),
-                                                style = MaterialTheme.typography.labelSmall,
-                                            )
-                                            Text(
-                                                stringResource(
-                                                    if (
-                                                        attachment.expiresAt <=
-                                                            System.currentTimeMillis()
-                                                    )
-                                                        R.string.remote_attachment_expired
-                                                    else R.string.remote_attachment_expires,
-                                                    java.text.DateFormat.getDateTimeInstance(
-                                                            java.text.DateFormat.SHORT,
-                                                            java.text.DateFormat.SHORT,
+                                    // Runs of images go through the preview, other attachments stay in place.
+                                    for (run in attachmentRuns(item.attachments, images != null)) {
+                                        if (images != null && run.first().kind == "image")
+                                            SentImageAttachments(run, images)
+                                        else for (attachment in run) {
+                                            Column(Modifier.padding(vertical = 4.dp)) {
+                                                Text(
+                                                    attachment.name,
+                                                    style = MaterialTheme.typography.labelLarge,
+                                                )
+                                                Text(
+                                                    Formatter.formatShortFileSize(
+                                                        LocalContext.current,
+                                                        attachment.size,
+                                                    ),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                )
+                                                Text(
+                                                    stringResource(
+                                                        if (
+                                                            attachment.expiresAt <=
+                                                                System.currentTimeMillis()
                                                         )
-                                                        .format(java.util.Date(attachment.expiresAt)),
-                                                ),
-                                                style = MaterialTheme.typography.labelSmall,
-                                            )
+                                                            R.string.remote_attachment_expired
+                                                        else R.string.remote_attachment_expires,
+                                                        java.text.DateFormat.getDateTimeInstance(
+                                                                java.text.DateFormat.SHORT,
+                                                                java.text.DateFormat.SHORT,
+                                                            )
+                                                            .format(java.util.Date(attachment.expiresAt)),
+                                                    ),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                )
+                                            }
                                         }
                                     }
                                     if (item.text.isNotEmpty())

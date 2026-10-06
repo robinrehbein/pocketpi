@@ -52,10 +52,7 @@ class AttachmentReadRepositoryTest {
         override fun send(payload: JsonObject) {
             sent += payload
             sentAt += now()
-            fun reply(body: Pair<String, JsonObject>, ok: Boolean = true) =
-                listener.message(
-                    Wire.objectOf("type" to "result", "requestId" to payload.text("requestId"), "ok" to ok, body.first to body.second)
-                )
+            fun reply(body: Pair<String, JsonObject>, ok: Boolean = true) = respond(payload, body, ok)
             when (payload.text("type")) {
                 "projects.list" ->
                     reply(
@@ -86,6 +83,11 @@ class AttachmentReadRepositoryTest {
                 else -> reply("data" to Wire.objectOf("kind" to "accepted"))
             }
         }
+
+        fun respond(request: JsonObject, body: Pair<String, JsonObject>, ok: Boolean = true) =
+            listener.message(
+                Wire.objectOf("type" to "result", "requestId" to request.text("requestId"), "ok" to ok, body.first to body.second)
+            )
 
         fun reads() = sent.filter { it.text("type") == "session.attachments.get" }
     }
@@ -231,5 +233,89 @@ class AttachmentReadRepositoryTest {
         advanceUntilIdle()
         assertEquals(AttachmentReadResult.Unavailable, result.await())
         assertEquals(1, transport.reads().size)
+    }
+
+    @Test
+    fun aCancelledSharedReadFailsLiveWaitersInsteadOfLeavingThemWaiting() = runTest {
+        val transport = transport().apply { read = { null } }
+        val repository = connected(transport)
+        val waiter = async { repository.readAttachment("session", attachment) }
+        runCurrent()
+        assertEquals(1, transport.reads().size)
+        repository.cancelSelection()
+        runCurrent()
+        assertEquals(AttachmentReadResult.Failed, waiter.await())
+    }
+
+    @Test
+    fun aCallerThatLeavesStillCancelsNormally() = runTest {
+        val transport = transport().apply { read = { null } }
+        val repository = connected(transport)
+        val waiter = async { repository.readAttachment("session", attachment) }
+        runCurrent()
+        waiter.cancel()
+        runCurrent()
+        assertTrue(waiter.isCancelled)
+    }
+
+    @Test
+    fun anOldReadFinishingDoesNotRemoveANewerEntry() = runTest {
+        val transport = transport()
+        val serve = transport.read
+        transport.read = { null }
+        val repository = connected(transport)
+        val first = async { repository.readAttachment("session", attachment) }
+        runCurrent()
+        first.cancel()
+        runCurrent()
+        transport.read = serve
+        val second = async { repository.readAttachment("session", attachment) }
+        runCurrent()
+        // The abandoned request is answered; the first job ends while the second one waits its turn.
+        transport.respond(transport.reads().first(), "data" to serve(transport.reads().first())!!)
+        runCurrent()
+        val third = async { repository.readAttachment("session", attachment) }
+        advanceUntilIdle()
+        assertTrue(second.await() is AttachmentReadResult.Loaded && third.await() is AttachmentReadResult.Loaded)
+        // One abandoned request plus a single chain of three, shared by the later callers.
+        assertEquals(4, transport.reads().size)
+    }
+
+    @Test
+    fun noReadStartsWhileAnAbandonedRequestIsStillOutstanding() = runTest {
+        val transport = transport()
+        val serve = transport.read
+        transport.read = { null }
+        val repository = connected(transport)
+        val first = async { repository.readAttachment("session", attachment) }
+        runCurrent()
+        first.cancel()
+        runCurrent()
+        transport.read = serve
+        val second = async { repository.readAttachment("session", attachment) }
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertEquals(1, transport.reads().size)
+        val abandoned = transport.reads().single()
+        val answeredAt = testScheduler.currentTime
+        transport.respond(abandoned, "data" to serve(abandoned)!!)
+        advanceUntilIdle()
+        assertTrue(second.await() is AttachmentReadResult.Loaded)
+        assertTrue(transport.sentAt[transport.sent.indexOf(transport.reads()[1])] - answeredAt >= 0)
+        assertEquals(4, transport.reads().size)
+    }
+
+    @Test
+    fun capabilitiesNotYetKnownAreNeverReportedAsUnsupported() = runTest {
+        val transport = transport().apply { advertised = emptyList() }
+        val repository = connected(transport)
+        assertTrue(repository.state.value.capabilitiesKnown)
+        transport.listener.ready(emptySet())
+        runCurrent()
+        assertFalse(repository.state.value.capabilitiesKnown)
+        val result = async { repository.readAttachment("session", attachment) }
+        runCurrent()
+        assertEquals(AttachmentReadResult.Failed, result.await())
+        assertTrue(transport.reads().isEmpty())
     }
 }

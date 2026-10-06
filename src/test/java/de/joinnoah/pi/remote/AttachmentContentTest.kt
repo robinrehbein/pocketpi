@@ -33,7 +33,7 @@ class AttachmentContentTest {
         val invalid = payloads("wireInvalid").filter { isGet(it.second) }
         assertTrue(invalid.isNotEmpty())
         for ((name, payload) in invalid) {
-            assertThrows(name, Exception::class.java) { requireAttachmentGet(payload) }
+            assertThrows(name, IllegalArgumentException::class.java) { requireAttachmentGet(payload) }
             if (payload.keys == setOf("type", "requestId", "sessionId", "attachmentId", "offset"))
                 assertThrows(name, IllegalArgumentException::class.java) {
                     attachmentGetFields(payload.text("sessionId"), payload.text("attachmentId"), payload.long("offset"))
@@ -62,7 +62,7 @@ class AttachmentContentTest {
         }
         for ((name, payload) in payloads("wireInvalid").filterNot { isGet(it.second) }) {
             val data = payload.obj("data")
-            assertThrows(name, Exception::class.java) {
+            assertThrows(name, IllegalArgumentException::class.java) {
                 validatedAttachmentChunk(data, sessionId, attachmentId, data.long("offset"))
             }
         }
@@ -124,7 +124,7 @@ class AttachmentContentTest {
         val end = bytes.size.toLong()
         val chunk = validatedAttachmentChunk(reply(end, data = ""), sessionId, attachmentId, end)
         assertEquals(0, chunk.bytes.size)
-        assertThrows(Exception::class.java) {
+        assertThrows(IllegalArgumentException::class.java) {
             validatedAttachmentChunk(reply(end - 1, length = 0, data = ""), sessionId, attachmentId, end - 1)
         }
     }
@@ -179,6 +179,15 @@ class AttachmentContentTest {
             rejects { reassembler(small).accept(reply(0, small, data = data)) }
         }
         rejects { reassembler(small).accept(reply(0, small, extra = mapOf("extra" to JsonPrimitive(1)))) }
+    }
+
+    @Test
+    fun attachmentsKeepTheirOrderInRunsOfImages() {
+        fun a(id: String, kind: String) = RemoteAttachment(id, id, kind, "x/y", 1, "a".repeat(64), 1)
+        val list = listOf(a("1", "image"), a("2", "image"), a("3", "file"), a("4", "image"))
+        assertEquals(listOf(listOf("1", "2"), listOf("3"), listOf("4")), attachmentRuns(list, true).map { r -> r.map { it.id } })
+        assertEquals(1, attachmentRuns(list, false).size)
+        assertEquals(emptyList<List<RemoteAttachment>>(), attachmentRuns(emptyList(), true))
     }
 
     @Test
