@@ -1468,6 +1468,10 @@ internal fun RemoteScreen(
                             }
                         }
                         leadingItems.count = leading
+                        val copyButtonId =
+                            shownItems.lastOrNull {
+                                it is ConversationItem.Bubble && it.role == "assistant"
+                            }?.id
                         items(shownItems, key = { it.id }) { item ->
                             val highlighted = item.id == highlightedId
                             Box(
@@ -1486,6 +1490,7 @@ internal fun RemoteScreen(
                                     highlighted = highlighted,
                                     fork = messageFork?.takeIf { item.id in forkableIds },
                                     images = sentImages,
+                                    copyButton = item.id == copyButtonId,
                                 )
                             }
                         }

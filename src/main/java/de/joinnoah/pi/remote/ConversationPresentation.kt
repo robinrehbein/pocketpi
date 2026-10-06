@@ -18,6 +18,8 @@ internal sealed interface ConversationItem {
         val attachments: List<RemoteAttachment> = emptyList(),
         val error: Boolean = false,
         val usage: MessageUsage? = null,
+        /** True while the host is still producing this message; its text is not complete yet. */
+        val streaming: Boolean = false,
     ) : ConversationItem
 
     data class Thinking(
@@ -353,6 +355,7 @@ internal fun conversationItems(
             val parts = message.parts()
             val error = message.safeText("state") == "error"
             val usage = messageUsage(message)
+            val streaming = message.optionalText("state") == "streaming"
             if (parts.isEmpty()) {
                 if (decoded.body.isNotEmpty() || quote != null || attachments.isNotEmpty()) {
                     add(
@@ -368,6 +371,7 @@ internal fun conversationItems(
                             attachments,
                             error,
                             usage,
+                            streaming,
                         )
                     )
                 }
@@ -390,6 +394,7 @@ internal fun conversationItems(
                         attachments,
                         error,
                         usage,
+                        streaming,
                     )
                 )
             }
@@ -417,6 +422,7 @@ internal fun conversationItems(
                                     if (!quoteShown) attachments else emptyList(),
                                     error,
                                     usage,
+                                    streaming,
                                 )
                             )
                         }

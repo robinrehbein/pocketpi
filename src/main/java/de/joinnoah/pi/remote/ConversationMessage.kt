@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -204,6 +205,8 @@ internal fun ConversationMessage(
     fork: MessageFork? = null,
     /** Without a source, sent images show as plain text like any other attachment. */
     images: SentImageSource? = null,
+    /** Set only for the newest assistant bubble, like pi's `/copy`; others copy through accessibility. */
+    copyButton: Boolean = false,
 ) {
     Box(Modifier.jumpHighlight(highlighted)) {
         ConversationMessageContent(
@@ -216,6 +219,7 @@ internal fun ConversationMessage(
             onAskToFix,
             fork,
             images,
+            copyButton,
         )
     }
 }
@@ -231,14 +235,19 @@ private fun ConversationMessageContent(
     onAskToFix: ((messageId: String) -> Unit)?,
     fork: MessageFork?,
     images: SentImageSource?,
+    copyButton: Boolean,
 ) {
     val quoteLabel = stringResource(R.string.remote_quote)
     val forkLabel = stringResource(R.string.remote_fork_action)
+    val copyLabel = stringResource(R.string.remote_copy_message)
     when (item) {
         is ConversationItem.Bubble -> {
             val outgoing = item.role == "user"
             val canQuote = item.text.isNotBlank()
             val forkShown = fork != null && outgoing
+            // Only a finished assistant text can be copied; a streaming one is still changing.
+            val canCopy = item.role == "assistant" && !item.streaming && !item.error && item.text.isNotBlank()
+            val copyToClipboard = rememberCopyToClipboard(copyLabel)
             var forkMenu by remember(item.id) { mutableStateOf(false) }
             var forkConfirming by remember(item.id) { mutableStateOf<ForkMode?>(null) }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -279,6 +288,13 @@ private fun ConversationMessageContent(
                                             add(
                                                 CustomAccessibilityAction(quoteLabel) {
                                                     onQuote(item.sourceId)
+                                                    true
+                                                }
+                                            )
+                                        if (canCopy)
+                                            add(
+                                                CustomAccessibilityAction(copyLabel) {
+                                                    copyToClipboard(item.text)
                                                     true
                                                 }
                                             )
@@ -344,7 +360,22 @@ private fun ConversationMessageContent(
                                             stringResource(R.string.remote_truncated),
                                             style = MaterialTheme.typography.labelSmall,
                                         )
-                                    item.timestamp?.let { MessageTimestamp(it) }
+                                    if (canCopy && copyButton)
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            IconButton(
+                                                onClick = { copyToClipboard(item.text) },
+                                                modifier = Modifier.size(32.dp).testTag("copyMessage-${item.id}"),
+                                            ) {
+                                                Icon(
+                                                    Icons.Outlined.ContentCopy,
+                                                    copyLabel,
+                                                    Modifier.size(16.dp),
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                            item.timestamp?.let { MessageTimestamp(it, Modifier.weight(1f)) }
+                                        }
+                                    else item.timestamp?.let { MessageTimestamp(it) }
                             }
                         }
                     }
@@ -712,7 +743,7 @@ internal fun subagentPreviewText(preview: String): String =
     preview.replace(Regex("\\[([^]\\n]+)]\\(https?://[^)\\s]*$"), "$1…")
 
 @Composable
-private fun MessageTimestamp(timestamp: Long) {
+private fun MessageTimestamp(timestamp: Long, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val date = Date(timestamp)
     val time = DateFormat.getTimeFormat(context).format(date)
@@ -721,7 +752,7 @@ private fun MessageTimestamp(timestamp: Long) {
         else "${DateFormat.getDateFormat(context).format(date)} $time"
     Text(
         label,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = androidx.compose.ui.text.style.TextAlign.End,
