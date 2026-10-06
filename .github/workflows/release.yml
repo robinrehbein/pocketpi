@@ -34,7 +34,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          current="$(git ls-remote origin refs/heads/main | cut -f1)"
+          current="$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)"
           test -n "$current" && test "$current" = "$RELEASE_SHA" || {
             echo 'main moved since this run started; run the release again on the new head'; exit 1;
           }
