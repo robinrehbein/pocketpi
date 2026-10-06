@@ -169,6 +169,12 @@
     <string name="remote_camera_aim">Richte die Kamera auf den QR-Code auf deinem Mac</string>
     <string name="remote_notifications">Benachrichtigungen</string>
     <string name="remote_notification_help">Erhalte eine Benachrichtigung, wenn pi fertig ist oder eine Antwort braucht. Fragen kommen direkt von deinem Mac, nie über den Push-Dienst; einfache kannst du gleich in der Benachrichtigung beantworten.</string>
+    <string name="remote_notification_toggle">Benachrichtigungen von deinem Mac</string>
+    <string name="remote_notification_toggle_off">Aus. Dein Mac sendet keine Push-Benachrichtigungen an dieses Handy.</string>
+    <string name="remote_notification_prompt_title">Bleib auf dem Laufenden</string>
+    <string name="remote_notification_prompt_text">Erlaube Benachrichtigungen, damit pi dir sagen kann, wenn eine Sitzung fertig ist oder eine Antwort braucht.</string>
+    <string name="remote_notification_prompt_allow">Erlauben</string>
+    <string name="remote_notification_prompt_later">Nicht jetzt</string>
     <string name="remote_notification_allow">Benachrichtigungen aktivieren</string>
     <string name="remote_notification_unconfigured">Dieser Build kann sich nicht für Push-Benachrichtigungen registrieren und zeigt daher keine an.</string>
     <string name="remote_notification_denied">Benachrichtigungen sind aus. Du kannst sie in den Android-Einstellungen aktivieren.</string>

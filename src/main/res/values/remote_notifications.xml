@@ -1,7 +1,10 @@
 <resources>
     <!-- English fallback for all unsupported locales. -->
-    <string name="remote_notification_channel">Sessions</string>
-    <string name="remote_notification_channel_help">When pi finishes or needs an answer</string>
+    <string name="remote_notification_channel_questions">Questions</string>
+    <string name="remote_notification_channel_questions_help">When pi needs an answer</string>
+    <string name="remote_notification_channel_updates">Updates</string>
+    <string name="remote_notification_channel_updates_help">When a session, subagent or background job finishes</string>
+    <string name="remote_notification_complete_named">%1$s finished</string>
     <string name="remote_notification_approve">Approve</string>
     <string name="remote_notification_answer">Answer</string>
     <string name="remote_notification_open_action">Open</string>

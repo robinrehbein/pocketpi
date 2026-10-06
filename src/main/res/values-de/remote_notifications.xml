@@ -1,6 +1,9 @@
 <resources>
-    <string name="remote_notification_channel">Sitzungen</string>
-    <string name="remote_notification_channel_help">Wenn pi fertig ist oder eine Antwort braucht</string>
+    <string name="remote_notification_channel_questions">Fragen</string>
+    <string name="remote_notification_channel_questions_help">Wenn pi eine Antwort braucht</string>
+    <string name="remote_notification_channel_updates">Updates</string>
+    <string name="remote_notification_channel_updates_help">Wenn eine Sitzung, ein Subagent oder ein Hintergrundjob fertig ist</string>
+    <string name="remote_notification_complete_named">%1$s ist fertig</string>
     <string name="remote_notification_approve">Freigeben</string>
     <string name="remote_notification_answer">Antworten</string>
     <string name="remote_notification_open_action">Öffnen</string>
