@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_local_command_tree">Sitzungsbaum durchsuchen</string>
+    <string name="remote_tree_title">Sitzungsbaum</string>
+    <string name="remote_tree_empty">In dieser Sitzung gibt es noch nichts.</string>
+    <string name="remote_tree_retry">Erneut versuchen</string>
+    <string name="remote_tree_truncated">Der Baum ist lang, deshalb wird nur ein Teil gezeigt: der Weg zum aktuellen Punkt und die neuesten Schritte.</string>
+    <string name="remote_tree_current">Aktuell</string>
+    <string name="remote_tree_branch">Verzweigung</string>
+    <string name="remote_tree_no_preview">(kein Text)</string>
+    <string name="remote_tree_kind_user">Du</string>
+    <string name="remote_tree_kind_assistant">Assistent</string>
+    <string name="remote_tree_kind_tool">Tool-Ergebnis</string>
+    <string name="remote_tree_kind_compaction">Komprimierung</string>
+    <string name="remote_tree_kind_branch_summary">Zweig-Zusammenfassung</string>
+    <string name="remote_tree_kind_custom_message">Nachricht einer Erweiterung</string>
+    <string name="remote_tree_continue">Ab hier fortsetzen</string>
+    <string name="remote_tree_fork">Ab hier abzweigen</string>
+    <string name="remote_tree_already_here">Du bist schon hier</string>
+    <string name="remote_tree_continue_not_navigable">Diese Sitzung lässt sich nicht vom Handy aus verschieben. Du kannst aber ab hier abzweigen.</string>
+    <string name="remote_tree_continue_not_idle">Zum Fortsetzen ab hier muss die Sitzung im Leerlauf sein.</string>
+    <string name="remote_tree_fork_not_forkable">Ab diesem Schritt lässt sich nicht abzweigen.</string>
+    <string name="remote_tree_fork_not_stopped">Zum Abzweigen muss die Sitzung gestoppt sein.</string>
+    <string name="remote_tree_summarize_title">Den verlassenen Zweig zusammenfassen?</string>
+    <string name="remote_tree_summarize_message">pi kann die Schritte, die du hinter dir lässt, zusammenfassen und in der Sitzung behalten. Dafür braucht es ein Modell, und es kann etwas dauern.</string>
+    <string name="remote_tree_no_summary">Keine Zusammenfassung</string>
+    <string name="remote_tree_summarize">Zusammenfassen</string>
+    <string name="remote_tree_moving">Wechsle zu diesem Punkt…</string>
+    <string name="remote_tree_summarizing">Zweig wird zusammengefasst…</string>
+    <string name="remote_tree_cancel">Abbrechen</string>
+    <string name="remote_tree_offline">Die Verbindung zu deinem Mac ist unterbrochen.</string>
+    <string name="remote_tree_unsupported">Das wird noch nicht unterstützt. Aktualisiere pi Remote auf deinem Mac und lade es in pi neu, dann versuche es erneut.</string>
+    <string name="remote_tree_busy">Die Sitzung ist beschäftigt. Versuche es gleich noch einmal.</string>
+    <string name="remote_tree_cancelled">Abgebrochen. Die Sitzung ist am selben Punkt geblieben.</string>
+    <string name="remote_tree_not_found">Diesen Schritt gibt es nicht mehr. Der Baum wurde aktualisiert.</string>
+    <string name="remote_tree_invalid">Dieser Schritt lässt sich nicht verwenden. Der Baum wurde aktualisiert.</string>
+    <string name="remote_tree_unknown_result">Das Ergebnis ist unbekannt. Der Chat wurde aktualisiert, prüfe also, wo die Sitzung jetzt steht.</string>
+    <string name="remote_tree_failed">Der Sitzungsbaum konnte nicht geladen oder geändert werden. Versuche es erneut.</string>
+    <string name="remote_tree_fork_invalid">Ab diesem Schritt lässt sich nicht abzweigen.</string>
+</resources>

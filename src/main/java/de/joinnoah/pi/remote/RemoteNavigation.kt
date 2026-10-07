@@ -335,6 +335,19 @@ internal class RemoteNavigator(
         }
     }
 
+    /**
+     * Forks the chat [source] at the tree node [nodeId]. Like [forkSession], the fork replaces
+     * [source] on the stack.
+     */
+    fun forkSessionAtNode(source: RemoteNavKey.Chat, nodeId: String) {
+        if (topKey() != source) return
+        val current = invalidate()
+        activation = scope.launch {
+            val selection = repository.forkSessionAtNode(source.selection(), nodeId)
+            if (current == request) replace(selection, keepSettings = false)
+        }
+    }
+
     /** Opens the folder browser at the browse root, on top of the host's Projects. */
     fun openFolders(routeId: String) {
         if (topKey() != RemoteNavKey.Projects(routeId)) return

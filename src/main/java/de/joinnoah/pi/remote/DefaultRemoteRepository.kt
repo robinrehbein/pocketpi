@@ -121,6 +121,7 @@ class DefaultRemoteRepository(
             PROVIDER_AUTH_CAPABILITY,
             ATTACHMENT_READ_CAPABILITY,
             EXPORT_CAPABILITY,
+            SESSION_TREE_CAPABILITY,
         )
     private val mutable = MutableStateFlow(RemoteState())
     override val state = mutable.asStateFlow()
@@ -918,6 +919,7 @@ class DefaultRemoteRepository(
         draft: String? = null,
         requestId: String = Wire.random(),
         onSent: (() -> Unit)? = null,
+        timeoutMillis: Long = 30000,
     ): JsonObject {
         checkEpoch(epoch)
         check(state.value.connected)
@@ -942,7 +944,7 @@ class DefaultRemoteRepository(
             onSent?.invoke()
             transport.send(payload)
             val result =
-                withTimeoutOrNull(30000) { completion.await() }
+                withTimeoutOrNull(timeoutMillis) { completion.await() }
                     ?: throw IllegalStateException("Request timed out")
             checkEpoch(epoch)
             if (type == "projects.list" && result.text("kind") == "projects") {
@@ -1557,6 +1559,45 @@ class DefaultRemoteRepository(
         source: RemoteSelection,
         messageId: String,
         mode: ForkMode,
+    ): RemoteSelection =
+        forkFrom(
+            source,
+            SESSION_FORK_CAPABILITY,
+            "session.fork",
+            { sourceId -> arrayOf("sessionId" to sourceId, "messageId" to messageId, "mode" to mode.wire) },
+            setOf(mode.wire),
+            ::forkError,
+        )
+
+    override suspend fun forkSessionAtNode(source: RemoteSelection, nodeId: String): RemoteSelection =
+        if (
+            SESSION_TREE_CAPABILITY !in state.value.capabilities ||
+                SESSION_TREE_CAPABILITY in state.value.unavailableCapabilities ||
+                !opaqueId(nodeId)
+        )
+            source
+        else
+            forkFrom(
+                source,
+                SESSION_FORK_CAPABILITY,
+                "session.tree.fork",
+                { sourceId -> treeForkFields(sourceId, nodeId) },
+                setOf("edit", "at"),
+                ::treeForkError,
+            )
+
+    /**
+     * Forks [source] with the request [type] and switches to the fork. [modes] are the result modes
+     * the request may produce: `edit` puts the host's text into the new chat's composer, `retry`
+     * reports its resend, `at` opens the fork as it is.
+     */
+    private suspend fun forkFrom(
+        source: RemoteSelection,
+        capability: String,
+        type: String,
+        fields: (sourceId: String) -> Array<Pair<String, Any?>>,
+        modes: Set<String>,
+        errorText: (code: String?) -> Int,
     ): RemoteSelection {
         val routeId = source.routeId ?: return source
         val projectId = source.projectId ?: return source
@@ -1564,7 +1605,7 @@ class DefaultRemoteRepository(
         val current = state.value
         // Older hosts close the connection on unknown commands.
         if (
-            SESSION_FORK_CAPABILITY !in current.capabilities ||
+            capability !in current.capabilities ||
                 current.selection != source ||
                 current.session?.optionalText("id") != sourceId
         )
@@ -1575,20 +1616,8 @@ class DefaultRemoteRepository(
         update { it.copy(loading = true) }
         var failure = R.string.remote_request_error
         try {
-            val result =
-                request(
-                    "session.fork",
-                    epoch,
-                    "sessionId" to sourceId,
-                    "messageId" to messageId,
-                    "mode" to mode.wire,
-                )
-            val session = result.obj("session")
-            check(
-                result.text("kind") == "fork" &&
-                    result.text("sourceSessionId") == sourceId &&
-                    session.text("projectId") == projectId
-            )
+            val result = validatedFork(request(type, epoch, *fields(sourceId)), sourceId, projectId, modes)
+            val session = result.session
             val project =
                 state.value.project?.takeIf { it.optionalText("id") == projectId }
                     ?: state.value.projects.find { it.optionalText("id") == projectId }
@@ -1597,14 +1626,15 @@ class DefaultRemoteRepository(
             cachedChat = null
             val canonical = RemoteSelection(routeId, projectId, session.text("id"))
             var notice: Int? = null
-            if (mode == ForkMode.EDIT) {
-                val draft = forkDraft(result.text("text"))
-                drafts[DraftKey(routeId, session.text("id"))] =
-                    StoredDraft(text = draft.text, quote = draft.quote)
-                persist()
-                if (draft.droppedAttachments) notice = R.string.remote_fork_attachments_dropped
-            } else {
-                notice = forkResendNotice(result.optionalText("resend"))
+            when (result.mode) {
+                "edit" -> {
+                    val draft = forkDraft(checkNotNull(result.text))
+                    drafts[DraftKey(routeId, session.text("id"))] =
+                        StoredDraft(text = draft.text, quote = draft.quote)
+                    persist()
+                    if (draft.droppedAttachments) notice = R.string.remote_fork_attachments_dropped
+                }
+                "retry" -> notice = forkResendNotice(result.resend)
             }
             select(
                 canonical,
@@ -1623,7 +1653,7 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            failure = forkError((e as? RemoteRequestException)?.code)
+            failure = errorText((e as? RemoteRequestException)?.code)
         } finally {
             if (epoch == selectionEpoch) update { it.copy(loading = false) }
         }
@@ -4309,6 +4339,87 @@ class DefaultRemoteRepository(
             ExportResult.Failed(e.failure)
         } catch (e: Exception) {
             ExportResult.Failed(ExportFailure.FAILED)
+        }
+    }
+
+    // ---- Session tree (session.tree.v1) ---------------------------------------------------
+
+    private fun treeRefused(sessionId: String): TreeFailure? {
+        val current = state.value
+        return when {
+            !opaqueId(sessionId) || sessionId != current.selection.sessionId -> TreeFailure.FAILED
+            !current.connected -> TreeFailure.OFFLINE
+            SESSION_TREE_CAPABILITY !in current.capabilities ||
+                SESSION_TREE_CAPABILITY in current.unavailableCapabilities -> TreeFailure.UNSUPPORTED
+            else -> null
+        }
+    }
+
+    override suspend fun loadSessionTree(sessionId: String): TreeLoadResult {
+        treeRefused(sessionId)?.let { return TreeLoadResult.Failed(it) }
+        val epoch = selectionEpoch
+        return try {
+            val data = request("session.tree", epoch, *treeFields(sessionId))
+            TreeLoadResult.Loaded(
+                try {
+                    validatedTree(data, sessionId)
+                } catch (e: Exception) {
+                    throw TreeException(TreeFailure.PROTOCOL)
+                }
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // A read has no result that could be unknown.
+            val failure = treeFailure(e)
+            TreeLoadResult.Failed(if (treeResultUnknown(failure)) TreeFailure.FAILED else failure)
+        }
+    }
+
+    override suspend fun navigateSessionTree(
+        sessionId: String,
+        nodeId: String,
+        summarize: Boolean,
+    ): TreeNavigateResult {
+        treeRefused(sessionId)?.let { return TreeNavigateResult.Failed(it) }
+        if (!validTreeNodeId(nodeId)) return TreeNavigateResult.Failed(TreeFailure.INVALID)
+        val epoch = selectionEpoch
+        return try {
+            // The host waits 30 s for the move, 180 s with a summary, before it answers.
+            val data =
+                request(
+                    "session.tree.navigate",
+                    epoch,
+                    *treeNavigateFields(sessionId, nodeId, summarize),
+                    timeoutMillis = if (summarize) 195_000 else 45_000,
+                )
+            val navigation =
+                try {
+                    validatedNavigation(data, sessionId)
+                } catch (e: Exception) {
+                    throw TreeException(TreeFailure.PROTOCOL)
+                }
+            if (epoch == selectionEpoch && state.value.selection.sessionId == sessionId) {
+                treeDraft(navigation.text)?.let { draft ->
+                    val key = currentDraftKey()
+                    if (key != null) {
+                        drafts[key] = (drafts[key] ?: StoredDraft()).copy(text = draft.text, quote = draft.quote)
+                        update { it.copy(draft = draft.text, quote = draft.quote) }
+                        persist()
+                        if (draft.droppedAttachments) reportError(R.string.remote_fork_attachments_dropped)
+                    }
+                }
+                // The host's snapshot.required event does the same; do not depend on its order.
+                snapshotAsync()
+            }
+            TreeNavigateResult.Done(navigation)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val failure = treeFailure(e)
+            // The move may have happened; show what the host has now.
+            if (treeResultUnknown(failure) && epoch == selectionEpoch && state.value.connected) snapshotAsync()
+            TreeNavigateResult.Failed(failure)
         }
     }
 

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_local_command_tree">Browse the session tree</string>
+    <string name="remote_tree_title">Session tree</string>
+    <string name="remote_tree_empty">Nothing in this session yet.</string>
+    <string name="remote_tree_retry">Try again</string>
+    <string name="remote_tree_truncated">The tree is long, so only part of it is shown: the path to the current point and the newest steps.</string>
+    <string name="remote_tree_current">Current</string>
+    <string name="remote_tree_branch">Branch</string>
+    <string name="remote_tree_no_preview">(no text)</string>
+    <string name="remote_tree_kind_user">You</string>
+    <string name="remote_tree_kind_assistant">Assistant</string>
+    <string name="remote_tree_kind_tool">Tool result</string>
+    <string name="remote_tree_kind_compaction">Compaction</string>
+    <string name="remote_tree_kind_branch_summary">Branch summary</string>
+    <string name="remote_tree_kind_custom_message">Extension message</string>
+    <string name="remote_tree_continue">Continue from here</string>
+    <string name="remote_tree_fork">Fork from here</string>
+    <string name="remote_tree_already_here">Already here</string>
+    <string name="remote_tree_continue_not_navigable">This session cannot be moved from your phone. You can still fork from here.</string>
+    <string name="remote_tree_continue_not_idle">Continuing from here needs an idle session.</string>
+    <string name="remote_tree_fork_not_forkable">This step cannot be forked.</string>
+    <string name="remote_tree_fork_not_stopped">Forking needs a stopped session.</string>
+    <string name="remote_tree_summarize_title">Summarize the branch you leave?</string>
+    <string name="remote_tree_summarize_message">pi can write a summary of the steps you leave behind and keep it in the session. This needs a model and can take a while.</string>
+    <string name="remote_tree_no_summary">No summary</string>
+    <string name="remote_tree_summarize">Summarize</string>
+    <string name="remote_tree_moving">Moving to this point…</string>
+    <string name="remote_tree_summarizing">Summarizing the branch…</string>
+    <string name="remote_tree_cancel">Cancel</string>
+    <string name="remote_tree_offline">The connection to your Mac is down.</string>
+    <string name="remote_tree_unsupported">This is not supported yet. Update pi Remote on your Mac and reload it in pi, then try again.</string>
+    <string name="remote_tree_busy">The session is busy. Try again in a moment.</string>
+    <string name="remote_tree_cancelled">Cancelled. The session stayed where it was.</string>
+    <string name="remote_tree_not_found">This step no longer exists. The tree was refreshed.</string>
+    <string name="remote_tree_invalid">This step cannot be used. The tree was refreshed.</string>
+    <string name="remote_tree_unknown_result">The result is unknown. The chat was refreshed, so check where the session is now.</string>
+    <string name="remote_tree_failed">The session tree could not be loaded or changed. Try again.</string>
+    <string name="remote_tree_fork_invalid">This step cannot be forked.</string>
+</resources>
