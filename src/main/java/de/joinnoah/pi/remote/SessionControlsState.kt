@@ -257,12 +257,14 @@ internal enum class LocalCommand(val commandName: String, val description: Int) 
     SETTINGS("settings", R.string.remote_local_command_settings),
     NAME("name", R.string.remote_local_command_name),
     EXPORT("export", R.string.remote_local_command_export),
+    TREE("tree", R.string.remote_local_command_tree),
 }
 
 /**
  * The [LocalCommand]s that can run now, in list order. [inChat] is false outside a chat route,
  * where a new session has no project to open in. A command draft is sent only while the session
- * is idle, so nothing is offered before.
+ * is idle, so nothing is offered before; `/tree` only reads, so it is offered while the session
+ * runs too.
  */
 internal fun availableLocalCommands(
     state: RemoteState,
@@ -272,20 +274,30 @@ internal fun availableLocalCommands(
     val sendable =
         state.connected && !state.loading && state.status == "idle" && !state.sending &&
             !state.importingAttachments && !state.configurationChanging
-    if (!sendable) return emptyList()
     return LocalCommand.entries.filter { command ->
-        when (command) {
-            LocalCommand.NEW -> inChat
-            LocalCommand.COMPACT -> compactAvailable(state) && canCompact(state, nowMillis)
-            LocalCommand.MODEL ->
-                state.connected && !state.loading && !state.configurationChanging &&
-                    configurationControlsAvailable(state.capabilities, state.unavailableCapabilities)
-            LocalCommand.SETTINGS -> !state.configurationLoading && sessionSettingsAvailable(state)
-            LocalCommand.NAME -> canRenameSession(state)
-            LocalCommand.EXPORT -> canExportSession(state)
-        }
+        // /tree only reads, so it is also offered while the session runs.
+        if (command == LocalCommand.TREE) canShowTree(state)
+        else sendable && localCommandAvailable(command, state, inChat, nowMillis)
     }
 }
+
+private fun localCommandAvailable(
+    command: LocalCommand,
+    state: RemoteState,
+    inChat: Boolean,
+    nowMillis: Long,
+): Boolean =
+    when (command) {
+        LocalCommand.NEW -> inChat
+        LocalCommand.COMPACT -> compactAvailable(state) && canCompact(state, nowMillis)
+        LocalCommand.MODEL ->
+            state.connected && !state.loading && !state.configurationChanging &&
+                configurationControlsAvailable(state.capabilities, state.unavailableCapabilities)
+        LocalCommand.SETTINGS -> !state.configurationLoading && sessionSettingsAvailable(state)
+        LocalCommand.NAME -> canRenameSession(state)
+        LocalCommand.EXPORT -> canExportSession(state)
+        LocalCommand.TREE -> canShowTree(state)
+    }
 
 /**
  * A draft that names an available [LocalCommand]; [argument] is the text after the name with its

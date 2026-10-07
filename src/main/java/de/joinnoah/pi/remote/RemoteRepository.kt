@@ -150,6 +150,14 @@ interface RemoteRepository {
     suspend fun forkSession(source: RemoteSelection, messageId: String, mode: ForkMode): RemoteSelection =
         source
 
+    /**
+     * Starts a new session that continues from the tree node [nodeId] of the selected chat
+     * [source], through `session.tree.fork` (only with `session.tree.v1`). Returns the fork's
+     * selection, or [source] again when the host refused. A fork from a user message puts the
+     * message into the new chat's composer; any other node opens the fork as it is.
+     */
+    suspend fun forkSessionAtNode(source: RemoteSelection, nodeId: String): RemoteSelection = source
+
     fun cancelSelection()
 
     suspend fun pair(text: String): RemoteSelection?
@@ -290,6 +298,18 @@ interface RemoteRepository {
      */
     suspend fun exportSession(sessionId: String): ExportResult =
         ExportResult.Failed(ExportFailure.UNSUPPORTED)
+
+    /** Reads the tree of [sessionId] (`session.tree`, only with [SESSION_TREE_CAPABILITY]). */
+    suspend fun loadSessionTree(sessionId: String): TreeLoadResult =
+        TreeLoadResult.Failed(TreeFailure.UNSUPPORTED)
+
+    /**
+     * Moves the leaf of [sessionId] to [nodeId] in place (`session.tree.navigate`). On success a
+     * returned text is already in the composer and the chat has been refreshed; on an unknown
+     * result the chat is refreshed too.
+     */
+    suspend fun navigateSessionTree(sessionId: String, nodeId: String, summarize: Boolean): TreeNavigateResult =
+        TreeNavigateResult.Failed(TreeFailure.UNSUPPORTED)
 
     /** Opens [RemoteState.files] for the selected session at its folder. */
     fun openFiles() {}

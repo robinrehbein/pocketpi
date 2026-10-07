@@ -48,6 +48,7 @@ class RemoteRepositoryTest {
         var failureOnConnect: Int? = null
         var response: (JsonObject) -> JsonObject? = { null }
         var failure: (JsonObject) -> String? = { null }
+        var failureMessage: (JsonObject) -> String? = { null }
 
         override fun connect(host: PairedHost) {
             connects++
@@ -72,7 +73,7 @@ class RemoteRepositoryTest {
                         "type" to "result",
                         "requestId" to payload.text("requestId"),
                         "ok" to false,
-                        "error" to Wire.objectOf("code" to code, "message" to code),
+                        "error" to Wire.objectOf("code" to code, "message" to (failureMessage(payload) ?: code)),
                     )
                 )
                 return
@@ -3948,6 +3949,382 @@ class RemoteRepositoryTest {
         assertEquals("session", repository.state.value.session?.text("id"))
         assertEquals(R.string.remote_fork_busy, repository.state.value.error)
         assertFalse(repository.state.value.loading)
+    }
+
+    private fun treeNode(id: String, parentId: String?, kind: String = "user", forkable: Boolean = true) =
+        Wire.objectOf(
+            "id" to id,
+            "parentId" to parentId,
+            "kind" to kind,
+            "preview" to "preview $id",
+            "timestamp" to "2026-01-01T12:00:00.000Z",
+            "children" to 1,
+            "forkable" to forkable,
+        )
+
+    private fun treeResult(sessionId: String) =
+        Wire.objectOf(
+            "kind" to "tree",
+            "sessionId" to sessionId,
+            "leafId" to "a1",
+            "truncated" to false,
+            "canNavigate" to true,
+            "nodes" to JsonArray(listOf(treeNode("u1", null), treeNode("a1", "u1", "assistant"))),
+        )
+
+    private fun treeing(transport: Transport, result: (JsonObject) -> JsonObject? = { null }) {
+        configure(transport, sessions = listOf(session(), session("fork")))
+        advertising(
+            transport,
+            JsonArray(listOf(JsonPrimitive(SESSION_FORK_CAPABILITY), JsonPrimitive(SESSION_TREE_CAPABILITY))),
+        )
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type").startsWith("session.tree")) result(request) else original(request)
+        }
+    }
+
+    @Test
+    fun treeSendsNothingWithoutTheRouteCapability() = runTest {
+        val transport = Transport().also(::configure)
+        val repository = repository(transport)
+        val source = RemoteSelection("host", "project", "session")
+        repository.activate(source)
+        assertEquals(TreeLoadResult.Failed(TreeFailure.UNSUPPORTED), repository.loadSessionTree("session"))
+        assertEquals(
+            TreeNavigateResult.Failed(TreeFailure.UNSUPPORTED),
+            repository.navigateSessionTree("session", "u1", false),
+        )
+        assertEquals(source, repository.forkSessionAtNode(source, "u1"))
+        assertTrue(transport.sent.none { it.text("type").startsWith("session.tree") })
+    }
+
+    @Test
+    fun treeLoadsTheSelectedSessionsTreeAndRejectsABrokenReply() = runTest {
+        val transport = Transport()
+        var broken = false
+        treeing(transport) { request ->
+            treeResult(request.text("sessionId")).let { if (broken) JsonObject(it + ("canNavigate" to JsonPrimitive("yes"))) else it }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val loaded = repository.loadSessionTree("session") as TreeLoadResult.Loaded
+        assertEquals(listOf("u1", "a1"), loaded.tree.nodes.map { it.id })
+        val request = transport.sent.single { it.text("type") == "session.tree" }
+        assertEquals(setOf("type", "requestId", "sessionId"), request.keys)
+        assertEquals(TreeLoadResult.Failed(TreeFailure.FAILED), repository.loadSessionTree("other"))
+        broken = true
+        assertEquals(TreeLoadResult.Failed(TreeFailure.PROTOCOL), repository.loadSessionTree("session"))
+        transport.failure = { if (it.text("type") == "session.tree") "internal" else null }
+        // A read has no unknown result.
+        assertEquals(TreeLoadResult.Failed(TreeFailure.FAILED), repository.loadSessionTree("session"))
+        transport.failure = { if (it.text("type") == "session.tree") "not_found" else null }
+        assertEquals(TreeLoadResult.Failed(TreeFailure.NOT_FOUND), repository.loadSessionTree("session"))
+    }
+
+    @Test
+    fun navigatingPutsTheTextInTheComposerAndRefreshesTheChat() = runTest {
+        val quote = MessageQuote("assistant-2", "assistant", "earlier answer")
+        val transport = Transport()
+        treeing(transport) { request ->
+            Wire.objectOf(
+                "kind" to "tree.navigated",
+                "sessionId" to request.text("sessionId"),
+                "leafId" to "u1",
+                "text" to QuoteCodec.encode("second question", quote),
+            )
+        }
+        val drafts = Drafts()
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        val result = repository.navigateSessionTree("session", "u2", true)
+        runCurrent()
+        assertEquals(TreeNavigateResult.Done(TreeNavigation("u1", QuoteCodec.encode("second question", quote))), result)
+        val request = transport.sent.single { it.text("type") == "session.tree.navigate" }
+        assertEquals(setOf("type", "requestId", "sessionId", "nodeId", "summarize"), request.keys)
+        assertEquals("u2", request.text("nodeId"))
+        assertTrue(request.flag("summarize"))
+        val state = repository.state.value
+        assertEquals("second question", state.draft)
+        assertEquals(quote, state.quote)
+        assertEquals("session", state.selection.sessionId)
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        repository.flush()
+        assertEquals("second question", drafts.values[DraftKey("host", "session")]?.text)
+    }
+
+    @Test
+    fun navigatingWithoutTextKeepsTheDraft() = runTest {
+        val transport = Transport()
+        treeing(transport) { request ->
+            Wire.objectOf("kind" to "tree.navigated", "sessionId" to request.text("sessionId"), "leafId" to "a1")
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.draft("keep me")
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        assertEquals(TreeNavigateResult.Done(TreeNavigation("a1", null)), repository.navigateSessionTree("session", "a1", false))
+        runCurrent()
+        assertEquals("keep me", repository.state.value.draft)
+        assertFalse(transport.sent.single { it.text("type") == "session.tree.navigate" }.flag("summarize"))
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertEquals(
+            TreeNavigateResult.Failed(TreeFailure.INVALID),
+            repository.navigateSessionTree("session", "bad id", false),
+        )
+    }
+
+    @Test
+    fun failedNavigationsMapTheirErrorsAndRefreshWhenTheResultIsUnknown() = runTest {
+        val transport = Transport()
+        treeing(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        for ((code, failure) in
+            listOf(
+                "busy" to TreeFailure.BUSY,
+                "cancelled" to TreeFailure.CANCELLED,
+                "unsupported" to TreeFailure.UNSUPPORTED,
+                "not_found" to TreeFailure.NOT_FOUND,
+                "invalid_request" to TreeFailure.INVALID,
+                "forbidden" to TreeFailure.FAILED,
+            )) {
+            transport.failure = { if (it.text("type") == "session.tree.navigate") code else null }
+            val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+            assertEquals(code, TreeNavigateResult.Failed(failure), repository.navigateSessionTree("session", "u1", false))
+            runCurrent()
+            assertEquals(code, snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        }
+        // Only an `internal` that says the result is unknown, and a timeout, may have moved the leaf.
+        for ((code, message) in
+            listOf(
+                "internal" to "Navigation result unknown; refresh",
+                "timeout" to "timeout",
+            )) {
+            transport.failure = { if (it.text("type") == "session.tree.navigate") code else null }
+            transport.failureMessage = { message }
+            val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+            assertEquals(
+                code,
+                TreeNavigateResult.Failed(TreeFailure.UNKNOWN_RESULT),
+                repository.navigateSessionTree("session", "u1", false),
+            )
+            runCurrent()
+            assertEquals(code, snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        }
+        transport.failure = { if (it.text("type") == "session.tree.navigate") "internal" else null }
+        transport.failureMessage = { "No model available for summarization" }
+        val before = transport.sent.count { it.text("type") == "session.snapshot" }
+        assertEquals(TreeNavigateResult.Failed(TreeFailure.FAILED), repository.navigateSessionTree("session", "u1", true))
+        runCurrent()
+        assertEquals(before, transport.sent.count { it.text("type") == "session.snapshot" })
+        transport.failureMessage = { null }
+        transport.failure = { null }
+        // A reply that breaks the protocol is no success, and leaves the draft alone.
+        transport.response = { request ->
+            if (request.text("type") == "session.tree.navigate")
+                Wire.objectOf("kind" to "tree.navigated", "sessionId" to "other", "leafId" to null)
+            else null
+        }
+        assertEquals(
+            TreeNavigateResult.Failed(TreeFailure.PROTOCOL),
+            repository.navigateSessionTree("session", "u1", false),
+        )
+    }
+
+    private fun navigated(request: JsonObject, text: String? = null) =
+        Wire.objectOf(
+            "kind" to "tree.navigated",
+            "sessionId" to request.text("sessionId"),
+            "leafId" to "u1",
+            *(if (text != null) arrayOf("text" to text) else emptyArray()),
+        )
+
+    @Test
+    fun navigatedTextNeverReplacesATypedDraftOrQuote() = runTest {
+        val transport = Transport()
+        treeing(transport) { navigated(it, "step text") }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.draft("typed meanwhile")
+        runCurrent()
+        assertTrue(repository.navigateSessionTree("session", "u2", false) is TreeNavigateResult.Done)
+        runCurrent()
+        assertEquals("typed meanwhile", repository.state.value.draft)
+        assertEquals(R.string.remote_tree_text_not_inserted, repository.state.value.error)
+    }
+
+    @Test
+    fun navigatedTextNeverReplacesAQuote() = runTest {
+        val transport = Transport()
+        treeing(transport) { navigated(it, "step text") }
+        quoteMessages(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.quote("a")
+        runCurrent()
+        assertNotNull(repository.state.value.quote)
+        assertTrue(repository.navigateSessionTree("session", "u2", false) is TreeNavigateResult.Done)
+        assertEquals("", repository.state.value.draft)
+        assertNotNull(repository.state.value.quote)
+        assertEquals(R.string.remote_tree_text_not_inserted, repository.state.value.error)
+    }
+
+    @Test
+    fun navigatedTextFillsABlankComposerWithoutANotice() = runTest {
+        val transport = Transport()
+        treeing(transport) { navigated(it, "step text") }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.draft("   ")
+        runCurrent()
+        assertTrue(repository.navigateSessionTree("session", "u2", false) is TreeNavigateResult.Done)
+        assertEquals("step text", repository.state.value.draft)
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun aLostConnectionDuringANavigationIsAnUnknownResultButNotDuringARead() = runTest {
+        val transport = Transport()
+        treeing(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val move = async { repository.navigateSessionTree("session", "u1", false) }
+        runCurrent()
+        repository.disconnect()
+        runCurrent()
+        assertEquals(TreeNavigateResult.Failed(TreeFailure.UNKNOWN_RESULT), move.await())
+        val reconnected = Transport()
+        treeing(reconnected)
+        val again = repository(reconnected)
+        again.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val read = async { again.loadSessionTree("session") }
+        runCurrent()
+        again.disconnect()
+        runCurrent()
+        assertEquals(TreeLoadResult.Failed(TreeFailure.FAILED), read.await())
+    }
+
+    @Test
+    fun aNavigationWithoutAnAnswerEndsAfterTheTimeoutAndRefreshes() = runTest {
+        for ((summarize, millis) in listOf(false to 45_000L, true to 195_000L)) {
+            val transport = Transport()
+            treeing(transport)
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", "session"))
+            runCurrent()
+            val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+            val move = async { repository.navigateSessionTree("session", "u1", summarize) }
+            runCurrent()
+            advanceTimeBy(millis - 1)
+            assertFalse(summarize.toString(), move.isCompleted)
+            advanceTimeBy(2)
+            runCurrent()
+            assertEquals(TreeNavigateResult.Failed(TreeFailure.UNKNOWN_RESULT), move.await())
+            assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        }
+    }
+
+    @Test
+    fun aSelectionChangeDuringANavigationLeavesEveryDraftUntouched() = runTest {
+        val transport = Transport()
+        treeing(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val move = async { repository.navigateSessionTree("session", "u2", false) }
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.tree.navigate" }
+        repository.activate(RemoteSelection("host", "project", "fork"))
+        runCurrent()
+        transport.result(request, navigated(request, "step text"))
+        runCurrent()
+        val outcome = try { move.await() } catch (e: CancellationException) { null }
+        assertFalse(outcome is TreeNavigateResult.Done)
+        assertEquals("", repository.state.value.draft)
+        assertEquals("fork", repository.state.value.selection.sessionId)
+        repository.flush()
+    }
+
+    @Test
+    fun forkAtANodeOpensTheForkWithoutADraft() = runTest {
+        val transport = Transport()
+        treeing(transport) { request ->
+            Wire.objectOf(
+                "kind" to "fork",
+                "session" to session("fork"),
+                "sourceSessionId" to request.text("sessionId"),
+                "mode" to "at",
+            )
+        }
+        val repository = repository(transport)
+        val source = RemoteSelection("host", "project", "session")
+        repository.activate(source)
+        val fork = repository.forkSessionAtNode(source, "a1")
+        runCurrent()
+        assertEquals(RemoteSelection("host", "project", "fork"), fork)
+        val request = transport.sent.single { it.text("type") == "session.tree.fork" }
+        assertEquals(setOf("type", "requestId", "sessionId", "nodeId"), request.keys)
+        assertEquals("a1", request.text("nodeId"))
+        val state = repository.state.value
+        assertEquals(fork, state.selection)
+        assertEquals("", state.draft)
+        assertNull(state.quote)
+        assertNull(state.error)
+    }
+
+    @Test
+    fun forkAtAUserNodePrefillsTheForksComposer() = runTest {
+        val transport = Transport()
+        treeing(transport) { request ->
+            Wire.objectOf(
+                "kind" to "fork",
+                "session" to session("fork"),
+                "sourceSessionId" to request.text("sessionId"),
+                "mode" to "edit",
+                "text" to "second question",
+            )
+        }
+        val repository = repository(transport)
+        val source = RemoteSelection("host", "project", "session")
+        repository.activate(source)
+        val fork = repository.forkSessionAtNode(source, "u2")
+        runCurrent()
+        assertEquals(RemoteSelection("host", "project", "fork"), fork)
+        assertEquals("second question", repository.state.value.draft)
+    }
+
+    @Test
+    fun refusedOrBrokenForkAtANodeStaysInTheSourceChat() = runTest {
+        val transport = Transport()
+        treeing(transport) { request ->
+            // `retry` is not a result of a tree fork.
+            Wire.objectOf(
+                "kind" to "fork",
+                "session" to session("fork"),
+                "sourceSessionId" to request.text("sessionId"),
+                "mode" to "retry",
+                "resend" to "accepted",
+            )
+        }
+        val repository = repository(transport)
+        val source = RemoteSelection("host", "project", "session")
+        repository.activate(source)
+        assertEquals(source, repository.forkSessionAtNode(source, "a1"))
+        assertEquals(source, repository.state.value.selection)
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertFalse(repository.state.value.loading)
+        transport.failure = { if (it.text("type") == "session.tree.fork") "invalid_request" else null }
+        assertEquals(source, repository.forkSessionAtNode(source, "t1"))
+        assertEquals(R.string.remote_tree_fork_invalid, repository.state.value.error)
+        transport.failure = { if (it.text("type") == "session.tree.fork") "busy" else null }
+        assertEquals(source, repository.forkSessionAtNode(source, "a1"))
+        assertEquals(R.string.remote_fork_busy, repository.state.value.error)
     }
 
     @Test

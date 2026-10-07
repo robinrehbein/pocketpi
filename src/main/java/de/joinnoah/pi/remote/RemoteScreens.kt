@@ -591,6 +591,7 @@ internal fun RemoteScreen(
     }
     var modelPickerRequested by remember(key) { mutableStateOf(false) }
     var settingsSheetRequested by remember(key) { mutableStateOf(false) }
+    var treeSheetRequested by remember(key) { mutableStateOf(false) }
     /**
      * Runs the draft when it names an available [LocalCommand] and clears it; false leaves the draft
      * for the normal send, which reports unknown or unavailable commands.
@@ -607,6 +608,7 @@ internal fun RemoteScreen(
             LocalCommand.MODEL -> modelPickerRequested = true
             LocalCommand.SETTINGS -> settingsSheetRequested = true
             LocalCommand.EXPORT -> state.selection.sessionId?.let(::startExport)
+            LocalCommand.TREE -> treeSheetRequested = true
             LocalCommand.NAME -> {
                 val session = state.session ?: return true
                 if (invocation.argument.isEmpty()) startRename(session.text("id"), session.text("title"))
@@ -1886,6 +1888,24 @@ internal fun RemoteScreen(
                                 }
                             }
                         }
+                    val treeSessionId = state.selection.sessionId
+                    val treeChat = model as? ChatViewModel
+                    if (treeSheetRequested && chatKey != null && treeSessionId != null && treeChat != null)
+                        SessionTreeSheet(
+                            state = state,
+                            // Outlives the sheet, so a move that finishes after it closed still lands.
+                            scope = exportScope,
+                            load = { treeChat.loadSessionTree(treeSessionId) },
+                            navigate = { nodeId, summarize ->
+                                treeChat.navigateSessionTree(treeSessionId, nodeId, summarize)
+                            },
+                            onFork = { nodeId ->
+                                treeSheetRequested = false
+                                navigator.forkSessionAtNode(chatKey, nodeId)
+                            },
+                            onAbort = model::abort,
+                            onDismiss = { treeSheetRequested = false },
+                        )
                     ChatComposer(
                         state = state,
                         onDraft = model::draft,
@@ -1921,7 +1941,14 @@ internal fun RemoteScreen(
                                 localCommands =
                                     availableLocalCommands(state, key is RemoteNavKey.Chat, System.currentTimeMillis()),
                                 selectLocalCommand = { command ->
-                                    model.draft(selectCommandName(state.draft, command.commandName))
+                                    // The tree only reads, so it opens at once, also while the chat runs,
+                                    // when a /tree draft could not be sent.
+                                    if (command == LocalCommand.TREE) {
+                                        // Like a sent /tree, a command draft does not stay in the composer.
+                                        if (state.draft.trimStart().startsWith("/")) model.draft("")
+                                        treeSheetRequested = true
+                                    }
+                                    else model.draft(selectCommandName(state.draft, command.commandName))
                                 },
                                 modelPickerRequested = modelPickerRequested,
                                 onModelPickerRequestHandled = { modelPickerRequested = false },

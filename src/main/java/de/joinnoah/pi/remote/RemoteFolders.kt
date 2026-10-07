@@ -16,8 +16,12 @@ private const val MAX_CLONE_URL_BYTES = 2048
  * An error result with the host's `details` object. Of the folder errors only `trust_required`
  * carries one (`{piConfig}`); every other code has none.
  */
-internal class RemoteRequestException(val code: String, val details: JsonObject? = null) :
-    IllegalStateException(code)
+internal class RemoteRequestException(
+    val code: String,
+    val details: JsonObject? = null,
+    /** The host's error message, for the few codes whose meaning depends on it. */
+    val hostMessage: String? = null,
+) : IllegalStateException(code)
 
 data class FolderEntry(
     val name: String,

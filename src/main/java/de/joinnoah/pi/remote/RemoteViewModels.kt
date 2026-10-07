@@ -273,6 +273,16 @@ internal class ChatViewModel(
         if (cleared || !matches(repository.state.value)) ExportResult.Failed(ExportFailure.FAILED)
         else repository.exportSession(sessionId)
 
+    /** Reads the tree of this chat's session; a destination that is no longer the shown chat gets a failure. */
+    suspend fun loadSessionTree(sessionId: String): TreeLoadResult =
+        if (cleared || !matches(repository.state.value)) TreeLoadResult.Failed(TreeFailure.FAILED)
+        else repository.loadSessionTree(sessionId)
+
+    /** Moves this chat's session to a tree node; see [RemoteRepository.navigateSessionTree]. */
+    suspend fun navigateSessionTree(sessionId: String, nodeId: String, summarize: Boolean): TreeNavigateResult =
+        if (cleared || !matches(repository.state.value)) TreeNavigateResult.Failed(TreeFailure.FAILED)
+        else repository.navigateSessionTree(sessionId, nodeId, summarize)
+
     /** Quotes the message and offers [prompt] as the draft unless the user already typed one. */
     fun askToFix(messageId: String, prompt: String) = active {
         repository.quote(messageId)

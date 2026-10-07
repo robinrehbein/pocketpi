@@ -259,6 +259,35 @@ class SessionControlsTest {
     }
 
     @Test
+    fun treeIsOfferedWhileRunningAndEveryOtherCommandKeepsItsRule() {
+        val tree = chatState.copy(
+            capabilities = chatState.capabilities + EXPORT_CAPABILITY + SESSION_TREE_CAPABILITY,
+            selection = RemoteSelection(sessionId = "s1"),
+        )
+        val idle = availableLocalCommands(tree, true, 0)
+        assertEquals(
+            listOf(LocalCommand.NEW, LocalCommand.COMPACT, LocalCommand.MODEL, LocalCommand.NAME, LocalCommand.EXPORT, LocalCommand.TREE),
+            idle,
+        )
+        // Not idle: only the read-only tree stays; the rest need an idle session as before.
+        for (status in listOf("running", "waiting", "offline"))
+            assertEquals(status, listOf(LocalCommand.TREE), availableLocalCommands(tree.copy(status = status), true, 0))
+        assertEquals(listOf(LocalCommand.TREE), availableLocalCommands(tree.copy(sending = true), true, 0))
+        assertEquals(listOf(LocalCommand.TREE), availableLocalCommands(tree.copy(configurationChanging = true), true, 0))
+        assertEquals(listOf(LocalCommand.TREE), availableLocalCommands(tree.copy(importingAttachments = true), true, 0))
+        assertEquals(idle - LocalCommand.NEW, availableLocalCommands(tree, false, 0))
+        // Without the capability, a selected session, a connection or a finished load there is no tree.
+        assertEquals(idle - LocalCommand.TREE, availableLocalCommands(tree.copy(capabilities = tree.capabilities - SESSION_TREE_CAPABILITY), true, 0))
+        assertEquals(idle - LocalCommand.TREE, availableLocalCommands(tree.copy(unavailableCapabilities = setOf(SESSION_TREE_CAPABILITY)), true, 0))
+        assertTrue(availableLocalCommands(tree.copy(status = "running", connected = false), true, 0).isEmpty())
+        assertTrue(availableLocalCommands(tree.copy(status = "running", loading = true), true, 0).isEmpty())
+        assertTrue(availableLocalCommands(tree.copy(status = "running", selection = RemoteSelection()), true, 0).isEmpty())
+        val invocation = localInvocation(tree.copy(status = "running", draft = "/tree"), availableLocalCommands(tree.copy(status = "running"), true, 0))
+        assertEquals(LocalInvocation(LocalCommand.TREE, ""), invocation)
+        assertNull(localInvocation(tree.copy(draft = "/tree now"), idle))
+    }
+
+    @Test
     fun localCommandsFollowTheControlsTheyStandFor() {
         val all = listOf(LocalCommand.NEW, LocalCommand.COMPACT, LocalCommand.MODEL, LocalCommand.NAME)
         assertEquals(all, availableLocalCommands(chatState, true, 0))
