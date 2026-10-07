@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import android.content.Intent
+import android.net.Uri
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -558,6 +559,35 @@ internal fun RemoteScreen(
         renameSessionId = sessionId
         renameDraft = TextFieldValue(title, TextRange(title.length))
     }
+    var exportState by remember(key) { mutableStateOf<ExportState?>(null) }
+    val exportScope = rememberCoroutineScope()
+    val exportChooserTitle = stringResource(R.string.remote_export_chooser)
+    fun shareExport(uri: String) {
+        // No app may accept the file; the status stays so the user can try again.
+        runCatching {
+            context.startActivity(exportShareIntent(Uri.parse(uri), exportChooserTitle).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+    fun startExport(sessionId: String) {
+        val chat = model as? ChatViewModel ?: return
+        if (exportState == ExportState.Exporting) return
+        exportState = ExportState.Exporting
+        exportScope.launch {
+            exportState =
+                when (val result = chat.exportSession(sessionId)) {
+                    is ExportResult.Failed -> ExportState.Failed(result.failure)
+                    is ExportResult.Ready ->
+                        runCatching { withContext(Dispatchers.IO) { storeExport(context, result) } }
+                            .fold(
+                                { uri ->
+                                    shareExport(uri.toString())
+                                    ExportState.Done(uri.toString())
+                                },
+                                { ExportState.Failed(ExportFailure.STORAGE) },
+                            )
+                }
+        }
+    }
     var modelPickerRequested by remember(key) { mutableStateOf(false) }
     var settingsSheetRequested by remember(key) { mutableStateOf(false) }
     /**
@@ -575,6 +605,7 @@ internal fun RemoteScreen(
             LocalCommand.COMPACT -> model.compactContext()
             LocalCommand.MODEL -> modelPickerRequested = true
             LocalCommand.SETTINGS -> settingsSheetRequested = true
+            LocalCommand.EXPORT -> state.selection.sessionId?.let(::startExport)
             LocalCommand.NAME -> {
                 val session = state.session ?: return true
                 if (invocation.argument.isEmpty()) startRename(session.text("id"), session.text("title"))
@@ -777,6 +808,10 @@ internal fun RemoteScreen(
                     if (compactionVisible(state.compaction, compactionNow))
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             CompactionBanner(state.compaction, compactionNow)
+                        }
+                    if (exportState != null)
+                        Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                            ExportStatus(exportState, ::shareExport) { exportState = null }
                         }
                 }
             }

@@ -284,6 +284,13 @@ interface RemoteRepository {
     suspend fun readAttachment(sessionId: String, attachment: RemoteAttachment): AttachmentReadResult =
         AttachmentReadResult.Unsupported
 
+    /**
+     * Renders [sessionId] as one HTML file and reads it from the host in chunks (`session.export`,
+     * `session.export.get`, only with [EXPORT_CAPABILITY] and for host-owned sessions).
+     */
+    suspend fun exportSession(sessionId: String): ExportResult =
+        ExportResult.Failed(ExportFailure.UNSUPPORTED)
+
     /** Opens [RemoteState.files] for the selected session at its folder. */
     fun openFiles() {}
 

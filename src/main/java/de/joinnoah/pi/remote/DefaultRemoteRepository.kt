@@ -120,6 +120,7 @@ class DefaultRemoteRepository(
             FILES_CAPABILITY,
             PROVIDER_AUTH_CAPABILITY,
             ATTACHMENT_READ_CAPABILITY,
+            EXPORT_CAPABILITY,
         )
     private val mutable = MutableStateFlow(RemoteState())
     override val state = mutable.asStateFlow()
@@ -4281,6 +4282,33 @@ class DefaultRemoteRepository(
             return AttachmentReadResult.Failed
         }
         return AttachmentReadResult.Loaded(reassembler.bytes().also { attachmentBytes[key] = it })
+    }
+
+    // ---- Session export (session.export.v1) -----------------------------------------------
+
+    override suspend fun exportSession(sessionId: String): ExportResult {
+        val current = state.value
+        if (!opaqueId(sessionId) || sessionId != current.selection.sessionId)
+            return ExportResult.Failed(ExportFailure.FAILED)
+        if (!current.connected) return ExportResult.Failed(ExportFailure.OFFLINE)
+        if (current.session?.optionalText("origin") != "rpc" || EXPORT_CAPABILITY !in current.capabilities)
+            return ExportResult.Failed(ExportFailure.UNSUPPORTED)
+        val epoch = selectionEpoch
+        return try {
+            downloadExport(
+                sessionId,
+                start = { request("session.export", epoch, "sessionId" to sessionId) },
+                read = { exportId, offset ->
+                    request("session.export.get", epoch, *exportGetFields(sessionId, exportId, offset))
+                },
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ExportException) {
+            ExportResult.Failed(e.failure)
+        } catch (e: Exception) {
+            ExportResult.Failed(ExportFailure.FAILED)
+        }
     }
 
     private val filesLoader =

@@ -237,6 +237,16 @@ internal fun canRenameSession(state: RemoteState): Boolean =
         state.status != "offline"
 
 /**
+ * The selected session can be exported: the host advertises [EXPORT_CAPABILITY] and the session
+ * was started from the phone (`rpc`); a terminal pi session answers `unsupported`.
+ */
+internal fun canExportSession(state: RemoteState): Boolean =
+    state.connected && !state.loading && state.selection.sessionId != null &&
+        EXPORT_CAPABILITY in state.capabilities && EXPORT_CAPABILITY !in state.unavailableCapabilities &&
+        state.session?.optionalText("origin") == "rpc" &&
+        state.status != "offline"
+
+/**
  * pi's built-in slash commands are not in the host's catalog, so the app maps the ones it has a
  * control for. [commandName] is what follows the slash.
  */
@@ -246,6 +256,7 @@ internal enum class LocalCommand(val commandName: String, val description: Int) 
     MODEL("model", R.string.remote_local_command_model),
     SETTINGS("settings", R.string.remote_local_command_settings),
     NAME("name", R.string.remote_local_command_name),
+    EXPORT("export", R.string.remote_local_command_export),
 }
 
 /**
@@ -271,6 +282,7 @@ internal fun availableLocalCommands(
                     configurationControlsAvailable(state.capabilities, state.unavailableCapabilities)
             LocalCommand.SETTINGS -> !state.configurationLoading && sessionSettingsAvailable(state)
             LocalCommand.NAME -> canRenameSession(state)
+            LocalCommand.EXPORT -> canExportSession(state)
         }
     }
 }
