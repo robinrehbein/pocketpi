@@ -34,7 +34,7 @@ internal fun outputFormat(name: String?, arguments: String?, text: String): Outp
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ToolOutputView(text: String, name: String? = null, arguments: String? = null) {
-    var peek by remember(text) { mutableStateOf(false) }
+    var peek by remember { mutableStateOf(false) }
     val format = remember(name, arguments, text) { outputFormat(name, arguments, text) }
     val preview = remember(text) { text.lineSequence().take(24).joinToString("\n").take(6000) }
     Column(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = { peek = true })) {
@@ -61,7 +61,7 @@ private fun OutputContent(text: String, format: OutputFormat) {
         OutputFormat.TEXT -> Text(text, style = MaterialTheme.typography.bodyMedium)
         OutputFormat.SOURCE -> Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.medium) {
             Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp)) {
-                text.lines().forEach { line ->
+                outputLines(text).forEach { line ->
                     Text(line, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall, softWrap = false)
                 }
             }
