@@ -972,6 +972,10 @@ class DefaultRemoteRepository(
         }
     }
 
+    /** The error's `message`, shortened; only some callers read it. */
+    private fun hostMessage(error: JsonObject): String? =
+        (error["message"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.take(256)
+
     private fun receive(payload: JsonObject) {
         try {
             when (payload.text("type")) {
@@ -982,7 +986,7 @@ class DefaultRemoteRepository(
                         else
                             payload.obj("error").let { error ->
                                 completion.completeExceptionally(
-                                    RemoteRequestException(error.text("code"), error["details"] as? JsonObject)
+                                    RemoteRequestException(error.text("code"), error["details"] as? JsonObject, hostMessage(error))
                                 )
                             }
                         return
@@ -993,7 +997,7 @@ class DefaultRemoteRepository(
                     else
                         payload.obj("error").let { error ->
                             completion.completeExceptionally(
-                                RemoteRequestException(error.text("code"), error["details"] as? JsonObject)
+                                RemoteRequestException(error.text("code"), error["details"] as? JsonObject, hostMessage(error))
                             )
                         }
                 }
@@ -4368,7 +4372,9 @@ class DefaultRemoteRepository(
                 }
             )
         } catch (e: CancellationException) {
-            throw e
+            // The request was cancelled by a disconnect or selection change, not this caller.
+            currentCoroutineContext().ensureActive()
+            TreeLoadResult.Failed(TreeFailure.FAILED)
         } catch (e: Exception) {
             // A read has no result that could be unknown.
             val failure = treeFailure(e)
@@ -4402,11 +4408,15 @@ class DefaultRemoteRepository(
             if (epoch == selectionEpoch && state.value.selection.sessionId == sessionId) {
                 treeDraft(navigation.text)?.let { draft ->
                     val key = currentDraftKey()
+                    val now = state.value
                     if (key != null) {
-                        drafts[key] = (drafts[key] ?: StoredDraft()).copy(text = draft.text, quote = draft.quote)
-                        update { it.copy(draft = draft.text, quote = draft.quote) }
-                        persist()
-                        if (draft.droppedAttachments) reportError(R.string.remote_fork_attachments_dropped)
+                        // Never replace what the user has typed or quoted since.
+                        if (now.draft.isBlank() && now.quote == null) {
+                            drafts[key] = (drafts[key] ?: StoredDraft()).copy(text = draft.text, quote = draft.quote)
+                            update { it.copy(draft = draft.text, quote = draft.quote) }
+                            persist()
+                            if (draft.droppedAttachments) reportError(R.string.remote_fork_attachments_dropped)
+                        } else reportError(R.string.remote_tree_text_not_inserted)
                     }
                 }
                 // The host's snapshot.required event does the same; do not depend on its order.
@@ -4414,9 +4424,12 @@ class DefaultRemoteRepository(
             }
             TreeNavigateResult.Done(navigation)
         } catch (e: CancellationException) {
-            throw e
+            // A disconnect or selection change cancels the request, not this caller; the move may
+            // still have happened, and the sheet must not wait for an answer that never comes.
+            currentCoroutineContext().ensureActive()
+            TreeNavigateResult.Failed(TreeFailure.UNKNOWN_RESULT)
         } catch (e: Exception) {
-            val failure = treeFailure(e)
+            val failure = treeFailure(e, navigating = true)
             // The move may have happened; show what the host has now.
             if (treeResultUnknown(failure) && epoch == selectionEpoch && state.value.connected) snapshotAsync()
             TreeNavigateResult.Failed(failure)

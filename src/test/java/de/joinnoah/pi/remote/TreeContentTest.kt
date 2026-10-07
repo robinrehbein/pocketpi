@@ -64,7 +64,10 @@ class TreeContentTest {
 
     @Test
     fun invalidNodeIdsCannotBeBuilt() {
-        val invalid = payloads("wireInvalid").filter { it.second.text("type") != "session.tree" && it.second["nodeId"] != null && it.second.keys.size == 4 }
+        val invalid = payloads("wireInvalid").filter {
+                it.second.text("type") in setOf("session.tree.navigate", "session.tree.fork") &&
+                    it.second.keys == setOf("type", "requestId", "sessionId", "nodeId")
+            }
         assertTrue(invalid.map { it.first }.containsAll(listOf("navigate-empty-node", "navigate-node-with-space")))
         for ((name, payload) in invalid) {
             val nodeId = payload.text("nodeId")
@@ -94,7 +97,7 @@ class TreeContentTest {
         val invalid = payloads("wireInvalid").filter { kind(it.second) == "tree" }
         assertTrue(invalid.size >= 10)
         for ((name, payload) in invalid) {
-            assertThrows(name, Exception::class.java) { validatedTree(payload.obj("data"), sessionId) }
+            assertThrows(name, IllegalArgumentException::class.java) { validatedTree(payload.obj("data"), sessionId) }
         }
     }
 
@@ -115,6 +118,34 @@ class TreeContentTest {
     }
 
     @Test
+    fun theNodeLimitIsInclusive() {
+        fun result(count: Int) =
+            Wire.objectOf(
+                "kind" to "tree",
+                "sessionId" to sessionId,
+                "leafId" to null,
+                "truncated" to false,
+                "canNavigate" to false,
+                "nodes" to
+                    JsonArray(
+                        (0 until count).map {
+                            Wire.objectOf(
+                                "id" to "n$it",
+                                "parentId" to null,
+                                "kind" to "user",
+                                "preview" to "p",
+                                "timestamp" to "2026-01-01T12:00:00.000Z",
+                                "children" to 0,
+                                "forkable" to true,
+                            )
+                        }
+                    ),
+            )
+        assertEquals(MAX_TREE_NODES, validatedTree(result(MAX_TREE_NODES), sessionId).nodes.size)
+        assertThrows(IllegalArgumentException::class.java) { validatedTree(result(MAX_TREE_NODES + 1), sessionId) }
+    }
+
+    @Test
     fun treeOfAnotherSessionIsRejected() {
         val data = payloads("wireValid").first { it.first == "tree-branched" }.second.obj("data")
         assertThrows(IllegalArgumentException::class.java) { validatedTree(data, "other") }
@@ -131,7 +162,7 @@ class TreeContentTest {
         val invalid = payloads("wireInvalid").filter { kind(it.second) == "tree.navigated" }
         assertEquals(3, invalid.size)
         for ((name, payload) in invalid) {
-            assertThrows(name, Exception::class.java) { validatedNavigation(payload.obj("data"), sessionId) }
+            assertThrows(name, IllegalArgumentException::class.java) { validatedNavigation(payload.obj("data"), sessionId) }
         }
         assertThrows(IllegalArgumentException::class.java) {
             validatedNavigation(valid.first().second.obj("data"), "other")
@@ -159,7 +190,7 @@ class TreeContentTest {
         assertEquals(3, invalid.size)
         for ((name, payload) in invalid) {
             val data = payload.obj("data")
-            assertThrows(name, Exception::class.java) {
+            assertThrows(name, IllegalArgumentException::class.java) {
                 validatedFork(data, data.text("sourceSessionId"), "project", setOf("edit", "at", "retry"))
             }
         }
@@ -194,6 +225,9 @@ class TreeContentTest {
         assertEquals(TreeContinue.NOT_NAVIGABLE, continueAvailability(chat.copy(connected = false), navigable, nodes[0]))
         assertEquals(TreeContinue.NOT_NAVIGABLE, continueAvailability(chat.copy(loading = true), navigable, nodes[0]))
         assertEquals(TreeContinue.NOT_NAVIGABLE, continueAvailability(chat.copy(capabilities = emptySet()), navigable, nodes[0]))
+        // The host's extension cannot parse an id outside its pattern.
+        val odd = node("a.b")
+        assertEquals(TreeContinue.NOT_NAVIGABLE, continueAvailability(chat, tree(nodes = listOf(odd)), odd))
         // An empty session has no leaf to be at.
         assertTrue(canContinueInPlace(chat, tree(leafId = null, nodes = nodes), nodes[0]))
     }
@@ -261,7 +295,7 @@ class TreeContentTest {
                 "not_found" to (TreeFailure.NOT_FOUND to R.string.remote_tree_not_found),
                 "invalid_request" to (TreeFailure.INVALID to R.string.remote_tree_invalid),
                 "timeout" to (TreeFailure.UNKNOWN_RESULT to R.string.remote_tree_unknown_result),
-                "internal" to (TreeFailure.UNKNOWN_RESULT to R.string.remote_tree_unknown_result),
+                "internal" to (TreeFailure.FAILED to R.string.remote_tree_failed),
                 "offline" to (TreeFailure.OFFLINE to R.string.remote_tree_offline),
                 "forbidden" to (TreeFailure.FAILED to R.string.remote_tree_failed),
             )
@@ -270,7 +304,19 @@ class TreeContentTest {
             assertEquals(code, pair.first, failure)
             assertEquals(code, pair.second, treeFailureText(failure))
         }
+        assertEquals(
+            TreeFailure.UNKNOWN_RESULT,
+            treeFailure(RemoteRequestException("internal", hostMessage = "Navigation result unknown; refresh")),
+        )
+        assertEquals(
+            TreeFailure.FAILED,
+            treeFailure(RemoteRequestException("internal", hostMessage = "No model available for summarization")),
+        )
         assertEquals(TreeFailure.UNKNOWN_RESULT, treeFailure(IllegalStateException("Request timed out")))
+        assertEquals(TreeFailure.UNKNOWN_RESULT, treeFailure(IllegalStateException("Connection lost"), navigating = true))
+        assertEquals(TreeFailure.FAILED, treeFailure(IllegalStateException("Connection lost")))
+        assertEquals(R.string.remote_tree_load_not_found, treeLoadFailureText(TreeFailure.NOT_FOUND))
+        assertEquals(R.string.remote_tree_busy, treeLoadFailureText(TreeFailure.BUSY))
         assertEquals(TreeFailure.FAILED, treeFailure(IllegalStateException("other")))
         assertEquals(TreeFailure.FAILED, treeFailure(RuntimeException()))
         assertEquals(TreeFailure.PROTOCOL, treeFailure(TreeException(TreeFailure.PROTOCOL)))
@@ -283,7 +329,7 @@ class TreeContentTest {
     fun forkFromANodeHasItsOwnErrors() {
         assertEquals(R.string.remote_fork_busy, treeForkError("busy"))
         assertEquals(R.string.remote_tree_unsupported, treeForkError("unsupported"))
-        assertEquals(R.string.remote_tree_not_found, treeForkError("not_found"))
+        assertEquals(R.string.remote_tree_fork_not_found, treeForkError("not_found"))
         assertEquals(R.string.remote_tree_fork_invalid, treeForkError("invalid_request"))
         assertEquals(R.string.remote_request_error, treeForkError("internal"))
         assertEquals(R.string.remote_request_error, treeForkError(null))

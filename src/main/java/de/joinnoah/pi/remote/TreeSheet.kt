@@ -43,6 +43,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
@@ -139,18 +140,26 @@ internal fun SessionTreeSheet(
             Text(
                 stringResource(R.string.remote_tree_title),
                 style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp).semantics { heading() },
             )
             when (val current = ui) {
                 TreeUi.Loading ->
-                    LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp))
+                    Column(
+                        Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+                            .semantics { liveRegion = LiveRegionMode.Polite }
+                            .testTag("treeLoading"),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(stringResource(R.string.remote_tree_loading))
+                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                    }
                 is TreeUi.Failed ->
                     Column(
                         Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(
-                            stringResource(treeFailureText(current.failure)),
+                            stringResource(treeLoadFailureText(current.failure)),
                             color = MaterialTheme.colorScheme.error,
                             modifier = Modifier.testTag("treeError"),
                         )
@@ -234,7 +243,9 @@ private fun TreeList(
     // Open at the current point, which is usually at the end.
     LaunchedEffect(tree) {
         val leaf = tree.nodes.indexOfFirst { it.id == tree.leafId }
-        if (leaf > 0) listState.scrollToItem((leaf - 2).coerceAtLeast(0))
+        // The truncation notice is a header item before the nodes.
+        val header = if (tree.truncated) 1 else 0
+        if (leaf > 0) listState.scrollToItem((header + leaf - 2).coerceAtLeast(0))
     }
     LazyColumn(
         state = listState,
@@ -243,7 +254,7 @@ private fun TreeList(
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         if (tree.truncated)
-            item(key = "truncated") {
+            item(key = "header:truncated") {
                 Text(
                     stringResource(R.string.remote_tree_truncated),
                     style = MaterialTheme.typography.bodySmall,
@@ -252,10 +263,10 @@ private fun TreeList(
                 )
             }
         if (tree.nodes.isEmpty())
-            item(key = "empty") {
+            item(key = "header:empty") {
                 Text(stringResource(R.string.remote_tree_empty), modifier = Modifier.testTag("treeEmpty"))
             }
-        itemsIndexed(tree.nodes, key = { _, node -> node.id }) { _, node ->
+        itemsIndexed(tree.nodes, key = { _, node -> "node:${node.id}" }) { _, node ->
             TreeRow(
                 node = node,
                 indent = treeIndent(depths[node.id] ?: 0),
@@ -292,7 +303,7 @@ private fun TreeRow(
         modifier =
             Modifier.fillMaxWidth()
                 .padding(start = INDENT_STEP * indent)
-                .selectable(selected = selected, enabled = enabled, role = Role.Button, onClick = onClick)
+                .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
                 .testTag("treeRow"),
         shape = RoundedCornerShape(14.dp),
         color =
@@ -369,8 +380,17 @@ private fun TreeActions(
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("treeRunning"),
             )
             LinearProgressIndicator(Modifier.fillMaxWidth())
+            // One stop is enough; the host answers `cancelled` when the summary ends.
+            var stopped by remember { mutableStateOf(false) }
             if (running)
-                OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth().testTag("treeCancel")) {
+                OutlinedButton(
+                    onClick = {
+                        stopped = true
+                        onCancel()
+                    },
+                    enabled = !stopped,
+                    modifier = Modifier.fillMaxWidth().testTag("treeCancel"),
+                ) {
                     Text(stringResource(R.string.remote_tree_cancel))
                 }
         }

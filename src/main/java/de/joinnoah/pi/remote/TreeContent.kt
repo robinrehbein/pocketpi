@@ -229,7 +229,7 @@ internal enum class TreeContinue {
 
 internal fun continueAvailability(state: RemoteState, tree: SessionTree, node: TreeNode): TreeContinue =
     when {
-        !canShowTree(state) || !tree.canNavigate -> TreeContinue.NOT_NAVIGABLE
+        !canShowTree(state) || !tree.canNavigate || !validTreeNodeId(node.id) -> TreeContinue.NOT_NAVIGABLE
         node.id == tree.leafId -> TreeContinue.ALREADY_HERE
         state.status != "idle" || state.sending || state.configurationChanging -> TreeContinue.NOT_IDLE
         else -> TreeContinue.AVAILABLE
@@ -245,8 +245,11 @@ internal fun canForkFromNode(state: RemoteState, node: TreeNode): Boolean =
 
 // ---- Errors -------------------------------------------------------------------------------
 
-/** The failure behind a thrown request error. */
-internal fun treeFailure(e: Exception): TreeFailure =
+/** How the host's `internal` error starts when it does not know whether a navigation happened. */
+private const val NAVIGATION_UNKNOWN_PREFIX = "Navigation result unknown"
+
+/** The failure behind a thrown request error; [navigating] for a `session.tree.navigate`. */
+internal fun treeFailure(e: Exception, navigating: Boolean = false): TreeFailure =
     when (e) {
         is TreeException -> e.failure
         is RemoteRequestException ->
@@ -257,16 +260,30 @@ internal fun treeFailure(e: Exception): TreeFailure =
                 "not_found" -> TreeFailure.NOT_FOUND
                 "invalid_request" -> TreeFailure.INVALID
                 "offline" -> TreeFailure.OFFLINE
-                "timeout", "internal" -> TreeFailure.UNKNOWN_RESULT
+                "timeout" -> TreeFailure.UNKNOWN_RESULT
+                // Other internal errors (no model for a summary, ...) are clean failures.
+                "internal" ->
+                    if (e.hostMessage?.startsWith(NAVIGATION_UNKNOWN_PREFIX) == true) TreeFailure.UNKNOWN_RESULT
+                    else TreeFailure.FAILED
                 else -> TreeFailure.FAILED
             }
         is IllegalStateException ->
-            if (e.message == "Request timed out") TreeFailure.UNKNOWN_RESULT else TreeFailure.FAILED
+            when {
+                e.message == "Request timed out" -> TreeFailure.UNKNOWN_RESULT
+                // The reply of a move may have been lost with the connection.
+                navigating && e.message == "Connection lost" -> TreeFailure.UNKNOWN_RESULT
+                else -> TreeFailure.FAILED
+            }
         else -> TreeFailure.FAILED
     }
 
 /** Whether the host may have moved the leaf although the app has no answer; the chat then refreshes. */
 internal fun treeResultUnknown(failure: TreeFailure): Boolean = failure == TreeFailure.UNKNOWN_RESULT
+
+/** The text for a failed tree read: a session pi has not saved yet has no tree. */
+@StringRes
+internal fun treeLoadFailureText(failure: TreeFailure): Int =
+    if (failure == TreeFailure.NOT_FOUND) R.string.remote_tree_load_not_found else treeFailureText(failure)
 
 @StringRes
 internal fun treeFailureText(failure: TreeFailure): Int =
@@ -287,7 +304,7 @@ internal fun treeForkError(code: String?): Int =
     when (code) {
         "busy" -> R.string.remote_fork_busy
         "unsupported" -> R.string.remote_tree_unsupported
-        "not_found" -> R.string.remote_tree_not_found
+        "not_found" -> R.string.remote_tree_fork_not_found
         "invalid_request" -> R.string.remote_tree_fork_invalid
         else -> R.string.remote_request_error
     }

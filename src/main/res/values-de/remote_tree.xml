@@ -37,4 +37,8 @@
     <string name="remote_tree_unknown_result">Das Ergebnis ist unbekannt. Der Chat wurde aktualisiert, prüfe also, wo die Sitzung jetzt steht.</string>
     <string name="remote_tree_failed">Der Sitzungsbaum konnte nicht geladen oder geändert werden. Versuche es erneut.</string>
     <string name="remote_tree_fork_invalid">Ab diesem Schritt lässt sich nicht abzweigen.</string>
+    <string name="remote_tree_loading">Sitzungsbaum wird geladen…</string>
+    <string name="remote_tree_load_not_found">Diese Sitzung ist noch nicht gespeichert, deshalb hat sie noch keinen Baum.</string>
+    <string name="remote_tree_fork_not_found">Dieser Schritt wurde nicht gefunden, deshalb wurde nichts abgezweigt. Öffne den Baum neu und versuche es erneut.</string>
+    <string name="remote_tree_text_not_inserted">Der Text des Schritts wurde nicht eingefügt, weil im Eingabefeld schon Text steht.</string>
 </resources>

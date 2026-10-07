@@ -1936,7 +1936,11 @@ internal fun RemoteScreen(
                                 selectLocalCommand = { command ->
                                     // The tree only reads, so it opens at once, also while the chat runs,
                                     // when a /tree draft could not be sent.
-                                    if (command == LocalCommand.TREE) treeSheetRequested = true
+                                    if (command == LocalCommand.TREE) {
+                                        // Like a sent /tree, a command draft does not stay in the composer.
+                                        if (state.draft.trimStart().startsWith("/")) model.draft("")
+                                        treeSheetRequested = true
+                                    }
                                     else model.draft(selectCommandName(state.draft, command.commandName))
                                 },
                                 modelPickerRequested = modelPickerRequested,

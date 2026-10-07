@@ -37,4 +37,8 @@
     <string name="remote_tree_unknown_result">The result is unknown. The chat was refreshed, so check where the session is now.</string>
     <string name="remote_tree_failed">The session tree could not be loaded or changed. Try again.</string>
     <string name="remote_tree_fork_invalid">This step cannot be forked.</string>
+    <string name="remote_tree_loading">Loading the session tree…</string>
+    <string name="remote_tree_load_not_found">This session is not saved yet, so it has no tree.</string>
+    <string name="remote_tree_fork_not_found">This step could not be found, so nothing was forked. Reopen the tree and try again.</string>
+    <string name="remote_tree_text_not_inserted">The step\'s text was not inserted, because the composer already has text.</string>
 </resources>
