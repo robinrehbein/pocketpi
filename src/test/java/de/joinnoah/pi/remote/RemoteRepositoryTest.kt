@@ -812,11 +812,11 @@ class RemoteRepositoryTest {
         transport: Transport,
         local: LocalAttachment,
         prompt: Boolean = true,
+        remoteId: String = "BBBBBBBBBBBBBBBBBBBBBB",
     ) {
         capable(transport)
         transport.capabilities += ATTACHMENTS_CAPABILITY
         val original = transport.response
-        val remoteId = "BBBBBBBBBBBBBBBBBBBBBB"
         transport.response = { request ->
             when (request.text("type")) {
                 "session.attachments.begin" ->
@@ -1074,6 +1074,38 @@ class RemoteRepositoryTest {
         assertNotNull(repository.state.value.configuration)
         assertTrue(repository.state.value.commands.isNotEmpty())
         assertTrue(repository.state.value.unavailableCapabilities.isEmpty())
+    }
+
+    @Test
+    fun sentImageUsesUploadedBytesAfterLocalDraftCleanupWithoutDownload() = runTest {
+        val bytes = byteArrayOf(1, 2, 3)
+        val local = localFile(bytes).copy(kind = "image", name = "photo.jpg", mimeType = "image/jpeg")
+        val remoteId = Wire.encode(ByteArray(16) { 1 })
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, local, remoteId = remoteId) }
+        val repository = repository(transport, attachmentStorage = storage) { _, _ ->
+            storage.write(local, bytes)
+            local
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.importAttachments(repository.state.value.selection, listOf("content:photo"), true)
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        advanceTimeBy(201)
+        runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "session.prompt" })
+        assertFalse(storage.bytes.containsKey(local.id))
+        val remote = RemoteAttachment(
+            remoteId, local.name, local.kind, local.mimeType,
+            local.size, local.sha256, 3_600_000,
+        )
+        val result = repository.readAttachment("session", remote)
+        assertTrue(result is AttachmentReadResult.Loaded)
+        assertArrayEquals(bytes, (result as AttachmentReadResult.Loaded).bytes)
+        assertFalse(transport.sent.any { it.text("type") == "session.attachments.get" })
+        assertTrue(repository.readAttachment("session", remote.copy(sha256 = "0".repeat(64))) !is AttachmentReadResult.Loaded)
     }
 
     @Test
