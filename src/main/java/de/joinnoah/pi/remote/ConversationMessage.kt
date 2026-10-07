@@ -642,7 +642,7 @@ private fun ConversationMessageContent(
                                 stringResource(R.string.remote_tool_output),
                                 style = MaterialTheme.typography.labelMedium,
                             )
-                            SelectionContainer { MarkdownText(it) }
+                            ToolOutputView(it, item.name, item.arguments)
                             TextButton(onClick = { onQuote(item.sourceId) }) { Text(quoteLabel) }
                         }
                         if (item.truncated)
