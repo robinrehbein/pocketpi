@@ -172,7 +172,7 @@ class DefaultRemoteRepository(
     private data class CommandDispatch(val key: DraftKey, val epoch: Long, var revision: Long = -1)
 
     private val commandDispatches = linkedMapOf<String, CommandDispatch>()
-    private val earlyFollowUpReceipts = linkedMapOf<Pair<String, String>, String>()
+    private val earlyFollowUpReceipts = linkedMapOf<Triple<DraftKey, String, String>, String>()
     private var selectionEpoch = 0L
     private var generation = 0L
     private val requests = RequestLedger()
@@ -1052,6 +1052,9 @@ class DefaultRemoteRepository(
                             updateSessionTitle(id, title)
                         }
                     }
+                    if (payload.text("kind") == "message.upsert") {
+                        messageDeliveryReceipt(payload.text("sessionId"), payload.obj("message"))
+                    }
                     if (payload.text("kind") == "command.status") commandReceipt(payload)
                     if (payload.text("kind") in setOf("follow_up.status", "steer.status")) followUpReceipt(payload)
                     val timelineEvent = if (payload.text("kind") in setOf("follow_up.status", "steer.status"))
@@ -1080,21 +1083,69 @@ class DefaultRemoteRepository(
     }
 
     private fun followUpReceipt(event: JsonObject) {
-        val key = DraftKey(activeHost?.routeId ?: return, event.text("sessionId"))
-        val latest = drafts[key] ?: return
-        val id = event.text("requestId")
-        val status = event.text("status")
-        require(status in setOf("accepted", "delivered", "cancelled", "uncertain"))
         val delivery = if (event.text("kind") == "steer.status") "steer" else "follow_up"
-        if (latest.followUps.none { it.requestId == id }) {
-            earlyFollowUpReceipts[id to delivery] = status
+        applyFollowUpReceipt(event.text("sessionId"), event.text("requestId"), delivery, event.text("status"))
+    }
+
+    private fun messageDeliveryReceipt(sessionId: String, message: JsonObject) {
+        if (message.optionalText("role") != "user") return
+        val metadata = message["remoteDelivery"] as? JsonObject ?: return
+        val id = (metadata["requestId"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return
+        val delivery = (metadata["delivery"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return
+        if (id.isEmpty() || id.toByteArray().size > 256 || id.any { it.code <= 32 || it.code == 127 } ||
+            delivery !in setOf("steer", "follow_up")) return
+        applyFollowUpReceipt(sessionId, id, delivery, "delivered")
+    }
+
+    private fun mergedFollowUpStatus(previous: String, incoming: String): String = when {
+        previous == "delivered" -> previous
+        incoming == "delivered" -> incoming
+        previous in setOf("cancelled", "uncertain") -> previous
+        else -> incoming
+    }
+
+    private fun applyFollowUpReceipt(sessionId: String, id: String, delivery: String, status: String) {
+        require(status in setOf("accepted", "delivered", "cancelled", "uncertain"))
+        val key = DraftKey(activeHost?.routeId ?: return, sessionId)
+        val latest = drafts[key] ?: return
+        if (latest.followUps.none { it.requestId == id && it.delivery == delivery }) {
+            // Only the in-flight mutation can receive a receipt before its acknowledgement.
+            if (latest.mutationId != id) return
+            if (status == "delivered" && latest.submittedText != null) {
+                // Consumption proves delivery even if the prompt acknowledgement was lost.
+                val unchanged = latest.text == latest.submittedText && latest.quote == latest.submittedQuote
+                val attachments = if (latest.attachments == latest.submittedAttachments) emptyList()
+                    else latest.attachments
+                val confirmed = latest.copy(
+                    text = if (unchanged) "" else latest.text,
+                    quote = if (unchanged) null else latest.quote,
+                    attachments = attachments,
+                    uploads = latest.uploads.filter { upload -> attachments.any { it.id == upload.localId } },
+                    mutationId = null,
+                    submittedText = null,
+                    submittedQuote = null,
+                    submittedAttachments = emptyList(),
+                    followUps = latest.followUps + PendingFollowUp(id, latest.submittedText, "delivered", delivery),
+                )
+                drafts[key] = confirmed
+                persist()
+                if (currentDraftKey() == key) update { it.copy(
+                    draft = confirmed.text, quote = confirmed.quote, attachments = confirmed.attachments,
+                    uncertain = false, followUps = confirmed.followUps,
+                ) }
+                return
+            }
+            val receiptKey = Triple(key, id, delivery)
+            earlyFollowUpReceipts[receiptKey] = mergedFollowUpStatus(
+                earlyFollowUpReceipts[receiptKey] ?: "pending", status)
             while (earlyFollowUpReceipts.size > 128) earlyFollowUpReceipts.remove(earlyFollowUpReceipts.keys.first())
             return
         }
         val entries = latest.followUps.map {
-            if (it.requestId == id && it.delivery == delivery && it.status !in setOf("delivered", "cancelled", "uncertain"))
-                it.copy(status = status) else it
+            if (it.requestId == id && it.delivery == delivery)
+                it.copy(status = mergedFollowUpStatus(it.status, status)) else it
         }
+        if (entries == latest.followUps) return
         drafts[key] = latest.copy(followUps = entries)
         persist()
         if (currentDraftKey() == key) update { it.copy(followUps = entries) }
@@ -1248,6 +1299,7 @@ class DefaultRemoteRepository(
             checkEpoch(epoch)
             if (current !== timeline) return
             current.snapshot(data, older)
+            current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
             publishTimeline()
         } finally {
             if (epoch == selectionEpoch) resynchronizing = false
@@ -2866,7 +2918,7 @@ class DefaultRemoteRepository(
                 val latest = drafts[key]
                 if (latest?.mutationId == id) {
                     val pending = if (queued) {
-                        val receipt = earlyFollowUpReceipts.remove(id to delivery)
+                        val receipt = earlyFollowUpReceipts.remove(Triple(key, id, delivery))
                         check(latest.followUps.size < 64)
                         latest.followUps + PendingFollowUp(id, current.draft, receipt ?: "accepted", delivery)
                     } else latest.followUps

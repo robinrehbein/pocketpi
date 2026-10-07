@@ -2988,6 +2988,120 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun confirmedDeliveryUpgradesUncertaintyAndCannotBeDowngraded() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        transport.capabilities = setOf(STEER_CAPABILITY)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.prompt")
+                Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else normal(request)
+        }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        repository.draft("same text")
+        repository.steer()
+        runCurrent()
+        val id = transport.sent.last { it.text("type") == "session.prompt" }.text("requestId")
+        listOf("uncertain", "delivered", "accepted", "cancelled").forEachIndexed { index, status ->
+            transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+                "revision" to index + 2, "kind" to "steer.status", "requestId" to id, "status" to status))
+        }
+        repository.flush()
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+        assertEquals("delivered", drafts.values.getValue(DraftKey("host", "session")).followUps.single().status)
+    }
+
+    @Test
+    fun messageIdentityBeforeAcknowledgementSurvivesLaterAcceptedReceipt() = runTest {
+        val transport = Transport().also(::configure)
+        transport.capabilities = setOf(FOLLOW_UP_CAPABILITY)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.prompt") {
+                transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+                    "revision" to 2, "kind" to "message.upsert", "message" to Wire.objectOf(
+                        "id" to "consumed", "role" to "user", "text" to "same text",
+                        "remoteDelivery" to Wire.objectOf("requestId" to request.text("requestId"),
+                            "delivery" to "follow_up"))))
+                transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+                    "revision" to 3, "kind" to "follow_up.status", "requestId" to request.text("requestId"),
+                    "status" to "accepted"))
+                Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            } else normal(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        repository.draft("same text")
+        repository.followUp()
+        runCurrent()
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+    }
+
+    @Test
+    fun snapshotRecoversOnlyMatchingUserDeliveryIdentity() = runTest {
+        val drafts = Drafts().apply {
+            values = mapOf(DraftKey("host", "session") to StoredDraft(followUps = listOf(
+                PendingFollowUp("first", "same text", "uncertain", "steer"),
+                PendingFollowUp("second", "same text", "uncertain", "follow_up"),
+                PendingFollowUp("third", "same text", "uncertain", "steer"))))
+        }
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        fun message(id: String, requestId: String?, delivery: String = "steer", role: String = "user") =
+            Wire.objectOf("id" to id, "role" to role, "text" to "same text",
+                "remoteDelivery" to requestId?.let {
+                    Wire.objectOf("requestId" to it, "delivery" to delivery)
+                })
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "idle",
+                "pendingQuestions" to JsonArray(emptyList()), "messages" to JsonArray(listOf(
+                    message("one", "first"), message("two", "second", "steer"),
+                    message("three", "third", role = "assistant"), message("four", null))))
+            else normal(request)
+        }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        assertEquals(listOf("delivered", "uncertain", "uncertain"), repository.state.value.followUps.map { it.status })
+        assertEquals(listOf("delivered", "uncertain", "uncertain"),
+            drafts.values.getValue(DraftKey("host", "session")).followUps.map { it.status })
+    }
+
+    @Test
+    fun snapshotAfterRestartResolvesLostAcknowledgementAndPreservesEditedDraft() = runTest {
+        val drafts = Drafts().apply {
+            values = mapOf(DraftKey("host", "session") to StoredDraft(
+                text = "new draft", mutationId = "lost-ack", submittedText = "sent text"))
+        }
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "idle",
+                "pendingQuestions" to JsonArray(emptyList()), "messages" to JsonArray(listOf(Wire.objectOf(
+                    "id" to "consumed", "role" to "user", "text" to "sent text",
+                    "remoteDelivery" to Wire.objectOf("requestId" to "lost-ack", "delivery" to "follow_up")))))
+            else normal(request)
+        }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        assertFalse(repository.state.value.uncertain)
+        assertEquals("new draft", repository.state.value.draft)
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+        assertEquals("sent text", repository.state.value.followUps.single().text)
+        assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
     fun lostFollowUpAcknowledgementLeavesDraftUncertainWithoutReplay() = runTest {
         val drafts = Drafts()
         val transport = Transport().also(::configure)
