@@ -1733,22 +1733,29 @@ internal fun RemoteScreen(
                 chatHeader()
             }
         }
-        if (railShown)
-            TimelineRail(
-                markers = markers,
-                onJump = ::jumpTo,
-                scrollState = listState,
-                // Between the header and the composer.
-                modifier =
-                    Modifier.align(Alignment.TopEnd)
-                        .fillMaxHeight()
-                        .padding(
-                            top = headerHeight + 8.dp,
-                            bottom = composerHeight + 8.dp,
-                            end = 24.dp,
-                        )
-                        .then(underlay),
-            )
+        if (railShown) {
+            Box(
+                Modifier.align(Alignment.TopCenter)
+                    .widthIn(max = MAX_READING_WIDTH + 32.dp)
+                    .fillMaxWidth()
+                    .fillMaxHeight()
+                    .padding(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = headerHeight + 8.dp,
+                        bottom = composerHeight + 8.dp,
+                    )
+                    .then(underlay),
+            ) {
+                TimelineRail(
+                    markers = markers,
+                    onJump = ::jumpTo,
+                    scrollState = listState,
+                    // Share the composer's inset and the toggle button's center axis.
+                    modifier = Modifier.align(Alignment.TopEnd).width(48.dp).fillMaxHeight(),
+                )
+            }
+        }
         if (key is RemoteNavKey.Chat) {
             Box(
                 Modifier.align(Alignment.BottomCenter)
@@ -1818,7 +1825,7 @@ internal fun RemoteScreen(
                         Row(
                             Modifier.fillMaxWidth().testTag("chatInsights"),
                             horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
+                            verticalAlignment = Alignment.Bottom,
                         ) {
                             Row(
                                 Modifier.weight(1f).horizontalScroll(rememberScrollState()),
