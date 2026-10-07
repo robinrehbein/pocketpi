@@ -205,6 +205,8 @@ internal fun ConversationMessage(
     fork: MessageFork? = null,
     /** Without a source, sent images show as plain text like any other attachment. */
     images: SentImageSource? = null,
+    /** Without a source, an image the agent mentions shows as its description. */
+    projectImages: ProjectImageSource? = null,
     /** Set only for the newest assistant bubble, like pi's `/copy`; others copy through accessibility. */
     copyButton: Boolean = false,
 ) {
@@ -219,6 +221,7 @@ internal fun ConversationMessage(
             onAskToFix,
             fork,
             images,
+            projectImages,
             copyButton,
         )
     }
@@ -235,6 +238,7 @@ private fun ConversationMessageContent(
     onAskToFix: ((messageId: String) -> Unit)?,
     fork: MessageFork?,
     images: SentImageSource?,
+    projectImages: ProjectImageSource?,
     copyButton: Boolean,
 ) {
     val quoteLabel = stringResource(R.string.remote_quote)
@@ -354,7 +358,10 @@ private fun ConversationMessageContent(
                                         }
                                     }
                                     if (item.text.isNotEmpty())
-                                        SelectionContainer { MarkdownText(item.text) }
+                                        // Only the assistant's text may name files to load; a user's text never does.
+                                        CompositionLocalProvider(
+                                            LocalProjectImageSource provides projectImages.takeIf { !outgoing }
+                                        ) { SelectionContainer { MarkdownText(item.text) } }
                                     if (item.truncated)
                                         Text(
                                             stringResource(R.string.remote_truncated),

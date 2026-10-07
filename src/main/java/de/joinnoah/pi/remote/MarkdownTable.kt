@@ -15,6 +15,8 @@ import androidx.compose.ui.unit.dp
 
 internal sealed interface MarkdownBlock {
     data class Line(val text: String) : MarkdownBlock
+    /** An image of the session folder on a line of its own; [path] is relative (or POSIX absolute). */
+    data class Image(val alt: String, val path: String) : MarkdownBlock
     data class Table(val header: List<String>, val alignment: List<TextAlign>, val rows: List<List<String>>) : MarkdownBlock
 }
 
@@ -104,7 +106,10 @@ internal fun markdownBlocks(text: String): List<MarkdownBlock> {
             }
             blocks.add(MarkdownBlock.Table(header, alignment, rows))
         } else {
-            blocks.add(MarkdownBlock.Line(lines[index++]))
+            val images = imageOnlyLine(lines[index])
+            if (images != null) images.forEach { (alt, path) -> blocks.add(MarkdownBlock.Image(alt, path)) }
+            else blocks.add(MarkdownBlock.Line(lines[index]))
+            index++
         }
     }
     return blocks

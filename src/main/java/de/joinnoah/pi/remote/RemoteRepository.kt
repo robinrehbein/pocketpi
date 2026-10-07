@@ -293,6 +293,14 @@ interface RemoteRepository {
         AttachmentReadResult.Unsupported
 
     /**
+     * An image the agent mentioned, by [path] (relative to the session folder or POSIX absolute),
+     * read from the host in chunks (`session.files.media`, only with [FILES_MEDIA_CAPABILITY]). The
+     * first-loaded bytes stay in memory; [fresh] reads the file again and does not replace them.
+     */
+    suspend fun readProjectImage(sessionId: String, path: String, fresh: Boolean = false): ProjectImageResult =
+        ProjectImageResult.Unsupported
+
+    /**
      * Renders [sessionId] as one HTML file and reads it from the host in chunks (`session.export`,
      * `session.export.get`, only with [EXPORT_CAPABILITY] and for host-owned sessions).
      */

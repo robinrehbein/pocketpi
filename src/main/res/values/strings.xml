@@ -461,4 +461,22 @@
     <string name="performance_full_chat_continue">Continue stream</string>
     <string name="remote_output_peek">Preview full output</string>
     <string name="remote_output_close">Close</string>
+    <string name="remote_image_loading">Loading image…</string>
+    <string name="remote_image_open">View image %1$s</string>
+    <string name="remote_image_too_large">This image is too large to show.</string>
+    <string name="remote_image_not_an_image">This file is not an image that can be shown.</string>
+    <string name="remote_image_unavailable">This image is not available.</string>
+    <string name="remote_image_unsupported">Update pi Remote on your Mac to see images.</string>
+    <string name="remote_image_connection_failure">Could not load image. Check your connection.</string>
+    <string name="remote_image_malformed">This image cannot be displayed.</string>
+    <string name="remote_image_retry">Retry</string>
+    <string name="remote_image_close">Close image</string>
+    <string name="remote_image_share">Share image</string>
+    <string name="remote_image_save">Save image</string>
+    <string name="remote_image_share_title">Share image</string>
+    <string name="remote_image_caption">Loaded from your Mac, encrypted</string>
+    <string name="remote_image_viewer_hint">Pinch to zoom, double-tap to reset</string>
+    <string name="remote_image_fetch_failed">Could not fetch the image again.</string>
+    <string name="remote_image_saved">Image saved.</string>
+    <string name="remote_image_save_failed">Could not save the image.</string>
 </resources>

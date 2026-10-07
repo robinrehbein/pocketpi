@@ -44,6 +44,8 @@ class RemoteApplication : Application() {
         super.onCreate()
         // Exports hold chat content; none outlives the process that shared it.
         Thread { runCatching { ExportStorage.clear(cacheDir) } }.start()
+        // Shared agent images are copies of project files; none outlives the process either.
+        Thread { runCatching { ImageStorage.clear(cacheDir) } }.start()
         settings = DefaultSettingsRepository(this)
         val attachments = AttachmentStore(this)
         val importer = AttachmentImporter(this, attachments)

@@ -44,6 +44,10 @@ private const val TOOL_OUTPUT_CHUNK_BYTES = 49_152
 private const val MAX_TOOL_OUTPUT_DATA_CHARS = 65_536
 private const val SESSION_REFRESH_INTERVAL_MILLIS = 5_000L
 private const val ATTACHMENT_READ_SPACING_MILLIS = 200L
+private const val CAPABILITIES_V1_ROUTE = "capabilities.v1:"
+private const val CAPABILITIES_V2_ROUTE = "capabilities.v2:"
+/** The v2 list holds the v1 entries plus newer ones; installed apps accept 16, this one 32. */
+private const val MAX_ROUTE_CAPABILITIES = 32
 private val DENIED_DEVICE_ERRORS =
     setOf(R.string.remote_device_revoked, R.string.remote_device_paused)
 private val CONNECTION_ERRORS =
@@ -122,7 +126,11 @@ class DefaultRemoteRepository(
             ATTACHMENT_READ_CAPABILITY,
             EXPORT_CAPABILITY,
             SESSION_TREE_CAPABILITY,
+            // Advertised only on the capabilities.v2 route, which the first projects.list uses.
+            FILES_MEDIA_CAPABILITY,
         )
+    /** The request ID prefix of `projects.list`; falls back to v1 once for a host without v2. */
+    private var capabilityRoute = CAPABILITIES_V2_ROUTE
     private val mutable = MutableStateFlow(RemoteState())
     override val state = mutable.asStateFlow()
     private val attachmentMutex = Mutex()
@@ -353,6 +361,7 @@ class DefaultRemoteRepository(
 
                 override fun ready(capabilities: Set<String>) {
                     resetReconnect()
+                    capabilityRoute = CAPABILITIES_V2_ROUTE
                     update {
                         it.copy(
                             connected = true,
@@ -842,6 +851,8 @@ class DefaultRemoteRepository(
                 clearNavigationCache()
                 attachmentBytes.clear()
                 SentImageThumbnails.clear()
+                projectImageBytes.clear()
+                ProjectImageBitmaps.clear()
             }
             cachedProjectChats = cachedProjectChats?.takeIf { it.first == host.routeId }
                 ?.let { it.first to it.second.map { chat -> chat.copy(verified = false) } }
@@ -924,7 +935,7 @@ class DefaultRemoteRepository(
         checkEpoch(epoch)
         check(state.value.connected)
         // Older hosts accept this as an opaque request ID and return ordinary projects.
-        val id = if (type == "projects.list") "capabilities.v1:$requestId" else requestId
+        val id = if (type == "projects.list") "$capabilityRoute$requestId" else requestId
         val payload = Wire.objectOf("type" to type, "requestId" to id, *fields)
         val completion = CompletableDeferred<JsonObject>()
         requests.add(
@@ -948,8 +959,13 @@ class DefaultRemoteRepository(
                     ?: throw IllegalStateException("Request timed out")
             checkEpoch(epoch)
             if (type == "projects.list" && result.text("kind") == "projects") {
+                if (id.startsWith(CAPABILITIES_V2_ROUTE) && result["capabilities"] !is JsonArray) {
+                    // A host that predates the v2 route treats the ID as opaque and sends no list.
+                    capabilityRoute = CAPABILITIES_V1_ROUTE
+                    return request(type, epoch, *fields, draft = draft, onSent = onSent, timeoutMillis = timeoutMillis)
+                }
                 val advertised = (result["capabilities"] as? JsonArray)
-                    ?.takeIf { it.size <= 16 }
+                    ?.takeIf { it.size <= MAX_ROUTE_CAPABILITIES }
                     ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                     .orEmpty()
                 val merged = routeCapabilities.filter { it in advertised }
@@ -1836,6 +1852,8 @@ class DefaultRemoteRepository(
         reconnectEnabled = false
         cancelSelection()
         clearNavigationCache()
+        projectImageBytes.clear()
+        ProjectImageBitmaps.clear()
         retry?.cancel()
         generation++
         transport.close()
@@ -1858,6 +1876,8 @@ class DefaultRemoteRepository(
         if (activeHost?.routeId == routeId) disconnect()
         attachmentBytes.clear()
         SentImageThumbnails.clear()
+        projectImageBytes.clear()
+        ProjectImageBitmaps.clear()
         removedRoutes += routeId
         savedNavigation.remove(routeId)
         queueNavigationWrite(immediate = true)
@@ -4375,6 +4395,120 @@ class DefaultRemoteRepository(
             return AttachmentReadResult.Failed
         }
         return AttachmentReadResult.Loaded(reassembler.bytes().also { attachmentBytes[key] = it })
+    }
+
+    // ---- Agent images (session.files.media.v1) --------------------------------------------
+
+    private class ProjectImageRead {
+        lateinit var job: Deferred<ProjectImageResult>
+        var waiters = 0
+    }
+
+    private val projectImageBytes = ProjectImageByteCache()
+    private val projectImageReads = mutableMapOf<Triple<String, String, Boolean>, ProjectImageRead>()
+    private val projectImageReadMutex = Mutex()
+    private var lastProjectImageRead: Long? = null
+
+    override suspend fun readProjectImage(sessionId: String, path: String, fresh: Boolean): ProjectImageResult {
+        if (!opaqueId(sessionId) || !validMediaPath(path) || sessionId != state.value.selection.sessionId)
+            return ProjectImageResult.Unavailable
+        val cacheKey = ProjectImageByteCache.Key(sessionId, path)
+        if (!fresh) projectImageBytes[cacheKey]?.let { return it }
+        val current = state.value
+        if (!current.connected) return ProjectImageResult.Failed
+        if (FILES_MEDIA_CAPABILITY !in current.capabilities || FILES_MEDIA_CAPABILITY in current.unavailableCapabilities)
+            // Until projects.list has been answered the host's capabilities are not known yet.
+            return if (current.capabilitiesKnown) ProjectImageResult.Unsupported else ProjectImageResult.Failed
+        val epoch = selectionEpoch
+        val key = Triple(sessionId, path, fresh)
+        // Concurrent callers for one image share a single read; it stops when the last one leaves.
+        val read =
+            synchronized(projectImageReads) {
+                projectImageReads
+                    .getOrPut(key) {
+                        val entry = ProjectImageRead()
+                        entry.job =
+                            scope.async(start = CoroutineStart.LAZY) {
+                                try {
+                                    fetchProjectImage(epoch, sessionId, path, cacheKey, fresh)
+                                } finally {
+                                    synchronized(projectImageReads) { projectImageReads.remove(key, entry) }
+                                }
+                            }
+                        entry
+                    }
+                    .also { it.waiters++ }
+            }
+        read.job.start()
+        try {
+            return read.job.await()
+        } catch (e: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            return ProjectImageResult.Failed
+        } finally {
+            synchronized(projectImageReads) {
+                if (--read.waiters == 0 && read.job.isActive) {
+                    read.job.cancel()
+                    projectImageReads.remove(key, read)
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchProjectImage(
+        epoch: Long,
+        sessionId: String,
+        path: String,
+        cacheKey: ProjectImageByteCache.Key,
+        fresh: Boolean,
+    ): ProjectImageResult {
+        // One request at a time, each start at least 200 ms after the last, retries included.
+        suspend fun spaced(type: String, vararg fields: Pair<String, Any?>): JsonObject =
+            projectImageReadMutex.withLock {
+                lastProjectImageRead?.let {
+                    val wait = ATTACHMENT_READ_SPACING_MILLIS - (now() - it)
+                    if (wait > 0) delay(wait.coerceAtMost(ATTACHMENT_READ_SPACING_MILLIS))
+                }
+                lastProjectImageRead = now()
+                // Once sent, the request is awaited even if the caller leaves, so the next one
+                // never starts while the host may still be answering this one.
+                withContext(NonCancellable) { request(type, epoch, *fields) }
+            }
+        return try {
+            when (
+                val download =
+                    downloadMedia(
+                        sessionId,
+                        path,
+                        start = { spaced("session.files.media", *mediaFields(sessionId, path)) },
+                        read = { mediaId, offset ->
+                            spaced("session.files.media.get", *mediaGetFields(sessionId, mediaId, offset))
+                        },
+                    )
+            ) {
+                is MediaDownload.Omitted ->
+                    when (download.reason) {
+                        MediaOmitted.TOO_LARGE -> ProjectImageResult.TooLarge
+                        MediaOmitted.NOT_AN_IMAGE -> ProjectImageResult.NotAnImage
+                    }
+                is MediaDownload.Ready ->
+                    ProjectImageResult.Loaded(
+                        download.meta.path,
+                        download.meta.mime.wire,
+                        download.meta.sha256,
+                        download.bytes,
+                    ).also { if (!fresh) projectImageBytes[cacheKey] = it }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: MediaException) {
+            when (e.failure) {
+                MediaFailure.UNAVAILABLE -> ProjectImageResult.Unavailable
+                MediaFailure.FAILED -> ProjectImageResult.Failed
+            }
+        } catch (e: Exception) {
+            ProjectImageResult.Failed
+        }
     }
 
     // ---- Session export (session.export.v1) -----------------------------------------------

@@ -227,6 +227,16 @@ internal fun RemoteScreen(
                 )
             }
         }
+    val projectImages =
+        state.selection.sessionId?.takeIf { chatModel != null }?.let { sessionId ->
+            val supported = FILES_MEDIA_CAPABILITY in state.capabilities
+            remember(chatModel, sessionId, state.connected, state.capabilitiesKnown, supported) {
+                ProjectImageSource(
+                    sessionId, state.connected, state.capabilitiesKnown, supported,
+                    checkNotNull(chatModel)::readProjectImage,
+                )
+            }
+        }
     val touched = remember(conversation) { touchedFiles(conversation) }
     // Diffing every edit can take a moment in a long chat; keep it off the main thread.
     val touchedLines by
@@ -1632,6 +1642,7 @@ internal fun RemoteScreen(
                                     highlighted = highlighted,
                                     fork = messageFork?.takeIf { item.id in forkableIds },
                                     images = sentImages,
+                                    projectImages = projectImages,
                                     copyButton = item.id == copyButtonId,
                                 )
                             }
