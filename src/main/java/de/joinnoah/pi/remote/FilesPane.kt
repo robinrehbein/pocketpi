@@ -430,8 +430,7 @@ private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Un
             ?: plain
     val style = monoTextStyle()
     val contentWidth = rememberCodeContentWidth(lines, style)
-    val charWidth = rememberMonoCharWidth(style)
-    val numberWidth = charWidth * lines.size.coerceAtLeast(1).toString().length
+    val numberWidth = rememberLineNumberWidth(lines.size, style)
     val scroll = rememberScrollState()
     val selection = file.selection?.takeIf { it.last <= lines.size }
     val selectionState =
@@ -518,12 +517,13 @@ private fun FileLineRow(
                     this.selected = selected
                     if (selectionState != null) stateDescription = selectionState
                 }
-                .width(maxOf(rowStyle.numberWidth + 16.dp, 48.dp))
+                .testTag("filesLine:$number")
                 .padding(horizontal = 8.dp)
-                .testTag("filesLine:$number"),
+                .width(maxOf(rowStyle.numberWidth, 32.dp)),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = rowStyle.text,
             textAlign = TextAlign.End,
+            softWrap = false,
             maxLines = 1,
         )
         Box(Modifier.weight(1f).horizontalScroll(scroll)) {
