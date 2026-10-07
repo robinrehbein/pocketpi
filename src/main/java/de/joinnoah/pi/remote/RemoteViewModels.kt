@@ -268,6 +268,11 @@ internal class ChatViewModel(
         if (cleared || !matches(repository.state.value)) AttachmentReadResult.Unavailable
         else repository.readAttachment(sessionId, attachment)
 
+    /** Exports this chat's session; a destination that is no longer the shown chat gets a failure. */
+    suspend fun exportSession(sessionId: String): ExportResult =
+        if (cleared || !matches(repository.state.value)) ExportResult.Failed(ExportFailure.FAILED)
+        else repository.exportSession(sessionId)
+
     /** Quotes the message and offers [prompt] as the draft unless the user already typed one. */
     fun askToFix(messageId: String, prompt: String) = active {
         repository.quote(messageId)

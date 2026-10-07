@@ -1,0 +1,367 @@
+{
+  "version": 1,
+  "wireValid": [
+    {
+      "name": "export",
+      "payload": {
+        "type": "session.export",
+        "requestId": "export:1",
+        "sessionId": "live-session"
+      }
+    },
+    {
+      "name": "get",
+      "payload": {
+        "type": "session.export.get",
+        "requestId": "export:2",
+        "sessionId": "live-session",
+        "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+        "offset": 0
+      }
+    },
+    {
+      "name": "get-at-end",
+      "payload": {
+        "type": "session.export.get",
+        "requestId": "export:2",
+        "sessionId": "live-session",
+        "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+        "offset": 2
+      }
+    },
+    {
+      "name": "export-result",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "fileName": "pi-session-20260101-120000.html",
+          "mimeType": "text/html",
+          "totalBytes": 2,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "chunk",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export.content",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "offset": 0,
+          "totalBytes": 2,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "data": "aGk"
+        }
+      }
+    },
+    {
+      "name": "exact-end-empty-chunk",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export.content",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "offset": 2,
+          "totalBytes": 2,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "data": ""
+        }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "export-extra-key",
+      "payload": {
+        "type": "session.export",
+        "requestId": "export:1",
+        "sessionId": "live-session",
+        "path": "/private"
+      }
+    },
+    {
+      "name": "export-missing-session",
+      "payload": {
+        "type": "session.export",
+        "requestId": "export:1"
+      }
+    },
+    {
+      "name": "get-short-id",
+      "payload": {
+        "type": "session.export.get",
+        "requestId": "export:2",
+        "sessionId": "live-session",
+        "exportId": "abc",
+        "offset": 0
+      }
+    },
+    {
+      "name": "get-path-id",
+      "payload": {
+        "type": "session.export.get",
+        "requestId": "export:2",
+        "sessionId": "live-session",
+        "exportId": "../../etc/passwd",
+        "offset": 0
+      }
+    },
+    {
+      "name": "get-negative-offset",
+      "payload": {
+        "type": "session.export.get",
+        "requestId": "export:2",
+        "sessionId": "live-session",
+        "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+        "offset": -1
+      }
+    },
+    {
+      "name": "get-offset-too-large",
+      "payload": {
+        "type": "session.export.get",
+        "requestId": "export:2",
+        "sessionId": "live-session",
+        "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+        "offset": 20971521
+      }
+    },
+    {
+      "name": "get-missing-offset",
+      "payload": {
+        "type": "session.export.get",
+        "requestId": "export:2",
+        "sessionId": "live-session",
+        "exportId": "AAAAAAAAAAAAAAAAAAAAAA"
+      }
+    },
+    {
+      "name": "get-extra-key",
+      "payload": {
+        "type": "session.export.get",
+        "requestId": "export:2",
+        "sessionId": "live-session",
+        "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+        "offset": 0,
+        "path": "/private"
+      }
+    },
+    {
+      "name": "meta-wrong-mime",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "fileName": "pi-session-20260101-120000.html",
+          "mimeType": "text/plain",
+          "totalBytes": 2,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "meta-zero-bytes",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "fileName": "pi-session-20260101-120000.html",
+          "mimeType": "text/html",
+          "totalBytes": 0,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "meta-too-large",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "fileName": "pi-session-20260101-120000.html",
+          "mimeType": "text/html",
+          "totalBytes": 20971521,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "meta-bad-file-name",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "fileName": "../session.html",
+          "mimeType": "text/html",
+          "totalBytes": 2,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "meta-uppercase-sha",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "fileName": "pi-session-20260101-120000.html",
+          "mimeType": "text/html",
+          "totalBytes": 2,
+          "sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      }
+    },
+    {
+      "name": "meta-extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "fileName": "pi-session-20260101-120000.html",
+          "mimeType": "text/html",
+          "totalBytes": 2,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "path": "/private"
+        }
+      }
+    },
+    {
+      "name": "chunk-empty-before-end",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export.content",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "offset": 0,
+          "totalBytes": 2,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "data": ""
+        }
+      }
+    },
+    {
+      "name": "chunk-past-total",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export.content",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "offset": 1,
+          "totalBytes": 2,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "data": "aGk"
+        }
+      }
+    },
+    {
+      "name": "chunk-offset-past-total",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export.content",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "offset": 3,
+          "totalBytes": 2,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "data": ""
+        }
+      }
+    },
+    {
+      "name": "chunk-bad-base64",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export.content",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "offset": 0,
+          "totalBytes": 2,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "data": "a+/="
+        }
+      }
+    },
+    {
+      "name": "chunk-zero-total",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export.content",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "offset": 0,
+          "totalBytes": 0,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "data": ""
+        }
+      }
+    },
+    {
+      "name": "chunk-bad-sha",
+      "payload": {
+        "type": "result",
+        "requestId": "export:1",
+        "ok": true,
+        "data": {
+          "kind": "export.content",
+          "sessionId": "live-session",
+          "exportId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "offset": 0,
+          "totalBytes": 2,
+          "sha256": "xyz",
+          "data": "aGk"
+        }
+      }
+    }
+  ]
+}

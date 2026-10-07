@@ -241,6 +241,24 @@ class SessionControlsTest {
     }
 
     @Test
+    fun exportNeedsTheCapabilityAndAHostOwnedSession() {
+        val exportable = chatState.copy(
+            capabilities = chatState.capabilities + EXPORT_CAPABILITY,
+            selection = RemoteSelection(sessionId = "s1"),
+        )
+        assertTrue(canExportSession(exportable))
+        assertEquals(LocalCommand.EXPORT, availableLocalCommands(exportable, true, 0).last())
+        assertFalse(LocalCommand.EXPORT in availableLocalCommands(chatState, true, 0))
+        assertFalse(canExportSession(exportable.copy(capabilities = chatState.capabilities)))
+        assertFalse(canExportSession(exportable.copy(unavailableCapabilities = setOf(EXPORT_CAPABILITY))))
+        val terminal = exportable.copy(session = Wire.objectOf("id" to "s1", "title" to "T", "origin" to "tui"))
+        assertFalse(canExportSession(terminal))
+        assertFalse(canExportSession(exportable.copy(status = "offline")))
+        assertFalse(canExportSession(exportable.copy(selection = RemoteSelection())))
+        assertFalse(LocalCommand.EXPORT in availableLocalCommands(exportable.copy(status = "running"), true, 0))
+    }
+
+    @Test
     fun localCommandsFollowTheControlsTheyStandFor() {
         val all = listOf(LocalCommand.NEW, LocalCommand.COMPACT, LocalCommand.MODEL, LocalCommand.NAME)
         assertEquals(all, availableLocalCommands(chatState, true, 0))

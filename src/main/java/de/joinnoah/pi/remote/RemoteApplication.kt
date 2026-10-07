@@ -42,6 +42,8 @@ class RemoteApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Exports hold chat content; none outlives the process that shared it.
+        Thread { runCatching { ExportStorage.clear(cacheDir) } }.start()
         settings = DefaultSettingsRepository(this)
         val attachments = AttachmentStore(this)
         val importer = AttachmentImporter(this, attachments)
