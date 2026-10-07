@@ -1,7 +1,7 @@
 package de.joinnoah.pi.remote
 
-import java.io.ByteArrayOutputStream
 import java.io.File
+import java.security.MessageDigest
 import java.util.concurrent.CancellationException
 import kotlinx.serialization.json.JsonObject
 
@@ -102,16 +102,18 @@ internal fun exportGetFields(
     return arrayOf("sessionId" to sessionId, "exportId" to exportId, "offset" to offset)
 }
 
-private fun requestFailure(e: Exception): ExportException =
+private fun requestFailure(e: Exception, fromStart: Boolean): ExportException =
     when (e) {
         is RemoteRequestException ->
             ExportException(
                 when (e.code) {
                     "busy" -> ExportFailure.BUSY
-                    "not_found" -> ExportFailure.NOT_FOUND
+                    // Nothing exists yet at the start, so "not found" is no expiry there.
+                    "not_found" -> if (fromStart) ExportFailure.FAILED else ExportFailure.NOT_FOUND
                     "unsupported" -> ExportFailure.UNSUPPORTED
                     "offline" -> ExportFailure.OFFLINE
-                    "invalid_request" -> ExportFailure.TOO_LARGE
+                    // A render over the limit is refused at the start; a read never is.
+                    "invalid_request" -> if (fromStart) ExportFailure.TOO_LARGE else ExportFailure.PROTOCOL
                     else -> ExportFailure.FAILED
                 }
             )
@@ -140,7 +142,7 @@ internal suspend fun downloadExport(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                throw requestFailure(e)
+                throw requestFailure(e, fromStart = true)
             }
         val meta =
             try {
@@ -148,7 +150,13 @@ internal suspend fun downloadExport(
             } catch (e: Exception) {
                 throw ExportException(ExportFailure.PROTOCOL)
             }
-        val buffer = ByteArrayOutputStream(meta.totalBytes.toInt())
+        val bytes =
+            try {
+                ByteArray(meta.totalBytes.toInt())
+            } catch (e: OutOfMemoryError) {
+                throw ExportException(ExportFailure.STORAGE)
+            }
+        val digest = MessageDigest.getInstance("SHA-256")
         var offset = 0L
         var vanished = false
         while (offset < meta.totalBytes) {
@@ -162,9 +170,9 @@ internal suspend fun downloadExport(
                         vanished = true
                         break
                     }
-                    throw requestFailure(e)
+                    throw requestFailure(e, fromStart = false)
                 } catch (e: Exception) {
-                    throw requestFailure(e)
+                    throw requestFailure(e, fromStart = false)
                 }
             val chunk =
                 try {
@@ -174,15 +182,16 @@ internal suspend fun downloadExport(
                 }
             // Only the last chunk may be empty, and then offset == totalBytes ends the loop.
             if (chunk.bytes.isEmpty()) throw ExportException(ExportFailure.PROTOCOL)
-            buffer.write(chunk.bytes)
+            System.arraycopy(chunk.bytes, 0, bytes, offset.toInt(), chunk.bytes.size)
+            digest.update(chunk.bytes)
             offset += chunk.bytes.size
         }
         if (vanished) {
             restarted = true
             continue
         }
-        val bytes = buffer.toByteArray()
-        if (bytes.size.toLong() != meta.totalBytes || AttachmentImportRules.sha256(bytes) != meta.sha256)
+        val hash = digest.digest().joinToString("") { "%02x".format(it) }
+        if (offset != meta.totalBytes || hash != meta.sha256)
             throw ExportException(ExportFailure.HASH_MISMATCH)
         return ExportResult.Ready(meta.fileName, bytes)
     }
@@ -211,6 +220,11 @@ internal object ExportStorage {
         return if (cleaned.isEmpty()) FALLBACK_NAME else "$cleaned.html"
     }
 
+    /** Deletes every stored export. Blocking. */
+    fun clear(cacheDir: File) {
+        File(cacheDir, DIRECTORY).listFiles()?.forEach { it.delete() }
+    }
+
     /** Deletes every earlier export, then writes [bytes] and returns the file. Blocking. */
     fun write(cacheDir: File, name: String, bytes: ByteArray): File {
         val dir = File(cacheDir, DIRECTORY)
@@ -218,9 +232,17 @@ internal object ExportStorage {
         dir.listFiles()?.forEach { it.delete() }
         val file = File(dir, safeName(name))
         require(file.canonicalFile.parentFile == dir.canonicalFile) { "Unsafe export file" }
-        val temporary = File(dir, "${file.name}.tmp")
-        temporary.writeBytes(bytes)
-        check(temporary.renameTo(file)) { "Export file could not be written" }
+        // Written outside the served folder, so a half-written file is never shareable.
+        val temporary = File(cacheDir, "${file.name}.tmp")
+        try {
+            temporary.writeBytes(bytes)
+            if (!temporary.renameTo(file)) {
+                temporary.copyTo(file, overwrite = true)
+            }
+        } finally {
+            temporary.delete()
+        }
+        check(file.length() == bytes.size.toLong()) { "Export file could not be written" }
         return file
     }
 }

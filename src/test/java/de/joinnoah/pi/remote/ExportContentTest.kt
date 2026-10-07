@@ -231,6 +231,24 @@ class ExportContentTest {
         )
     }
 
+    @Test
+    fun startAndReadErrorsMapDifferently() {
+        assertEquals(
+            ExportFailure.FAILED,
+            failure { downloadExport(sessionId, { throw RemoteRequestException("not_found") }, { _, o -> chunk(o) }) },
+        )
+        assertEquals(
+            ExportFailure.PROTOCOL,
+            failure {
+                downloadExport(sessionId, { meta() }, { _, _ -> throw RemoteRequestException("invalid_request") })
+            },
+        )
+        assertEquals(
+            ExportFailure.BUSY,
+            failure { downloadExport(sessionId, { meta() }, { _, _ -> throw RemoteRequestException("busy") }) },
+        )
+    }
+
     // ---- storage -------------------------------------------------------------------------
 
     @Test
@@ -246,6 +264,9 @@ class ExportContentTest {
             assertFalse(first.exists())
             assertEquals("two", second.readText())
             assertEquals(listOf(second.name), second.parentFile!!.list()!!.toList())
+            assertEquals(listOf("exports"), cache.list()!!.toList())
+            ExportStorage.clear(cache)
+            assertEquals(0, second.parentFile!!.list()!!.size)
         } finally {
             cache.deleteRecursively()
         }

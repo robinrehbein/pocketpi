@@ -4291,7 +4291,8 @@ class DefaultRemoteRepository(
         if (!opaqueId(sessionId) || sessionId != current.selection.sessionId)
             return ExportResult.Failed(ExportFailure.FAILED)
         if (!current.connected) return ExportResult.Failed(ExportFailure.OFFLINE)
-        if (current.session?.optionalText("origin") != "rpc" || EXPORT_CAPABILITY !in current.capabilities)
+        if (current.session?.optionalText("origin") != "rpc" || EXPORT_CAPABILITY !in current.capabilities ||
+            EXPORT_CAPABILITY in current.unavailableCapabilities)
             return ExportResult.Failed(ExportFailure.UNSUPPORTED)
         val epoch = selectionEpoch
         return try {

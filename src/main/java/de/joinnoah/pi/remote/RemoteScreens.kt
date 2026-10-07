@@ -577,14 +577,15 @@ internal fun RemoteScreen(
                 when (val result = chat.exportSession(sessionId)) {
                     is ExportResult.Failed -> ExportState.Failed(result.failure)
                     is ExportResult.Ready ->
-                        runCatching { withContext(Dispatchers.IO) { storeExport(context, result) } }
-                            .fold(
-                                { uri ->
-                                    shareExport(uri.toString())
-                                    ExportState.Done(uri.toString())
-                                },
-                                { ExportState.Failed(ExportFailure.STORAGE) },
-                            )
+                        try {
+                            val uri = withContext(Dispatchers.IO) { storeExport(context, result) }
+                            shareExport(uri.toString())
+                            ExportState.Done(uri.toString())
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            ExportState.Failed(ExportFailure.STORAGE)
+                        }
                 }
         }
     }
@@ -811,7 +812,11 @@ internal fun RemoteScreen(
                         }
                     if (exportState != null)
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                            ExportStatus(exportState, ::shareExport) { exportState = null }
+                            ExportStatus(exportState, ::shareExport) {
+                                if (exportState is ExportState.Done)
+                                    exportScope.launch(Dispatchers.IO) { ExportStorage.clear(context.cacheDir) }
+                                exportState = null
+                            }
                         }
                 }
             }
