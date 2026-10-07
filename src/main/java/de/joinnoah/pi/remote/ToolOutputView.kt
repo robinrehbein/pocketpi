@@ -37,14 +37,20 @@ internal fun outputFormat(name: String?, arguments: String?, text: String): Outp
 @Composable
 internal fun ToolOutputView(text: String, name: String? = null, arguments: String? = null) {
     var peek by remember { mutableStateOf(false) }
-    val clipboard = LocalClipboardManager.current
     val format = remember(name, arguments, text) { outputFormat(name, arguments, text) }
     val preview = remember(text) { text.lineSequence().take(24).joinToString("\n").take(6000) }
     Column(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = { peek = true })) {
         OutputContent(preview, format)
         TextButton(onClick = { peek = true }) { Text(stringResource(R.string.remote_output_peek)) }
     }
-    if (peek) Dialog(onDismissRequest = { peek = false }) {
+    if (peek) ToolOutputPeek(text, name, arguments) { peek = false }
+}
+
+@Composable
+internal fun ToolOutputPeek(text: String, name: String?, arguments: String?, onDismiss: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    val format = remember(name, arguments, text) { outputFormat(name, arguments, text) }
+    Dialog(onDismissRequest = onDismiss) {
         Surface(shape = MaterialTheme.shapes.extraLarge) {
             Column(Modifier.fillMaxWidth().heightIn(max = 640.dp).padding(16.dp)) {
                 Text(stringResource(R.string.remote_tool_output), style = MaterialTheme.typography.titleLarge)
@@ -55,7 +61,7 @@ internal fun ToolOutputView(text: String, name: String? = null, arguments: Strin
                     TextButton(onClick = { clipboard.setText(AnnotatedString(text)) }) {
                         Text(stringResource(R.string.remote_copy_code))
                     }
-                    TextButton(onClick = { peek = false }) { Text(stringResource(R.string.remote_output_close)) }
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.remote_output_close)) }
                 }
             }
         }

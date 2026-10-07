@@ -7,6 +7,7 @@ import android.text.format.Formatter
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -224,6 +225,7 @@ internal fun ConversationMessage(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun ConversationMessageContent(
     item: ConversationItem,
@@ -488,6 +490,10 @@ private fun ConversationMessageContent(
                 else null
             }
             var expanded by remember(item.id) { mutableStateOf(planMarkdown != null) }
+            var outputPeek by remember(item.id) { mutableStateOf(false) }
+            if (outputPeek) item.output?.let { output ->
+                ToolOutputPeek(output, item.name, item.arguments) { outputPeek = false }
+            }
             // Plan cards keep their inline toggle; other tools open the detail screen when the host
             // screen offers one, and the expand icon toggles the inline preview on its own.
             val openTool = onOpenTool.takeIf { planMarkdown == null }
@@ -539,10 +545,14 @@ private fun ConversationMessageContent(
                     Row(
                         Modifier.fillMaxWidth()
                             .testTag("toolCardHeader")
-                            .then(
-                                if (openTool != null)
-                                    Modifier.clickable(onClickLabel = openToolLabel) { openTool(item) }
-                                else Modifier.clickable { expanded = !expanded }
+                            .combinedClickable(
+                                onClickLabel = if (openTool != null) openToolLabel else null,
+                                onClick = {
+                                    if (openTool != null) openTool(item)
+                                    else expanded = !expanded
+                                },
+                                onLongClickLabel = stringResource(R.string.remote_output_peek),
+                                onLongClick = if (item.output != null) ({ outputPeek = true }) else null,
                             )
                             .heightIn(min = 40.dp),
                         verticalAlignment = Alignment.CenterVertically,
