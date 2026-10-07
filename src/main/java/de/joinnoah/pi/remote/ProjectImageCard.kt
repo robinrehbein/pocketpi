@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,11 +38,13 @@ internal val LocalProjectImageSource = staticCompositionLocalOf<ProjectImageSour
 
 internal sealed interface ProjectImageState {
     data object Loading : ProjectImageState
-    class Ready(val image: ImageBitmap, val loaded: ProjectImageResult.Loaded) : ProjectImageState
+    /** Holds the thumbnail only; the viewer fetches the bytes again from the cache when it opens. */
+    class Ready(val image: ImageBitmap, val sha256: String, val mimeType: String) : ProjectImageState
     data object TooLarge : ProjectImageState
     data object NotAnImage : ProjectImageState
     data object Unavailable : ProjectImageState
     data object UnsupportedHost : ProjectImageState
+    data object Busy : ProjectImageState
     data object ConnectionFailure : ProjectImageState
     data object Malformed : ProjectImageState
 }
@@ -59,12 +60,13 @@ internal suspend fun ProjectImageSource.cardState(path: String): ProjectImageSta
                 ProjectImageBitmaps[key]
                     ?: decodeProjectImage(result, PROJECT_IMAGE_CARD_EDGE)?.also { ProjectImageBitmaps[key] = it }
             if (bitmap == null) ProjectImageState.Malformed
-            else ProjectImageState.Ready(bitmap.asImageBitmap(), result)
+            else ProjectImageState.Ready(bitmap.asImageBitmap(), result.sha256, result.mimeType)
         }
         ProjectImageResult.Unsupported -> ProjectImageState.UnsupportedHost
         ProjectImageResult.Unavailable -> ProjectImageState.Unavailable
         ProjectImageResult.TooLarge -> ProjectImageState.TooLarge
         ProjectImageResult.NotAnImage -> ProjectImageState.NotAnImage
+        ProjectImageResult.Busy -> ProjectImageState.Busy
         ProjectImageResult.Failed -> ProjectImageState.ConnectionFailure
     }
 }
@@ -79,7 +81,8 @@ private const val CARD_ASPECT = 4f / 3f
 internal fun ProjectImageCard(alt: String, path: String, source: ProjectImageSource, modifier: Modifier = Modifier) {
     var state by remember(source.sessionId, path) { mutableStateOf<ProjectImageState>(ProjectImageState.Loading) }
     var requests by remember(source.sessionId, path) { mutableIntStateOf(0) }
-    var viewing by rememberSaveable(source.sessionId, path) { mutableStateOf(false) }
+    // Not saved: a rotation must not reopen the viewer by itself.
+    var viewing by remember(source.sessionId, path) { mutableStateOf(false) }
     LaunchedEffect(source.sessionId, path, source.connected, source.capabilitiesKnown, source.supported, requests) {
         // An image already shown stays through connection changes.
         if (state !is ProjectImageState.Ready) {
@@ -94,8 +97,9 @@ internal fun ProjectImageCard(alt: String, path: String, source: ProjectImageSou
         Surface(
             modifier =
                 Modifier.fillMaxWidth()
-                    .aspectRatio(CARD_ASPECT)
+                    // The cap comes first so a wide layout is capped too; the shape then narrows.
                     .heightIn(max = 320.dp)
+                    .aspectRatio(CARD_ASPECT)
                     .clip(RoundedCornerShape(12.dp))
                     .then(
                         if (ready != null)
@@ -124,7 +128,7 @@ internal fun ProjectImageCard(alt: String, path: String, source: ProjectImageSou
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-    if (viewing && ready != null) ImageViewer(ready.loaded, path, source) { viewing = false }
+    if (viewing && ready != null) ImageViewer(path, ready.sha256, ready.mimeType, source) { viewing = false }
 }
 
 @Composable
@@ -142,6 +146,7 @@ private fun ProjectImageMessage(state: ProjectImageState, onRetry: () -> Unit) {
                     ProjectImageState.TooLarge -> R.string.remote_image_too_large
                     ProjectImageState.NotAnImage -> R.string.remote_image_not_an_image
                     ProjectImageState.UnsupportedHost -> R.string.remote_image_unsupported
+                    ProjectImageState.Busy -> R.string.remote_image_busy
                     ProjectImageState.ConnectionFailure -> R.string.remote_image_connection_failure
                     ProjectImageState.Malformed -> R.string.remote_image_malformed
                     else -> R.string.remote_image_unavailable
@@ -149,7 +154,7 @@ private fun ProjectImageMessage(state: ProjectImageState, onRetry: () -> Unit) {
             ),
             style = MaterialTheme.typography.labelMedium,
         )
-        if (state == ProjectImageState.ConnectionFailure)
+        if (state == ProjectImageState.ConnectionFailure || state == ProjectImageState.Busy)
             TextButton(onClick = onRetry, modifier = Modifier.testTag("projectImageRetry")) {
                 Text(stringResource(R.string.remote_image_retry))
             }

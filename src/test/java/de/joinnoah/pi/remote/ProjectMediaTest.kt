@@ -165,7 +165,9 @@ class ProjectMediaTest {
                     )
                 }.exceptionOrNull() as MediaException).failure
         for (code in listOf("invalid_path", "not_found", "forbidden")) assertEquals(code, MediaFailure.UNAVAILABLE, failure(code, true))
-        for (code in listOf("busy", "offline", "internal")) {
+        assertEquals(MediaFailure.BUSY, failure("busy", true))
+        assertEquals(MediaFailure.BUSY, failure("busy", false))
+        for (code in listOf("offline", "internal")) {
             assertEquals(code, MediaFailure.FAILED, failure(code, true))
             assertEquals(code, MediaFailure.FAILED, failure(code, false))
         }

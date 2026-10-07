@@ -469,13 +469,13 @@
     <string name="remote_image_unsupported">Update pi Remote on your Mac to see images.</string>
     <string name="remote_image_connection_failure">Could not load image. Check your connection.</string>
     <string name="remote_image_malformed">This image cannot be displayed.</string>
+    <string name="remote_image_busy">Your Mac is busy sending images. Try again in a moment.</string>
     <string name="remote_image_retry">Retry</string>
     <string name="remote_image_close">Close image</string>
     <string name="remote_image_share">Share image</string>
     <string name="remote_image_save">Save image</string>
     <string name="remote_image_share_title">Share image</string>
     <string name="remote_image_caption">Loaded from your Mac, encrypted</string>
-    <string name="remote_image_viewer_hint">Pinch to zoom, double-tap to reset</string>
     <string name="remote_image_fetch_failed">Could not fetch the image again.</string>
     <string name="remote_image_saved">Image saved.</string>
     <string name="remote_image_save_failed">Could not save the image.</string>

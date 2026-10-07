@@ -962,7 +962,7 @@ class DefaultRemoteRepository(
                 if (id.startsWith(CAPABILITIES_V2_ROUTE) && result["capabilities"] !is JsonArray) {
                     // A host that predates the v2 route treats the ID as opaque and sends no list.
                     capabilityRoute = CAPABILITIES_V1_ROUTE
-                    return request(type, epoch, *fields, draft = draft, onSent = onSent, timeoutMillis = timeoutMillis)
+                    return request(type, epoch, *fields, draft = draft, timeoutMillis = timeoutMillis)
                 }
                 val advertised = (result["capabilities"] as? JsonArray)
                     ?.takeIf { it.size <= MAX_ROUTE_CAPABILITIES }
@@ -4407,6 +4407,8 @@ class DefaultRemoteRepository(
     private val projectImageBytes = ProjectImageByteCache()
     private val projectImageReads = mutableMapOf<Triple<String, String, Boolean>, ProjectImageRead>()
     private val projectImageReadMutex = Mutex()
+    /** The host keeps four copies per device; two downloads leave room for a share or a save. */
+    private val projectImageDownloads = Semaphore(2)
     private var lastProjectImageRead: Long? = null
 
     override suspend fun readProjectImage(sessionId: String, path: String, fresh: Boolean): ProjectImageResult {
@@ -4430,7 +4432,9 @@ class DefaultRemoteRepository(
                         entry.job =
                             scope.async(start = CoroutineStart.LAZY) {
                                 try {
-                                    fetchProjectImage(epoch, sessionId, path, cacheKey, fresh)
+                                    projectImageDownloads.withPermit {
+                                        fetchProjectImage(epoch, sessionId, path, cacheKey, fresh)
+                                    }
                                 } finally {
                                     synchronized(projectImageReads) { projectImageReads.remove(key, entry) }
                                 }
@@ -4497,13 +4501,18 @@ class DefaultRemoteRepository(
                         download.meta.mime.wire,
                         download.meta.sha256,
                         download.bytes,
-                    ).also { if (!fresh) projectImageBytes[cacheKey] = it }
+                    ).also {
+                        // A fresh read replaces the copy, so Share, Save and the next view agree.
+                        projectImageBytes[cacheKey] = it
+                        if (fresh) ProjectImageBitmaps.dropStale(sessionId, path, it.sha256)
+                    }
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: MediaException) {
             when (e.failure) {
                 MediaFailure.UNAVAILABLE -> ProjectImageResult.Unavailable
+                MediaFailure.BUSY -> ProjectImageResult.Busy
                 MediaFailure.FAILED -> ProjectImageResult.Failed
             }
         } catch (e: Exception) {

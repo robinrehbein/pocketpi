@@ -41,6 +41,8 @@ class ProjectImageRepositoryTest {
             )
         }
         var error: String? = null
+        var open = 0
+        var peakOpen = 0
         private val session =
             Wire.objectOf("id" to "session", "origin" to "rpc", "status" to "idle", "projectId" to "project")
 
@@ -78,11 +80,12 @@ class ProjectImageRepositoryTest {
                         )
                     )
                 "session.files.media" ->
-                    error?.let { respond(payload, "error" to Wire.objectOf("code" to it, "message" to it), ok = false) }
-                        ?: reply(startReply(payload))
+                    error?.takeIf { it != "mid" }?.let { respond(payload, "error" to Wire.objectOf("code" to it, "message" to it), ok = false) }
+                        ?: reply(startReply(payload).also { if (it.containsKey("mediaId")) { open++; peakOpen = maxOf(peakOpen, open) } })
                 "session.files.media.get" -> {
                     val offset = payload.long("offset").toInt()
                     val length = minOf(MEDIA_CHUNK_BYTES, content.size - offset)
+                    if (offset + length == content.size) open--
                     reply(
                         Wire.objectOf(
                             "kind" to "files.media.content", "sessionId" to payload.text("sessionId"),
@@ -223,6 +226,48 @@ class ProjectImageRepositoryTest {
         transport.error = "invalid_path"
         assertEquals(ProjectImageResult.Unavailable, read())
         transport.error = "busy"
+        assertEquals(ProjectImageResult.Busy, read())
+        transport.error = "internal"
         assertEquals(ProjectImageResult.Failed, read())
+    }
+
+    @Test
+    fun atMostTwoCopiesAreOpenAtOnce() = runTest {
+        val transport = transport()
+        val repository = connected(transport)
+        val reads = (1..5).map { async { repository.readProjectImage("session", "build/shot$it.png") } }
+        advanceUntilIdle()
+        assertTrue(reads.all { it.await() is ProjectImageResult.Loaded })
+        assertEquals(2, transport.peakOpen)
+    }
+
+    @Test
+    fun aBusyHostIsARetryableStateAndTheNextAttemptWorks() = runTest {
+        val transport = transport().apply { error = "busy" }
+        val repository = connected(transport)
+        val busy = async { repository.readProjectImage("session", "build/shot.png") }
+        advanceUntilIdle()
+        assertEquals(ProjectImageResult.Busy, busy.await())
+        transport.error = null
+        val again = async { repository.readProjectImage("session", "build/shot.png") }
+        advanceUntilIdle()
+        assertTrue(again.await() is ProjectImageResult.Loaded)
+    }
+
+    @Test
+    fun aFreshReadReplacesTheCachedCopy() = runTest {
+        val transport = transport()
+        val repository = connected(transport)
+        val first = async { repository.readProjectImage("session", "build/shot.png") }
+        advanceUntilIdle()
+        val old = first.await() as ProjectImageResult.Loaded
+        val fresh = async { repository.readProjectImage("session", "build/shot.png", fresh = true) }
+        advanceUntilIdle()
+        val latest = fresh.await() as ProjectImageResult.Loaded
+        val count = transport.media().size
+        // The ordinary read now answers with the fresh copy, without a request.
+        assertSame(latest, repository.readProjectImage("session", "build/shot.png"))
+        assertNotSame(old, latest)
+        assertEquals(count, transport.media().size)
     }
 }

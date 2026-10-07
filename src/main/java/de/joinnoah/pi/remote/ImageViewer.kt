@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import android.provider.DocumentsContract
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,10 +34,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 internal const val MAX_IMAGE_ZOOM = 6f
+
+/** What the viewer shows while the full-size bitmap is made: a spinner, the picture, or an error. */
+private sealed interface ViewerImage {
+    data object Decoding : ViewerImage
+    data object Failed : ViewerImage
+    class Ready(val bitmap: androidx.compose.ui.graphics.ImageBitmap) : ViewerImage
+}
 
 /** Keeps a zoomed image covering the view: at most the overflow of the scaled size on each side. */
 internal fun clampImageOffset(offset: Float, scale: Float, viewSize: Float): Float {
@@ -50,23 +59,36 @@ internal fun clampImageOffset(offset: Float, scale: Float, viewSize: Float): Flo
  */
 @Composable
 internal fun ImageViewer(
-    image: ProjectImageResult.Loaded,
     path: String,
+    sha256: String,
+    mimeType: String,
     source: ProjectImageSource,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val bitmap by
-        produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, source.sessionId, path, image.sha256) {
-            val key = ProjectImageBitmaps.Key(source.sessionId, path, image.sha256, PROJECT_IMAGE_VIEWER_EDGE)
+    // The bytes come from the cache when the viewer opens, never from the card.
+    val decoded by
+        produceState<ViewerImage>(ViewerImage.Decoding, source.sessionId, path, sha256) {
+            val key = ProjectImageBitmaps.Key(source.sessionId, path, sha256, PROJECT_IMAGE_VIEWER_EDGE)
+            val cached = ProjectImageBitmaps[key]
             value =
-                (ProjectImageBitmaps[key]
-                        ?: decodeProjectImage(image, PROJECT_IMAGE_VIEWER_EDGE)?.also { ProjectImageBitmaps[key] = it })
-                    ?.asImageBitmap()
+                if (cached != null) ViewerImage.Ready(cached.asImageBitmap())
+                else {
+                    val image = source.read(source.sessionId, path, false) as? ProjectImageResult.Loaded
+                    val bitmap =
+                        image?.let { loaded ->
+                            decodeProjectImage(loaded, PROJECT_IMAGE_VIEWER_EDGE)?.also {
+                                ProjectImageBitmaps[
+                                    ProjectImageBitmaps.Key(source.sessionId, path, loaded.sha256, PROJECT_IMAGE_VIEWER_EDGE)
+                                ] = it
+                            }
+                        }
+                    if (bitmap != null) ViewerImage.Ready(bitmap.asImageBitmap()) else ViewerImage.Failed
+                }
         }
-    val mime = MediaMime.fromWire(image.mimeType)
-    val fileName = remember(image) { mime?.let { ImageStorage.safeName(image.path, it) } ?: image.path.substringAfterLast('/') }
+    val mime = MediaMime.fromWire(mimeType)
+    val fileName = remember(path, mimeType) { mime?.let { ImageStorage.safeName(path, it) } ?: path.substringAfterLast('/') }
     var busy by remember { mutableStateOf(false) }
     val fetchFailed = stringResource(R.string.remote_image_fetch_failed)
     val saved = stringResource(R.string.remote_image_saved)
@@ -79,23 +101,30 @@ internal fun ImageViewer(
         }
 
     val saver =
-        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(image.mimeType)) { uri ->
+        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(mimeType)) { uri ->
             if (uri != null)
                 scope.launch {
                     busy = true
+                    var written = false
                     try {
-                        val latest = fresh() ?: return@launch
-                        val ok =
-                            withContext(Dispatchers.IO) {
-                                runCatching {
-                                        checkNotNull(context.contentResolver.openOutputStream(uri, "wt")).use {
-                                            it.write(latest.bytes)
+                        val latest = fresh()
+                        if (latest != null)
+                            written =
+                                withContext(Dispatchers.IO) {
+                                    runCatching {
+                                            checkNotNull(context.contentResolver.openOutputStream(uri, "wt")).use {
+                                                it.write(latest.bytes)
+                                            }
                                         }
-                                    }
-                                    .isSuccess
-                            }
-                        Toast.makeText(context, if (ok) saved else saveFailed, Toast.LENGTH_SHORT).show()
+                                        .isSuccess
+                                }
+                        if (latest != null) Toast.makeText(context, if (written) saved else saveFailed, Toast.LENGTH_SHORT).show()
                     } finally {
+                        // The picker already created the file; never leave an empty one behind.
+                        if (!written)
+                            withContext(NonCancellable + Dispatchers.IO) {
+                                runCatching { DocumentsContract.deleteDocument(context.contentResolver, uri) }
+                            }
                         busy = false
                     }
                 }
@@ -129,8 +158,10 @@ internal fun ImageViewer(
                         },
                     contentAlignment = Alignment.Center,
                 ) {
-                    val shown = bitmap
-                    if (shown != null)
+                    val shown = (decoded as? ViewerImage.Ready)?.bitmap
+                    if (decoded == ViewerImage.Decoding)
+                        CircularProgressIndicator(Modifier.testTag("imageViewerLoading"), color = Color.White)
+                    else if (shown != null)
                         Image(
                             bitmap = shown,
                             contentDescription = fileName,

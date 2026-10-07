@@ -32,8 +32,10 @@ class MarkdownImageTest {
         assertEquals(MarkdownImageTarget.Rejected, markdownImageTarget("a%FF.png"))
         assertEquals(MarkdownImageTarget.Rejected, markdownImageTarget("a%0A.png"))
         assertEquals(MarkdownImageTarget.Rejected, markdownImageTarget("a%5Cb.png"))
-        // A destination with spaces but no angle brackets is not a destination.
-        assertEquals(MarkdownImageTarget.Rejected, markdownImageTarget("a b.png"))
+        // Unquoted spaces are fine when the destination ends in an image extension.
+        assertEquals("my shot.png", local("my shot.png"))
+        assertEquals(MarkdownImageTarget.Rejected, markdownImageTarget("a b.txt"))
+        assertEquals(listOf(MarkdownBlock.Image("x", "my shot.png")), markdownBlocks("![x](my shot.png)"))
     }
 
     @Test
@@ -84,6 +86,19 @@ class MarkdownImageTest {
         assertEquals("![a](a.png)", inlineMarkdown("`![a](a.png)`", link).text)
         assertEquals("shown", markdownImageAltText(MarkdownBlock.Image("shown", "a/b.png")))
         assertEquals("b.png", markdownImageAltText(MarkdownBlock.Image("", "a/b.png")))
+    }
+
+    @Test
+    fun manyUnclosedImageOpeningsStayBounded() {
+        val text = "![a](".repeat(50_000)
+        val started = System.nanoTime()
+        var found = 0
+        for (index in text.indices) if (text[index] == '!' && scanMarkdownImage(text, index) != null) found++
+        assertEquals(0, found)
+        assertTrue((System.nanoTime() - started) / 1_000_000 < 5_000)
+        // The scan never reaches past its window, so a distant closing parenthesis is not found.
+        assertNull(scanMarkdownImage("![a](" + "x".repeat(5000) + ")", 0))
+        assertNotNull(scanMarkdownImage("![a](" + "x".repeat(100) + ")", 0))
     }
 
     @Test

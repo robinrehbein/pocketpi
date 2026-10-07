@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import com.caverock.androidsvg.SVG
 import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
@@ -21,7 +22,8 @@ class ProjectImageDecodingTest {
         return ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
     }
 
-    private fun loaded(bytes: ByteArray, mime: String) = ProjectImageResult.Loaded("a.x", mime, "0".repeat(64), bytes)
+    private fun loaded(bytes: ByteArray, mime: String) =
+        ProjectImageResult.Loaded("a.x", mime, AttachmentImportRules.sha256(bytes), bytes)
 
     /** The package-private resolver registry of AndroidSVG; null means nothing external is ever read. */
     private fun fileResolver(): Any? =
@@ -91,5 +93,74 @@ class ProjectImageDecodingTest {
         assertNull(renderSvg("<svg".toByteArray(), 100))
         assertNull(renderSvg("not xml at all".toByteArray(), 100))
         assertNull(decodeProjectImage(loaded(entity.toByteArray(), "image/svg+xml"), 100))
+    }
+
+    private fun nested(depth: Int) =
+        ("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">" + "<g>".repeat(depth) + "<rect width=\"5\" height=\"5\"/>" +
+            "</g>".repeat(depth) + "</svg>").toByteArray()
+
+    @Test
+    fun deepNestingAndHugeElementCountsAreRefusedWithoutCrashing() = runTest {
+        assertTrue(safeSvgBytes(nested(150)))
+        assertNotNull(renderSvg(nested(150), 64))
+        for (depth in listOf(250, 100_000)) {
+            assertFalse(safeSvgBytes(nested(depth)))
+            assertNull(renderSvg(nested(depth), 64))
+            assertNull(decodeProjectImage(loaded(nested(depth), "image/svg+xml"), 64))
+        }
+        val many = ("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">" + "<rect width=\"1\" height=\"1\"/>".repeat(60_000) + "</svg>").toByteArray()
+        assertFalse(safeSvgBytes(many))
+        assertNull(renderSvg(many, 64))
+        // A throwable inside the renderer ends in null, never in a crash.
+        assertNull(runCatching { BoundedSvgRenderer(renderer = { _, _ -> throw StackOverflowError() }).render("so", ByteArray(1), 10) }.getOrThrow())
+    }
+
+    @Test
+    fun anEncodingOtherThanUtf8IsRefused() {
+        val tail = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>"
+        assertTrue(safeSvgBytes("<?xml version=\"1.0\" encoding=\"UTF-8\"?>$tail".toByteArray()))
+        assertTrue(safeSvgBytes("<?xml version=\"1.0\"?>$tail".toByteArray()))
+        assertFalse(safeSvgBytes("<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?>$tail".toByteArray()))
+        assertFalse(safeSvgBytes("<?xml version='1.0' encoding='utf-16'?>$tail".toByteArray()))
+    }
+
+    @Test
+    fun theRendererUsesAtMostTwoThreadsAndFailsFastWhenBusy() = runTest {
+        val release = java.util.concurrent.CountDownLatch(1)
+        val running = java.util.concurrent.atomic.AtomicInteger()
+        val peak = java.util.concurrent.atomic.AtomicInteger()
+        val renderer = BoundedSvgRenderer(threads = 2, timeoutMillis = 10_000, renderer = { _, _ ->
+            peak.set(maxOf(peak.get(), running.incrementAndGet()))
+            release.await()
+            running.decrementAndGet()
+            null
+        })
+        val first = async(kotlinx.coroutines.Dispatchers.Default) { renderer.render("one", ByteArray(1), 10) }
+        val second = async(kotlinx.coroutines.Dispatchers.Default) { renderer.render("two", ByteArray(1), 10) }
+        while (running.get() < 2) Thread.sleep(5)
+        // Both threads are taken: a third request is refused at once and is not remembered as bad.
+        assertNull(renderer.render("three", ByteArray(1), 10))
+        assertFalse(renderer.hasFailed("three"))
+        release.countDown()
+        first.await(); second.await()
+        assertEquals(2, peak.get())
+    }
+
+    @Test
+    fun bytesThatTimedOutOrFailedAreNeverRenderedAgain() = runTest {
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val renderer = BoundedSvgRenderer(threads = 2, timeoutMillis = 100, renderer = { _, _ ->
+            calls.incrementAndGet()
+            try { Thread.sleep(5_000) } catch (e: InterruptedException) { }
+            null
+        })
+        assertNull(renderer.render("slow", ByteArray(1), 10))
+        assertTrue(renderer.hasFailed("slow"))
+        assertNull(renderer.render("slow", ByteArray(1), 10))
+        assertEquals(1, calls.get())
+        val failing = BoundedSvgRenderer(renderer = { _, _ -> calls.incrementAndGet(); null })
+        assertNull(failing.render("bad", ByteArray(1), 10))
+        assertNull(failing.render("bad", ByteArray(1), 10))
+        assertEquals(2, calls.get())
     }
 }

@@ -16,6 +16,9 @@ internal sealed interface MarkdownImageTarget {
 internal data class MarkdownImageToken(val alt: String, val destination: String, val end: Int)
 
 private val imageExtensions = setOf("png", "jpg", "jpeg", "webp", "gif", "svg")
+/** A scan never looks further than this past the `!`, so a long text of unclosed `![` stays linear. */
+private const val MAX_IMAGE_SCAN = 2048
+private val trailingImageExtension = Regex("\\.(png|jpe?g|webp|gif|svg)$", RegexOption.IGNORE_CASE)
 private val urlScheme = Regex("^[A-Za-z][A-Za-z0-9+.-]*:")
 
 /**
@@ -24,9 +27,10 @@ private val urlScheme = Regex("^[A-Za-z][A-Za-z0-9+.-]*:")
  */
 internal fun scanMarkdownImage(text: String, start: Int): MarkdownImageToken? {
     if (text.getOrNull(start) != '!' || text.getOrNull(start + 1) != '[') return null
+    val limit = minOf(text.length, start + MAX_IMAGE_SCAN)
     var end = start + 2
     var brackets = 1
-    while (end < text.length && brackets > 0) {
+    while (end < limit && brackets > 0) {
         when (text[end]) {
             '\\' -> { end += 2; continue }
             '[' -> brackets++
@@ -38,7 +42,7 @@ internal fun scanMarkdownImage(text: String, start: Int): MarkdownImageToken? {
     var close = end + 2
     var parentheses = 1
     var angle = false
-    while (close < text.length && parentheses > 0) {
+    while (close < limit && parentheses > 0) {
         when (text[close]) {
             '\\' -> { close += 2; continue }
             '<' -> if (close == end + 2) angle = true
@@ -48,7 +52,7 @@ internal fun scanMarkdownImage(text: String, start: Int): MarkdownImageToken? {
         }
         if (parentheses > 0) close++
     }
-    if (parentheses != 0 || close >= text.length) return null
+    if (parentheses != 0 || close >= limit) return null
     return MarkdownImageToken(text.substring(start + 2, end), text.substring(end + 2, close), close + 1)
 }
 
@@ -63,6 +67,11 @@ private fun destinationWithoutTitle(raw: String): String? {
         if (close < 0) return null
         destination = value.substring(1, close)
         rest = value.substring(close + 1)
+    } else if (trailingImageExtension.containsMatchIn(value)) {
+        // Spaces without angle brackets: a title always ends in a quote or parenthesis, so a
+        // value that ends in an image extension is one destination.
+        destination = value
+        rest = ""
     } else {
         val space = value.indexOfFirst { it.isWhitespace() }
         destination = if (space < 0) value else value.substring(0, space)

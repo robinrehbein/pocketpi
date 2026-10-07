@@ -125,6 +125,8 @@ internal fun parseMediaChunk(data: JsonObject, sessionId: String, meta: MediaMet
 internal enum class MediaFailure {
     /** Not found, not allowed, or a reply that broke the protocol; asking again gives the same. */
     UNAVAILABLE,
+    /** The host holds its limit of copies; asking again shortly works. */
+    BUSY,
     /** A dropped connection, a busy or failing host, a timeout or a damaged transfer. */
     FAILED,
 }
@@ -144,6 +146,7 @@ private fun mediaRequestFailure(e: Exception): MediaException =
             MediaException(
                 when (e.code) {
                     "invalid_path", "not_found", "forbidden", "invalid_request" -> MediaFailure.UNAVAILABLE
+                    "busy" -> MediaFailure.BUSY
                     else -> MediaFailure.FAILED
                 }
             )
@@ -251,7 +254,10 @@ sealed interface ProjectImageResult {
     /** The host holds the file but its bytes are not a supported image. */
     data object NotAnImage : ProjectImageResult
 
-    /** A dropped connection, a busy or failing host, or a timeout; asking again may work. */
+    /** The host is serving its limit of images; asking again in a moment works. */
+    data object Busy : ProjectImageResult
+
+    /** A dropped connection, a failing host, or a timeout; asking again may work. */
     data object Failed : ProjectImageResult
 }
 
