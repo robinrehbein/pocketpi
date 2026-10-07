@@ -69,13 +69,11 @@ private fun OutputContent(text: String, format: OutputFormat) {
         OutputFormat.TEXT -> Text(text, style = MaterialTheme.typography.bodyMedium)
         OutputFormat.SOURCE -> Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.medium) {
             Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp)) {
-                text.lines().forEach { line ->
-                    // Wrap only exceptionally wide lines; keep layout wraps inside the original
-                    // selectable Text so copying never inserts artificial source line breaks.
-                    Text(line, modifier = Modifier.widthIn(max = 2000.dp),
-                        fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall,
-                        softWrap = true)
-                }
+                // A single selectable value preserves all original line separators. The width
+                // ceiling safely wraps pathological lines without modifying copied source.
+                Text(text, modifier = Modifier.widthIn(max = 2000.dp),
+                    fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall,
+                    softWrap = true)
             }
         }
     }
