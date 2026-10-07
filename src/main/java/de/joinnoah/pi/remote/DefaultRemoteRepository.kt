@@ -2621,7 +2621,7 @@ class DefaultRemoteRepository(
             }
             val previous = drafts[key]?.uploads?.find { it.localId == local.id }
             val confirmed = previous?.attachment
-            if (
+            val remote = if (
                 previous?.projectId == projectId &&
                     confirmed != null &&
                     confirmed.expiresAt > now() &&
@@ -2721,6 +2721,13 @@ class DefaultRemoteRepository(
                 uploaded += local.size
                 attachment
             }
+            // The upload already read and verified these exact bytes. Keep them under the
+            // server ID before the prompt can appear in the conversation; draft cleanup may
+            // delete the local file as soon as sending succeeds.
+            if (remote.kind == "image") {
+                attachmentBytes[AttachmentByteCache.Key(key.sessionId, remote.id, remote.sha256)] = bytes
+            }
+            remote
         }
     }
 
