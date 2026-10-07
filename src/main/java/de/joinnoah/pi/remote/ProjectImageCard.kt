@@ -45,6 +45,8 @@ internal sealed interface ProjectImageState {
     data object Unavailable : ProjectImageState
     data object UnsupportedHost : ProjectImageState
     data object Busy : ProjectImageState
+    /** The SVG renderer had no free slot; the picture itself may be fine. */
+    data object RenderBusy : ProjectImageState
     data object ConnectionFailure : ProjectImageState
     data object Malformed : ProjectImageState
 }
@@ -56,11 +58,15 @@ internal suspend fun ProjectImageSource.cardState(path: String): ProjectImageSta
     return when (val result = read(sessionId, path, false)) {
         is ProjectImageResult.Loaded -> {
             val key = ProjectImageBitmaps.Key(sessionId, path, result.sha256, PROJECT_IMAGE_CARD_EDGE)
-            val bitmap =
-                ProjectImageBitmaps[key]
-                    ?: decodeProjectImage(result, PROJECT_IMAGE_CARD_EDGE)?.also { ProjectImageBitmaps[key] = it }
-            if (bitmap == null) ProjectImageState.Malformed
-            else ProjectImageState.Ready(bitmap.asImageBitmap(), result.sha256, result.mimeType)
+            val cached = ProjectImageBitmaps[key]
+            when (val decoded = if (cached != null) ProjectImageDecode.Ready(cached) else decodeProjectImage(result, PROJECT_IMAGE_CARD_EDGE)) {
+                is ProjectImageDecode.Ready -> {
+                    ProjectImageBitmaps[key] = decoded.bitmap
+                    ProjectImageState.Ready(decoded.bitmap.asImageBitmap(), result.sha256, result.mimeType)
+                }
+                ProjectImageDecode.Malformed -> ProjectImageState.Malformed
+                ProjectImageDecode.Busy -> ProjectImageState.RenderBusy
+            }
         }
         ProjectImageResult.Unsupported -> ProjectImageState.UnsupportedHost
         ProjectImageResult.Unavailable -> ProjectImageState.Unavailable
@@ -147,6 +153,7 @@ private fun ProjectImageMessage(state: ProjectImageState, onRetry: () -> Unit) {
                     ProjectImageState.NotAnImage -> R.string.remote_image_not_an_image
                     ProjectImageState.UnsupportedHost -> R.string.remote_image_unsupported
                     ProjectImageState.Busy -> R.string.remote_image_busy
+                    ProjectImageState.RenderBusy -> R.string.remote_image_render_busy
                     ProjectImageState.ConnectionFailure -> R.string.remote_image_connection_failure
                     ProjectImageState.Malformed -> R.string.remote_image_malformed
                     else -> R.string.remote_image_unavailable
@@ -154,7 +161,8 @@ private fun ProjectImageMessage(state: ProjectImageState, onRetry: () -> Unit) {
             ),
             style = MaterialTheme.typography.labelMedium,
         )
-        if (state == ProjectImageState.ConnectionFailure || state == ProjectImageState.Busy)
+        if (state == ProjectImageState.ConnectionFailure || state == ProjectImageState.Busy ||
+            state == ProjectImageState.RenderBusy)
             TextButton(onClick = onRetry, modifier = Modifier.testTag("projectImageRetry")) {
                 Text(stringResource(R.string.remote_image_retry))
             }

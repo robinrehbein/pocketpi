@@ -25,6 +25,7 @@ internal const val PROJECT_IMAGE_VIEWER_EDGE = SENT_IMAGE_LARGE_EDGE
 
 private const val SVG_TIMEOUT_MILLIS = 5_000L
 private const val SVG_RENDER_THREADS = 2
+private const val SVG_SLOT_WAIT_MILLIS = 4_000L
 private const val SVG_THREAD_STACK_BYTES = 8L * 1024 * 1024
 private const val MAX_SVG_ELEMENTS = 50_000
 private const val MAX_SVG_DEPTH = 200
@@ -41,7 +42,7 @@ private val svgEncoding = Regex("^\\s*<\\?xml[^>]*?encoding\\s*=\\s*[\"']([^\"']
 internal fun safeSvgBytes(bytes: ByteArray): Boolean {
     if (bytes.isEmpty() || bytes.size > MAX_MEDIA_SVG_BYTES) return false
     if (bytes.take(64).any { it == 0.toByte() }) return false
-    val text = String(bytes, Charsets.ISO_8859_1)
+    val text = String(bytes, Charsets.ISO_8859_1).removePrefix("\u00EF\u00BB\u00BF")
     svgEncoding.find(text.take(512))?.let { if (!it.groupValues[1].equals("utf-8", ignoreCase = true)) return false }
     if (text.contains("<!ENTITY")) return false
     val doctype = text.indexOf("<!DOCTYPE")
@@ -131,66 +132,125 @@ internal fun renderSvg(bytes: ByteArray, maxEdge: Int): Bitmap? {
     }
 }
 
+/** What the bounded renderer answers: a picture, the verdict that these bytes cannot be drawn, or "try again". */
+internal sealed interface SvgRender {
+    class Ready(val bitmap: Bitmap) : SvgRender
+
+    /** The bytes failed, crashed or timed out at this size; they are not tried again at that size. */
+    data object Failed : SvgRender
+
+    /** No render slot freed up in time, or every thread is stuck; says nothing about the bytes. */
+    data object Busy : SvgRender
+}
+
+/** The outcome of [decodeProjectImage]. */
+internal sealed interface ProjectImageDecode {
+    class Ready(val bitmap: Bitmap) : ProjectImageDecode
+
+    data object Malformed : ProjectImageDecode
+
+    /** The SVG renderer had no free slot; the picture may be fine, so ask again. */
+    data object Busy : ProjectImageDecode
+}
+
+internal fun ProjectImageDecode.bitmapOrNull(): Bitmap? = (this as? ProjectImageDecode.Ready)?.bitmap
+
 /**
- * Renders SVGs on at most [threads] threads with a large stack, each for at most [timeoutMillis].
- * A parser cannot be interrupted, so a render that times out keeps its thread; to bound the damage
- * the bytes of a render that failed or timed out (by SHA-256) are never rendered again in this
- * process, and a request that finds every thread busy fails at once without being remembered.
+ * Renders SVGs on at most [threads] threads with a large stack, each for at most [timeoutMillis]. A
+ * request waits up to [slotWaitMillis] for a free slot, so a valid SVG is not lost to a busy moment.
+ * A parser cannot be interrupted, so a render that times out keeps its thread (and its slot) until
+ * it ends; once every thread is stuck like that, requests answer [SvgRender.Busy] at once. The bytes
+ * of a failed or timed-out render are remembered by (SHA-256, edge) and not rendered again at that
+ * size in this process; [SvgRender.Busy] is never remembered.
  */
 internal class BoundedSvgRenderer(
-    threads: Int = SVG_RENDER_THREADS,
+    private val threads: Int = SVG_RENDER_THREADS,
     private val timeoutMillis: Long = SVG_TIMEOUT_MILLIS,
+    private val slotWaitMillis: Long = SVG_SLOT_WAIT_MILLIS,
     private val renderer: (ByteArray, Int) -> Bitmap? = ::renderSvg,
 ) {
+    private val slots = java.util.concurrent.Semaphore(threads)
+    private val stuck = java.util.concurrent.atomic.AtomicInteger()
+    // At most [threads] tasks exist at once (one per permit), so the queue never overflows.
     private val pool =
-        ThreadPoolExecutor(threads, threads, 0L, TimeUnit.MILLISECONDS, SynchronousQueue()) { runnable ->
+        ThreadPoolExecutor(threads, threads, 0L, TimeUnit.MILLISECONDS, java.util.concurrent.LinkedBlockingQueue()) { runnable ->
             Thread(null, runnable, "svg-render", SVG_THREAD_STACK_BYTES).apply { isDaemon = true }
         }
     private val failed =
         java.util.Collections.newSetFromMap(
-            object : LinkedHashMap<String, Boolean>(16, 0.75f, false) {
-                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>?) = size > MAX_FAILED_SVGS
+            object : LinkedHashMap<Pair<String, Int>, Boolean>(16, 0.75f, false) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Pair<String, Int>, Boolean>?) =
+                    size > MAX_FAILED_SVGS
             }
         )
 
-    fun hasFailed(sha256: String): Boolean = synchronized(failed) { sha256 in failed }
+    fun hasFailed(sha256: String, maxEdge: Int): Boolean = synchronized(failed) { (sha256 to maxEdge) in failed }
 
-    suspend fun render(sha256: String, bytes: ByteArray, maxEdge: Int): Bitmap? {
-        if (hasFailed(sha256)) return null
+    /** Render slots in use, including those held by stuck threads; for tests. */
+    fun slotsInUse(): Int = threads - slots.availablePermits()
+
+    suspend fun render(sha256: String, bytes: ByteArray, maxEdge: Int): SvgRender {
+        if (hasFailed(sha256, maxEdge)) return SvgRender.Failed
+        if (stuck.get() >= threads) return SvgRender.Busy
+        // A cancelled wait is interrupted before it holds a permit.
+        if (!runInterruptible(Dispatchers.IO) { slots.tryAcquire(slotWaitMillis, TimeUnit.MILLISECONDS) }) return SvgRender.Busy
+        // 0 running, 1 finished, 2 abandoned after the timeout (the thread is stuck until it ends).
+        val state = java.util.concurrent.atomic.AtomicInteger(0)
         val task =
             try {
-                pool.submit(Callable { renderer(bytes, maxEdge) })
+                pool.submit(
+                    Callable {
+                        try {
+                            renderer(bytes, maxEdge)
+                        } finally {
+                            if (!state.compareAndSet(0, 1)) stuck.decrementAndGet()
+                            slots.release()
+                        }
+                    }
+                )
             } catch (e: RejectedExecutionException) {
-                return null
+                slots.release()
+                return SvgRender.Busy
             }
         return try {
-            runInterruptible(Dispatchers.IO) { task.get(timeoutMillis, TimeUnit.MILLISECONDS) }
-                .also { if (it == null) remember(sha256) }
+            val bitmap = runInterruptible(Dispatchers.IO) { task.get(timeoutMillis, TimeUnit.MILLISECONDS) }
+            if (bitmap == null) {
+                remember(sha256, maxEdge)
+                SvgRender.Failed
+            } else SvgRender.Ready(bitmap)
         } catch (e: TimeoutException) {
-            remember(sha256)
-            null
+            if (state.compareAndSet(0, 2)) stuck.incrementAndGet()
+            remember(sha256, maxEdge)
+            SvgRender.Failed
         } catch (e: ExecutionException) {
-            remember(sha256)
-            null
+            remember(sha256, maxEdge)
+            SvgRender.Failed
         } finally {
             task.cancel(true)
         }
     }
 
-    private fun remember(sha256: String) {
-        synchronized(failed) { failed += sha256 }
+    private fun remember(sha256: String, maxEdge: Int) {
+        synchronized(failed) { failed += sha256 to maxEdge }
     }
 }
 
 internal val projectSvgRenderer = BoundedSvgRenderer()
 
 /**
- * Decodes a loaded image for display with a longest edge of at most [maxEdge], or null when it
- * is malformed. A GIF shows its first frame. Never decodes on the caller's thread.
+ * Decodes a loaded image for display with a longest edge of at most [maxEdge]. A GIF shows its
+ * first frame. Never decodes on the caller's thread.
  */
-internal suspend fun decodeProjectImage(image: ProjectImageResult.Loaded, maxEdge: Int): Bitmap? =
-    if (image.isSvg) projectSvgRenderer.render(image.sha256, image.bytes, maxEdge)
-    else withContext(Dispatchers.Default) { decodeSentImage(image.bytes, maxEdge) }
+internal suspend fun decodeProjectImage(image: ProjectImageResult.Loaded, maxEdge: Int): ProjectImageDecode =
+    if (image.isSvg)
+        when (val result = projectSvgRenderer.render(image.sha256, image.bytes, maxEdge)) {
+            is SvgRender.Ready -> ProjectImageDecode.Ready(result.bitmap)
+            SvgRender.Failed -> ProjectImageDecode.Malformed
+            SvgRender.Busy -> ProjectImageDecode.Busy
+        }
+    else
+        withContext(Dispatchers.Default) { decodeSentImage(image.bytes, maxEdge) }
+            ?.let { ProjectImageDecode.Ready(it) } ?: ProjectImageDecode.Malformed
 
 /** Decoded agent images kept in memory only, so scrolling back does not decode again. */
 internal object ProjectImageBitmaps {

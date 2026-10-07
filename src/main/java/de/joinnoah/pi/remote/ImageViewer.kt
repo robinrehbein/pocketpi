@@ -44,6 +44,7 @@ internal const val MAX_IMAGE_ZOOM = 6f
 private sealed interface ViewerImage {
     data object Decoding : ViewerImage
     data object Failed : ViewerImage
+    data object Busy : ViewerImage
     class Ready(val bitmap: androidx.compose.ui.graphics.ImageBitmap) : ViewerImage
 }
 
@@ -68,23 +69,26 @@ internal fun ImageViewer(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // The bytes come from the cache when the viewer opens, never from the card.
+    var decodeAttempts by remember { mutableIntStateOf(0) }
     val decoded by
-        produceState<ViewerImage>(ViewerImage.Decoding, source.sessionId, path, sha256) {
+        produceState<ViewerImage>(ViewerImage.Decoding, source.sessionId, path, sha256, decodeAttempts) {
+            value = ViewerImage.Decoding
             val key = ProjectImageBitmaps.Key(source.sessionId, path, sha256, PROJECT_IMAGE_VIEWER_EDGE)
             val cached = ProjectImageBitmaps[key]
             value =
                 if (cached != null) ViewerImage.Ready(cached.asImageBitmap())
                 else {
                     val image = source.read(source.sessionId, path, false) as? ProjectImageResult.Loaded
-                    val bitmap =
-                        image?.let { loaded ->
-                            decodeProjectImage(loaded, PROJECT_IMAGE_VIEWER_EDGE)?.also {
-                                ProjectImageBitmaps[
-                                    ProjectImageBitmaps.Key(source.sessionId, path, loaded.sha256, PROJECT_IMAGE_VIEWER_EDGE)
-                                ] = it
-                            }
+                    when (val result = image?.let { decodeProjectImage(it, PROJECT_IMAGE_VIEWER_EDGE) }) {
+                        is ProjectImageDecode.Ready -> {
+                            ProjectImageBitmaps[
+                                ProjectImageBitmaps.Key(source.sessionId, path, checkNotNull(image).sha256, PROJECT_IMAGE_VIEWER_EDGE)
+                            ] = result.bitmap
+                            ViewerImage.Ready(result.bitmap.asImageBitmap())
                         }
-                    if (bitmap != null) ViewerImage.Ready(bitmap.asImageBitmap()) else ViewerImage.Failed
+                        ProjectImageDecode.Busy -> ViewerImage.Busy
+                        else -> ViewerImage.Failed
+                    }
                 }
         }
     val mime = MediaMime.fromWire(mimeType)
@@ -109,8 +113,10 @@ internal fun ImageViewer(
                     try {
                         val latest = fresh()
                         if (latest != null)
+                            // Not cancellable: a write that has begun finishes, and once it has, the
+                            // document is never deleted, even if the viewer closes right after.
                             written =
-                                withContext(Dispatchers.IO) {
+                                withContext(NonCancellable + Dispatchers.IO) {
                                     runCatching {
                                             checkNotNull(context.contentResolver.openOutputStream(uri, "wt")).use {
                                                 it.write(latest.bytes)
@@ -176,6 +182,13 @@ internal fun ImageViewer(
                                     )
                                     .testTag("imageViewerPicture"),
                         )
+                    else if (decoded == ViewerImage.Busy)
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(stringResource(R.string.remote_image_render_busy))
+                            TextButton(onClick = { decodeAttempts++ }, modifier = Modifier.testTag("imageViewerRetry")) {
+                                Text(stringResource(R.string.remote_image_retry))
+                            }
+                        }
                     else Text(stringResource(R.string.remote_image_malformed))
                 }
                 Row(

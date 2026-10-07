@@ -470,6 +470,7 @@
     <string name="remote_image_connection_failure">Bild konnte nicht geladen werden. Prüfe deine Verbindung.</string>
     <string name="remote_image_malformed">Dieses Bild kann nicht angezeigt werden.</string>
     <string name="remote_image_busy">Dein Mac sendet gerade viele Bilder. Versuche es gleich erneut.</string>
+    <string name="remote_image_render_busy">Es werden gerade viele Bilder gezeichnet. Versuche es gleich erneut.</string>
     <string name="remote_image_retry">Erneut versuchen</string>
     <string name="remote_image_close">Bild schließen</string>
     <string name="remote_image_share">Bild teilen</string>

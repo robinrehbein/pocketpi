@@ -470,6 +470,7 @@
     <string name="remote_image_connection_failure">Could not load image. Check your connection.</string>
     <string name="remote_image_malformed">This image cannot be displayed.</string>
     <string name="remote_image_busy">Your Mac is busy sending images. Try again in a moment.</string>
+    <string name="remote_image_render_busy">Too many images are being drawn. Try again in a moment.</string>
     <string name="remote_image_retry">Retry</string>
     <string name="remote_image_close">Close image</string>
     <string name="remote_image_share">Share image</string>
