@@ -46,6 +46,15 @@ fun MarkdownText(text: String) {
                         MarkdownTable(block)
                         return@forEach
                     }
+                    if (block is MarkdownBlock.Image) {
+                        val source = LocalProjectImageSource.current
+                        if (source != null) ProjectImageCard(block.alt, block.path, source)
+                        else Text(
+                            remember(block, linkColor) { inlineMarkdown(markdownImageAltText(block), linkColor) },
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        return@forEach
+                    }
                     val line = (block as MarkdownBlock.Line).text
                     val level =
                         line
@@ -77,3 +86,7 @@ fun MarkdownText(text: String) {
 }
 
 private val markdownBulletRegex = Regex("^[-*] ")
+
+/** What an image block shows where no image loader exists: its description, else the file name. */
+internal fun markdownImageAltText(image: MarkdownBlock.Image): String =
+    image.alt.ifBlank { image.path.substringAfterLast('/') }

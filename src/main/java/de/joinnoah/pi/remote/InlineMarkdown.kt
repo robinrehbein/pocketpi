@@ -12,7 +12,7 @@ internal fun inlineMarkdown(text: String, linkColor: Color): AnnotatedString =
 
 private val escapable = "\\`*_{}[]<>()#+-.!|"
 
-private fun unescapeMarkdown(text: String): String = buildString {
+internal fun unescapeMarkdown(text: String): String = buildString {
     var index = 0
     while (index < text.length) {
         if (text[index] == '\\' && text.getOrNull(index + 1)?.let { it in escapable } == true) index++
@@ -81,6 +81,21 @@ private fun parseInline(text: String, color: Color, depth: Int, links: Boolean):
                 index = end + run.length; continue
             }
             append(run); index += run.length; continue
+        }
+        if (char == '!' && text.getOrNull(index + 1) == '[') {
+            // An image inside running text is never fetched: it reads as its description, or as a
+            // link for an http(s) address.
+            val image = scanMarkdownImage(text, index)
+            if (image != null) {
+                val target = markdownImageTarget(image.destination)
+                val label =
+                    parseInline(image.alt, color, depth + 1, false).takeIf { it.isNotEmpty() }
+                        ?: (target as? MarkdownImageTarget.Local)?.path?.substringAfterLast('/')?.let(::AnnotatedString)
+                        ?: AnnotatedString("")
+                if (target is MarkdownImageTarget.Remote && links) link(label.takeIf { it.isNotEmpty() } ?: AnnotatedString(target.url), target.url)
+                else append(label)
+                index = image.end; continue
+            }
         }
         if (char == '[' && links) {
             // Balance brackets in labels and parentheses in URLs instead of truncating destinations.

@@ -262,7 +262,7 @@ class RemoteRepositoryTest {
             val repository = repository(transport)
             repository.activate(RemoteSelection("host", "project", "session"))
             val discovery = transport.sent.first { it.text("type") == "projects.list" }
-            assertTrue(discovery.text("requestId").startsWith("capabilities.v1:"))
+            assertTrue(discovery.text("requestId").startsWith("capabilities.v2:"))
             assertEquals(supportsSteer, canSteer(repository.state.value))
             assertTrue(canFollowUp(repository.state.value))
             assertTrue(repository.state.value.connected)
@@ -1834,7 +1834,7 @@ class RemoteRepositoryTest {
         repository.activate(target)
         val original = transport.response
         transport.response = { request ->
-            if (request.text("type") == "projects.list") data("projects", emptyList())
+            if (request.text("type") == "projects.list") JsonObject(data("projects", emptyList()) + ("capabilities" to JsonArray(emptyList())))
             else original(request)
         }
 
@@ -1843,7 +1843,8 @@ class RemoteRepositoryTest {
         runCurrent()
 
         assertEquals(RemoteSelection("host"), repository.state.value.selection)
-        assertEquals(2, transport.sent.count { it.text("type") == "projects.list" })
+        // The first discovery went v2 and, without a list, once more v1; the refresh added one.
+        assertEquals(3, transport.sent.count { it.text("type") == "projects.list" })
         assertFalse(transport.sent.any { it.text("type") == "sessions.open" })
     }
 
