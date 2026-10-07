@@ -11,6 +11,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -35,6 +37,7 @@ internal fun outputFormat(name: String?, arguments: String?, text: String): Outp
 @Composable
 internal fun ToolOutputView(text: String, name: String? = null, arguments: String? = null) {
     var peek by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboardManager.current
     val format = remember(name, arguments, text) { outputFormat(name, arguments, text) }
     val preview = remember(text) { text.lineSequence().take(24).joinToString("\n").take(6000) }
     Column(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = { peek = true })) {
@@ -48,7 +51,12 @@ internal fun ToolOutputView(text: String, name: String? = null, arguments: Strin
                 Box(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(vertical = 12.dp)) {
                     SelectionContainer { OutputContent(text, format) }
                 }
-                TextButton(onClick = { peek = false }) { Text(stringResource(R.string.remote_output_close)) }
+                Row {
+                    TextButton(onClick = { clipboard.setText(AnnotatedString(text)) }) {
+                        Text(stringResource(R.string.remote_copy_code))
+                    }
+                    TextButton(onClick = { peek = false }) { Text(stringResource(R.string.remote_output_close)) }
+                }
             }
         }
     }
