@@ -57,7 +57,7 @@ internal fun ToolOutputView(text: String, name: String? = null, arguments: Strin
 @Composable
 private fun OutputContent(text: String, format: OutputFormat) {
     when (format) {
-        OutputFormat.MARKDOWN -> OutputMarkdown(text)
+        OutputFormat.MARKDOWN -> MarkdownText(text)
         OutputFormat.TEXT -> Text(text, style = MaterialTheme.typography.bodyMedium)
         OutputFormat.SOURCE -> Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.medium) {
             Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp)) {
@@ -69,42 +69,3 @@ private fun OutputContent(text: String, format: OutputFormat) {
     }
 }
 
-/** Render pipe tables only outside fenced code blocks. */
-@Composable
-private fun OutputMarkdown(text: String) {
-    val lines = text.lines()
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        var index = 0
-        var start = 0
-        var fenced = false
-        while (index < lines.size) {
-            if (lines[index].trimStart().startsWith("```")) fenced = !fenced
-            val separator = lines.getOrNull(index + 1)
-            if (!fenced && lines[index].contains('|') && separator != null &&
-                separator.contains('|') && separator.split('|').filter { it.isNotBlank() }.let { cells ->
-                    cells.isNotEmpty() && cells.all { it.trim().matches(Regex(":?-{3,}:?")) }
-                }) {
-                if (start < index) MarkdownText(lines.subList(start, index).joinToString("\n"))
-                val rows = mutableListOf(lines[index])
-                index += 2
-                while (index < lines.size && lines[index].contains('|') && lines[index].isNotBlank()) rows.add(lines[index++])
-                Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.medium) {
-                    Column(Modifier.horizontalScroll(rememberScrollState()).padding(8.dp)) {
-                        rows.forEachIndexed { rowIndex, row ->
-                            Row {
-                                row.trim().removePrefix("|").removeSuffix("|").split('|').forEach { cell ->
-                                    Text(inlineMarkdown(cell.trim(), MaterialTheme.colorScheme.primary),
-                                        modifier = Modifier.width(160.dp).padding(8.dp),
-                                        style = if (rowIndex == 0) MaterialTheme.typography.labelLarge else MaterialTheme.typography.bodySmall)
-                                }
-                            }
-                            HorizontalDivider()
-                        }
-                    }
-                }
-                start = index
-            } else index++
-        }
-        if (start < lines.size) MarkdownText(lines.subList(start, lines.size).joinToString("\n"))
-    }
-}
