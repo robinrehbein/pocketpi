@@ -336,7 +336,8 @@ private fun ToolDetailContent(
     val outputScroll = rememberScrollState()
     val charWidth = rememberMonoCharWidth(style)
     val contentWidth = rememberCodeContentWidth(rowTexts, style)
-    val numberWidth = remember(rows, charWidth) { charWidth * (rows.lastOrNull { it.number != null }?.number ?: 1).toString().length }
+    val maxNumber = remember(rows) { rows.maxOfOrNull { it.number ?: 0 } ?: 1 }
+    val numberWidth = rememberLineNumberWidth(maxNumber, style)
     val density = LocalDensity.current
     var searchBarHeight by remember { mutableIntStateOf(0) }
     val cards = remember(output) { resultCards(output.orEmpty()) }
@@ -547,8 +548,8 @@ private fun CodeBlock(
     val shown = remember(rows, limit) { rows.take(limit.coerceIn(0, MAX_ARGUMENT_ROWS)) }
     val texts = remember(shown) { shown.map { it.text } }
     val width = rememberCodeContentWidth(texts, style)
-    val charWidth = rememberMonoCharWidth(style)
-    val numberWidth = remember(shown, charWidth) { charWidth * (shown.lastOrNull { it.number != null }?.number ?: 1).toString().length }
+    val maxNumber = remember(shown) { shown.maxOfOrNull { it.number ?: 0 } ?: 1 }
+    val numberWidth = rememberLineNumberWidth(maxNumber, style)
     val scroll = rememberScrollState()
     Surface(modifier.fillMaxWidth(), color = container, contentColor = content, shape = MaterialTheme.shapes.small) {
         Column(Modifier.padding(vertical = 6.dp)) {
@@ -577,10 +578,11 @@ private fun CodeBlock(
 private fun LineNumber(number: Int?, width: Dp, style: TextStyle) {
     Text(
         number?.toString().orEmpty(),
-        Modifier.width(width + 16.dp).padding(horizontal = 8.dp),
+        Modifier.padding(horizontal = 8.dp).width(width),
         style = style,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = TextAlign.End,
+        softWrap = false,
         maxLines = 1,
     )
 }
