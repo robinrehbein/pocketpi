@@ -32,6 +32,11 @@ internal class ProjectImageSource(
     val capabilitiesKnown: Boolean,
     val supported: Boolean,
     val read: suspend (sessionId: String, path: String, fresh: Boolean) -> ProjectImageResult,
+    /** [RemoteRepository.readProjectArtifact]; HTML cards and Mermaid diagrams appear only where this exists. */
+    val readArtifact: suspend (sessionId: String, path: String, fresh: Boolean) -> ProjectArtifactResult = { _, _, _ ->
+        ProjectArtifactResult.UnsupportedHost
+    },
+    val artifactSupported: Boolean = false,
 )
 
 internal val LocalProjectImageSource = staticCompositionLocalOf<ProjectImageSource?> { null }

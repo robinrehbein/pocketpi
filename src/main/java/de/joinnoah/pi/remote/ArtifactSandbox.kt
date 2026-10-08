@@ -1,0 +1,482 @@
+package de.joinnoah.pi.remote
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.graphics.Color
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.view.ViewGroup
+import android.webkit.CookieManager
+import android.webkit.GeolocationPermissions
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
+import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebStorage
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.webkit.WebViewRenderProcess
+import android.webkit.WebViewRenderProcessClient
+import java.io.ByteArrayInputStream
+import java.security.SecureRandom
+import java.util.Collections
+import java.util.WeakHashMap
+
+/*
+ * The sandbox for HTML artifacts and Mermaid diagrams. Content here is written by an agent or by a
+ * file the agent touched, so it is treated as hostile: JavaScript runs, but the page gets no way out
+ * that we know of. There is no JavaScript bridge (no addJavascriptInterface, no addWebMessageListener)
+ * on any view made here, every navigation is refused, and every request except the one document (and,
+ * for Mermaid, its two bundled scripts) is answered with an empty 403 before it reaches the network
+ * stack. A Content-Security-Policy header and blockNetworkLoads back that up.
+ *
+ * The single exception is a GET for a library on the CDN allowlist (ArtifactCdn.kt). The WebView still
+ * does not connect: the app fetches it with a fresh request and hands the bytes back.
+ *
+ * WebRTC and network hints (preconnect, dns-prefetch) bypass all of that. ArtifactNetworkLock.kt adds
+ * the two layers for them: a process-wide proxy override to a dead proxy, which every TCP connection
+ * the WebView opens must go through, and a document-start script that removes WebRTC, which is the
+ * only thing that stops UDP. A view that cannot get the proxy loads nothing; a view that cannot get
+ * the script runs no JavaScript. These layers are measured on a device by ArtifactSandboxEmulatorTest,
+ * not proven: a WebView update could open a channel none of them covers.
+ */
+
+internal enum class ArtifactKind { Html, Mermaid }
+
+/** What [artifactRequestPolicy] decides for one request. */
+internal enum class ArtifactDecision { Document, MermaidLibrary, MermaidViewerScript, Deny }
+
+/** The origin the sandbox serves from. `.invalid` never resolves, so a leak could not reach a server. */
+internal fun artifactHost(random: SecureRandom = SecureRandom()): String {
+    val bytes = ByteArray(8).also(random::nextBytes)
+    return "a" + bytes.joinToString("") { "%02x".format(it) } + ".artifact.invalid"
+}
+
+internal fun artifactDocumentUrl(host: String) = "https://$host/index.html"
+
+/**
+ * Whether the request for [url] may be answered, and with what. Only a GET of the exact document URL
+ * on [host] is allowed, plus the two bundled Mermaid scripts for [ArtifactKind.Mermaid]. Anything else
+ * (other hosts, other paths, queries, fragments in the request, other methods) is denied.
+ */
+internal fun artifactRequestPolicy(url: String, method: String, host: String, kind: ArtifactKind): ArtifactDecision {
+    if (method != "GET") return ArtifactDecision.Deny
+    val base = "https://$host/"
+    if (!url.startsWith(base)) return ArtifactDecision.Deny
+    return when (url.removePrefix(base)) {
+        "index.html" -> ArtifactDecision.Document
+        "mermaid.min.js" -> if (kind == ArtifactKind.Mermaid) ArtifactDecision.MermaidLibrary else ArtifactDecision.Deny
+        "viewer.js" -> if (kind == ArtifactKind.Mermaid) ArtifactDecision.MermaidViewerScript else ArtifactDecision.Deny
+        else -> ArtifactDecision.Deny
+    }
+}
+
+private val CDN_SCRIPT_SOURCES = ARTIFACT_CDN_SCRIPT_HOSTS.joinToString(" ") { "https://$it" }
+
+/**
+ * The CSP header. `sandbox allow-scripts` gives the page an opaque origin with no storage, forms,
+ * popups or top navigation; the fetch directives close the rest. HTML artifacts may use inline
+ * script and style and load from the CDN allowlist only; Mermaid only runs the two bundled scripts
+ * from [host] and has no CDN.
+ */
+internal fun artifactContentSecurityPolicy(kind: ArtifactKind, host: String): String =
+    when (kind) {
+        ArtifactKind.Html ->
+            "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' $CDN_SCRIPT_SOURCES; " +
+                "style-src 'unsafe-inline' $CDN_SCRIPT_SOURCES https://$ARTIFACT_CDN_FONT_CSS_HOST; " +
+                "img-src data: blob: $CDN_SCRIPT_SOURCES; " +
+                "font-src data: https://$ARTIFACT_CDN_FONT_FILE_HOST $CDN_SCRIPT_SOURCES; media-src data: blob:; " +
+                "connect-src $CDN_SCRIPT_SOURCES; frame-src 'none'; form-action 'none'; base-uri 'none'"
+        ArtifactKind.Mermaid ->
+            "sandbox allow-scripts; default-src 'none'; script-src https://$host; " +
+                "style-src 'unsafe-inline'; img-src data:; font-src data:; " +
+                "connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'"
+    }
+
+/** What a sandboxed view reports back. Called on the main thread. */
+internal class ArtifactCallbacks(
+    /** The document finished loading. */
+    val onLoaded: () -> Unit = {},
+    /** The page title changed; Mermaid signals "ok" or "error" this way. */
+    val onTitle: (String) -> Unit = {},
+    /** The main document failed to load or the web process died; the view must be dropped. */
+    val onFailed: () -> Unit = {},
+)
+
+/** One page to show: what it is, where it is served from, and its text. */
+internal class ArtifactPage(
+    val kind: ArtifactKind,
+    /** The HTML document, or for Mermaid the diagram source. */
+    val text: String,
+    val dark: Boolean = false,
+    val host: String = artifactHost(),
+) {
+    val url: String get() = artifactDocumentUrl(host)
+}
+
+private val EMPTY_FORBIDDEN get() =
+    WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+
+private fun cdnResponse(reply: ArtifactCdnReply): WebResourceResponse =
+    when (reply) {
+        is ArtifactCdnReply.Ok ->
+            WebResourceResponse(
+                reply.mediaType,
+                reply.charset,
+                200,
+                "OK",
+                mapOf(
+                    "Access-Control-Allow-Origin" to "*",
+                    "Cross-Origin-Resource-Policy" to "cross-origin",
+                    "X-Content-Type-Options" to "nosniff",
+                    "Cache-Control" to "no-store",
+                ),
+                ByteArrayInputStream(reply.body),
+            )
+        is ArtifactCdnReply.Refused ->
+            WebResourceResponse(
+                "text/plain",
+                "utf-8",
+                reply.status,
+                when (reply.status) {
+                    404 -> "Not Found"
+                    504 -> "Gateway Timeout"
+                    else -> "Forbidden"
+                },
+                emptyMap(),
+                ByteArrayInputStream(ByteArray(0)),
+            )
+    }
+
+private fun responseHeaders(csp: String) =
+    mapOf(
+        "Content-Security-Policy" to csp,
+        "Cache-Control" to "no-store",
+        "X-Content-Type-Options" to "nosniff",
+        "X-DNS-Prefetch-Control" to "off",
+    )
+
+/** Answers a request from the page or denies it; never reaches the network. */
+internal fun artifactResponse(context: Context, page: ArtifactPage, url: String, method: String): WebResourceResponse {
+    val csp = artifactContentSecurityPolicy(page.kind, page.host)
+    fun asset(name: String, mime: String) =
+        WebResourceResponse(mime, "utf-8", 200, "OK", responseHeaders(csp), context.assets.open("mermaid/$name"))
+    return when (artifactRequestPolicy(url, method, page.host, page.kind)) {
+        ArtifactDecision.Document ->
+            WebResourceResponse(
+                "text/html",
+                "utf-8",
+                200,
+                "OK",
+                responseHeaders(csp),
+                ByteArrayInputStream(
+                    when (page.kind) {
+                        ArtifactKind.Html -> page.text.toByteArray(Charsets.UTF_8)
+                        ArtifactKind.Mermaid -> context.assets.open("mermaid/viewer.html").use { it.readBytes() }
+                    }
+                ),
+            )
+        ArtifactDecision.MermaidLibrary -> asset("mermaid.min.js", "text/javascript")
+        ArtifactDecision.MermaidViewerScript -> asset("viewer.js", "text/javascript")
+        ArtifactDecision.Deny -> EMPTY_FORBIDDEN
+    }
+}
+
+/** Applies every sandbox setting. Kept apart from view creation so a test can check them one by one. */
+@SuppressLint("SetJavaScriptEnabled")
+@Suppress("DEPRECATION")
+internal fun configureArtifactWebView(view: WebView) {
+    with(view.settings) {
+        javaScriptEnabled = true
+        blockNetworkLoads = true
+        allowFileAccess = false
+        allowContentAccess = false
+        allowFileAccessFromFileURLs = false
+        allowUniversalAccessFromFileURLs = false
+        domStorageEnabled = false
+        databaseEnabled = false
+        setGeolocationEnabled(false)
+        javaScriptCanOpenWindowsAutomatically = false
+        setSupportMultipleWindows(false)
+        mediaPlaybackRequiresUserGesture = true
+        cacheMode = WebSettings.LOAD_NO_CACHE
+        builtInZoomControls = false
+        displayZoomControls = false
+    }
+    CookieManager.getInstance().setAcceptCookie(false)
+    CookieManager.getInstance().setAcceptThirdPartyCookies(view, false)
+    view.setDownloadListener { _, _, _, _, _ -> }
+    view.setNetworkAvailable(false)
+    view.isHapticFeedbackEnabled = false
+}
+
+/** Refuses geolocation, permission prompts, file choosers and new windows; reports Mermaid's title signal. */
+internal class ArtifactChromeClient(private val callbacks: ArtifactCallbacks) : WebChromeClient() {
+    override fun onGeolocationPermissionsShowPrompt(origin: String?, callback: GeolocationPermissions.Callback?) {
+        callback?.invoke(origin, false, false)
+    }
+
+    override fun onPermissionRequest(request: PermissionRequest?) {
+        request?.deny()
+    }
+
+    override fun onShowFileChooser(
+        webView: WebView?,
+        filePathCallback: ValueCallback<Array<android.net.Uri>>?,
+        fileChooserParams: FileChooserParams?,
+    ): Boolean {
+        filePathCallback?.onReceiveValue(null)
+        return true
+    }
+
+    // A page must not stall the viewer behind a modal dialog or leave through beforeunload.
+    override fun onJsAlert(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
+        result?.cancel()
+        return true
+    }
+
+    override fun onJsConfirm(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
+        result?.cancel()
+        return true
+    }
+
+    override fun onJsPrompt(
+        view: WebView?,
+        url: String?,
+        message: String?,
+        defaultValue: String?,
+        result: JsPromptResult?,
+    ): Boolean {
+        result?.cancel()
+        return true
+    }
+
+    override fun onJsBeforeUnload(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
+        result?.cancel()
+        return true
+    }
+
+    override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message?) = false
+
+    override fun onReceivedTitle(view: WebView?, title: String?) {
+        callbacks.onTitle(title.orEmpty())
+    }
+}
+
+/** Blocks every navigation, serves [page] from memory and denies everything else. */
+internal class ArtifactWebViewClient(
+    private val context: Context,
+    private val page: ArtifactPage,
+    private val callbacks: ArtifactCallbacks,
+    private val cdn: Lazy<ArtifactCdnFetcher> = lazy { ArtifactCdn.fetcher(context) },
+    private val userAgent: String = "",
+) : WebViewClient() {
+    private var finished = false
+    private val cdnBudget = ArtifactCdnBudget()
+
+    /** Stops CDN requests in flight; the view is being disposed. */
+    fun cancelNetwork() = cdnBudget.cancel()
+
+    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?) = true
+
+    @Deprecated("Deprecated in Java")
+    override fun shouldOverrideUrlLoading(view: WebView?, url: String?) = true
+
+    override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+        val target = request ?: return EMPTY_FORBIDDEN
+        val url = target.url.toString()
+        val local = artifactResponse(context, page, url, target.method)
+        if (local.statusCode != 403) return local
+        // Only a sub-resource GET, never the page itself, and only the allowlist. Request headers are not read.
+        if (target.method != "GET" || target.isForMainFrame || page.kind != ArtifactKind.Html || !artifactCdnAllowed(url))
+            return local
+        return cdnResponse(cdn.value.fetch(url, userAgent, cdnBudget))
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun shouldInterceptRequest(view: WebView?, url: String?): WebResourceResponse? = EMPTY_FORBIDDEN
+
+    override fun onPageFinished(view: WebView?, url: String?) {
+        if (finished || url != page.url) return
+        finished = true
+        if (page.kind == ArtifactKind.Mermaid)
+            view?.evaluateJavascript("renderDiagram(${jsonQuote(page.text)}, ${page.dark})", null)
+        callbacks.onLoaded()
+    }
+
+    override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: android.webkit.WebResourceError?) {
+        if (request?.isForMainFrame == true) callbacks.onFailed()
+    }
+
+    override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+        callbacks.onFailed()
+        return true
+    }
+}
+
+/**
+ * A configured, locked-down WebView showing [page]. [background] fills behind the page.
+ * The caller owns it and must pass it to [disposeArtifactWebView].
+ *
+ * The page is loaded only once [networkLock] has the dead proxy in force, so the first view of a
+ * process loads a moment later. Without the proxy nothing is loaded and [ArtifactCallbacks.onFailed]
+ * is called. Without the WebRTC block ([webRtcBlock] returns false) the view runs no JavaScript: an
+ * HTML artifact shows without its scripts, and a Mermaid diagram is not loaded and fails.
+ *
+ * [cdn] answers requests for allowlisted hosts; null uses the app's own client, created on first use.
+ */
+internal fun createArtifactWebView(
+    context: Context,
+    page: ArtifactPage,
+    callbacks: ArtifactCallbacks,
+    background: Int = Color.WHITE,
+    networkLock: ArtifactNetworkLock = ArtifactNetworkLock.process,
+    webRtcBlock: (WebView) -> Boolean = ::installArtifactWebRtcBlock,
+    cdn: ArtifactCdnFetcher? = null,
+): WebView =
+    WebView(context).also { view ->
+        configureArtifactWebView(view)
+        view.setBackgroundColor(background)
+        view.webViewClient =
+            if (cdn == null) ArtifactWebViewClient(context, page, callbacks, userAgent = view.settings.userAgentString.orEmpty())
+            else ArtifactWebViewClient(context, page, callbacks, lazyOf(cdn), view.settings.userAgentString.orEmpty())
+        view.webChromeClient = ArtifactChromeClient(callbacks)
+        if (Build.VERSION.SDK_INT >= 29) view.webViewRenderProcessClient = ArtifactRenderProcessClient()
+        // Posted: this may run inside the factory that is still creating the view.
+        val fail = { Handler(Looper.getMainLooper()).post { if (view !in disposedArtifactViews) callbacks.onFailed() } }
+        // Registered before the first load; a view without it must not run scripts at all.
+        if (!webRtcBlock(view)) {
+            view.settings.javaScriptEnabled = false
+            // A diagram cannot draw without scripts; fail now instead of showing a blank page.
+            if (page.kind == ArtifactKind.Mermaid) {
+                fail()
+                return@also
+            }
+        }
+        networkLock.ensure(
+            onReady = { if (view !in disposedArtifactViews) view.loadUrl(page.url) },
+            onUnsupported = { fail() },
+        )
+    }
+
+/** Views passed to [disposeArtifactWebView], so a late network-lock callback leaves them alone. */
+private val disposedArtifactViews: MutableSet<WebView> = Collections.newSetFromMap(WeakHashMap())
+
+/**
+ * Ends a renderer that stops answering (a page stuck in a loop). Terminating it lands in
+ * [ArtifactWebViewClient.onRenderProcessGone], which fails the view cleanly.
+ */
+@androidx.annotation.RequiresApi(29)
+internal class ArtifactRenderProcessClient : WebViewRenderProcessClient() {
+    override fun onRenderProcessUnresponsive(view: WebView, renderer: WebViewRenderProcess?) {
+        renderer?.terminate()
+    }
+
+    override fun onRenderProcessResponsive(view: WebView, renderer: WebViewRenderProcess?) {}
+}
+
+/** Tears a sandboxed view down so nothing it held outlives it; one failing step never skips the rest. */
+internal fun disposeArtifactWebView(view: WebView) {
+    disposedArtifactViews += view
+    try {
+        runCatching { (view.webViewClient as? ArtifactWebViewClient)?.cancelNetwork() }
+        runCatching { view.stopLoading() }
+        runCatching { view.loadUrl("about:blank") }
+        runCatching { view.clearHistory() }
+        runCatching { view.clearCache(true) }
+        runCatching { WebStorage.getInstance().deleteAllData() }
+        runCatching { view.removeAllViews() }
+        runCatching { (view.parent as? ViewGroup)?.removeView(view) }
+    } finally {
+        runCatching { view.destroy() }
+    }
+}
+
+/**
+ * Quotes [text] as a JavaScript string literal that is also safe inside an HTML script block:
+ * U+2028 and U+2029 (line terminators in old engines) and `</` are escaped.
+ */
+internal fun jsonQuote(text: String): String =
+    buildString(text.length + 2) {
+        append('"')
+        for ((index, c) in text.withIndex()) {
+            when {
+                c == '"' -> append("\\\"")
+                c == '\\' -> append("\\\\")
+                c == '\n' -> append("\\n")
+                c == '\r' -> append("\\r")
+                c == '\t' -> append("\\t")
+                c == '/' && index > 0 && text[index - 1] == '<' -> append("\\/")
+                c == '\u2028' -> append("\\u2028")
+                c == '\u2029' -> append("\\u2029")
+                c < ' ' -> append("\\u%04x".format(c.code))
+                else -> append(c)
+            }
+        }
+        append('"')
+    }
+
+private val externalReferenceRegex =
+    Regex("""(?:\b(?:src|href|poster|data|action)\s*=\s*|url\(\s*)(?:"([^"]*)"|'([^']*)'|([^\s>)"']+))""", RegexOption.IGNORE_CASE)
+
+private const val EXTERNAL_SCAN_CHARS = 256 * 1024
+
+/**
+ * References in the first 256 KB of [html] that the sandbox cannot satisfy: anything other than a
+ * `data:` or `blob:` URL, a `#fragment`, `javascript:`, or a file on the CDN allowlist. Used only for
+ * a notice; the sandbox refuses what is not allowlisted either way.
+ */
+internal fun externalReferences(html: String): List<String> =
+    externalReferenceRegex
+        .findAll(html.take(EXTERNAL_SCAN_CHARS))
+        .map { it.groupValues.drop(1).firstOrNull(String::isNotEmpty).orEmpty() }
+        .filter { ref ->
+            val value = ref.trim().lowercase()
+            value.isNotEmpty() && !value.startsWith("#") && !value.startsWith("data:") &&
+                !value.startsWith("blob:") && !value.startsWith("javascript:") && !artifactCdnAllowed(absoluteReference(ref.trim()))
+        }
+        .distinct()
+        .toList()
+
+/**
+ * The form WebView would request for [ref]: HTML entities decoded, a protocol-relative reference
+ * resolved to https (the sandbox document is served over https), scheme and host lower-cased and the
+ * default port dropped. Only used to decide whether to show the notice; the strict allowlist check
+ * still runs on the result.
+ */
+private fun absoluteReference(ref: String): String {
+    val decoded = decodeBasicEntities(ref.trim())
+    val url = if (decoded.startsWith("//")) "https:$decoded" else decoded
+    val schemeEnd = url.indexOf("://")
+    if (schemeEnd < 0) return url
+    val scheme = url.substring(0, schemeEnd).lowercase()
+    val rest = url.substring(schemeEnd + 3)
+    val authority = rest.takeWhile { it != '/' && it != '?' && it != '#' }
+    val tail = rest.substring(authority.length)
+    val host = authority.lowercase().removeSuffix(":443")
+    return "$scheme://$host$tail"
+}
+
+private val entityRegex = Regex("&(#[0-9]+|#[xX][0-9a-fA-F]+|amp|lt|gt|quot|apos);")
+
+private fun decodeBasicEntities(text: String): String =
+    entityRegex.replace(text) { m ->
+        when (val name = m.groupValues[1]) {
+            "amp" -> "&"
+            "lt" -> "<"
+            "gt" -> ">"
+            "quot" -> "\""
+            "apos" -> "'"
+            else ->
+                (if (name[1] == 'x' || name[1] == 'X') name.drop(2).toIntOrNull(16) else name.drop(1).toIntOrNull())
+                    ?.takeIf { it in 1..0x10FFFF && it !in 0xD800..0xDFFF }
+                    ?.let { String(Character.toChars(it)) }
+                    ?: m.value
+        }
+    }

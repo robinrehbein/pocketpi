@@ -480,4 +480,35 @@
     <string name="remote_image_fetch_failed">Das Bild konnte nicht erneut geladen werden.</string>
     <string name="remote_image_saved">Bild gespeichert.</string>
     <string name="remote_image_save_failed">Das Bild konnte nicht gespeichert werden.</string>
+    <string name="remote_artifact_loading">Seite wird geladen…</string>
+    <string name="remote_artifact_open">Seite %1$s öffnen</string>
+    <string name="remote_artifact_open_action">Öffnen</string>
+    <string name="remote_artifact_badge">HTML</string>
+    <string name="remote_artifact_too_large">Diese Seite ist zu groß für die Anzeige.</string>
+    <string name="remote_artifact_not_an_artifact">Diese Datei ist keine HTML-Seite, die angezeigt werden kann.</string>
+    <string name="remote_artifact_unavailable">Diese Seite ist nicht verfügbar.</string>
+    <string name="remote_artifact_unsupported">Aktualisiere pi Remote auf deinem Mac, um HTML-Seiten zu sehen.</string>
+    <string name="remote_artifact_connection_failure">Seite konnte nicht geladen werden. Prüfe deine Verbindung.</string>
+    <string name="remote_artifact_busy">Dein Mac sendet gerade viele Dateien. Versuche es gleich erneut.</string>
+    <string name="remote_artifact_close">Seite schließen</string>
+    <string name="remote_artifact_reload">Von deinem Mac neu laden</string>
+    <string name="remote_artifact_reload_failed">Die Seite konnte nicht erneut geladen werden.</string>
+    <string name="remote_artifact_share">Teilen</string>
+    <string name="remote_artifact_share_title">Teilen</string>
+    <string name="remote_artifact_preview">Vorschau</string>
+    <string name="remote_artifact_code">Code</string>
+    <string name="remote_artifact_libraries_only">Nur Bibliotheken</string>
+    <string name="remote_artifact_external_references">Diese Seite verweist auf Dateien außerhalb der erlaubten Bibliotheken. Sie werden in der Vorschau nicht geladen.</string>
+    <string name="remote_artifact_preview_failed">Die Vorschau funktioniert nicht mehr.</string>
+    <string name="remote_artifact_export_failed">Die Datei konnte nicht vorbereitet werden.</string>
+    <string name="remote_artifact_copy_too_large">Zu groß zum Kopieren. Nutze stattdessen Teilen.</string>
+    <string name="remote_artifact_copy_failed">Der Text konnte nicht kopiert werden.</string>
+    <string name="remote_mermaid_badge">Mermaid</string>
+    <string name="remote_mermaid_open">Diagramm öffnen</string>
+    <plurals name="remote_mermaid_lines">
+        <item quantity="one">%d Zeile</item>
+        <item quantity="other">%d Zeilen</item>
+    </plurals>
+    <string name="remote_mermaid_too_large">Diagramm zu groß zum Zeichnen. Stattdessen wird der Code gezeigt.</string>
+    <string name="remote_mermaid_failed">Dieses Diagramm konnte nicht gezeichnet werden. Öffne es, um den Code zu sehen.</string>
 </resources>

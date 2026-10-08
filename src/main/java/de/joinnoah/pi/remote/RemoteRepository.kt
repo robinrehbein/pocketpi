@@ -301,6 +301,14 @@ interface RemoteRepository {
         ProjectImageResult.Unsupported
 
     /**
+     * An HTML file the agent mentioned, by [path] (relative to the session folder or POSIX absolute),
+     * read like [readProjectImage] but only with [FILES_ARTIFACT_CAPABILITY]. The document stays in
+     * memory only; [fresh] reads the file again.
+     */
+    suspend fun readProjectArtifact(sessionId: String, path: String, fresh: Boolean = false): ProjectArtifactResult =
+        ProjectArtifactResult.UnsupportedHost
+
+    /**
      * Renders [sessionId] as one HTML file and reads it from the host in chunks (`session.export`,
      * `session.export.get`, only with [EXPORT_CAPABILITY] and for host-owned sessions).
      */

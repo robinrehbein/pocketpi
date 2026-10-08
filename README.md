@@ -188,8 +188,9 @@ request #642. `session-export-v1.json` (exporting a session as an HTML file) is 
 copy from noah-monorepo commit `748465c46c866a4d9d3c78754bff6e860955fdf8`, the merge of pull
 request #647. `session-tree-v1.json` (browsing, navigating and forking the session tree) comes
 from commit `1b6b8d3871d52b66b876e95f080f69bf00bb4309`, the merge of pull request #650.
-`files-media-v1.json` (agent images, read by path from the session folder) is a byte-for-byte copy
-from noah-monorepo commit `9ffee72201a85482a80738e86a2f9eae968b1b79`, the merge of pull request #652. When the
+`files-media-v1.json` (agent images read by path from the session folder, plus `text/html`
+artifacts behind `session.files.artifact.v1`) is a byte-for-byte copy from noah-monorepo commit
+`a07ba16e92e6613ac81a0032e2000c592fb2ed6f`, the merge of pull request #653. When the
 upstream protocol fixtures change, copy the changed files into
 `src/test/resources/`, compare their bytes with the upstream source, and run
 `./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and
@@ -204,7 +205,8 @@ delivery acceptance; those require the configured host, relay and device.
 ## Appearance
 
 PocketPi uses the official pi mark for its adaptive launcher icon and a monochrome silhouette for
-notifications. The logo attribution is included in `NOTICE` and in the APK assets.
+notifications. The logo attribution is included in `NOTICE` and in the APK assets. Mermaid (MIT) is bundled
+unmodified in `src/main/assets/mermaid/` with its license and notice.
 
 UI typography requests Samsung's installed `sec` font family, then the older
 `sec-roboto-light` family, through Compose's optional local font resolver. It retains the weights

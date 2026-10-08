@@ -18,7 +18,8 @@ internal data class MarkdownImageToken(val alt: String, val destination: String,
 private val imageExtensions = setOf("png", "jpg", "jpeg", "webp", "gif", "svg")
 /** A scan never looks further than this past the `!`, so a long text of unclosed `![` stays linear. */
 private const val MAX_IMAGE_SCAN = 2048
-private val trailingImageExtension = Regex("\\.(png|jpe?g|webp|gif|svg)$", RegexOption.IGNORE_CASE)
+private val artifactExtensions = setOf("html", "htm")
+private val trailingImageExtension = Regex("\\.(png|jpe?g|webp|gif|svg|html?)$", RegexOption.IGNORE_CASE)
 private val urlScheme = Regex("^[A-Za-z][A-Za-z0-9+.-]*:")
 
 /**
@@ -54,6 +55,21 @@ internal fun scanMarkdownImage(text: String, start: Int): MarkdownImageToken? {
     }
     if (parentheses != 0 || close >= limit) return null
     return MarkdownImageToken(text.substring(start + 2, end), text.substring(end + 2, close), close + 1)
+}
+
+/** One `[text](destination)` or `![text](destination)`; [end] is the index after the closing parenthesis. */
+internal data class MarkdownLinkToken(val text: String, val destination: String, val image: Boolean, val end: Int)
+
+/** Scans a link (`[`) or an image (`!`) starting at [start]; null when none is complete there. */
+internal fun scanMarkdownLink(text: String, start: Int): MarkdownLinkToken? {
+    if (text.getOrNull(start) == '!') {
+        val image = scanMarkdownImage(text, start) ?: return null
+        return MarkdownLinkToken(image.alt, image.destination, true, image.end)
+    }
+    if (text.getOrNull(start) != '[') return null
+    // The image scanner balances brackets and parentheses; reuse it on the same text shifted by a `!`.
+    val shifted = scanMarkdownImage("!" + text.substring(start, minOf(text.length, start + MAX_IMAGE_SCAN)), 0) ?: return null
+    return MarkdownLinkToken(shifted.alt, shifted.destination, false, start + shifted.end - 1)
 }
 
 /** The destination of an image token, without an optional title. Null when it is malformed. */
@@ -123,7 +139,13 @@ private fun percentDecodeOnce(value: String): String? {
  * segment or extension other than png, jpg, jpeg, webp, gif and svg. The host decides whether the
  * file is inside the folder, so an absolute path is sent as it is.
  */
-internal fun markdownImageTarget(raw: String): MarkdownImageTarget {
+internal fun markdownImageTarget(raw: String): MarkdownImageTarget = markdownLocalTarget(raw, imageExtensions)
+
+/** True for an artifact file name; the extension decides, the host still checks the bytes. */
+internal fun markdownArtifactTarget(raw: String): MarkdownImageTarget = markdownLocalTarget(raw, artifactExtensions)
+
+/** [markdownImageTarget] for any set of lower-case [extensions]; every path rule is the same. */
+internal fun markdownLocalTarget(raw: String, extensions: Set<String>): MarkdownImageTarget {
     val destination = destinationWithoutTitle(unescapeMarkdown(raw)) ?: return MarkdownImageTarget.Rejected
     if (urlScheme.containsMatchIn(destination)) {
         val lower = destination.lowercase()
@@ -147,7 +169,7 @@ internal fun markdownImageTarget(raw: String): MarkdownImageTarget {
     }
     if (segments.isEmpty()) return MarkdownImageTarget.Rejected
     val extension = segments.last().substringAfterLast('.', "").lowercase()
-    if (extension !in imageExtensions) return MarkdownImageTarget.Rejected
+    if (extension !in extensions) return MarkdownImageTarget.Rejected
     val path = (if (absolute) "/" else "") + segments.joinToString("/")
     return if (validMediaPath(path)) MarkdownImageTarget.Local(path) else MarkdownImageTarget.Rejected
 }
@@ -169,4 +191,23 @@ internal fun imageOnlyLine(line: String): List<Pair<String, String>>? {
         while (index < line.length && line[index].isWhitespace()) index++
     }
     return images.takeIf { it.isNotEmpty() }
+}
+
+private val artifactBullet = Regex("^[-*] +")
+
+/**
+ * The title and path of a line that is nothing but one link or image to a local HTML file,
+ * optionally behind a `- ` or `* ` bullet; null for any other line, so a link inside prose stays an
+ * ordinary link. Indented four spaces or more is code.
+ */
+internal fun artifactOnlyLine(line: String): Pair<String, String>? {
+    if (line.takeWhile { it == ' ' }.length > 3 || '\t' in line.takeWhile { it.isWhitespace() }) return null
+    var rest = line.trim()
+    if (rest.isEmpty()) return null
+    artifactBullet.find(rest)?.let { rest = rest.substring(it.value.length) }
+    if (rest.isEmpty() || (rest[0] != '[' && rest[0] != '!')) return null
+    val token = scanMarkdownLink(rest, 0) ?: return null
+    if (token.end != rest.length) return null
+    val target = markdownArtifactTarget(token.destination) as? MarkdownImageTarget.Local ?: return null
+    return token.text to target.path
 }

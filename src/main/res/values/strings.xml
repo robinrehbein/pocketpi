@@ -480,4 +480,35 @@
     <string name="remote_image_fetch_failed">Could not fetch the image again.</string>
     <string name="remote_image_saved">Image saved.</string>
     <string name="remote_image_save_failed">Could not save the image.</string>
+    <string name="remote_artifact_loading">Loading page…</string>
+    <string name="remote_artifact_open">Open page %1$s</string>
+    <string name="remote_artifact_open_action">Open</string>
+    <string name="remote_artifact_badge">HTML</string>
+    <string name="remote_artifact_too_large">This page is too large to show.</string>
+    <string name="remote_artifact_not_an_artifact">This file is not an HTML page that can be shown.</string>
+    <string name="remote_artifact_unavailable">This page is not available.</string>
+    <string name="remote_artifact_unsupported">Update pi Remote on your Mac to see HTML pages.</string>
+    <string name="remote_artifact_connection_failure">Could not load page. Check your connection.</string>
+    <string name="remote_artifact_busy">Your Mac is busy sending files. Try again in a moment.</string>
+    <string name="remote_artifact_close">Close page</string>
+    <string name="remote_artifact_reload">Reload from your Mac</string>
+    <string name="remote_artifact_reload_failed">Could not fetch the page again.</string>
+    <string name="remote_artifact_share">Share</string>
+    <string name="remote_artifact_share_title">Share</string>
+    <string name="remote_artifact_preview">Preview</string>
+    <string name="remote_artifact_code">Code</string>
+    <string name="remote_artifact_libraries_only">Libraries only</string>
+    <string name="remote_artifact_external_references">This page references files outside the allowed libraries. They are not loaded in the preview.</string>
+    <string name="remote_artifact_preview_failed">The preview stopped working.</string>
+    <string name="remote_artifact_export_failed">Could not prepare the file.</string>
+    <string name="remote_artifact_copy_too_large">Too large to copy. Use Share instead.</string>
+    <string name="remote_artifact_copy_failed">Could not copy the text.</string>
+    <string name="remote_mermaid_badge">Mermaid</string>
+    <string name="remote_mermaid_open">Open diagram</string>
+    <plurals name="remote_mermaid_lines">
+        <item quantity="one">%d line</item>
+        <item quantity="other">%d lines</item>
+    </plurals>
+    <string name="remote_mermaid_too_large">Diagram too large to draw. Showing the code instead.</string>
+    <string name="remote_mermaid_failed">This diagram could not be drawn. Open it to see the code.</string>
 </resources>
