@@ -3,9 +3,12 @@ package de.joinnoah.pi.remote
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
+import android.os.Build
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
@@ -16,6 +19,8 @@ import android.webkit.WebSettings
 import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebViewRenderProcess
+import android.webkit.WebViewRenderProcessClient
 import java.io.ByteArrayInputStream
 import java.security.SecureRandom
 
@@ -176,7 +181,34 @@ internal class ArtifactChromeClient(private val callbacks: ArtifactCallbacks) : 
         fileChooserParams: FileChooserParams?,
     ): Boolean {
         filePathCallback?.onReceiveValue(null)
-        return false
+        return true
+    }
+
+    // A page must not stall the viewer behind a modal dialog or leave through beforeunload.
+    override fun onJsAlert(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
+        result?.cancel()
+        return true
+    }
+
+    override fun onJsConfirm(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
+        result?.cancel()
+        return true
+    }
+
+    override fun onJsPrompt(
+        view: WebView?,
+        url: String?,
+        message: String?,
+        defaultValue: String?,
+        result: JsPromptResult?,
+    ): Boolean {
+        result?.cancel()
+        return true
+    }
+
+    override fun onJsBeforeUnload(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
+        result?.cancel()
+        return true
     }
 
     override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message?) = false
@@ -240,20 +272,35 @@ internal fun createArtifactWebView(
         view.setBackgroundColor(background)
         view.webViewClient = ArtifactWebViewClient(context, page, callbacks)
         view.webChromeClient = ArtifactChromeClient(callbacks)
+        if (Build.VERSION.SDK_INT >= 29) view.webViewRenderProcessClient = ArtifactRenderProcessClient()
         view.loadUrl(page.url)
     }
 
-/** Tears a sandboxed view down so nothing it held outlives it. */
+/**
+ * Ends a renderer that stops answering (a page stuck in a loop). Terminating it lands in
+ * [ArtifactWebViewClient.onRenderProcessGone], which fails the view cleanly.
+ */
+@androidx.annotation.RequiresApi(29)
+internal class ArtifactRenderProcessClient : WebViewRenderProcessClient() {
+    override fun onRenderProcessUnresponsive(view: WebView, renderer: WebViewRenderProcess?) {
+        renderer?.terminate()
+    }
+
+    override fun onRenderProcessResponsive(view: WebView, renderer: WebViewRenderProcess?) {}
+}
+
+/** Tears a sandboxed view down so nothing it held outlives it; one failing step never skips the rest. */
 internal fun disposeArtifactWebView(view: WebView) {
-    runCatching {
-        view.stopLoading()
-        view.loadUrl("about:blank")
-        view.clearHistory()
-        view.clearCache(true)
-        WebStorage.getInstance().deleteAllData()
-        view.removeAllViews()
-        (view.parent as? ViewGroup)?.removeView(view)
-        view.destroy()
+    try {
+        runCatching { view.stopLoading() }
+        runCatching { view.loadUrl("about:blank") }
+        runCatching { view.clearHistory() }
+        runCatching { view.clearCache(true) }
+        runCatching { WebStorage.getInstance().deleteAllData() }
+        runCatching { view.removeAllViews() }
+        runCatching { (view.parent as? ViewGroup)?.removeView(view) }
+    } finally {
+        runCatching { view.destroy() }
     }
 }
 
@@ -272,8 +319,8 @@ internal fun jsonQuote(text: String): String =
                 c == '\r' -> append("\\r")
                 c == '\t' -> append("\\t")
                 c == '/' && index > 0 && text[index - 1] == '<' -> append("\\/")
-                c == ' ' -> append("\\u2028")
-                c == ' ' -> append("\\u2029")
+                c == '\u2028' -> append("\\u2028")
+                c == '\u2029' -> append("\\u2029")
                 c < ' ' -> append("\\u%04x".format(c.code))
                 else -> append(c)
             }

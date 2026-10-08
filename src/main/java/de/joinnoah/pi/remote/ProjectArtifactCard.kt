@@ -26,7 +26,6 @@ internal sealed interface ProjectArtifactState {
     data object UnsupportedHost : ProjectArtifactState
     data object Busy : ProjectArtifactState
     data object ConnectionFailure : ProjectArtifactState
-    data object Malformed : ProjectArtifactState
 }
 
 internal fun ProjectArtifactResult.toCardState(): ProjectArtifactState =
@@ -38,7 +37,6 @@ internal fun ProjectArtifactResult.toCardState(): ProjectArtifactState =
         ProjectArtifactResult.NotAnArtifact -> ProjectArtifactState.NotAnArtifact
         ProjectArtifactResult.Busy -> ProjectArtifactState.Busy
         ProjectArtifactResult.ConnectionFailure -> ProjectArtifactState.ConnectionFailure
-        ProjectArtifactResult.Malformed -> ProjectArtifactState.Malformed
     }
 
 /** Reads the artifact at [path]; right after connecting, capabilities are unknown and the answer waits. */
@@ -107,7 +105,6 @@ private fun ArtifactMessage(state: ProjectArtifactState, onRetry: () -> Unit) {
                     ProjectArtifactState.UnsupportedHost -> R.string.remote_artifact_unsupported
                     ProjectArtifactState.Busy -> R.string.remote_artifact_busy
                     ProjectArtifactState.ConnectionFailure -> R.string.remote_artifact_connection_failure
-                    ProjectArtifactState.Malformed -> R.string.remote_artifact_malformed
                     else -> R.string.remote_artifact_unavailable
                 }
             ),

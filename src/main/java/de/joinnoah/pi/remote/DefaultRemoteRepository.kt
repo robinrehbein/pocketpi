@@ -4416,6 +4416,11 @@ class DefaultRemoteRepository(
     private val projectImageReadMutex = Mutex()
     /** The host keeps four copies per device; two downloads leave room for a share or a save. */
     private val projectImageDownloads = Semaphore(2)
+    /**
+     * Artifacts get their own permit so a slow page never starves images. Together with the two image
+     * permits that is at most three downloads, under the host's four-per-device cap.
+     */
+    private val projectArtifactDownloads = Semaphore(1)
     private var lastProjectImageRead: Long? = null
 
     override suspend fun readProjectImage(sessionId: String, path: String, fresh: Boolean): ProjectImageResult {
@@ -4498,6 +4503,7 @@ class DefaultRemoteRepository(
                         read = { mediaId, offset ->
                             spaced("session.files.media.get", *mediaGetFields(sessionId, mediaId, offset))
                         },
+                        accept = { !it.isHtml },
                     )
             ) {
                 is MediaDownload.Omitted ->
@@ -4506,8 +4512,7 @@ class DefaultRemoteRepository(
                         MediaOmitted.NOT_AN_IMAGE -> ProjectImageResult.NotAnImage
                     }
                 is MediaDownload.Ready ->
-                    if (download.meta.mime.isHtml) ProjectImageResult.NotAnImage
-                    else ProjectImageResult.Loaded(
+                    ProjectImageResult.Loaded(
                         download.meta.path,
                         download.meta.mime.wire,
                         download.meta.sha256,
@@ -4562,7 +4567,7 @@ class DefaultRemoteRepository(
                         entry.job =
                             scope.async(start = CoroutineStart.LAZY) {
                                 try {
-                                    projectImageDownloads.withPermit {
+                                    projectArtifactDownloads.withPermit {
                                         fetchProjectArtifact(epoch, sessionId, path, cacheKey)
                                     }
                                 } finally {
@@ -4605,6 +4610,7 @@ class DefaultRemoteRepository(
                         read = { mediaId, offset ->
                             spacedMediaRequest(epoch, "session.files.media.get", *mediaGetFields(sessionId, mediaId, offset))
                         },
+                        accept = { it.isHtml },
                     )
             ) {
                 is MediaDownload.Omitted ->

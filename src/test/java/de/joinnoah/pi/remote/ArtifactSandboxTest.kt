@@ -150,8 +150,14 @@ class ArtifactSandboxTest {
         assertEquals(Triple<String?, Boolean, Boolean>("https://x", false, false), geo)
         assertFalse(chrome.onCreateWindow(null, false, true, null))
         var chooser: Array<android.net.Uri>? = arrayOf()
-        assertFalse(chrome.onShowFileChooser(null, { chooser = it }, null))
+        assertTrue(chrome.onShowFileChooser(null, { chooser = it }, null))
         assertEquals(null, chooser)
+        val results = List(4) { org.robolectric.shadows.ShadowJsPromptResult.newInstance() }
+        assertTrue(chrome.onJsAlert(null, "https://x", "hi", results[0]))
+        assertTrue(chrome.onJsConfirm(null, "https://x", "sure?", results[1]))
+        assertTrue(chrome.onJsBeforeUnload(null, "https://x", "leave?", results[2]))
+        assertTrue(chrome.onJsPrompt(null, "https://x", "name?", "d", results[3]))
+        results.forEach { assertTrue(org.robolectric.Shadows.shadowOf(it).wasCancelled()) }
     }
 
     @Test fun titleChangesReachTheCallback() {
@@ -166,7 +172,7 @@ class ArtifactSandboxTest {
     @Test fun jsonQuoteIsSafeInsideAScriptBlock() {
         assertEquals("\"a\\\"b\\\\c\\nd\"", jsonQuote("a\"b\\c\nd"))
         assertEquals("\"<\\/script>\"", jsonQuote("</script>"))
-        assertEquals("\"\\u2028\\u2029\"", jsonQuote("  "))
+        assertEquals("\"\\u2028\\u2029\"", jsonQuote("\u2028\u2029"))
         assertEquals("\"\\u0000\\u001f\"", jsonQuote("\u0000\u001f"))
         assertEquals("\"é😀\"", jsonQuote("é😀"))
         assertNotEquals("\"<\"", jsonQuote("</"))

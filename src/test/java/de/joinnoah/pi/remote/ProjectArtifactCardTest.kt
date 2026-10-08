@@ -17,7 +17,6 @@ class ProjectArtifactCardTest {
         assertEquals(ProjectArtifactState.NotAnArtifact, ProjectArtifactResult.NotAnArtifact.toCardState())
         assertEquals(ProjectArtifactState.Busy, ProjectArtifactResult.Busy.toCardState())
         assertEquals(ProjectArtifactState.ConnectionFailure, ProjectArtifactResult.ConnectionFailure.toCardState())
-        assertEquals(ProjectArtifactState.Malformed, ProjectArtifactResult.Malformed.toCardState())
     }
 
     @Test fun onlyTransientStatesOfferRetry() {
@@ -25,7 +24,7 @@ class ProjectArtifactCardTest {
         assertTrue(ProjectArtifactState.ConnectionFailure.retryable())
         listOf(
             ProjectArtifactState.Loading, ProjectArtifactState.TooLarge, ProjectArtifactState.NotAnArtifact,
-            ProjectArtifactState.Unavailable, ProjectArtifactState.UnsupportedHost, ProjectArtifactState.Malformed,
+            ProjectArtifactState.Unavailable, ProjectArtifactState.UnsupportedHost,
         ).forEach { assertFalse(it.toString(), it.retryable()) }
     }
 

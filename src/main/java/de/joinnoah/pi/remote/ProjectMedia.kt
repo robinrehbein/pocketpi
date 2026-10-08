@@ -168,13 +168,15 @@ private fun mediaRequestFailure(e: Exception): MediaException =
 /**
  * Asks for the image with [start], then reads the copy with [read] from offset 0, chunk by chunk,
  * until `totalBytes` arrived, and checks the SHA-256. A `not_found` in the middle of the download
- * (the copy expired) starts over once; a second one fails. Throws [MediaException].
+ * (the copy expired) starts over once; a second one fails. A type [accept] refuses ends with
+ * [MediaOmitted.NOT_AN_IMAGE] before any byte is read. Throws [MediaException].
  */
 internal suspend fun downloadMedia(
     sessionId: String,
     path: String,
     start: suspend () -> JsonObject,
     read: suspend (mediaId: String, offset: Long) -> JsonObject,
+    accept: (MediaMime) -> Boolean,
 ): MediaDownload {
     var restarted = false
     while (true) {
@@ -191,7 +193,7 @@ internal suspend fun downloadMedia(
                 when (val parsed = parseFilesMedia(started, sessionId, path)) {
                     is MediaStart.Omitted -> return MediaDownload.Omitted(parsed.reason)
                     is MediaStart.Ready -> parsed.meta
-                }
+                }.also { if (!accept(it.mime)) return MediaDownload.Omitted(MediaOmitted.NOT_AN_IMAGE) }
             } catch (e: Exception) {
                 throw MediaException(MediaFailure.UNAVAILABLE)
             }
@@ -330,9 +332,6 @@ sealed interface ProjectArtifactResult {
 
     /** A dropped connection, a failing host, or a timeout; asking again may work. */
     data object ConnectionFailure : ProjectArtifactResult
-
-    /** The host replied outside the protocol. */
-    data object Malformed : ProjectArtifactResult
 }
 
 /**

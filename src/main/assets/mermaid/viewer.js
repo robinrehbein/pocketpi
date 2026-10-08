@@ -12,6 +12,7 @@
         securityLevel: "strict",
         theme: dark ? "dark" : "default",
         suppressErrorRendering: true,
+        maxTextSize: 100000,
       });
       window.mermaid.render("pocketpi-diagram", text).then(
         function (result) {

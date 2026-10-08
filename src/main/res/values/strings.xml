@@ -489,7 +489,6 @@
     <string name="remote_artifact_unavailable">This page is not available.</string>
     <string name="remote_artifact_unsupported">Update pi Remote on your Mac to see HTML pages.</string>
     <string name="remote_artifact_connection_failure">Could not load page. Check your connection.</string>
-    <string name="remote_artifact_malformed">This page cannot be displayed.</string>
     <string name="remote_artifact_busy">Your Mac is busy sending files. Try again in a moment.</string>
     <string name="remote_artifact_close">Close page</string>
     <string name="remote_artifact_reload">Reload from your Mac</string>
@@ -507,6 +506,8 @@
     <string name="remote_artifact_browser_confirm">Open</string>
     <string name="remote_artifact_cancel">Cancel</string>
     <string name="remote_artifact_export_failed">Could not prepare the file.</string>
+    <string name="remote_artifact_copy_too_large">Too large to copy. Use Share instead.</string>
+    <string name="remote_artifact_copy_failed">Could not copy the text.</string>
     <string name="remote_artifact_no_browser">No app found to open this page.</string>
     <string name="remote_mermaid_badge">Mermaid</string>
     <string name="remote_mermaid_open">Open diagram</string>

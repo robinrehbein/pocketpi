@@ -121,7 +121,7 @@ class ProjectMediaTest {
     fun downloadsChunkByChunkAndChecksTheDigest() = runTest {
         val offsets = mutableListOf<Long>()
         val result =
-            downloadMedia(sessionId, "build/shot.png", { startResult() }, { id, offset -> offsets += offset; chunkResult(id, offset) })
+            downloadMedia(sessionId, "build/shot.png", { startResult() }, { id, offset -> offsets += offset; chunkResult(id, offset) }, { true })
         result as MediaDownload.Ready
         assertArrayEquals(content, result.bytes)
         assertEquals(listOf(0L, MEDIA_CHUNK_BYTES.toLong(), MEDIA_CHUNK_BYTES * 2L), offsets)
@@ -131,8 +131,17 @@ class ProjectMediaTest {
     fun omittedResultsEndTheDownloadWithoutReads() = runTest {
         val omitted =
             Wire.objectOf("kind" to "files.media", "sessionId" to sessionId, "path" to "a.png", "omitted" to "not_an_image")
-        val result = downloadMedia(sessionId, "a.png", { omitted }, { _, _ -> error("no read") })
+        val result = downloadMedia(sessionId, "a.png", { omitted }, { _, _ -> error("no read") }, { true })
         assertEquals(MediaOmitted.NOT_AN_IMAGE, (result as MediaDownload.Omitted).reason)
+    }
+
+    @Test
+    fun aTypeTheCallerRefusesEndsTheDownloadWithoutReads() = runTest {
+        // startResult() announces a PNG; an artifact caller refuses it before any chunk is read.
+        val refused = downloadMedia(sessionId, "build/shot.png", { startResult() }, { _, _ -> error("no read") }, { it.isHtml })
+        assertEquals(MediaOmitted.NOT_AN_IMAGE, (refused as MediaDownload.Omitted).reason)
+        val accepted = downloadMedia(sessionId, "build/shot.png", { startResult() }, { id, offset -> chunkResult(id, offset) }, { !it.isHtml })
+        assertTrue(accepted is MediaDownload.Ready)
     }
 
     @Test
@@ -146,6 +155,7 @@ class ProjectMediaTest {
                     if (id.endsWith("A") && offset > 0) throw RemoteRequestException("not_found")
                     chunkResult(id, offset)
                 },
+                { true },
             )
         assertEquals(2, starts)
         assertArrayEquals(content, (ok as MediaDownload.Ready).bytes)
@@ -156,7 +166,7 @@ class ProjectMediaTest {
                 downloadMedia(sessionId, "build/shot.png", { starts++; startResult() }, { id, offset ->
                     if (offset > 0) throw RemoteRequestException("not_found")
                     chunkResult(id, offset)
-                })
+                }, { true })
             }.exceptionOrNull() as MediaException
         assertEquals(2, starts)
         assertEquals(MediaFailure.FAILED, error.failure)
@@ -170,6 +180,7 @@ class ProjectMediaTest {
                         sessionId, "build/shot.png",
                         { if (atStart) throw RemoteRequestException(code) else startResult() },
                         { _, _ -> throw RemoteRequestException(code) },
+                        { true },
                     )
                 }.exceptionOrNull() as MediaException).failure
         for (code in listOf("invalid_path", "not_found", "forbidden")) assertEquals(code, MediaFailure.UNAVAILABLE, failure(code, true))
@@ -196,17 +207,17 @@ class ProjectMediaTest {
         val wrong = "0".repeat(64)
         assertEquals(
             MediaFailure.FAILED,
-            failure { downloadMedia(sessionId, "build/shot.png", { startResult(digest = wrong) }, { id, o -> chunkResult(id, o, wrong) }) },
+            failure { downloadMedia(sessionId, "build/shot.png", { startResult(digest = wrong) }, { id, o -> chunkResult(id, o, wrong) }, { true }) },
         )
         // A chunk answering another offset.
         assertEquals(
             MediaFailure.UNAVAILABLE,
-            failure { downloadMedia(sessionId, "build/shot.png", { startResult() }, { id, _ -> chunkResult(id, MEDIA_CHUNK_BYTES.toLong()) }) },
+            failure { downloadMedia(sessionId, "build/shot.png", { startResult() }, { id, _ -> chunkResult(id, MEDIA_CHUNK_BYTES.toLong()) }, { true }) },
         )
         // A start for another path.
         assertEquals(
             MediaFailure.UNAVAILABLE,
-            failure { downloadMedia(sessionId, "build/shot.png", { startResult(path = "x.png") }, { id, o -> chunkResult(id, o) }) },
+            failure { downloadMedia(sessionId, "build/shot.png", { startResult(path = "x.png") }, { id, o -> chunkResult(id, o) }, { true }) },
         )
     }
 

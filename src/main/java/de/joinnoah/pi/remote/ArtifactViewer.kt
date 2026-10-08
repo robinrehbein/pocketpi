@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -32,6 +33,9 @@ import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** Above this many characters Copy is off: a larger clip can crash the clipboard binder. Share still works. */
+internal const val ARTIFACT_COPY_MAX_CHARS = 200_000
 
 /** The code tab shows at most this many characters of a line; Copy still copies the whole text. */
 internal const val ARTIFACT_CODE_LINE_CHARS = 2_000
@@ -66,6 +70,7 @@ internal fun ArtifactViewer(
     val fileName = path.substringAfterLast('/')
     val exportFailed = stringResource(R.string.remote_artifact_export_failed)
     val reloadFailed = stringResource(R.string.remote_artifact_reload_failed)
+    val copyFailed = stringResource(R.string.remote_artifact_copy_failed)
     val noBrowser = stringResource(R.string.remote_artifact_no_browser)
     val shareTitle = stringResource(R.string.remote_artifact_share_title)
     val browserTitle = stringResource(R.string.remote_artifact_open_in_browser)
@@ -165,10 +170,24 @@ internal fun ArtifactViewer(
                     if (showCode) {
                         val lines = remember(text) { text.lines() }
                         Column(Modifier.fillMaxSize()) {
-                            TextButton(
-                                onClick = { clipboard.setText(AnnotatedString(text)) },
-                                modifier = Modifier.padding(horizontal = 4.dp).testTag("artifactCopy"),
-                            ) { Text(stringResource(R.string.remote_copy_code)) }
+                            val copyAllowed = text.length <= ARTIFACT_COPY_MAX_CHARS
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(
+                                    enabled = copyAllowed,
+                                    onClick = {
+                                        runCatching { clipboard.setText(AnnotatedString(text)) }
+                                            .onFailure { Toast.makeText(context, copyFailed, Toast.LENGTH_SHORT).show() }
+                                    },
+                                    modifier = Modifier.padding(horizontal = 4.dp).testTag("artifactCopy"),
+                                ) { Text(stringResource(R.string.remote_copy_code)) }
+                                if (!copyAllowed)
+                                    Text(
+                                        stringResource(R.string.remote_artifact_copy_too_large),
+                                        Modifier.weight(1f).testTag("artifactCopyTooLarge"),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                            }
                             LazyColumn(Modifier.weight(1f).fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp)) {
                                 items(lines.size) { index ->
                                     Text(
@@ -231,12 +250,20 @@ internal fun ArtifactViewer(
                                 try {
                                     val uri = export()
                                     if (uri == null) Toast.makeText(context, exportFailed, Toast.LENGTH_SHORT).show()
-                                    else
-                                        try {
-                                            context.startActivity(artifactViewIntent(uri, "text/html", browserTitle))
-                                        } catch (_: ActivityNotFoundException) {
-                                            Toast.makeText(context, noBrowser, Toast.LENGTH_SHORT).show()
-                                        }
+                                    else {
+                                        val view = artifactViewIntent(uri, "text/html", browserTitle)
+                                        // The chooser always resolves; ask for the real ACTION_VIEW target first.
+                                        val handler =
+                                            Intent(Intent.ACTION_VIEW).setDataAndType(uri, "text/html")
+                                                .resolveActivity(context.packageManager)
+                                        if (handler == null) Toast.makeText(context, noBrowser, Toast.LENGTH_SHORT).show()
+                                        else
+                                            try {
+                                                context.startActivity(view)
+                                            } catch (_: ActivityNotFoundException) {
+                                                Toast.makeText(context, noBrowser, Toast.LENGTH_SHORT).show()
+                                            }
+                                    }
                                 } finally {
                                     busy = false
                                 }

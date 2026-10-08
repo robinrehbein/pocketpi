@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import android.graphics.Color
+import android.webkit.WebChromeClient
 import android.webkit.WebView
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
@@ -97,7 +98,10 @@ class ArtifactSandboxEmulatorTest {
             attempt(function () { navigator.sendBeacon("$base/beacon", "x"); });
             attempt(function () { new WebSocket("ws://127.0.0.1:$tcp/ws"); });
             attempt(function () {
-              var pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:127.0.0.1:$udp" }] });
+              var pc = new RTCPeerConnection({ iceServers: [
+                { urls: "stun:127.0.0.1:$udp" },
+                { urls: "turn:127.0.0.1:$tcp?transport=tcp", username: "user", credential: "secret" },
+              ] });
               pc.createDataChannel("x");
               pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).catch(function () {});
             });
@@ -105,7 +109,7 @@ class ArtifactSandboxEmulatorTest {
             attempt(function () { document.getElementById("f").submit(); });
             attempt(function () { location = "$base/location"; });
             attempt(function () { location.href = "$base/href"; });
-            setTimeout(function () { document.title = "probe-done"; }, 2500);
+            setTimeout(function () { document.title = "probe-done:" + self.origin; }, 2500);
             </script></body></html>
         """.trimIndent()
     }
@@ -114,16 +118,55 @@ class ArtifactSandboxEmulatorTest {
         val (tcp, udp) = listen()
         val page = ArtifactPage(ArtifactKind.Html, probePage(tcp, udp))
         val done = CountDownLatch(1)
-        val view = show(page, ArtifactCallbacks(onTitle = { if (it == "probe-done") done.countDown() }))
+        var reported = ""
+        val view = show(page, ArtifactCallbacks(onTitle = { if (it.startsWith("probe-done:")) { reported = it; done.countDown() } }))
         assertTrue(
             "The intercepted document did not run; blockNetworkLoads may block it, switch to loadDataWithBaseURL",
             done.await(30, TimeUnit.SECONDS),
         )
+        // The CSP sandbox header applied: the page has an opaque origin.
+        assertEquals("probe-done:null", reported)
         // Give late connections (ICE, retries) time to show up.
         Thread.sleep(2_000)
         assertEquals("TCP connections", 0, connections.get())
         assertEquals("UDP packets", 0, packets.get())
         assertEquals(page.url, currentUrl(view))
+    }
+
+    /**
+     * Positive control: the same page in a plain WebView (JavaScript on, no interception, no
+     * blockNetworkLoads) served from the loopback origin. If the listeners saw nothing here, the zero
+     * counts in the sandboxed run would prove nothing. It checks the TCP side (HTTP fetches and the
+     * TURN-over-TCP ICE server) and the UDP side (the STUN ICE server).
+     */
+    @Test fun aPlainWebViewReachesTheListenersSoTheProbeCanSeeALeak() {
+        val (tcp, udp) = listen()
+        val done = CountDownLatch(1)
+        var reported = ""
+        compose.setContent {
+            AndroidView(
+                factory = { context ->
+                    WebView(context).also { view ->
+                        @Suppress("SetJavaScriptEnabled")
+                        view.settings.javaScriptEnabled = true
+                        view.webChromeClient =
+                            object : WebChromeClient() {
+                                override fun onReceivedTitle(view: WebView?, title: String?) {
+                                    if (title?.startsWith("probe-done:") == true) { reported = title; done.countDown() }
+                                }
+                            }
+                        view.loadDataWithBaseURL("http://127.0.0.1:$tcp/", probePage(tcp, udp), "text/html", "utf-8", null)
+                    }
+                },
+                onRelease = ::disposeArtifactWebView,
+                modifier = Modifier.size(300.dp, 190.dp),
+            )
+        }
+        assertTrue("The control page did not run", done.await(30, TimeUnit.SECONDS))
+        assertEquals("probe-done:http://127.0.0.1:$tcp", reported)
+        Thread.sleep(2_000)
+        assertTrue("The control made no TCP connection, so the probe cannot see one", connections.get() > 0)
+        assertTrue("The control sent no UDP packet, so the probe cannot see one", packets.get() > 0)
     }
 
     @Test fun mermaidDrawsAValidDiagram() {

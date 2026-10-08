@@ -110,6 +110,10 @@ internal class ThumbnailCapture(val page: ArtifactPage) {
     private val loaded = CompletableDeferred<Boolean>()
     var view: WebView? = null
 
+    /** True when the last [capture] drew a page that reported ready; a timed-out picture is not. */
+    var ready = false
+        private set
+
     val callbacks =
         ArtifactCallbacks(
             // Mermaid is only drawn once its title says so; a plain page is ready when it has loaded.
@@ -126,12 +130,13 @@ internal class ThumbnailCapture(val page: ArtifactPage) {
 
     /** Waits for the page, lets it settle, and draws it. Null on failure or when nothing rendered. */
     suspend fun capture(logicalWidth: Int, logicalHeight: Int, width: Int, height: Int, background: Int): Bitmap? {
-        val ready =
-            withTimeoutOrNull(THUMBNAIL_TIMEOUT_MS) {
-                loaded.await().also { if (it) delay(THUMBNAIL_SETTLE_MS) }
-            }
+        ready = false
+        val signal = withTimeoutOrNull(THUMBNAIL_TIMEOUT_MS) { loaded.await() }
+        // The settle delay is outside the timeout, so a slow load does not eat it.
+        if (signal == true) delay(THUMBNAIL_SETTLE_MS)
         // On the hard timeout a plain page is drawn as far as it got; a diagram that is not drawn is not.
-        if (ready == false || (ready == null && page.kind == ArtifactKind.Mermaid)) return null
+        if (signal == false || (signal == null && page.kind == ArtifactKind.Mermaid)) return null
+        ready = signal == true
         val target = view ?: return null
         return captureWebView(target, logicalWidth, logicalHeight, width, height, background)
     }
@@ -180,7 +185,8 @@ internal fun ArtifactThumbnail(
                     phase =
                         if (bitmap == null) ThumbnailPhase.Failed
                         else {
-                            ArtifactThumbnails[key] = bitmap
+                            // A page that never reported ready is shown for now but not remembered.
+                            if (capture.ready) ArtifactThumbnails[key] = bitmap
                             ThumbnailPhase.Ready(bitmap)
                         }
                 } finally {
