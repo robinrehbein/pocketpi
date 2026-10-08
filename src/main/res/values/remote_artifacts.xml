@@ -21,5 +21,6 @@
     <string name="remote_artifacts_card_busy">Your Mac is busy. Try again in a moment.</string>
     <string name="remote_artifacts_card_failed">Could not load. Check your connection.</string>
     <string name="remote_artifacts_card_malformed">This image cannot be displayed.</string>
+    <string name="remote_artifacts_card_loading">Loading artifact…</string>
     <string name="remote_artifacts_card_retry">Retry</string>
 </resources>

@@ -21,5 +21,6 @@
     <string name="remote_artifacts_card_busy">Dein Mac ist gerade beschäftigt. Versuche es gleich noch einmal.</string>
     <string name="remote_artifacts_card_failed">Laden fehlgeschlagen. Prüfe deine Verbindung.</string>
     <string name="remote_artifacts_card_malformed">Dieses Bild kann nicht dargestellt werden.</string>
+    <string name="remote_artifacts_card_loading">Artefakt wird geladen…</string>
     <string name="remote_artifacts_card_retry">Erneut versuchen</string>
 </resources>

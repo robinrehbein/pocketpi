@@ -4691,8 +4691,12 @@ class DefaultRemoteRepository(
         sessionId: String,
         artifactId: String,
         version: Int?,
+        type: ArtifactType?,
+        sha256: String?,
     ): SessionArtifactOpenResult {
-        if (!validArtifactId(artifactId) || (version != null && version < 1)) return SessionArtifactOpenResult.Unavailable
+        if (!validArtifactId(artifactId) ||
+            (version != null && (version < 1 || version.toLong() > MAX_ARTIFACT_VERSION)))
+            return SessionArtifactOpenResult.Unavailable
         when (artifactAccess(sessionId)) {
             ArtifactAccess.INVALID -> return SessionArtifactOpenResult.Unavailable
             ArtifactAccess.UNSUPPORTED -> return SessionArtifactOpenResult.Unsupported
@@ -4700,30 +4704,40 @@ class DefaultRemoteRepository(
             ArtifactAccess.OK -> {}
         }
         // A version is an immutable snapshot, so its copy is safe to keep; the latest is read again.
+        // A kept copy whose digest differs from the listed one is stale and never wins.
         if (version != null) {
             val logical = "artifacts/$artifactId/$version"
-            for (type in listOf(ArtifactType.HTML, ArtifactType.MERMAID))
-                projectArtifacts[ProjectArtifactCache.Key(sessionId, "$logical.${type.mime.extension}")]?.let {
-                    return SessionArtifactOpenResult.Text(type, it)
-                }
-            projectImageBytes[ProjectImageByteCache.Key(sessionId, "$logical.svg")]?.let {
-                return SessionArtifactOpenResult.Svg(it)
-            }
+            for (kind in listOf(ArtifactType.HTML, ArtifactType.MERMAID))
+                if (type == null || type == kind)
+                    projectArtifacts[artifactCacheKey(sessionId, "$logical.${kind.mime.extension}")]
+                        ?.takeIf { sha256 == null || it.sha256 == sha256 }
+                        ?.let { return SessionArtifactOpenResult.Text(kind, it) }
+            if (type == null || type == ArtifactType.SVG)
+                projectImageBytes[artifactImageCacheKey(sessionId, "$logical.svg")]
+                    ?.takeIf { sha256 == null || it.sha256 == sha256 }
+                    ?.let { return SessionArtifactOpenResult.Svg(it) }
         }
         val epoch = selectionEpoch
         return try {
-            projectArtifactDownloads.withPermit { fetchSessionArtifact(epoch, sessionId, artifactId, version) }
+            projectArtifactDownloads.withPermit { fetchSessionArtifact(epoch, sessionId, artifactId, version, type) }
         } catch (e: CancellationException) {
             currentCoroutineContext().ensureActive()
             SessionArtifactOpenResult.ConnectionFailure
         }
     }
 
+    private fun artifactCacheKey(sessionId: String, logicalPath: String) =
+        ProjectArtifactCache.Key(sessionId, artifactCachePath(logicalPath))
+
+    private fun artifactImageCacheKey(sessionId: String, logicalPath: String) =
+        ProjectImageByteCache.Key(sessionId, artifactCachePath(logicalPath))
+
     private suspend fun fetchSessionArtifact(
         epoch: Long,
         sessionId: String,
         artifactId: String,
         version: Int?,
+        type: ArtifactType?,
     ): SessionArtifactOpenResult =
         try {
             when (
@@ -4737,7 +4751,8 @@ class DefaultRemoteRepository(
                         read = { mediaId, offset ->
                             spacedMediaRequest(epoch, "session.files.media.get", *mediaGetFields(sessionId, mediaId, offset))
                         },
-                        accept = { true },
+                        // An answer of another type than the listed one ends before any byte is read.
+                        accept = { (it.isHtml || it.isSvg || it.isMermaid) && (type == null || it == type.mime) },
                         artifactPath = { artifactPathMatches(it, artifactId, version) },
                     )
             ) {
@@ -4753,7 +4768,7 @@ class DefaultRemoteRepository(
                     else if (meta.mime.isSvg) {
                         SessionArtifactOpenResult.Svg(
                             ProjectImageResult.Loaded(meta.path, meta.mime.wire, meta.sha256, download.bytes)
-                                .also { if (version != null) projectImageBytes[ProjectImageByteCache.Key(sessionId, meta.path)] = it }
+                                .also { if (version != null) projectImageBytes[artifactImageCacheKey(sessionId, meta.path)] = it }
                         )
                     } else {
                         // The host's sniff is not trusted: the bytes must be text on this side as well.
@@ -4761,7 +4776,7 @@ class DefaultRemoteRepository(
                         if (text == null) SessionArtifactOpenResult.NotAnArtifact
                         else {
                             val loaded = ProjectArtifactResult.Loaded(meta.path, meta.sha256, text, download.bytes.size)
-                            if (version != null) projectArtifacts[ProjectArtifactCache.Key(sessionId, meta.path)] = loaded
+                            if (version != null) projectArtifacts[artifactCacheKey(sessionId, meta.path)] = loaded
                             SessionArtifactOpenResult.Text(
                                 if (meta.mime.isMermaid) ArtifactType.MERMAID else ArtifactType.HTML,
                                 loaded,

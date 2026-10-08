@@ -17,7 +17,7 @@ internal const val ARTIFACTS_CAPABILITY = "session.artifacts.v1"
 internal const val MAX_ARTIFACTS_LIST_ENTRIES = 200
 internal const val MAX_ARTIFACT_TITLE_BYTES = 480
 internal const val MAX_ARTIFACT_BYTES = 5L * 1024 * 1024
-private const val MAX_ARTIFACT_VERSION = 1_000_000L
+internal const val MAX_ARTIFACT_VERSION = 1_000_000L
 private val ARTIFACT_ID = Regex("[A-Za-z0-9_-]{22}")
 private val ARTIFACT_TIME = Regex("""\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z""")
 private val ARTIFACT_SHA256 = Regex("[a-f0-9]{64}")
@@ -162,3 +162,9 @@ sealed interface SessionArtifactOpenResult {
 
     data object ConnectionFailure : SessionArtifactOpenResult
 }
+
+/**
+ * The path part of an in-memory cache key for an artifact. A NUL can never be in a media path
+ * ([validMediaPath] refuses it), so a project file named like the logical path never shares a key.
+ */
+internal fun artifactCachePath(logicalPath: String): String = "\u0000artifact:$logicalPath"

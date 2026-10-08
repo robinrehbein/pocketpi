@@ -318,9 +318,18 @@ interface RemoteRepository {
     /**
      * One artifact of [sessionId] (`session.artifacts.open`, then `session.files.media.get`, only
      * with [ARTIFACTS_CAPABILITY]). [version] defaults to the latest; a version asked for is an
-     * immutable snapshot and stays in memory, the latest is read each time.
+     * immutable snapshot and stays in memory, the latest is read each time. [type] is the listed
+     * type: an answer of another type is [SessionArtifactOpenResult.NotAnArtifact] before any byte is
+     * read. [sha256] is the listed digest of that version: a kept copy with another digest is not used
+     * and is replaced.
      */
-    suspend fun openSessionArtifact(sessionId: String, artifactId: String, version: Int? = null): SessionArtifactOpenResult =
+    suspend fun openSessionArtifact(
+        sessionId: String,
+        artifactId: String,
+        version: Int? = null,
+        type: ArtifactType? = null,
+        sha256: String? = null,
+    ): SessionArtifactOpenResult =
         SessionArtifactOpenResult.Unsupported
 
     /**

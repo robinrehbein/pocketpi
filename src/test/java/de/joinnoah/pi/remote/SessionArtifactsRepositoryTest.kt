@@ -147,8 +147,14 @@ class SessionArtifactsRepositoryTest {
         return result.await()
     }
 
-    private suspend fun TestScope.open(repository: DefaultRemoteRepository, version: Int? = 2, artifactId: String = id): SessionArtifactOpenResult {
-        val result = async { repository.openSessionArtifact("session", artifactId, version) }
+    private suspend fun TestScope.open(
+        repository: DefaultRemoteRepository,
+        version: Int? = 2,
+        artifactId: String = id,
+        type: ArtifactType? = null,
+        sha256: String? = null,
+    ): SessionArtifactOpenResult {
+        val result = async { repository.openSessionArtifact("session", artifactId, version, type, sha256) }
         advanceUntilIdle()
         return result.await()
     }
@@ -333,6 +339,72 @@ class SessionArtifactsRepositoryTest {
         val other = async { repository.openSessionArtifact("other", id, 1) }
         advanceUntilIdle()
         assertEquals(SessionArtifactOpenResult.Unavailable, other.await())
+        assertTrue(transport.artifactRequests().isEmpty())
+    }
+
+    @Test
+    fun aKeptCopyWithAnotherDigestThanTheListedOneIsReplaced() = runTest {
+        val transport = Transport()
+        val repository = connected(transport)
+        val first = open(repository, 2, sha256 = digest) as SessionArtifactOpenResult.Text
+        val count = transport.media().size
+        // The listed digest matches: the kept copy answers.
+        assertSame(first.loaded, (open(repository, 2, sha256 = digest) as SessionArtifactOpenResult.Text).loaded)
+        assertEquals(count, transport.media().size)
+        // The list now names another digest for the same version: the stale copy never wins.
+        content = "<title>Changed</title>".toByteArray()
+        val fresh = open(repository, 2, sha256 = digest) as SessionArtifactOpenResult.Text
+        assertTrue(transport.media().size > count)
+        assertEquals("<title>Changed</title>", fresh.loaded.html)
+        assertEquals(digest, fresh.loaded.sha256)
+        // The replacement is what is kept now.
+        val after = transport.media().size
+        assertSame(fresh.loaded, (open(repository, 2, sha256 = digest) as SessionArtifactOpenResult.Text).loaded)
+        assertEquals(after, transport.media().size)
+    }
+
+    @Test
+    fun galleryCacheKeysNeverCollideWithAProjectFileOfTheSameName() = runTest {
+        val transport = Transport()
+        val repository = connected(transport)
+        val logical = "artifacts/$id/2.html"
+        // A project file at the logical path is read through session.files.media first.
+        val file = async { repository.readProjectArtifact("session", logical) }
+        advanceUntilIdle()
+        assertTrue(file.await() is ProjectArtifactResult.Loaded)
+        assertTrue(transport.artifactRequests().isEmpty())
+        // The artifact open must not be answered from that copy.
+        assertTrue(open(repository, 2) is SessionArtifactOpenResult.Text)
+        assertEquals(1, transport.artifactRequests().size)
+        // And the other way round: the kept artifact never answers a project file read.
+        content = "<title>File</title>".toByteArray()
+        val again = async { repository.readProjectArtifact("session", logical, fresh = false) }
+        advanceUntilIdle()
+        assertTrue((again.await() as ProjectArtifactResult.Loaded).html.contains("Grüße"))
+        assertEquals(1, transport.artifactRequests().size)
+        assertTrue(artifactCachePath(logical).startsWith("\u0000"))
+        assertFalse(validMediaPath(artifactCachePath(logical)))
+    }
+
+    @Test
+    fun anAnsweredTypeOtherThanTheListedOneEndsBeforeAnyByteIsRead() = runTest {
+        val transport = Transport()
+        val repository = connected(transport)
+        assertEquals(SessionArtifactOpenResult.NotAnArtifact, open(repository, 2, type = ArtifactType.SVG))
+        assertTrue(transport.sent.none { it.text("type") == "session.files.media.get" })
+        // A raster answer is no artifact, whatever the path says.
+        transport.mime = "image/png"
+        transport.path = { "artifacts/$id/2.html" }
+        assertEquals(SessionArtifactOpenResult.NotAnArtifact, open(repository, null))
+        assertTrue(transport.sent.none { it.text("type") == "session.files.media.get" })
+    }
+
+    @Test
+    fun aVersionAboveTheLimitIsUnavailableAndSendsNothing() = runTest {
+        val transport = Transport()
+        val repository = connected(transport)
+        assertEquals(SessionArtifactOpenResult.Unavailable, open(repository, (MAX_ARTIFACT_VERSION + 1).toInt()))
+        assertEquals(SessionArtifactOpenResult.Unavailable, open(repository, Int.MAX_VALUE))
         assertTrue(transport.artifactRequests().isEmpty())
     }
 }

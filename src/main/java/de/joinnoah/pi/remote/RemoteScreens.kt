@@ -606,6 +606,9 @@ internal fun RemoteScreen(
     var settingsSheetRequested by remember(key) { mutableStateOf(false) }
     var treeSheetRequested by remember(key) { mutableStateOf(false) }
     var artifactsSheetRequested by remember(key) { mutableStateOf(false) }
+    // A sheet closed by a lost connection or capability must not reappear by itself after a reconnect.
+    val artifactsAvailable = canShowArtifacts(state)
+    LaunchedEffect(artifactsAvailable) { if (!artifactsAvailable) artifactsSheetRequested = false }
     /**
      * Runs the draft when it names an available [LocalCommand] and clears it; false leaves the draft
      * for the normal send, which reports unknown or unavailable commands.
@@ -1927,7 +1930,15 @@ internal fun RemoteScreen(
                         SessionArtifactsSheet(
                             sessionId = treeSessionId,
                             list = { treeChat.listSessionArtifacts(treeSessionId) },
-                            open = { artifactId, version -> treeChat.openSessionArtifact(treeSessionId, artifactId, version) },
+                            open = { artifact, listed ->
+                                // The listed version is pinned to the listed digest; a reload takes the latest.
+                                treeChat.openSessionArtifact(
+                                    treeSessionId, artifact.id,
+                                    if (listed) artifact.version else null,
+                                    artifact.type,
+                                    if (listed) artifact.sha256 else null,
+                                )
+                            },
                             onDismiss = { artifactsSheetRequested = false },
                         )
                     ChatComposer(

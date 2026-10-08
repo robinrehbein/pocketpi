@@ -53,6 +53,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -93,17 +95,20 @@ internal sealed interface ArtifactCardContent {
     class Problem(@StringRes val message: Int, val retryable: Boolean) : ArtifactCardContent
 }
 
-/** Opens [artifact] at the version the list named, so the card and its viewer show the same snapshot. */
+/**
+ * Opens [artifact] at the version, type and digest the list named, so the card and its viewer show
+ * the same snapshot.
+ */
 internal suspend fun loadArtifactCard(
     sessionId: String,
     artifact: SessionArtifact,
-    open: suspend (artifactId: String, version: Int?) -> SessionArtifactOpenResult,
+    open: suspend (artifact: SessionArtifact, listed: Boolean) -> SessionArtifactOpenResult,
 ): ArtifactCardContent =
-    when (val result = open(artifact.id, artifact.version)) {
+    when (val result = open(artifact, true)) {
         is SessionArtifactOpenResult.Text -> ArtifactCardContent.Text(result.type, result.loaded)
         is SessionArtifactOpenResult.Svg -> {
             val image = result.image
-            val key = ProjectImageBitmaps.Key(sessionId, image.path, image.sha256, PROJECT_IMAGE_CARD_EDGE)
+            val key = ProjectImageBitmaps.Key(sessionId, artifactCachePath(image.path), image.sha256, PROJECT_IMAGE_CARD_EDGE)
             val cached = ProjectImageBitmaps[key]
             when (val decoded = if (cached != null) ProjectImageDecode.Ready(cached) else decodeProjectImage(image, PROJECT_IMAGE_CARD_EDGE)) {
                 is ProjectImageDecode.Ready -> {
@@ -127,12 +132,12 @@ internal suspend fun loadArtifactCard(
 internal fun artifactImageSource(
     sessionId: String,
     artifact: SessionArtifact,
-    open: suspend (artifactId: String, version: Int?) -> SessionArtifactOpenResult,
+    open: suspend (artifact: SessionArtifact, listed: Boolean) -> SessionArtifactOpenResult,
 ) =
     ProjectImageSource(
         sessionId, connected = true, capabilitiesKnown = true, supported = true,
         read = { _, _, _ ->
-            when (val result = open(artifact.id, artifact.version)) {
+            when (val result = open(artifact, true)) {
                 is SessionArtifactOpenResult.Svg -> result.image
                 SessionArtifactOpenResult.TooLarge -> ProjectImageResult.TooLarge
                 SessionArtifactOpenResult.NotAnArtifact, is SessionArtifactOpenResult.Text -> ProjectImageResult.NotAnImage
@@ -151,6 +156,16 @@ private fun SessionArtifact.typeLabel(): Int =
         ArtifactType.MERMAID -> R.string.remote_artifacts_type_mermaid
     }
 
+internal fun relativeAge(updatedAt: Long): String =
+    DateUtils.getRelativeTimeSpanString(updatedAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString()
+
+/**
+ * The file name Share and Save offer: the artifact's title, kept to a plain name, and the extension
+ * of its type, never the logical `<version>.html` of the wire path.
+ */
+internal fun artifactFileName(title: String, type: ArtifactType): String =
+    "${title.replace('/', '-').replace('\\', '-')}.${type.mime.extension}"
+
 /**
  * `/artifacts`: the HTML pages, SVG images and Mermaid diagrams recorded for the session, newest
  * first, as a grid of live thumbnails. [list] reads the list and [open] one artifact; a tap opens
@@ -161,7 +176,7 @@ private fun SessionArtifact.typeLabel(): Int =
 internal fun SessionArtifactsSheet(
     sessionId: String,
     list: suspend () -> SessionArtifactListResult,
-    open: suspend (artifactId: String, version: Int?) -> SessionArtifactOpenResult,
+    open: suspend (artifact: SessionArtifact, listed: Boolean) -> SessionArtifactOpenResult,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -171,7 +186,10 @@ internal fun SessionArtifactsSheet(
         sheetState = sheetState,
         modifier = Modifier.testTag("artifactsSheet"),
     ) {
-        SessionArtifactsGallery(sessionId, list, open, Modifier.heightIn(max = maxHeight).navigationBarsPadding())
+        SessionArtifactsGallery(
+            sessionId, list, open,
+            modifier = Modifier.heightIn(max = maxHeight).navigationBarsPadding(),
+        )
     }
 }
 
@@ -180,8 +198,10 @@ internal fun SessionArtifactsSheet(
 internal fun SessionArtifactsGallery(
     sessionId: String,
     list: suspend () -> SessionArtifactListResult,
-    open: suspend (artifactId: String, version: Int?) -> SessionArtifactOpenResult,
+    open: suspend (artifact: SessionArtifact, listed: Boolean) -> SessionArtifactOpenResult,
     modifier: Modifier = Modifier,
+    /** How long ago an artifact changed; injectable so tests do not depend on the clock or locale. */
+    formatAge: (updatedAt: Long) -> String = ::relativeAge,
 ) {
     var state by remember { mutableStateOf<ArtifactGalleryState>(ArtifactGalleryState.Loading) }
     var reload by remember { mutableIntStateOf(0) }
@@ -209,7 +229,8 @@ internal fun SessionArtifactsGallery(
             }
         }
         when (val current = state) {
-            ArtifactGalleryState.Loading ->
+            ArtifactGalleryState.Loading -> {
+                val loadingText = stringResource(R.string.remote_artifacts_loading)
                 Column(
                     Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
                         .semantics { liveRegion = LiveRegionMode.Polite }
@@ -217,8 +238,9 @@ internal fun SessionArtifactsGallery(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(stringResource(R.string.remote_artifacts_loading))
-                    CircularProgressIndicator(Modifier.size(24.dp))
+                    CircularProgressIndicator(Modifier.size(24.dp).semantics { contentDescription = loadingText })
                 }
+            }
             ArtifactGalleryState.Unsupported -> GalleryProblem(R.string.remote_artifacts_unsupported, false) { reload++ }
             ArtifactGalleryState.Unavailable -> GalleryProblem(R.string.remote_artifacts_unavailable, true) { reload++ }
             ArtifactGalleryState.Failed -> GalleryProblem(R.string.remote_artifacts_failed, true) { reload++ }
@@ -238,7 +260,7 @@ internal fun SessionArtifactsGallery(
                         modifier = Modifier.weight(1f, fill = false).testTag("artifactGrid"),
                     ) {
                         items(current.list.artifacts, key = { it.id }) { artifact ->
-                            ArtifactCard(sessionId, artifact, open)
+                            ArtifactCard(sessionId, artifact, open, formatAge)
                         }
                         if (current.list.truncated)
                             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -260,10 +282,16 @@ private fun GalleryProblem(@StringRes message: Int, retryable: Boolean, onRetry:
         Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        val text = stringResource(message)
         Text(
-            stringResource(message),
+            text,
             color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.testTag("artifactsError"),
+            modifier =
+                Modifier.semantics {
+                        liveRegion = LiveRegionMode.Polite
+                        error(text)
+                    }
+                    .testTag("artifactsError"),
         )
         if (retryable)
             OutlinedButton(onClick = onRetry, modifier = Modifier.fillMaxWidth().testTag("artifactsRetry")) {
@@ -276,7 +304,8 @@ private fun GalleryProblem(@StringRes message: Int, retryable: Boolean, onRetry:
 private fun ArtifactCard(
     sessionId: String,
     artifact: SessionArtifact,
-    open: suspend (artifactId: String, version: Int?) -> SessionArtifactOpenResult,
+    open: suspend (artifact: SessionArtifact, listed: Boolean) -> SessionArtifactOpenResult,
+    formatAge: (Long) -> String,
 ) {
     var content by remember(artifact.id, artifact.version) { mutableStateOf<ArtifactCardContent>(ArtifactCardContent.Loading) }
     var requests by remember(artifact.id, artifact.version) { mutableIntStateOf(0) }
@@ -287,7 +316,7 @@ private fun ArtifactCard(
     LaunchedEffect(artifact.id, artifact.version, requests) {
         if (content !is ArtifactCardContent.Picture && content !is ArtifactCardContent.Text) {
             content = ArtifactCardContent.Loading
-            content = loadArtifactCard(sessionId, artifact) { id, version -> latestOpen(id, version) }
+            content = loadArtifactCard(sessionId, artifact) { item, listed -> latestOpen(item, listed) }
         }
     }
     val label = stringResource(R.string.remote_artifacts_open, artifact.title)
@@ -297,10 +326,20 @@ private fun ArtifactCard(
             R.string.remote_artifacts_meta,
             stringResource(artifact.typeLabel()),
             artifact.version,
-            DateUtils.getRelativeTimeSpanString(artifact.updatedAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
-                .toString(),
+            formatAge(artifact.updatedAt),
         )
-    Column(Modifier.fillMaxWidth().testTag("artifactCard-${artifact.id}"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    // One button per card: the picture and the caption read and act as a single target.
+    Column(
+        Modifier.fillMaxWidth()
+            .testTag("artifactCard-${artifact.id}")
+            .then(
+                if (ready)
+                    Modifier.clickable(role = Role.Button, onClickLabel = label) { viewing = true }
+                        .semantics(mergeDescendants = true) {}
+                else Modifier
+            ),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
         Surface(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
             color = MaterialTheme.colorScheme.surfaceContainer,
@@ -312,8 +351,6 @@ private fun ArtifactCard(
                         if (current.type == ArtifactType.MERMAID) ArtifactKind.Mermaid else ArtifactKind.Html,
                         current.loaded.html,
                         current.loaded.sha256,
-                        onClickLabel = label,
-                        onClick = { viewing = true },
                         failed = {
                             Text(
                                 artifact.title,
@@ -327,14 +364,13 @@ private fun ArtifactCard(
                 is ArtifactCardContent.Picture ->
                     Image(
                         current.bitmap,
-                        contentDescription = artifact.title,
+                        // The caption below names it.
+                        contentDescription = null,
                         contentScale = ContentScale.Fit,
-                        modifier =
-                            Modifier.fillMaxWidth().aspectRatio(THUMBNAIL_ASPECT)
-                                .clickable(role = Role.Button, onClickLabel = label) { viewing = true }
-                                .testTag("artifactPicture-${artifact.id}"),
+                        modifier = Modifier.fillMaxWidth().aspectRatio(THUMBNAIL_ASPECT).testTag("artifactPicture-${artifact.id}"),
                     )
-                else ->
+                else -> {
+                    val loading = stringResource(R.string.remote_artifacts_card_loading)
                     Box(Modifier.fillMaxWidth().aspectRatio(THUMBNAIL_ASPECT), contentAlignment = Alignment.Center) {
                         if (current is ArtifactCardContent.Problem)
                             Column(
@@ -352,15 +388,15 @@ private fun ArtifactCard(
                                         Text(stringResource(R.string.remote_artifacts_card_retry))
                                     }
                             }
-                        else CircularProgressIndicator(Modifier.size(24.dp))
+                        else
+                            CircularProgressIndicator(
+                                Modifier.size(24.dp).semantics { contentDescription = loading }.testTag("artifactCardLoading-${artifact.id}")
+                            )
                     }
+                }
             }
         }
-        Column(
-            Modifier.fillMaxWidth().then(
-                if (ready) Modifier.clickable(role = Role.Button, onClickLabel = label) { viewing = true } else Modifier
-            ),
-        ) {
+        Column(Modifier.fillMaxWidth()) {
             Text(artifact.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 meta,
@@ -375,17 +411,18 @@ private fun ArtifactCard(
     if (viewing && shown is ArtifactCardContent.Text)
         ArtifactViewer(
             kind = if (shown.type == ArtifactType.MERMAID) ArtifactKind.Mermaid else ArtifactKind.Html,
-            path = shown.loaded.path,
+            // Share and Save name the file after the title, not the wire path's `<version>.html`.
+            path = artifactFileName(artifact.title, shown.type),
             title = artifact.title,
             initialText = shown.loaded.html,
             // Reload asks for the latest version, which may be newer than the card's.
-            reload = { (open(artifact.id, null) as? SessionArtifactOpenResult.Text)?.loaded?.html },
+            reload = { (open(artifact, false) as? SessionArtifactOpenResult.Text)?.loaded?.html },
             onDismiss = { viewing = false },
         )
     if (viewing && shown is ArtifactCardContent.Picture) {
         val source = remember(sessionId, artifact.id, artifact.version) { artifactImageSource(sessionId, artifact, open) }
         ImageViewer(
-            "${artifact.title.replace('/', '-')}.svg",
+            artifactFileName(artifact.title, ArtifactType.SVG),
             shown.image.sha256,
             shown.image.mimeType,
             source,
