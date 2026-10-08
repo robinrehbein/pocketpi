@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "session.files.media.v1 wire examples. The app must see session.files.media.v1 in the projects.list capabilities route before sending session.files.media or session.files.media.get. A path the parser accepts may still be answered invalid_path by the host (denied name, symlink, outside the session folder). Result paths are always relative.",
+  "note": "session.files.media.v1 wire examples. The app must see session.files.media.v1 in the projects.list capabilities route before sending session.files.media or session.files.media.get. A path the parser accepts may still be answered invalid_path by the host (denied name, symlink, outside the session folder). Result paths are always relative. text/html results (session.files.artifact.v1, .html and .htm files) are capped at 5 MiB.",
   "valid": [
     {
       "name": "media-command-relative",
@@ -225,6 +225,40 @@
             "session.files.v1",
             "session.files.media.v1"
           ]
+        }
+      }
+    },
+    {
+      "name": "media-result-html",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "out/report.html",
+          "mediaId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "mimeType": "text/html",
+          "totalBytes": 1234,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "media-result-html-max",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "out/report.htm",
+          "mediaId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "mimeType": "text/html",
+          "totalBytes": 5242880,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       }
     }
@@ -487,7 +521,7 @@
       }
     },
     {
-      "name": "media-result-html-mime",
+      "name": "media-result-text-mime",
       "payload": {
         "type": "result",
         "requestId": "req-1",
@@ -497,7 +531,7 @@
           "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
           "path": "build/shot.png",
           "mediaId": "AAAAAAAAAAAAAAAAAAAAAA",
-          "mimeType": "text/html",
+          "mimeType": "text/plain",
           "totalBytes": 1234,
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
@@ -816,6 +850,40 @@
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "data": "aGVsbG8h",
           "mimeType": "image/png"
+        }
+      }
+    },
+    {
+      "name": "media-result-html-over-cap",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "out/report.html",
+          "mediaId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "mimeType": "text/html",
+          "totalBytes": 5242881,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "media-result-html-empty",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "out/report.html",
+          "mediaId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "mimeType": "text/html",
+          "totalBytes": 0,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
       }
     }

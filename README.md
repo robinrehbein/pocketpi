@@ -189,7 +189,7 @@ copy from noah-monorepo commit `748465c46c866a4d9d3c78754bff6e860955fdf8`, the m
 request #647. `session-tree-v1.json` (browsing, navigating and forking the session tree) comes
 from commit `1b6b8d3871d52b66b876e95f080f69bf00bb4309`, the merge of pull request #650.
 `files-media-v1.json` (agent images, read by path from the session folder) is a byte-for-byte copy
-from noah-monorepo commit `9ffee72201a85482a80738e86a2f9eae968b1b79`, the merge of pull request #652. When the
+from noah-monorepo commit `PLACEHOLDER_ARTIFACT_COMMIT` (agent images, plus `text/html` artifacts behind `session.files.artifact.v1`). When the
 upstream protocol fixtures change, copy the changed files into
 `src/test/resources/`, compare their bytes with the upstream source, and run
 `./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and

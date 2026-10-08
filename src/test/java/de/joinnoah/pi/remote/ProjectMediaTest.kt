@@ -60,10 +60,18 @@ class ProjectMediaTest {
         val valid = entries("valid").map { it.obj("payload") }.filter { it.optionalText("type") == "result" && it.flag("ok") }
             .map { it.obj("data") }
         val starts = valid.filter { it.optionalText("kind") == "files.media" }
-        assertEquals(5, starts.size)
+        assertEquals(7, starts.size)
         starts.forEach { parseFilesMedia(it, sessionId, it.text("path")) }
         val svg = parseFilesMedia(starts[1], sessionId, "docs/logo.svg") as MediaStart.Ready
         assertEquals(MediaMime.SVG, svg.meta.mime)
+        val html = starts.filter { it.optionalText("mimeType") == MediaMime.HTML.wire }
+        assertEquals(2, html.size)
+        for (data in html) {
+            val ready = parseFilesMedia(data, sessionId, data.text("path")) as MediaStart.Ready
+            assertEquals(MediaMime.HTML, ready.meta.mime)
+            assertTrue(ready.meta.mime.isHtml)
+        }
+        assertEquals(MAX_MEDIA_HTML_BYTES, html.maxOf { it.long("totalBytes") })
         assertEquals(MediaOmitted.TOO_LARGE, (parseFilesMedia(starts[3], sessionId, "build/shot.png") as MediaStart.Omitted).reason)
         // An absolute request is answered with the relative tail.
         parseFilesMedia(starts[0], sessionId, "/Users/robin/project/build/shot.png")
@@ -85,7 +93,7 @@ class ProjectMediaTest {
             }
             assertThrows(data.toString().take(300), Exception::class.java) { bad() }
         }
-        assertEquals(23, checked)
+        assertEquals(25, checked)
     }
 
     // ---- download ---------------------------------------------------------------------------

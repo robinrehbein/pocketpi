@@ -273,6 +273,11 @@ internal class ChatViewModel(
         if (cleared || !matches(repository.state.value)) ProjectImageResult.Unavailable
         else repository.readProjectImage(sessionId, path, fresh)
 
+    /** Reads an HTML file the agent mentioned; a destination that is no longer the shown chat gets nothing. */
+    suspend fun readProjectArtifact(sessionId: String, path: String, fresh: Boolean = false): ProjectArtifactResult =
+        if (cleared || !matches(repository.state.value)) ProjectArtifactResult.Unavailable
+        else repository.readProjectArtifact(sessionId, path, fresh)
+
     /** Exports this chat's session; a destination that is no longer the shown chat gets a failure. */
     suspend fun exportSession(sessionId: String): ExportResult =
         if (cleared || !matches(repository.state.value)) ExportResult.Failed(ExportFailure.FAILED)

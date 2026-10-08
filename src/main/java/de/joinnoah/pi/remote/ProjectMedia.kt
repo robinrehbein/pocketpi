@@ -11,23 +11,35 @@ import kotlinx.serialization.json.JsonObject
  */
 internal const val FILES_MEDIA_CAPABILITY = "session.files.media.v1"
 
+/** HTML artifacts (`text/html` results of `session.files.media`); advertised on the same route. */
+internal const val FILES_ARTIFACT_CAPABILITY = "session.files.artifact.v1"
+
 internal const val MAX_MEDIA_RASTER_BYTES = 20L * 1024 * 1024
 internal const val MAX_MEDIA_SVG_BYTES = 2L * 1024 * 1024
+internal const val MAX_MEDIA_HTML_BYTES = 5L * 1024 * 1024
 internal const val MEDIA_CHUNK_BYTES = 49_152
 private const val MAX_MEDIA_CHUNK_CHARS = 65_536
 private const val MAX_MEDIA_PATH_BYTES = 4096
 private val MEDIA_SHA256 = Regex("[a-f0-9]{64}")
 
-/** The image types the host reports; the type comes from the bytes, never from the name. */
+/** The media types the host reports; the type comes from the bytes, never from the name. */
 internal enum class MediaMime(val wire: String, val extension: String) {
     PNG("image/png", "png"),
     JPEG("image/jpeg", "jpg"),
     WEBP("image/webp", "webp"),
     GIF("image/gif", "gif"),
-    SVG("image/svg+xml", "svg");
+    SVG("image/svg+xml", "svg"),
+    HTML("text/html", "html");
 
     val isSvg: Boolean get() = this == SVG
-    val byteLimit: Long get() = if (isSvg) MAX_MEDIA_SVG_BYTES else MAX_MEDIA_RASTER_BYTES
+    val isHtml: Boolean get() = this == HTML
+    val byteLimit: Long
+        get() =
+            when (this) {
+                SVG -> MAX_MEDIA_SVG_BYTES
+                HTML -> MAX_MEDIA_HTML_BYTES
+                else -> MAX_MEDIA_RASTER_BYTES
+            }
 
     companion object {
         fun fromWire(value: String): MediaMime? = entries.firstOrNull { it.wire == value }
@@ -278,6 +290,87 @@ internal class ProjectImageByteCache(private val capacity: Long = 32L * 1024 * 1
         val iterator = entries.entries.iterator()
         while (size > capacity && iterator.hasNext()) {
             size -= iterator.next().value.bytes.size
+            iterator.remove()
+        }
+    }
+
+    @Synchronized
+    fun clear() {
+        entries.clear()
+        size = 0
+    }
+}
+
+/** Outcome of [RemoteRepository.readProjectArtifact]; [Loaded] passed the length, SHA-256 and UTF-8 checks. */
+sealed interface ProjectArtifactResult {
+    class Loaded(
+        /** The normalised path relative to the session folder. */
+        val path: String,
+        val sha256: String,
+        /** The document text, UTF-8 decoded without a leading byte order mark. */
+        val html: String,
+        /** The size of the file on the Mac. */
+        val byteCount: Int,
+    ) : ProjectArtifactResult
+
+    /** No request was sent: the host lacks [FILES_ARTIFACT_CAPABILITY]. */
+    data object UnsupportedHost : ProjectArtifactResult
+
+    /** Not found, not allowed, or not valid; asking again returns the same answer. */
+    data object Unavailable : ProjectArtifactResult
+
+    /** The host holds the file but it is over the size limit. */
+    data object TooLarge : ProjectArtifactResult
+
+    /** The file is not an HTML document: not HTML to the host, or not valid UTF-8 text here. */
+    data object NotAnArtifact : ProjectArtifactResult
+
+    /** The host is serving its limit of files; asking again in a moment works. */
+    data object Busy : ProjectArtifactResult
+
+    /** A dropped connection, a failing host, or a timeout; asking again may work. */
+    data object ConnectionFailure : ProjectArtifactResult
+
+    /** The host replied outside the protocol. */
+    data object Malformed : ProjectArtifactResult
+}
+
+/**
+ * Decodes artifact [bytes] strictly as UTF-8. Null for malformed UTF-8 or any NUL, whatever the
+ * host sniffed; a leading byte order mark is dropped.
+ */
+internal fun decodeArtifactHtml(bytes: ByteArray): String? {
+    if (bytes.isEmpty() || bytes.any { it == 0.toByte() }) return null
+    val text =
+        try {
+            Charsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes))
+                .toString()
+        } catch (e: java.nio.charset.CharacterCodingException) {
+            return null
+        }
+    return text.removePrefix("\uFEFF")
+}
+
+/** Verified artifact documents kept in memory only, evicting the least recently used. Never written to disk. */
+internal class ProjectArtifactCache(private val capacity: Long = 12L * 1024 * 1024) {
+    data class Key(val sessionId: String, val path: String)
+
+    private val entries = LinkedHashMap<Key, ProjectArtifactResult.Loaded>(16, 0.75f, true)
+    private var size = 0L
+
+    @Synchronized operator fun get(key: Key): ProjectArtifactResult.Loaded? = entries[key]
+
+    @Synchronized
+    operator fun set(key: Key, value: ProjectArtifactResult.Loaded) {
+        if (value.byteCount > capacity) return
+        entries.put(key, value)?.let { size -= it.byteCount }
+        size += value.byteCount
+        val iterator = entries.entries.iterator()
+        while (size > capacity && iterator.hasNext()) {
+            size -= iterator.next().value.byteCount
             iterator.remove()
         }
     }

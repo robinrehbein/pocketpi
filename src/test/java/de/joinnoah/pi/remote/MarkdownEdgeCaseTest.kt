@@ -68,12 +68,12 @@ class MarkdownEdgeCaseTest {
 
     @Test fun fencesDoNotConsumeInlineBackticksAndSupportLongAndTildeFences() {
         assertEquals(listOf(MarkdownSegment("Text ```inline``` bleibt", false)), markdownSegments("Text ```inline``` bleibt"))
-        assertEquals(listOf(MarkdownSegment("A | B\n--- | ---", true)), markdownSegments("~~~md\nA | B\n--- | ---\n~~~"))
-        assertEquals(listOf(MarkdownSegment("```\nA | B", true)), markdownSegments("````md\n```\nA | B\n````"))
+        assertEquals(listOf(MarkdownSegment("A | B\n--- | ---", true, "md")), markdownSegments("~~~md\nA | B\n--- | ---\n~~~"))
+        assertEquals(listOf(MarkdownSegment("```\nA | B", true, "md")), markdownSegments("````md\n```\nA | B\n````"))
     }
 
     @Test fun streamingCodeRetainsFirstContentLine() {
-        assertEquals(listOf(MarkdownSegment("erste Zeile", true)), markdownSegments("```kotlin\nerste Zeile"))
-        assertEquals(listOf(MarkdownSegment("erste\nzweite", true)), markdownSegments("```\nerste\nzweite"))
+        assertEquals(listOf(MarkdownSegment("erste Zeile", true, "kotlin", false)), markdownSegments("```kotlin\nerste Zeile"))
+        assertEquals(listOf(MarkdownSegment("erste\nzweite", true, null, false)), markdownSegments("```\nerste\nzweite"))
     }
 }

@@ -17,6 +17,11 @@ internal sealed interface MarkdownBlock {
     data class Line(val text: String) : MarkdownBlock
     /** An image of the session folder on a line of its own; [path] is relative (or POSIX absolute). */
     data class Image(val alt: String, val path: String) : MarkdownBlock
+    /**
+     * A link to a local HTML file on a line of its own. [line] is the source line, so a surface that
+     * does not show artifacts renders it as the ordinary [Line] it is.
+     */
+    data class Artifact(val title: String, val path: String, val line: String) : MarkdownBlock
     data class Table(val header: List<String>, val alignment: List<TextAlign>, val rows: List<List<String>>) : MarkdownBlock
 }
 
@@ -107,7 +112,9 @@ internal fun markdownBlocks(text: String): List<MarkdownBlock> {
             blocks.add(MarkdownBlock.Table(header, alignment, rows))
         } else {
             val images = imageOnlyLine(lines[index])
+            val artifact = if (images == null) artifactOnlyLine(lines[index]) else null
             if (images != null) images.forEach { (alt, path) -> blocks.add(MarkdownBlock.Image(alt, path)) }
+            else if (artifact != null) blocks.add(MarkdownBlock.Artifact(artifact.first, artifact.second, lines[index]))
             else blocks.add(MarkdownBlock.Line(lines[index]))
             index++
         }

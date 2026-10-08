@@ -128,6 +128,7 @@ class DefaultRemoteRepository(
             SESSION_TREE_CAPABILITY,
             // Advertised only on the capabilities.v2 route, which the first projects.list uses.
             FILES_MEDIA_CAPABILITY,
+            FILES_ARTIFACT_CAPABILITY,
         )
     /** The request ID prefix of `projects.list`; falls back to v1 once for a host without v2. */
     private var capabilityRoute = CAPABILITIES_V2_ROUTE
@@ -852,6 +853,7 @@ class DefaultRemoteRepository(
                 attachmentBytes.clear()
                 SentImageThumbnails.clear()
                 projectImageBytes.clear()
+                projectArtifacts.clear()
                 ProjectImageBitmaps.clear()
             }
             cachedProjectChats = cachedProjectChats?.takeIf { it.first == host.routeId }
@@ -1853,6 +1855,7 @@ class DefaultRemoteRepository(
         cancelSelection()
         clearNavigationCache()
         projectImageBytes.clear()
+        projectArtifacts.clear()
         ProjectImageBitmaps.clear()
         retry?.cancel()
         generation++
@@ -1877,6 +1880,7 @@ class DefaultRemoteRepository(
         attachmentBytes.clear()
         SentImageThumbnails.clear()
         projectImageBytes.clear()
+        projectArtifacts.clear()
         ProjectImageBitmaps.clear()
         removedRoutes += routeId
         savedNavigation.remove(routeId)
@@ -4459,6 +4463,19 @@ class DefaultRemoteRepository(
         }
     }
 
+    /** One request at a time, each start at least 200 ms after the last, retries included. */
+    private suspend fun spacedMediaRequest(epoch: Long, type: String, vararg fields: Pair<String, Any?>): JsonObject =
+        projectImageReadMutex.withLock {
+            lastProjectImageRead?.let {
+                val wait = ATTACHMENT_READ_SPACING_MILLIS - (now() - it)
+                if (wait > 0) delay(wait.coerceAtMost(ATTACHMENT_READ_SPACING_MILLIS))
+            }
+            lastProjectImageRead = now()
+            // Once sent, the request is awaited even if the caller leaves, so the next one
+            // never starts while the host may still be answering this one.
+            withContext(NonCancellable) { request(type, epoch, *fields) }
+        }
+
     private suspend fun fetchProjectImage(
         epoch: Long,
         sessionId: String,
@@ -4466,18 +4483,8 @@ class DefaultRemoteRepository(
         cacheKey: ProjectImageByteCache.Key,
         fresh: Boolean,
     ): ProjectImageResult {
-        // One request at a time, each start at least 200 ms after the last, retries included.
         suspend fun spaced(type: String, vararg fields: Pair<String, Any?>): JsonObject =
-            projectImageReadMutex.withLock {
-                lastProjectImageRead?.let {
-                    val wait = ATTACHMENT_READ_SPACING_MILLIS - (now() - it)
-                    if (wait > 0) delay(wait.coerceAtMost(ATTACHMENT_READ_SPACING_MILLIS))
-                }
-                lastProjectImageRead = now()
-                // Once sent, the request is awaited even if the caller leaves, so the next one
-                // never starts while the host may still be answering this one.
-                withContext(NonCancellable) { request(type, epoch, *fields) }
-            }
+            spacedMediaRequest(epoch, type, *fields)
         return try {
             when (
                 val download =
@@ -4496,7 +4503,8 @@ class DefaultRemoteRepository(
                         MediaOmitted.NOT_AN_IMAGE -> ProjectImageResult.NotAnImage
                     }
                 is MediaDownload.Ready ->
-                    ProjectImageResult.Loaded(
+                    if (download.meta.mime.isHtml) ProjectImageResult.NotAnImage
+                    else ProjectImageResult.Loaded(
                         download.meta.path,
                         download.meta.mime.wire,
                         download.meta.sha256,
@@ -4519,6 +4527,108 @@ class DefaultRemoteRepository(
             ProjectImageResult.Failed
         }
     }
+
+    // ---- HTML artifacts (session.files.artifact.v1) ---------------------------------------
+
+    private class ProjectArtifactRead {
+        lateinit var job: Deferred<ProjectArtifactResult>
+        var waiters = 0
+    }
+
+    private val projectArtifacts = ProjectArtifactCache()
+    private val projectArtifactReads = mutableMapOf<Triple<String, String, Boolean>, ProjectArtifactRead>()
+
+    override suspend fun readProjectArtifact(sessionId: String, path: String, fresh: Boolean): ProjectArtifactResult {
+        if (!opaqueId(sessionId) || !validMediaPath(path) || sessionId != state.value.selection.sessionId)
+            return ProjectArtifactResult.Unavailable
+        val cacheKey = ProjectArtifactCache.Key(sessionId, path)
+        if (!fresh) projectArtifacts[cacheKey]?.let { return it }
+        val current = state.value
+        if (!current.connected) return ProjectArtifactResult.ConnectionFailure
+        if (FILES_ARTIFACT_CAPABILITY !in current.capabilities || FILES_ARTIFACT_CAPABILITY in current.unavailableCapabilities)
+            // Until projects.list has been answered the host's capabilities are not known yet.
+            return if (current.capabilitiesKnown) ProjectArtifactResult.UnsupportedHost
+            else ProjectArtifactResult.ConnectionFailure
+        val epoch = selectionEpoch
+        val key = Triple(sessionId, path, fresh)
+        val read =
+            synchronized(projectArtifactReads) {
+                projectArtifactReads
+                    .getOrPut(key) {
+                        val entry = ProjectArtifactRead()
+                        entry.job =
+                            scope.async(start = CoroutineStart.LAZY) {
+                                try {
+                                    projectImageDownloads.withPermit {
+                                        fetchProjectArtifact(epoch, sessionId, path, cacheKey)
+                                    }
+                                } finally {
+                                    synchronized(projectArtifactReads) { projectArtifactReads.remove(key, entry) }
+                                }
+                            }
+                        entry
+                    }
+                    .also { it.waiters++ }
+            }
+        read.job.start()
+        try {
+            return read.job.await()
+        } catch (e: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            return ProjectArtifactResult.ConnectionFailure
+        } finally {
+            synchronized(projectArtifactReads) {
+                if (--read.waiters == 0 && read.job.isActive) {
+                    read.job.cancel()
+                    projectArtifactReads.remove(key, read)
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchProjectArtifact(
+        epoch: Long,
+        sessionId: String,
+        path: String,
+        cacheKey: ProjectArtifactCache.Key,
+    ): ProjectArtifactResult =
+        try {
+            when (
+                val download =
+                    downloadMedia(
+                        sessionId,
+                        path,
+                        start = { spacedMediaRequest(epoch, "session.files.media", *mediaFields(sessionId, path)) },
+                        read = { mediaId, offset ->
+                            spacedMediaRequest(epoch, "session.files.media.get", *mediaGetFields(sessionId, mediaId, offset))
+                        },
+                    )
+            ) {
+                is MediaDownload.Omitted ->
+                    when (download.reason) {
+                        MediaOmitted.TOO_LARGE -> ProjectArtifactResult.TooLarge
+                        MediaOmitted.NOT_AN_IMAGE -> ProjectArtifactResult.NotAnArtifact
+                    }
+                is MediaDownload.Ready -> {
+                    // The host's sniff is not trusted: the bytes must be text on this side as well.
+                    val html = if (download.meta.mime.isHtml) decodeArtifactHtml(download.bytes) else null
+                    if (html == null) ProjectArtifactResult.NotAnArtifact
+                    else
+                        ProjectArtifactResult.Loaded(download.meta.path, download.meta.sha256, html, download.bytes.size)
+                            .also { projectArtifacts[cacheKey] = it }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: MediaException) {
+            when (e.failure) {
+                MediaFailure.UNAVAILABLE -> ProjectArtifactResult.Unavailable
+                MediaFailure.BUSY -> ProjectArtifactResult.Busy
+                MediaFailure.FAILED -> ProjectArtifactResult.ConnectionFailure
+            }
+        } catch (e: Exception) {
+            ProjectArtifactResult.ConnectionFailure
+        }
 
     // ---- Session export (session.export.v1) -----------------------------------------------
 

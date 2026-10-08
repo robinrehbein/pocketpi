@@ -55,7 +55,8 @@ fun MarkdownText(text: String) {
                         )
                         return@forEach
                     }
-                    val line = (block as MarkdownBlock.Line).text
+                    // Artifact cards arrive with the viewer; until then the line renders as the text it is.
+                    val line = (block as? MarkdownBlock.Artifact)?.line ?: (block as MarkdownBlock.Line).text
                     val level =
                         line
                             .takeWhile { it == '#' }
