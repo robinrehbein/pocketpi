@@ -855,6 +855,7 @@ class DefaultRemoteRepository(
                 projectImageBytes.clear()
                 projectArtifacts.clear()
                 ProjectImageBitmaps.clear()
+                ArtifactThumbnails.clear()
             }
             cachedProjectChats = cachedProjectChats?.takeIf { it.first == host.routeId }
                 ?.let { it.first to it.second.map { chat -> chat.copy(verified = false) } }
@@ -1857,6 +1858,7 @@ class DefaultRemoteRepository(
         projectImageBytes.clear()
         projectArtifacts.clear()
         ProjectImageBitmaps.clear()
+        ArtifactThumbnails.clear()
         retry?.cancel()
         generation++
         transport.close()
@@ -1882,6 +1884,7 @@ class DefaultRemoteRepository(
         projectImageBytes.clear()
         projectArtifacts.clear()
         ProjectImageBitmaps.clear()
+        ArtifactThumbnails.clear()
         removedRoutes += routeId
         savedNavigation.remove(routeId)
         queueNavigationWrite(immediate = true)

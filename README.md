@@ -204,7 +204,8 @@ delivery acceptance; those require the configured host, relay and device.
 ## Appearance
 
 PocketPi uses the official pi mark for its adaptive launcher icon and a monochrome silhouette for
-notifications. The logo attribution is included in `NOTICE` and in the APK assets.
+notifications. The logo attribution is included in `NOTICE` and in the APK assets. Mermaid (MIT) is bundled
+unmodified in `src/main/assets/mermaid/` with its license and notice.
 
 UI typography requests Samsung's installed `sec` font family, then the older
 `sec-roboto-light` family, through Compose's optional local font resolver. It retains the weights

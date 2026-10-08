@@ -46,6 +46,8 @@ class RemoteApplication : Application() {
         Thread { runCatching { ExportStorage.clear(cacheDir) } }.start()
         // Shared agent images are copies of project files; none outlives the process either.
         Thread { runCatching { ImageStorage.clear(cacheDir) } }.start()
+        // Opened or shared artifacts are copies of project files too.
+        Thread { runCatching { ArtifactStorage.clear(cacheDir) } }.start()
         settings = DefaultSettingsRepository(this)
         val attachments = AttachmentStore(this)
         val importer = AttachmentImporter(this, attachments)

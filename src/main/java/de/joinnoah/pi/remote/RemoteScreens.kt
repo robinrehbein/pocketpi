@@ -230,10 +230,13 @@ internal fun RemoteScreen(
     val projectImages =
         state.selection.sessionId?.takeIf { chatModel != null }?.let { sessionId ->
             val supported = FILES_MEDIA_CAPABILITY in state.capabilities
-            remember(chatModel, sessionId, state.connected, state.capabilitiesKnown, supported) {
+            val artifactSupported = FILES_ARTIFACT_CAPABILITY in state.capabilities
+            remember(chatModel, sessionId, state.connected, state.capabilitiesKnown, supported, artifactSupported) {
                 ProjectImageSource(
                     sessionId, state.connected, state.capabilitiesKnown, supported,
                     checkNotNull(chatModel)::readProjectImage,
+                    checkNotNull(chatModel)::readProjectArtifact,
+                    artifactSupported,
                 )
             }
         }

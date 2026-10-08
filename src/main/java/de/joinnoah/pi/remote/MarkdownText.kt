@@ -23,23 +23,9 @@ fun MarkdownText(text: String) {
             val part = segment.text
             if (segment.code) {
                 val code = part.trimEnd()
-                val clipboard = LocalClipboardManager.current
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                        Text(
-                            code,
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        TextButton(onClick = { clipboard.setText(AnnotatedString(code)) }) {
-                            Text(stringResource(R.string.remote_copy_code))
-                        }
-                    }
-                }
+                // Only assistant text has a source; a diagram elsewhere stays the code it is.
+                if (segment.isMermaid && LocalProjectImageSource.current != null) MermaidCard(code) { CodeBlock(it) }
+                else CodeBlock(code)
             } else
                 remember(part) { markdownBlocks(part) }.forEach { block ->
                     if (block is MarkdownBlock.Table) {
@@ -55,7 +41,13 @@ fun MarkdownText(text: String) {
                         )
                         return@forEach
                     }
-                    // Artifact cards arrive with the viewer; until then the line renders as the text it is.
+                    if (block is MarkdownBlock.Artifact) {
+                        val source = LocalProjectImageSource.current
+                        if (source != null) {
+                            ProjectArtifactCard(block.path, source)
+                            return@forEach
+                        }
+                    }
                     val line = (block as? MarkdownBlock.Artifact)?.line ?: (block as MarkdownBlock.Line).text
                     val level =
                         line
@@ -82,6 +74,27 @@ fun MarkdownText(text: String) {
                                 if (level != null) Modifier.semantics { heading() } else Modifier,
                         )
                 }
+        }
+    }
+}
+
+@Composable
+private fun CodeBlock(code: String) {
+    val clipboard = LocalClipboardManager.current
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            Text(
+                code,
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            TextButton(onClick = { clipboard.setText(AnnotatedString(code)) }) {
+                Text(stringResource(R.string.remote_copy_code))
+            }
         }
     }
 }
