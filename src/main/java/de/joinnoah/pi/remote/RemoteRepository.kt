@@ -339,6 +339,14 @@ interface RemoteRepository {
     suspend fun exportSession(sessionId: String): ExportResult =
         ExportResult.Failed(ExportFailure.UNSUPPORTED)
 
+    /**
+     * Reloads pi's extensions, skills, prompt templates, themes and context files in [sessionId]
+     * (`session.reload`, only with [RELOAD_CAPABILITY] and for host-owned sessions), then refreshes
+     * the chat and the command catalog.
+     */
+    suspend fun reloadSession(sessionId: String): ReloadResult =
+        ReloadResult.Failed(ReloadFailure.Unsupported)
+
     /** Reads the tree of [sessionId] (`session.tree`, only with [SESSION_TREE_CAPABILITY]). */
     suspend fun loadSessionTree(sessionId: String): TreeLoadResult =
         TreeLoadResult.Failed(TreeFailure.UNSUPPORTED)

@@ -246,6 +246,44 @@ internal fun canExportSession(state: RemoteState): Boolean =
         state.session?.optionalText("origin") == "rpc" &&
         state.status != "offline"
 
+/** How `/reload` stands for the selected session. */
+internal enum class ReloadAvailability {
+    /** The host has no reload, or the session cannot be reached. */
+    NONE,
+    /** A host-owned session: reload runs from the phone. */
+    RUNS,
+    /** A terminal session: shown, but only with the hint that the phone cannot reload it yet. */
+    TERMINAL_ONLY,
+}
+
+/**
+ * The host advertises [RELOAD_CAPABILITY]; only a session the app started (`rpc`) reloads from the
+ * phone, a terminal session (`tui`) is listed with an explanation instead.
+ */
+internal fun reloadAvailability(state: RemoteState): ReloadAvailability =
+    when {
+        !state.connected || state.loading || state.selection.sessionId == null ||
+            RELOAD_CAPABILITY !in state.capabilities || RELOAD_CAPABILITY in state.unavailableCapabilities ||
+            state.status == "offline" -> ReloadAvailability.NONE
+        state.session?.optionalText("origin") == "rpc" -> ReloadAvailability.RUNS
+        state.session?.optionalText("origin") == "tui" -> ReloadAvailability.TERMINAL_ONLY
+        else -> ReloadAvailability.NONE
+    }
+
+/** The description of [command] for the selected session; `/reload` explains a terminal session. */
+internal fun localCommandDescription(
+    command: LocalCommand,
+    state: RemoteState,
+    reloading: Boolean = false,
+): Int =
+    when {
+        command != LocalCommand.RELOAD -> command.description
+        reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY ->
+            R.string.remote_local_command_reload_terminal
+        reloading -> R.string.remote_local_command_reload_running
+        else -> command.description
+    }
+
 /**
  * pi's built-in slash commands are not in the host's catalog, so the app maps the ones it has a
  * control for. [commandName] is what follows the slash.
@@ -258,6 +296,7 @@ internal enum class LocalCommand(val commandName: String, val description: Int) 
     NAME("name", R.string.remote_local_command_name),
     EXPORT("export", R.string.remote_local_command_export),
     TREE("tree", R.string.remote_local_command_tree),
+    RELOAD("reload", R.string.remote_local_command_reload),
     ARTIFACTS("artifacts", R.string.remote_local_command_artifacts),
 }
 
@@ -265,12 +304,14 @@ internal enum class LocalCommand(val commandName: String, val description: Int) 
  * The [LocalCommand]s that can run now, in list order. [inChat] is false outside a chat route,
  * where a new session has no project to open in. A command draft is sent only while the session
  * is idle, so nothing is offered before; `/tree` only reads, so it is offered while the session
- * runs too.
+ * runs too. `/reload` also stays listed for a terminal session, where it only explains itself,
+ * and stays listed, as running, while [reloading].
  */
 internal fun availableLocalCommands(
     state: RemoteState,
     inChat: Boolean,
     nowMillis: Long,
+    reloading: Boolean = false,
 ): List<LocalCommand> {
     val sendable =
         state.connected && !state.loading && state.status == "idle" && !state.sending &&
@@ -278,6 +319,12 @@ internal fun availableLocalCommands(
     return LocalCommand.entries.filter { command ->
         // /tree and /artifacts only read, so they are also offered while the session runs.
         if (command == LocalCommand.TREE) canShowTree(state)
+        else if (command == LocalCommand.RELOAD)
+            when (reloadAvailability(state)) {
+                ReloadAvailability.NONE -> false
+                ReloadAvailability.TERMINAL_ONLY -> true
+                ReloadAvailability.RUNS -> reloading || sendable
+            }
         else if (command == LocalCommand.ARTIFACTS) canShowArtifacts(state)
         else sendable && localCommandAvailable(command, state, inChat, nowMillis)
     }
@@ -299,6 +346,7 @@ private fun localCommandAvailable(
         LocalCommand.NAME -> canRenameSession(state)
         LocalCommand.EXPORT -> canExportSession(state)
         LocalCommand.TREE -> canShowTree(state)
+        LocalCommand.RELOAD -> reloadAvailability(state) == ReloadAvailability.RUNS
         LocalCommand.ARTIFACTS -> canShowArtifacts(state)
     }
 
