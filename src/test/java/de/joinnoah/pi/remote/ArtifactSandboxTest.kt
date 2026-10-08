@@ -99,11 +99,18 @@ class ArtifactSandboxTest {
     }
 
     /** Stands in for WebView's proxy override; [applied] runs the pending callback. */
-    private class FakeProxy(var supported: Boolean = true, var throwOnApply: Boolean = false) : ArtifactProxyBackend {
+    private class FakeProxy(
+        var supported: Boolean = true,
+        var throwOnApply: Boolean = false,
+        var throwOnSupported: Boolean = false,
+    ) : ArtifactProxyBackend {
         val configs = mutableListOf<androidx.webkit.ProxyConfig>()
         private var pending: (() -> Unit)? = null
 
-        override fun supported() = supported
+        override fun supported(): Boolean {
+            if (throwOnSupported) throw IllegalStateException("no WebView")
+            return supported
+        }
 
         override fun apply(config: androidx.webkit.ProxyConfig, executor: java.util.concurrent.Executor, onApplied: Runnable) {
             if (throwOnApply) throw IllegalStateException("refused")
@@ -196,6 +203,31 @@ class ArtifactSandboxTest {
         val retry = sandboxed(page, lock)
         proxy.applied()
         assertEquals(page.url, lastLoaded(retry))
+    }
+
+    @Test fun aFailingSupportCheckFailsTheWaiterButIsAskedAgainAndACleanFalseIsPermanent() {
+        val proxy = FakeProxy(throwOnSupported = true)
+        val lock = ArtifactNetworkLock(proxy)
+        var failed = 0
+        val view = sandboxed(ArtifactPage(ArtifactKind.Html, "<p>hi</p>"), lock, ArtifactCallbacks(onFailed = { failed++ }))
+        idle()
+        assertEquals(1, failed)
+        assertEquals(null, lastLoaded(view))
+        assertFalse(lock.ready)
+        proxy.throwOnSupported = false
+        val page = ArtifactPage(ArtifactKind.Html, "<p>retry</p>")
+        val retry = sandboxed(page, lock)
+        proxy.applied()
+        assertEquals(page.url, lastLoaded(retry))
+
+        val refusing = FakeProxy(supported = false)
+        val refused = ArtifactNetworkLock(refusing)
+        refused.ensure({}, {})
+        refusing.supported = true
+        var unsupported = 0
+        refused.ensure({}, { unsupported++ })
+        assertEquals("a clean false stays refused", 1, unsupported)
+        assertTrue(refusing.configs.isEmpty())
     }
 
     @Test fun aViewDisposedBeforeTheProxyIsReadyIsNotLoadedOrFailed() {

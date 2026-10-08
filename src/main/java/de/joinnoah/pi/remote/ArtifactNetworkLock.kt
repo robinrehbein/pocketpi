@@ -49,7 +49,9 @@ private object WebViewProxyBackend : ArtifactProxyBackend {
 /**
  * Layer 1: points every WebView in this process at [ARTIFACT_DEAD_PROXY]. HTTP(S), WebSocket,
  * preconnect sockets and WebRTC's TCP paths (TURN over TCP or TLS, ICE-TCP) then end at a refused
- * connection, and their host names are not resolved locally. UDP (STUN, TURN over UDP, ICE host
+ * connection, and connections through the proxy do not resolve host names locally. A
+ * `<link rel=dns-prefetch>` may still make the device do a DNS lookup: the network-hints resolver does
+ * not go through the proxy (unmeasured). That is a known residual channel. UDP (STUN, TURN over UDP, ICE host
  * candidates) does not go through a proxy; [ARTIFACT_WEBRTC_BLOCK_SCRIPT] is the only layer for it.
  *
  * The override is applied lazily, the first time a sandboxed view is made, and only once per process.
@@ -82,14 +84,19 @@ internal class ArtifactNetworkLock(private val backend: ArtifactProxyBackend) {
             State.Unsupported -> onUnsupported()
             State.Pending -> waiting += Waiter(onReady, onUnsupported)
             State.Idle -> {
-                val supported = runCatching { backend.supported() }.getOrDefault(false)
-                if (!supported) {
+                // A clean false is permanent; a failed check is not, so a later view asks again.
+                val supported = try { backend.supported() } catch (_: RuntimeException) { null }
+                if (supported == false) {
                     state = State.Unsupported
                     onUnsupported()
                     return
                 }
                 state = State.Pending
                 waiting += Waiter(onReady, onUnsupported)
+                if (supported == null) {
+                    settle(State.Idle)
+                    return
+                }
                 val main = Handler(Looper.getMainLooper())
                 try {
                     backend.apply(artifactProxyConfig(), Executor { main.post(it) }) { settle(State.Ready) }

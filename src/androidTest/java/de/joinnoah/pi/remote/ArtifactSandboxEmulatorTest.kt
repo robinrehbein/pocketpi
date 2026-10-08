@@ -225,14 +225,14 @@ class ArtifactSandboxEmulatorTest {
             <meta http-equiv="refresh" content="0;url=$base/refresh">
             <link rel="prefetch" href="$base/prefetch"><link rel="preconnect" href="$hint"><link rel="dns-prefetch" href="$hint">
             <link rel="preconnect" href="http://127.0.0.1:${probe.preconnectLoopback}">
-            <link rel="preconnect" href="https://pre-$named:${probe.preconnect}"><link rel="dns-prefetch" href="//dns-$named">
+            <link rel="preconnect" href="https://pre-$named:${probe.preconnect}"><link rel="dns-prefetch" href="//dns-$named"><!-- Nothing observes DNS here: this exercises the path without proving it closed. -->
             <link rel="stylesheet" href="$base/style.css">
             </head><body>
             <img src="$base/img.png"><img src="$loop/img.png"><iframe src="$base/frame"></iframe><script src="$base/script.js"></script>
             <form id="f" action="$base/form" method="post"><input name="a" value="b"></form>
             <script>
             function attempt(f) { try { f(); } catch (e) {} }
-            var realms = { main: typeof window.RTCPeerConnection, blank: "noframe", srcdoc: "noreport" };
+            var realms = { main: typeof window.RTCPeerConnection, blank: "noframe", srcdoc: "noreport", renav: "noreport" };
             var blank = null;
             try {
               var frame = document.createElement("iframe");
@@ -244,6 +244,21 @@ class ArtifactSandboxEmulatorTest {
               blank = null;
               realms.blank = "unreachable-" + (e && e.name ? e.name : "error");
             }
+            // A frame whose document is replaced after its first load: the second document must still have no WebRTC.
+            attempt(function () {
+              var frame = document.createElement("iframe");
+              var loads = 0;
+              frame.onload = function () {
+                loads++;
+                try {
+                  if (loads === 1) frame.contentWindow.location.replace("about:blank");
+                  else realms.renav = typeof frame.contentWindow.RTCPeerConnection;
+                } catch (e) {
+                  realms.renav = "unreachable-" + (e && e.name ? e.name : "error");
+                }
+              };
+              document.body.appendChild(frame);
+            });
             window.addEventListener("message", function (e) {
               if (e.data && e.data.probe === "srcdoc") realms.srcdoc = String(e.data.type);
             });
@@ -286,13 +301,13 @@ class ArtifactSandboxEmulatorTest {
             attempt(function () { location = "$base/location"; });
             attempt(function () { location.href = "$base/href"; });
             setTimeout(function () {
-              document.title = "probe-done:" + self.origin + "|main=" + realms.main + "|blank=" + realms.blank + "|srcdoc=" + realms.srcdoc;
-            }, 3000);
+              document.title = "probe-done:" + self.origin + "|main=" + realms.main + "|blank=" + realms.blank + "|srcdoc=" + realms.srcdoc + "|renav=" + realms.renav;
+            }, 4000);
             </script></body></html>
         """.trimIndent()
     }
 
-    /** The probe's title, split into origin and the three realm answers. */
+    /** The probe's title, split into origin and the realm answers. */
     private class Report(title: String) {
         private val parts = title.removePrefix("probe-done:").split("|")
         val origin = parts.first()
@@ -320,6 +335,7 @@ class ArtifactSandboxEmulatorTest {
         val probe = listen()
         val page = ArtifactPage(ArtifactKind.Html, probePage(probe))
         val (view, report) = runProbe(page)
+        // This only shows the lock completed, not which proxy is in force; the routing test proves routing.
         assertTrue("The page loaded before the dead proxy was in force", ArtifactNetworkLock.process.ready)
         // The CSP sandbox header applied: the page has an opaque origin.
         assertEquals("null", report.origin)
@@ -336,6 +352,11 @@ class ArtifactSandboxEmulatorTest {
             "WebRTC in a srcdoc frame: 'noreport' means the frame never answered (blocked or broken), anything else that the block missed it",
             "undefined",
             report.realms["srcdoc"],
+        )
+        val renav = report.realms["renav"].orEmpty()
+        assertTrue(
+            "WebRTC is reachable in a frame navigated to about:blank after its first load: $renav",
+            renav == "undefined" || renav.startsWith("unreachable-"),
         )
         // Give late connections (ICE, retries) time to show up.
         Thread.sleep(3_000)
@@ -416,7 +437,7 @@ class ArtifactSandboxEmulatorTest {
         assertTrue("The control page did not run", done.await(30, TimeUnit.SECONDS))
         val report = Report(reported)
         assertEquals("http://${probe.ip}:${probe.http}", report.origin)
-        assertEquals(mapOf("main" to "function", "blank" to "function", "srcdoc" to "function"), report.realms)
+        assertEquals(mapOf("main" to "function", "blank" to "function", "srcdoc" to "function", "renav" to "function"), report.realms)
         Thread.sleep(3_000)
         val counts = probe.counts()
         // Printed so a CI log shows which channels the control proves the listeners can see.
@@ -425,6 +446,9 @@ class ArtifactSandboxEmulatorTest {
         // allows 127.0.0.1, so the loopback listener is the one that proves URL loads are visible.
         assertTrue("The control made no HTTP connection, so the probe cannot see one: $counts", counts.getValue("httpLoopback") > 0)
         val webRtc = listOf("turn", "turnLoopback", "stun", "stunLoopback").sumOf { counts.getValue(it) }
+        // A previous CI control run showed preconnect=2 and preconnectLoopback=2.
+        assertTrue("The control made no preconnect, so the probe cannot see one: $counts", counts.getValue("preconnect") > 0)
+        assertTrue("The control made no loopback preconnect, so the probe cannot see one: $counts", counts.getValue("preconnectLoopback") > 0)
         assertTrue("The control reached no WebRTC listener, so the probe cannot see one: $counts", webRtc > 0)
     }
 
