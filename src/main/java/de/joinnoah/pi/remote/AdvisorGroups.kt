@@ -23,19 +23,29 @@ internal fun advisorProviderDisplayName(provider: String): String =
     PROVIDER_DISPLAY_NAMES[provider.lowercase()]
         ?: provider.replaceFirstChar { it.uppercase() }
 
-/** Groups choices by provider; groups and rows keep the host's order. */
+/**
+ * Groups choices by case-insensitive provider id. Groups follow the first appearance of each
+ * provider and rows keep host order within a group, so interleaved providers are regrouped.
+ */
 internal fun groupAdvisorChoices(choices: List<AdvisorChoice>): List<AdvisorProviderGroup> =
-    choices.groupBy { it.provider }.map { (provider, rows) ->
+    choices.groupBy { it.provider.lowercase() }.map { (provider, rows) ->
         AdvisorProviderGroup(provider, advisorProviderDisplayName(provider), rows)
     }
 
+private fun String.normalizedForMatch(): String =
+    filterNot { it == '-' || it == '.' || it == '_' || it.isWhitespace() }.lowercase()
+
 /**
  * Small label above the model name: the "Maker: " prefix of the choice name, or null when it is
- * absent or repeats the group header.
+ * absent or repeats the group header or the raw provider id (ignoring case and "-", ".", "_",
+ * spaces).
  */
-internal fun advisorRowLabel(choice: AdvisorChoice, groupDisplayName: String): String? =
-    choice.name.substringBefore(": ", missingDelimiterValue = "")
-        .takeIf { it.isNotEmpty() && !it.equals(groupDisplayName, ignoreCase = true) }
+internal fun advisorRowLabel(choice: AdvisorChoice, group: AdvisorProviderGroup): String? =
+    choice.name.substringBefore(": ", missingDelimiterValue = "").takeIf { label ->
+        label.isNotEmpty() &&
+            !label.equals(group.displayName, ignoreCase = true) &&
+            label.normalizedForMatch() != group.provider.normalizedForMatch()
+    }
 
 internal fun advisorRowModelName(choice: AdvisorChoice): String =
     choice.name.substringAfter(": ", missingDelimiterValue = choice.name)

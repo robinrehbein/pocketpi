@@ -5,7 +5,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -102,5 +109,36 @@ class AdvisorControlUiTest {
         compose.onNodeWithText("Advisor model").performClick()
         compose.onNodeWithText(compose.activity.getString(R.string.remote_advisor_apply)).performClick()
         assertEquals(Triple("provider", "model", "high"), applied)
+    }
+
+    @Test
+    fun groupedPickerKeepsHeadingsLabelsSelectionAndCurrentMarker() {
+        val gpt = AdvisorChoice("openai", "gpt", "OpenAI: GPT-6", listOf("high"))
+        val routed = AdvisorChoice("openrouter", "or-gpt", "OpenAI: GPT-6", listOf("high"))
+        val claude = AdvisorChoice("anthropic", "claude", "Claude Opus", listOf("high"))
+        val advisor = SessionAdvisor("session", true, "openai/gpt", "high", false, false,
+            0, 3, 3, null, listOf(gpt, claude, routed))
+        var applied: Triple<String?, String?, String?>? = null
+        controls(RemoteState(connected = true, status = "idle",
+            selection = RemoteSelection("host", "project", "session"),
+            capabilities = setOf(ADVISOR_CAPABILITY), advisor = advisor),
+            set = { provider, id, level -> applied = Triple(provider, id, level) })
+        compose.onNodeWithTag("advisorControl").performScrollTo().performClick()
+        listOf("openai", "anthropic", "openrouter").forEach {
+            compose.onNodeWithTag("advisorPickerList").performScrollToNode(hasTestTag("advisorProviderHeader-$it"))
+            compose.onNodeWithTag("advisorProviderHeader-$it").assertExists().assert(
+                SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
+        }
+        // Under the OpenAI group the repeated "OpenAI" label is hidden: only the header carries the text.
+        compose.onNodeWithTag("advisorPickerList").performScrollToNode(hasContentDescription("OpenAI, GPT-6"))
+        compose.onNodeWithText("OpenAI").assertExists()
+        compose.onNodeWithContentDescription("OpenAI, GPT-6").assert(
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.StateDescription))
+        compose.onNodeWithTag("advisorPickerList").performScrollToNode(hasContentDescription("OpenRouter, OpenAI, GPT-6"))
+        // Under OpenRouter the maker label stays.
+        compose.onNodeWithText("OpenAI").assertExists()
+        compose.onNodeWithContentDescription("OpenRouter, OpenAI, GPT-6").performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_advisor_apply)).performClick()
+        assertEquals(Triple("openrouter", "or-gpt", "high"), applied)
     }
 }

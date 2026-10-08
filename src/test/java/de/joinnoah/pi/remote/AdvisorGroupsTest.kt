@@ -42,12 +42,42 @@ class AdvisorGroupsTest {
         assertEquals(0, groupAdvisorChoices(emptyList()).size)
     }
 
+    private fun label(provider: String, name: String): String? {
+        val c = choice(provider, "x", name)
+        return advisorRowLabel(c, groupAdvisorChoices(listOf(c)).single())
+    }
+
+    @Test
+    fun providersAreGroupedCaseInsensitively() {
+        val groups = groupAdvisorChoices(listOf(choice("OpenAI", "a", "A"), choice("openai", "b", "B")))
+        assertEquals(1, groups.size)
+        assertEquals("openai", groups[0].provider)
+        assertEquals("OpenAI", groups[0].displayName)
+    }
+
+    @Test
+    fun emptyProviderYieldsBlankDisplayName() {
+        assertEquals("", groupAdvisorChoices(listOf(choice("", "a", "A"))).single().displayName)
+    }
+
+    @Test
+    fun labelEdgeCases() {
+        assertEquals("A", label("openrouter", "A: B: C"))
+        assertEquals("B: C", advisorRowModelName(choice("openrouter", "x", "A: B: C")))
+        assertNull(label("openrouter", ": Model"))
+        assertEquals(": Model".substringAfter(": "), advisorRowModelName(choice("openrouter", "x", ": Model")))
+        assertNull(label("zai", "Z-AI: GLM"))
+        assertNull(label("z_ai", "z.ai: GLM"))
+        assertNull(label("acme lab", "Acme-Lab: M"))
+        assertEquals("Other", label("zai", "Other: GLM"))
+    }
+
     @Test
     fun rowLabelHiddenWhenItRepeatsTheHeader() {
-        assertNull(advisorRowLabel(choice("openai", "a", "OpenAI: GPT-6"), "OpenAI"))
-        assertNull(advisorRowLabel(choice("openai", "a", "openai: GPT-6"), "OpenAI"))
-        assertNull(advisorRowLabel(choice("openai", "a", "GPT-6"), "OpenAI"))
-        assertEquals("OpenAI", advisorRowLabel(choice("openrouter", "a", "OpenAI: GPT-6"), "OpenRouter"))
+        assertNull(label("openai", "OpenAI: GPT-6"))
+        assertNull(label("openai", "openai: GPT-6"))
+        assertNull(label("openai", "GPT-6"))
+        assertEquals("OpenAI", label("openrouter", "OpenAI: GPT-6"))
         assertEquals("GPT-6", advisorRowModelName(choice("openrouter", "a", "OpenAI: GPT-6")))
         assertEquals("GPT-6", advisorRowModelName(choice("openai", "a", "GPT-6")))
     }
