@@ -297,6 +297,7 @@ internal enum class LocalCommand(val commandName: String, val description: Int) 
     EXPORT("export", R.string.remote_local_command_export),
     TREE("tree", R.string.remote_local_command_tree),
     RELOAD("reload", R.string.remote_local_command_reload),
+    ARTIFACTS("artifacts", R.string.remote_local_command_artifacts),
 }
 
 /**
@@ -316,7 +317,7 @@ internal fun availableLocalCommands(
         state.connected && !state.loading && state.status == "idle" && !state.sending &&
             !state.importingAttachments && !state.configurationChanging
     return LocalCommand.entries.filter { command ->
-        // /tree only reads, so it is also offered while the session runs.
+        // /tree and /artifacts only read, so they are also offered while the session runs.
         if (command == LocalCommand.TREE) canShowTree(state)
         else if (command == LocalCommand.RELOAD)
             when (reloadAvailability(state)) {
@@ -324,6 +325,7 @@ internal fun availableLocalCommands(
                 ReloadAvailability.TERMINAL_ONLY -> true
                 ReloadAvailability.RUNS -> reloading || sendable
             }
+        else if (command == LocalCommand.ARTIFACTS) canShowArtifacts(state)
         else sendable && localCommandAvailable(command, state, inChat, nowMillis)
     }
 }
@@ -345,6 +347,7 @@ private fun localCommandAvailable(
         LocalCommand.EXPORT -> canExportSession(state)
         LocalCommand.TREE -> canShowTree(state)
         LocalCommand.RELOAD -> reloadAvailability(state) == ReloadAvailability.RUNS
+        LocalCommand.ARTIFACTS -> canShowArtifacts(state)
     }
 
 /**

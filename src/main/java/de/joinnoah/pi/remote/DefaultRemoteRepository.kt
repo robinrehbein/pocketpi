@@ -130,6 +130,7 @@ class DefaultRemoteRepository(
             FILES_MEDIA_CAPABILITY,
             FILES_ARTIFACT_CAPABILITY,
             RELOAD_CAPABILITY,
+            ARTIFACTS_CAPABILITY,
         )
     /** The request ID prefix of `projects.list`; falls back to v1 once for a host without v2. */
     private var capabilityRoute = CAPABILITIES_V2_ROUTE
@@ -4638,6 +4639,163 @@ class DefaultRemoteRepository(
             }
         } catch (e: Exception) {
             ProjectArtifactResult.ConnectionFailure
+        }
+
+    // ---- Session artifacts (session.artifacts.v1) -----------------------------------------
+
+    private enum class ArtifactAccess { OK, UNSUPPORTED, OFFLINE, INVALID }
+
+    private fun artifactAccess(sessionId: String): ArtifactAccess {
+        val current = state.value
+        return when {
+            !opaqueId(sessionId) || sessionId != current.selection.sessionId -> ArtifactAccess.INVALID
+            !current.connected -> ArtifactAccess.OFFLINE
+            ARTIFACTS_CAPABILITY !in current.capabilities || ARTIFACTS_CAPABILITY in current.unavailableCapabilities ->
+                // Until projects.list has been answered the host's capabilities are not known yet.
+                if (current.capabilitiesKnown) ArtifactAccess.UNSUPPORTED else ArtifactAccess.OFFLINE
+            else -> ArtifactAccess.OK
+        }
+    }
+
+    override suspend fun listSessionArtifacts(sessionId: String): SessionArtifactListResult {
+        when (artifactAccess(sessionId)) {
+            ArtifactAccess.INVALID -> return SessionArtifactListResult.Unavailable
+            ArtifactAccess.UNSUPPORTED -> return SessionArtifactListResult.Unsupported
+            ArtifactAccess.OFFLINE -> return SessionArtifactListResult.Failed
+            ArtifactAccess.OK -> {}
+        }
+        val epoch = selectionEpoch
+        return try {
+            val data = request("session.artifacts.list", epoch, "sessionId" to sessionId)
+            SessionArtifactListResult.Loaded(
+                try {
+                    parseArtifactsList(data, sessionId)
+                } catch (e: Exception) {
+                    return SessionArtifactListResult.Unavailable
+                }
+            )
+        } catch (e: CancellationException) {
+            // The request was cancelled by a disconnect or selection change, not this caller.
+            currentCoroutineContext().ensureActive()
+            SessionArtifactListResult.Failed
+        } catch (e: RemoteRequestException) {
+            when (e.code) {
+                "not_found", "forbidden", "invalid_request", "unsupported" -> SessionArtifactListResult.Unavailable
+                else -> SessionArtifactListResult.Failed
+            }
+        } catch (e: Exception) {
+            SessionArtifactListResult.Failed
+        }
+    }
+
+    override suspend fun openSessionArtifact(
+        sessionId: String,
+        artifactId: String,
+        version: Int?,
+        type: ArtifactType?,
+        sha256: String?,
+    ): SessionArtifactOpenResult {
+        if (!validArtifactId(artifactId) ||
+            (version != null && (version < 1 || version.toLong() > MAX_ARTIFACT_VERSION)))
+            return SessionArtifactOpenResult.Unavailable
+        when (artifactAccess(sessionId)) {
+            ArtifactAccess.INVALID -> return SessionArtifactOpenResult.Unavailable
+            ArtifactAccess.UNSUPPORTED -> return SessionArtifactOpenResult.Unsupported
+            ArtifactAccess.OFFLINE -> return SessionArtifactOpenResult.ConnectionFailure
+            ArtifactAccess.OK -> {}
+        }
+        // A version is an immutable snapshot, so its copy is safe to keep; the latest is read again.
+        // A kept copy whose digest differs from the listed one is stale and never wins.
+        if (version != null) {
+            val logical = "artifacts/$artifactId/$version"
+            for (kind in listOf(ArtifactType.HTML, ArtifactType.MERMAID))
+                if (type == null || type == kind)
+                    projectArtifacts[artifactCacheKey(sessionId, "$logical.${kind.mime.extension}")]
+                        ?.takeIf { sha256 == null || it.sha256 == sha256 }
+                        ?.let { return SessionArtifactOpenResult.Text(kind, it) }
+            if (type == null || type == ArtifactType.SVG)
+                projectImageBytes[artifactImageCacheKey(sessionId, "$logical.svg")]
+                    ?.takeIf { sha256 == null || it.sha256 == sha256 }
+                    ?.let { return SessionArtifactOpenResult.Svg(it) }
+        }
+        val epoch = selectionEpoch
+        return try {
+            projectArtifactDownloads.withPermit { fetchSessionArtifact(epoch, sessionId, artifactId, version, type) }
+        } catch (e: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            SessionArtifactOpenResult.ConnectionFailure
+        }
+    }
+
+    private fun artifactCacheKey(sessionId: String, logicalPath: String) =
+        ProjectArtifactCache.Key(sessionId, artifactCachePath(logicalPath))
+
+    private fun artifactImageCacheKey(sessionId: String, logicalPath: String) =
+        ProjectImageByteCache.Key(sessionId, artifactCachePath(logicalPath))
+
+    private suspend fun fetchSessionArtifact(
+        epoch: Long,
+        sessionId: String,
+        artifactId: String,
+        version: Int?,
+        type: ArtifactType?,
+    ): SessionArtifactOpenResult =
+        try {
+            when (
+                val download =
+                    downloadMedia(
+                        sessionId,
+                        "artifacts/$artifactId",
+                        start = {
+                            spacedMediaRequest(epoch, "session.artifacts.open", *artifactOpenFields(sessionId, artifactId, version))
+                        },
+                        read = { mediaId, offset ->
+                            spacedMediaRequest(epoch, "session.files.media.get", *mediaGetFields(sessionId, mediaId, offset))
+                        },
+                        // An answer of another type than the listed one ends before any byte is read.
+                        accept = { (it.isHtml || it.isSvg || it.isMermaid) && (type == null || it == type.mime) },
+                        artifactPath = { artifactPathMatches(it, artifactId, version) },
+                    )
+            ) {
+                is MediaDownload.Omitted ->
+                    when (download.reason) {
+                        MediaOmitted.TOO_LARGE -> SessionArtifactOpenResult.TooLarge
+                        MediaOmitted.NOT_AN_IMAGE -> SessionArtifactOpenResult.NotAnArtifact
+                    }
+                is MediaDownload.Ready -> {
+                    val meta = download.meta
+                    // The extension must agree with the type, so a path never names another kind.
+                    if (!meta.path.endsWith(".${meta.mime.extension}")) SessionArtifactOpenResult.Unavailable
+                    else if (meta.mime.isSvg) {
+                        SessionArtifactOpenResult.Svg(
+                            ProjectImageResult.Loaded(meta.path, meta.mime.wire, meta.sha256, download.bytes)
+                                .also { if (version != null) projectImageBytes[artifactImageCacheKey(sessionId, meta.path)] = it }
+                        )
+                    } else {
+                        // The host's sniff is not trusted: the bytes must be text on this side as well.
+                        val text = decodeArtifactHtml(download.bytes)
+                        if (text == null) SessionArtifactOpenResult.NotAnArtifact
+                        else {
+                            val loaded = ProjectArtifactResult.Loaded(meta.path, meta.sha256, text, download.bytes.size)
+                            if (version != null) projectArtifacts[artifactCacheKey(sessionId, meta.path)] = loaded
+                            SessionArtifactOpenResult.Text(
+                                if (meta.mime.isMermaid) ArtifactType.MERMAID else ArtifactType.HTML,
+                                loaded,
+                            )
+                        }
+                    }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: MediaException) {
+            when (e.failure) {
+                MediaFailure.UNAVAILABLE -> SessionArtifactOpenResult.Unavailable
+                MediaFailure.BUSY -> SessionArtifactOpenResult.Busy
+                MediaFailure.FAILED -> SessionArtifactOpenResult.ConnectionFailure
+            }
+        } catch (e: Exception) {
+            SessionArtifactOpenResult.ConnectionFailure
         }
 
     // ---- Session export (session.export.v1) -----------------------------------------------

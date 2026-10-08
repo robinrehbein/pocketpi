@@ -278,6 +278,22 @@ internal class ChatViewModel(
         if (cleared || !matches(repository.state.value)) ProjectArtifactResult.Unavailable
         else repository.readProjectArtifact(sessionId, path, fresh)
 
+    /** Lists this chat's artifacts; a destination that is no longer the shown chat gets a failure. */
+    suspend fun listSessionArtifacts(sessionId: String): SessionArtifactListResult =
+        if (cleared || !matches(repository.state.value)) SessionArtifactListResult.Failed
+        else repository.listSessionArtifacts(sessionId)
+
+    /** Opens one of this chat's artifacts; a destination that is no longer the shown chat gets nothing. */
+    suspend fun openSessionArtifact(
+        sessionId: String,
+        artifactId: String,
+        version: Int? = null,
+        type: ArtifactType? = null,
+        sha256: String? = null,
+    ): SessionArtifactOpenResult =
+        if (cleared || !matches(repository.state.value)) SessionArtifactOpenResult.Unavailable
+        else repository.openSessionArtifact(sessionId, artifactId, version, type, sha256)
+
     /** Exports this chat's session; a destination that is no longer the shown chat gets a failure. */
     suspend fun exportSession(sessionId: String): ExportResult =
         if (cleared || !matches(repository.state.value)) ExportResult.Failed(ExportFailure.FAILED)

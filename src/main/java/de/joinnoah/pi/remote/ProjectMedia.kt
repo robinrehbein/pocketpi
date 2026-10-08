@@ -17,6 +17,7 @@ internal const val FILES_ARTIFACT_CAPABILITY = "session.files.artifact.v1"
 internal const val MAX_MEDIA_RASTER_BYTES = 20L * 1024 * 1024
 internal const val MAX_MEDIA_SVG_BYTES = 2L * 1024 * 1024
 internal const val MAX_MEDIA_HTML_BYTES = 5L * 1024 * 1024
+internal const val MAX_MEDIA_MERMAID_BYTES = 5L * 1024 * 1024
 internal const val MEDIA_CHUNK_BYTES = 49_152
 private const val MAX_MEDIA_CHUNK_CHARS = 65_536
 private const val MAX_MEDIA_PATH_BYTES = 4096
@@ -29,15 +30,20 @@ internal enum class MediaMime(val wire: String, val extension: String) {
     WEBP("image/webp", "webp"),
     GIF("image/gif", "gif"),
     SVG("image/svg+xml", "svg"),
-    HTML("text/html", "html");
+    HTML("text/html", "html"),
+
+    /** Mermaid source; only a `session.artifacts.open` answer carries it (see [parseFilesMedia]). */
+    MERMAID("text/vnd.mermaid", "mmd");
 
     val isSvg: Boolean get() = this == SVG
     val isHtml: Boolean get() = this == HTML
+    val isMermaid: Boolean get() = this == MERMAID
     val byteLimit: Long
         get() =
             when (this) {
                 SVG -> MAX_MEDIA_SVG_BYTES
                 HTML -> MAX_MEDIA_HTML_BYTES
+                MERMAID -> MAX_MEDIA_MERMAID_BYTES
                 else -> MAX_MEDIA_RASTER_BYTES
             }
 
@@ -93,13 +99,23 @@ internal fun mediaGetFields(sessionId: String, mediaId: String, offset: Long): A
 /**
  * Validates a `files.media` result. The result path is always the normalised relative path: equal
  * to [requestedPath] when that was relative, and its tail when it was absolute.
+ *
+ * An answer to `session.artifacts.open` ([artifactPath] set) carries a logical path the client could
+ * not know before, so [artifactPath] judges it instead of [requestedPath], and only that answer may
+ * be `text/vnd.mermaid`.
  */
-internal fun parseFilesMedia(data: JsonObject, sessionId: String, requestedPath: String): MediaStart {
+internal fun parseFilesMedia(
+    data: JsonObject,
+    sessionId: String,
+    requestedPath: String,
+    artifactPath: ((String) -> Boolean)? = null,
+): MediaStart {
     require(data.text("kind") == "files.media")
     require(data.text("sessionId") == sessionId)
     val path = data.text("path")
     require(validMediaPath(path) && !path.startsWith("/"))
-    if (requestedPath.startsWith("/")) require(requestedPath.endsWith("/$path"))
+    if (artifactPath != null) require(artifactPath(path))
+    else if (requestedPath.startsWith("/")) require(requestedPath.endsWith("/$path"))
     else require(requestedPath == path)
     if (data.containsKey("omitted")) {
         Wire.keys(data, setOf("kind", "sessionId", "path", "omitted"))
@@ -110,6 +126,7 @@ internal fun parseFilesMedia(data: JsonObject, sessionId: String, requestedPath:
     val mediaId = data.text("mediaId")
     require(canonicalAttachmentId(mediaId))
     val mime = requireNotNull(MediaMime.fromWire(data.text("mimeType")))
+    require(artifactPath != null || !mime.isMermaid)
     val total = data.long("totalBytes")
     require(total in 1..mime.byteLimit)
     val sha256 = data.text("sha256")
@@ -177,6 +194,8 @@ internal suspend fun downloadMedia(
     start: suspend () -> JsonObject,
     read: suspend (mediaId: String, offset: Long) -> JsonObject,
     accept: (MediaMime) -> Boolean,
+    /** Set for `session.artifacts.open`: judges the logical path of the answer; see [parseFilesMedia]. */
+    artifactPath: ((String) -> Boolean)? = null,
 ): MediaDownload {
     var restarted = false
     while (true) {
@@ -190,7 +209,7 @@ internal suspend fun downloadMedia(
             }
         val meta =
             try {
-                when (val parsed = parseFilesMedia(started, sessionId, path)) {
+                when (val parsed = parseFilesMedia(started, sessionId, path, artifactPath)) {
                     is MediaStart.Omitted -> return MediaDownload.Omitted(parsed.reason)
                     is MediaStart.Ready -> parsed.meta
                 }.also { if (!accept(it.mime)) return MediaDownload.Omitted(MediaOmitted.NOT_AN_IMAGE) }

@@ -631,6 +631,10 @@ internal fun RemoteScreen(
     var modelPickerRequested by remember(key) { mutableStateOf(false) }
     var settingsSheetRequested by remember(key) { mutableStateOf(false) }
     var treeSheetRequested by remember(key) { mutableStateOf(false) }
+    var artifactsSheetRequested by remember(key) { mutableStateOf(false) }
+    // A sheet closed by a lost connection or capability must not reappear by itself after a reconnect.
+    val artifactsAvailable = canShowArtifacts(state)
+    LaunchedEffect(artifactsAvailable) { if (!artifactsAvailable) artifactsSheetRequested = false }
     /**
      * Runs the draft when it names an available [LocalCommand] and clears it; false leaves the draft
      * for the normal send, which reports unknown or unavailable commands.
@@ -653,6 +657,7 @@ internal fun RemoteScreen(
                     showToast(R.string.remote_reload_terminal_hint)
                 else if (reloading) showToast(R.string.remote_reload_running)
                 else state.selection.sessionId?.let(::startReload)
+            LocalCommand.ARTIFACTS -> artifactsSheetRequested = true
             LocalCommand.NAME -> {
                 val session = state.session ?: return true
                 if (invocation.argument.isEmpty()) startRename(session.text("id"), session.text("title"))
@@ -1951,6 +1956,22 @@ internal fun RemoteScreen(
                             onAbort = model::abort,
                             onDismiss = { treeSheetRequested = false },
                         )
+                    if (artifactsSheetRequested && chatKey != null && treeSessionId != null && treeChat != null &&
+                        canShowArtifacts(state))
+                        SessionArtifactsSheet(
+                            sessionId = treeSessionId,
+                            list = { treeChat.listSessionArtifacts(treeSessionId) },
+                            open = { artifact, listed ->
+                                // The listed version is pinned to the listed digest; a reload takes the latest.
+                                treeChat.openSessionArtifact(
+                                    treeSessionId, artifact.id,
+                                    if (listed) artifact.version else null,
+                                    artifact.type,
+                                    if (listed) artifact.sha256 else null,
+                                )
+                            },
+                            onDismiss = { artifactsSheetRequested = false },
+                        )
                     ChatComposer(
                         state = state,
                         onDraft = model::draft,
@@ -1986,12 +2007,13 @@ internal fun RemoteScreen(
                                 localCommands =
                                     availableLocalCommands(state, key is RemoteNavKey.Chat, System.currentTimeMillis(), reloading),
                                 selectLocalCommand = { command ->
-                                    // The tree only reads, so it opens at once, also while the chat runs,
-                                    // when a /tree draft could not be sent.
-                                    if (command == LocalCommand.TREE) {
-                                        // Like a sent /tree, a command draft does not stay in the composer.
+                                    // The tree and the artifacts only read, so they open at once, also while
+                                    // the chat runs, when a /tree or /artifacts draft could not be sent.
+                                    if (command == LocalCommand.TREE || command == LocalCommand.ARTIFACTS) {
+                                        // Like a sent command, a command draft does not stay in the composer.
                                         if (state.draft.trimStart().startsWith("/")) model.draft("")
-                                        treeSheetRequested = true
+                                        if (command == LocalCommand.TREE) treeSheetRequested = true
+                                        else artifactsSheetRequested = true
                                     }
                                     // A terminal session only explains itself; nothing to send.
                                     else if (command == LocalCommand.RELOAD &&

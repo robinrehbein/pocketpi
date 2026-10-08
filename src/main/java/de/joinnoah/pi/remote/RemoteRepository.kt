@@ -309,6 +309,30 @@ interface RemoteRepository {
         ProjectArtifactResult.UnsupportedHost
 
     /**
+     * The HTML, SVG and Mermaid artifacts recorded for [sessionId] (`session.artifacts.list`, only
+     * with [ARTIFACTS_CAPABILITY]), newest first.
+     */
+    suspend fun listSessionArtifacts(sessionId: String): SessionArtifactListResult =
+        SessionArtifactListResult.Unsupported
+
+    /**
+     * One artifact of [sessionId] (`session.artifacts.open`, then `session.files.media.get`, only
+     * with [ARTIFACTS_CAPABILITY]). [version] defaults to the latest; a version asked for is an
+     * immutable snapshot and stays in memory, the latest is read each time. [type] is the listed
+     * type: an answer of another type is [SessionArtifactOpenResult.NotAnArtifact] before any byte is
+     * read. [sha256] is the listed digest of that version: a kept copy with another digest is not used
+     * and is replaced.
+     */
+    suspend fun openSessionArtifact(
+        sessionId: String,
+        artifactId: String,
+        version: Int? = null,
+        type: ArtifactType? = null,
+        sha256: String? = null,
+    ): SessionArtifactOpenResult =
+        SessionArtifactOpenResult.Unsupported
+
+    /**
      * Renders [sessionId] as one HTML file and reads it from the host in chunks (`session.export`,
      * `session.export.get`, only with [EXPORT_CAPABILITY] and for host-owned sessions).
      */
