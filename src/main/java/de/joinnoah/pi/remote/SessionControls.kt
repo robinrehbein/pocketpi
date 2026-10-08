@@ -338,7 +338,7 @@ internal fun SessionControls(
                             headlineContent = { Text("/" + command.commandName) },
                             supportingContent = {
                                 Text(
-                                    stringResource(command.description),
+                                    stringResource(localCommandDescription(command, state)),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )

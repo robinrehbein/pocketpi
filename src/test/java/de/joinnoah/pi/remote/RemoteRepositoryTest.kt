@@ -4023,6 +4023,101 @@ class RemoteRepositoryTest {
         assertEquals(TreeLoadResult.Failed(TreeFailure.NOT_FOUND), repository.loadSessionTree("session"))
     }
 
+    private fun reloading(transport: Transport, result: (JsonObject) -> JsonObject? = { null }) {
+        configure(transport, sessions = listOf(session()))
+        // The command catalog is advertised at authentication, reload on the route.
+        transport.capabilities = setOf(COMMANDS_CAPABILITY)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(RELOAD_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.reload" -> result(request)
+                "session.commands.get" -> commandData(request.text("sessionId"))
+                else -> original(request)
+            }
+        }
+    }
+
+    private fun reloaded(request: JsonObject) =
+        Wire.objectOf("kind" to "reloaded", "sessionId" to request.text("sessionId"))
+
+    @Test
+    fun reloadSendsNothingWithoutTheRouteCapabilityOrForATerminalSession() = runTest {
+        val transport = Transport().also(::configure)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unsupported), repository.reloadSession("session"))
+        val terminal = Transport()
+        reloading(terminal)
+        configure(terminal, sessions = listOf(session(origin = "tui")))
+        val other = repository(terminal)
+        other.activate(RemoteSelection("host", "project", "session"))
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unsupported), other.reloadSession("session"))
+        assertEquals(ReloadResult.Failed(ReloadFailure.Failed(null)), other.reloadSession("elsewhere"))
+        assertTrue(transport.sent.none { it.text("type") == "session.reload" })
+        assertTrue(terminal.sent.none { it.text("type") == "session.reload" })
+    }
+
+    @Test
+    fun reloadAsksTheHostAndRefreshesTheChatAndTheCommandCatalog() = runTest {
+        val transport = Transport()
+        reloading(transport, ::reloaded)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        val catalogs = transport.sent.count { it.text("type") == "session.commands.get" }
+        assertEquals(ReloadResult.Done, repository.reloadSession("session"))
+        runCurrent()
+        val request = transport.sent.single { it.text("type") == "session.reload" }
+        assertEquals(setOf("type", "requestId", "sessionId"), request.keys)
+        assertEquals("session", request.text("sessionId"))
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertEquals(catalogs + 1, transport.sent.count { it.text("type") == "session.commands.get" })
+    }
+
+    @Test
+    fun reloadMapsErrorsAndRefreshesOnlyWhenTheResultIsUnknown() = runTest {
+        val transport = Transport()
+        reloading(transport, ::reloaded)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        for ((code, failure) in
+            listOf(
+                "busy" to ReloadFailure.Busy,
+                "unsupported" to ReloadFailure.Unsupported,
+                "offline" to ReloadFailure.ConnectionFailure,
+                "forbidden" to ReloadFailure.Failed(null),
+            )) {
+            transport.failure = { if (it.text("type") == "session.reload") code else null }
+            val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+            assertEquals(code, ReloadResult.Failed(failure), repository.reloadSession("session"))
+            runCurrent()
+            assertEquals(code, snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        }
+        transport.failure = { if (it.text("type") == "session.reload") "internal" else null }
+        transport.failureMessage = { "Extension failed to load" }
+        assertEquals(
+            ReloadResult.Failed(ReloadFailure.Failed("Extension failed to load")),
+            repository.reloadSession("session"),
+        )
+        transport.failureMessage = { "Reload result unknown; refresh" }
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unknown), repository.reloadSession("session"))
+        runCurrent()
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        transport.failure = { null }
+        transport.failureMessage = { null }
+        // A reply that breaks the protocol is no success.
+        transport.response = { request ->
+            if (request.text("type") == "session.reload")
+                Wire.objectOf("kind" to "reloaded", "sessionId" to "other")
+            else null
+        }
+        assertEquals(ReloadResult.Failed(ReloadFailure.Failed(null)), repository.reloadSession("session"))
+    }
+
     @Test
     fun navigatingPutsTheTextInTheComposerAndRefreshesTheChat() = runTest {
         val quote = MessageQuote("assistant-2", "assistant", "earlier answer")

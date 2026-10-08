@@ -129,6 +129,7 @@ class DefaultRemoteRepository(
             // Advertised only on the capabilities.v2 route, which the first projects.list uses.
             FILES_MEDIA_CAPABILITY,
             FILES_ARTIFACT_CAPABILITY,
+            RELOAD_CAPABILITY,
         )
     /** The request ID prefix of `projects.list`; falls back to v1 once for a host without v2. */
     private var capabilityRoute = CAPABILITIES_V2_ROUTE
@@ -4665,6 +4666,48 @@ class DefaultRemoteRepository(
         } catch (e: Exception) {
             ExportResult.Failed(ExportFailure.FAILED)
         }
+    }
+
+    // ---- Session reload (session.reload.v1) -----------------------------------------------
+
+    private var reloadingSession: String? = null
+
+    override suspend fun reloadSession(sessionId: String): ReloadResult {
+        val current = state.value
+        if (!opaqueId(sessionId) || sessionId != current.selection.sessionId)
+            return ReloadResult.Failed(ReloadFailure.Failed(null))
+        if (!current.connected) return ReloadResult.Failed(ReloadFailure.ConnectionFailure)
+        if (current.session?.optionalText("origin") != "rpc" || RELOAD_CAPABILITY !in current.capabilities ||
+            RELOAD_CAPABILITY in current.unavailableCapabilities)
+            return ReloadResult.Failed(ReloadFailure.Unsupported)
+        if (reloadingSession != null) return ReloadResult.Failed(ReloadFailure.Busy)
+        reloadingSession = sessionId
+        val epoch = selectionEpoch
+        return try {
+            // The host waits 30 s for pi's report before it answers.
+            val data = request("session.reload", epoch, "sessionId" to sessionId, timeoutMillis = 45_000)
+            val valid = runCatching { validatedReloaded(data, sessionId) }.isSuccess
+            // Whatever the reply looks like, pi was asked to reload.
+            refreshAfterReload(epoch)
+            if (valid) ReloadResult.Done else ReloadResult.Failed(ReloadFailure.Failed(null))
+        } catch (e: CancellationException) {
+            // A disconnect or selection change cancels the request, not this caller.
+            currentCoroutineContext().ensureActive()
+            ReloadResult.Failed(ReloadFailure.Unknown)
+        } catch (e: Exception) {
+            val failure = reloadFailure(e)
+            if (reloadResultUnknown(failure)) refreshAfterReload(epoch)
+            ReloadResult.Failed(failure)
+        } finally {
+            reloadingSession = null
+        }
+    }
+
+    /** New prompts, skills and extension commands may exist, and the host rewrote the message list. */
+    private fun refreshAfterReload(epoch: Long) {
+        if (epoch != selectionEpoch || !state.value.connected) return
+        snapshotAsync()
+        refreshCommands()
     }
 
     // ---- Session tree (session.tree.v1) ---------------------------------------------------

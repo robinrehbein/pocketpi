@@ -85,6 +85,17 @@
     <string name="remote_local_command_settings">Open the session settings</string>
     <string name="remote_local_command_export">Export the session as an HTML file</string>
     <string name="remote_export_running">Exporting the session…</string>
+    <string name="remote_local_command_reload">Reload extensions, skills, prompts and context files</string>
+    <string name="remote_local_command_reload_terminal">Only for sessions started from the app. Not possible in the terminal yet.</string>
+    <string name="remote_reload_terminal_hint">Reload only works for sessions started from the app. In the terminal it is not possible yet.</string>
+    <string name="remote_reload_running">Reloading…</string>
+    <string name="remote_reload_done">Extensions, skills, prompts, themes and context files reloaded</string>
+    <string name="remote_reload_busy">The session is busy. Try again when it is idle.</string>
+    <string name="remote_reload_unsupported">This computer cannot reload this session from the phone.</string>
+    <string name="remote_reload_failed">Reload failed.</string>
+    <string name="remote_reload_failed_detail">Reload failed: %1$s</string>
+    <string name="remote_reload_unknown">No answer in time. The reload may or may not have happened; the chat refreshes.</string>
+    <string name="remote_reload_connection">The reload could not reach the session. Check the connection and try again.</string>
     <string name="remote_export_done">Session exported</string>
     <string name="remote_export_share">Share</string>
     <string name="remote_export_dismiss">Dismiss</string>

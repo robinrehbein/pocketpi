@@ -259,6 +259,52 @@ class SessionControlsTest {
     }
 
     @Test
+    fun reloadRunsOnlyForHostOwnedIdleSessionsAndExplainsItselfInTheTerminal() {
+        val reloadable = chatState.copy(
+            capabilities = chatState.capabilities + RELOAD_CAPABILITY,
+            selection = RemoteSelection(sessionId = "s1"),
+        )
+        assertEquals(ReloadAvailability.RUNS, reloadAvailability(reloadable))
+        assertEquals(LocalCommand.RELOAD, availableLocalCommands(reloadable, true, 0).last())
+        assertEquals(R.string.remote_local_command_reload, localCommandDescription(LocalCommand.RELOAD, reloadable))
+        // Capability absent or unavailable: nothing is listed.
+        assertFalse(LocalCommand.RELOAD in availableLocalCommands(chatState, true, 0))
+        assertEquals(ReloadAvailability.NONE, reloadAvailability(reloadable.copy(capabilities = chatState.capabilities)))
+        val unavailable = reloadable.copy(unavailableCapabilities = setOf(RELOAD_CAPABILITY))
+        assertFalse(LocalCommand.RELOAD in availableLocalCommands(unavailable, true, 0))
+        // Only an idle session reloads, and not while a reload already runs.
+        for (busy in listOf(reloadable.copy(status = "running"), reloadable.copy(sending = true)))
+            assertFalse(LocalCommand.RELOAD in availableLocalCommands(busy, true, 0))
+        assertFalse(LocalCommand.RELOAD in availableLocalCommands(reloadable, true, 0, reloading = true))
+        for (unreachable in
+            listOf(
+                reloadable.copy(status = "offline"),
+                reloadable.copy(connected = false),
+                reloadable.copy(loading = true),
+                reloadable.copy(selection = RemoteSelection()),
+            ))
+            assertEquals(ReloadAvailability.NONE, reloadAvailability(unreachable))
+        // A terminal session is listed, also while it runs, with the reason instead of the usual text.
+        val terminal = reloadable.copy(session = Wire.objectOf("id" to "s1", "title" to "T", "origin" to "tui"))
+        assertEquals(ReloadAvailability.TERMINAL_ONLY, reloadAvailability(terminal))
+        assertTrue(LocalCommand.RELOAD in availableLocalCommands(terminal, true, 0))
+        assertTrue(LocalCommand.RELOAD in availableLocalCommands(terminal.copy(status = "running"), true, 0))
+        assertEquals(
+            R.string.remote_local_command_reload_terminal,
+            localCommandDescription(LocalCommand.RELOAD, terminal),
+        )
+        assertEquals(ReloadAvailability.NONE, reloadAvailability(terminal.copy(status = "offline")))
+        assertEquals(
+            ReloadAvailability.NONE,
+            reloadAvailability(reloadable.copy(session = Wire.objectOf("id" to "s1", "origin" to "other"))),
+        )
+        // A typed /reload is recognised, with no argument.
+        val invocation = localInvocation(reloadable.copy(draft = "/reload"), availableLocalCommands(reloadable, true, 0))
+        assertEquals(LocalInvocation(LocalCommand.RELOAD, ""), invocation)
+        assertNull(localInvocation(reloadable.copy(draft = "/reload now"), availableLocalCommands(reloadable, true, 0)))
+    }
+
+    @Test
     fun treeIsOfferedWhileRunningAndEveryOtherCommandKeepsItsRule() {
         val tree = chatState.copy(
             capabilities = chatState.capabilities + EXPORT_CAPABILITY + SESSION_TREE_CAPABILITY,

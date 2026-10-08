@@ -602,6 +602,32 @@ internal fun RemoteScreen(
                 }
         }
     }
+    var reloading by remember(key) { mutableStateOf(false) }
+    val resources = androidx.compose.ui.platform.LocalResources.current
+    fun showToast(@androidx.annotation.StringRes text: Int) {
+        Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+    }
+    fun startReload(sessionId: String) {
+        val chat = model as? ChatViewModel ?: return
+        if (reloading) return
+        reloading = true
+        showToast(R.string.remote_reload_running)
+        exportScope.launch {
+            try {
+                when (val result = chat.reloadSession(sessionId)) {
+                    ReloadResult.Done -> showToast(R.string.remote_reload_done)
+                    is ReloadResult.Failed -> {
+                        val failure = result.failure
+                        val message = (failure as? ReloadFailure.Failed)?.message
+                        if (message == null) showToast(reloadFailureText(failure))
+                        else Toast.makeText(context, resources.getString(reloadFailureText(failure), message), Toast.LENGTH_LONG).show()
+                    }
+                }
+            } finally {
+                reloading = false
+            }
+        }
+    }
     var modelPickerRequested by remember(key) { mutableStateOf(false) }
     var settingsSheetRequested by remember(key) { mutableStateOf(false) }
     var treeSheetRequested by remember(key) { mutableStateOf(false) }
@@ -612,7 +638,7 @@ internal fun RemoteScreen(
     fun runLocalCommand(): Boolean {
         val chat = key as? RemoteNavKey.Chat ?: return false
         val invocation =
-            localInvocation(state, availableLocalCommands(state, true, System.currentTimeMillis()))
+            localInvocation(state, availableLocalCommands(state, true, System.currentTimeMillis(), reloading))
                 ?: return false
         model.draft("")
         when (invocation.command) {
@@ -622,6 +648,10 @@ internal fun RemoteScreen(
             LocalCommand.SETTINGS -> settingsSheetRequested = true
             LocalCommand.EXPORT -> state.selection.sessionId?.let(::startExport)
             LocalCommand.TREE -> treeSheetRequested = true
+            LocalCommand.RELOAD ->
+                if (reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
+                    showToast(R.string.remote_reload_terminal_hint)
+                else state.selection.sessionId?.let(::startReload)
             LocalCommand.NAME -> {
                 val session = state.session ?: return true
                 if (invocation.argument.isEmpty()) startRename(session.text("id"), session.text("title"))
@@ -1953,7 +1983,7 @@ internal fun RemoteScreen(
                                 refreshJobs = { chatModel?.refreshJobs() },
                                 openJobs = chatModel?.let { chat -> chat::openJobs },
                                 localCommands =
-                                    availableLocalCommands(state, key is RemoteNavKey.Chat, System.currentTimeMillis()),
+                                    availableLocalCommands(state, key is RemoteNavKey.Chat, System.currentTimeMillis(), reloading),
                                 selectLocalCommand = { command ->
                                     // The tree only reads, so it opens at once, also while the chat runs,
                                     // when a /tree draft could not be sent.
@@ -1961,6 +1991,13 @@ internal fun RemoteScreen(
                                         // Like a sent /tree, a command draft does not stay in the composer.
                                         if (state.draft.trimStart().startsWith("/")) model.draft("")
                                         treeSheetRequested = true
+                                    }
+                                    // A terminal session only explains itself; nothing to send.
+                                    else if (command == LocalCommand.RELOAD &&
+                                        reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY
+                                    ) {
+                                        if (state.draft.trimStart().startsWith("/")) model.draft("")
+                                        showToast(R.string.remote_reload_terminal_hint)
                                     }
                                     else model.draft(selectCommandName(state.draft, command.commandName))
                                 },
