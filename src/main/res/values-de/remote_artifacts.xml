@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_local_command_artifacts">Artefakte dieser Sitzung ansehen</string>
+    <string name="remote_artifacts_title">Artefakte</string>
+    <string name="remote_artifacts_loading">Artefakte werden geladen…</string>
+    <string name="remote_artifacts_empty">Noch keine Artefakte. HTML-Seiten, SVG-Bilder und Mermaid-Diagramme, die pi in dieser Sitzung als Artefakte speichert, erscheinen hier.</string>
+    <string name="remote_artifacts_truncated">Die Liste ist lang, deshalb werden nur die neuesten Artefakte angezeigt.</string>
+    <string name="remote_artifacts_reload">Artefakte neu laden</string>
+    <string name="remote_artifacts_retry">Erneut versuchen</string>
+    <string name="remote_artifacts_failed">Die Artefakte konnten nicht geladen werden. Prüfe deine Verbindung.</string>
+    <string name="remote_artifacts_unavailable">Dein Mac hat die Artefakte dieser Sitzung nicht geliefert.</string>
+    <string name="remote_artifacts_unsupported">Aktualisiere pi Remote auf deinem Mac, um Artefakte anzusehen.</string>
+    <string name="remote_artifacts_open">Artefakt %1$s öffnen</string>
+    <string name="remote_artifacts_type_html">HTML</string>
+    <string name="remote_artifacts_type_svg">SVG</string>
+    <string name="remote_artifacts_type_mermaid">Mermaid</string>
+    <string name="remote_artifacts_meta">%1$s · Version %2$d · %3$s</string>
+    <string name="remote_artifacts_card_too_large">Zu groß zum Anzeigen.</string>
+    <string name="remote_artifacts_card_not_an_artifact">Diese Datei kann nicht angezeigt werden.</string>
+    <string name="remote_artifacts_card_unavailable">Nicht verfügbar.</string>
+    <string name="remote_artifacts_card_busy">Dein Mac ist gerade beschäftigt. Versuche es gleich noch einmal.</string>
+    <string name="remote_artifacts_card_failed">Laden fehlgeschlagen. Prüfe deine Verbindung.</string>
+    <string name="remote_artifacts_card_malformed">Dieses Bild kann nicht dargestellt werden.</string>
+    <string name="remote_artifacts_card_retry">Erneut versuchen</string>
+</resources>

@@ -288,6 +288,27 @@ class SessionControlsTest {
     }
 
     @Test
+    fun artifactsAreOfferedOnlyWithTheCapabilityAndEvenWhileRunning() {
+        val base = chatState.copy(selection = RemoteSelection(sessionId = "s1"))
+        assertFalse(LocalCommand.ARTIFACTS in availableLocalCommands(base, true, 0))
+        val artifacts = base.copy(capabilities = base.capabilities + ARTIFACTS_CAPABILITY)
+        assertTrue(LocalCommand.ARTIFACTS in availableLocalCommands(artifacts, true, 0))
+        // Read-only, like the tree: offered while the session runs, sends or changes settings.
+        for (status in listOf("running", "waiting", "offline"))
+            assertEquals(status, listOf(LocalCommand.ARTIFACTS), availableLocalCommands(artifacts.copy(status = status), true, 0))
+        assertEquals(listOf(LocalCommand.ARTIFACTS), availableLocalCommands(artifacts.copy(sending = true), true, 0))
+        assertFalse(LocalCommand.ARTIFACTS in availableLocalCommands(artifacts.copy(unavailableCapabilities = setOf(ARTIFACTS_CAPABILITY)), true, 0))
+        assertFalse(canShowArtifacts(artifacts.copy(connected = false)))
+        assertFalse(canShowArtifacts(artifacts.copy(loading = true)))
+        assertFalse(canShowArtifacts(artifacts.copy(selection = RemoteSelection())))
+        val running = artifacts.copy(status = "running", draft = "/artifacts")
+        assertEquals(
+            LocalInvocation(LocalCommand.ARTIFACTS, ""),
+            localInvocation(running, availableLocalCommands(running, true, 0)),
+        )
+    }
+
+    @Test
     fun localCommandsFollowTheControlsTheyStandFor() {
         val all = listOf(LocalCommand.NEW, LocalCommand.COMPACT, LocalCommand.MODEL, LocalCommand.NAME)
         assertEquals(all, availableLocalCommands(chatState, true, 0))
