@@ -21,6 +21,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -60,6 +61,8 @@ internal fun SessionControls(
     /** The [LocalCommand]s that can run now; they lead the slash suggestions and shadow host commands. */
     localCommands: List<LocalCommand> = emptyList(),
     selectLocalCommand: (LocalCommand) -> Unit = {},
+    /** A reload is running; `/reload` then shows that instead of offering to start another. */
+    reloading: Boolean = false,
     /** A typed `/model` asks for the model picker; [onModelPickerRequestHandled] acknowledges it. */
     modelPickerRequested: Boolean = false,
     onModelPickerRequestHandled: () -> Unit = {},
@@ -334,16 +337,20 @@ internal fun SessionControls(
             else if (localSuggestions.isNotEmpty() || hostSuggestions.isNotEmpty())
                 LazyColumn(Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(max = 160.dp)) {
                     items(localSuggestions, key = { "local:" + it.commandName }) { command ->
+                        // Tappable for its hint, but dimmed: it does not run from here.
+                        val dimmed =
+                            command == LocalCommand.RELOAD &&
+                                (reloading || reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
                         ListItem(
                             headlineContent = { Text("/" + command.commandName) },
                             supportingContent = {
                                 Text(
-                                    stringResource(localCommandDescription(command, state)),
-                                    maxLines = 1,
+                                    stringResource(localCommandDescription(command, state, reloading)),
+                                    maxLines = if (command == LocalCommand.RELOAD) 2 else 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             },
-                            modifier = Modifier.clickable { selectLocalCommand(command) },
+                            modifier = Modifier.alpha(if (dimmed) 0.6f else 1f).clickable { selectLocalCommand(command) },
                         )
                     }
                     items(hostSuggestions, key = { it.name }) { command ->

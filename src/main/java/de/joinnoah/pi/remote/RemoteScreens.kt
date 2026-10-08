@@ -651,6 +651,7 @@ internal fun RemoteScreen(
             LocalCommand.RELOAD ->
                 if (reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
                     showToast(R.string.remote_reload_terminal_hint)
+                else if (reloading) showToast(R.string.remote_reload_running)
                 else state.selection.sessionId?.let(::startReload)
             LocalCommand.NAME -> {
                 val session = state.session ?: return true
@@ -1994,13 +1995,17 @@ internal fun RemoteScreen(
                                     }
                                     // A terminal session only explains itself; nothing to send.
                                     else if (command == LocalCommand.RELOAD &&
-                                        reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY
+                                        (reloading || reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
                                     ) {
                                         if (state.draft.trimStart().startsWith("/")) model.draft("")
-                                        showToast(R.string.remote_reload_terminal_hint)
+                                        showToast(
+                                            if (reloading) R.string.remote_reload_running
+                                            else R.string.remote_reload_terminal_hint
+                                        )
                                     }
                                     else model.draft(selectCommandName(state.draft, command.commandName))
                                 },
+                                reloading = reloading,
                                 modelPickerRequested = modelPickerRequested,
                                 onModelPickerRequestHandled = { modelPickerRequested = false },
                                 changeSettings = model::changeSettings,

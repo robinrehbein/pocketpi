@@ -275,7 +275,20 @@ class SessionControlsTest {
         // Only an idle session reloads, and not while a reload already runs.
         for (busy in listOf(reloadable.copy(status = "running"), reloadable.copy(sending = true)))
             assertFalse(LocalCommand.RELOAD in availableLocalCommands(busy, true, 0))
-        assertFalse(LocalCommand.RELOAD in availableLocalCommands(reloadable, true, 0, reloading = true))
+        // While a reload runs the row stays, describing the progress, even though the session is busy.
+        val running = reloadable.copy(status = "running")
+        assertTrue(LocalCommand.RELOAD in availableLocalCommands(running, true, 0, reloading = true))
+        assertEquals(
+            R.string.remote_local_command_reload_running,
+            localCommandDescription(LocalCommand.RELOAD, running, reloading = true),
+        )
+        assertEquals(
+            LocalInvocation(LocalCommand.RELOAD, ""),
+            localInvocation(
+                running.copy(draft = "/reload"),
+                availableLocalCommands(running, true, 0, reloading = true),
+            ),
+        )
         for (unreachable in
             listOf(
                 reloadable.copy(status = "offline"),

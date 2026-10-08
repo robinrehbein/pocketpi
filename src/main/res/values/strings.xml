@@ -86,9 +86,10 @@
     <string name="remote_local_command_export">Export the session as an HTML file</string>
     <string name="remote_export_running">Exporting the session…</string>
     <string name="remote_local_command_reload">Reload extensions, skills, prompts and context files</string>
-    <string name="remote_local_command_reload_terminal">Only for sessions started from the app. Not possible in the terminal yet.</string>
+    <string name="remote_local_command_reload_terminal">Not possible in terminal sessions yet. Only for sessions started from the app.</string>
     <string name="remote_reload_terminal_hint">Reload only works for sessions started from the app. In the terminal it is not possible yet.</string>
     <string name="remote_reload_running">Reloading…</string>
+    <string name="remote_local_command_reload_running">Reloading…</string>
     <string name="remote_reload_done">Extensions, skills, prompts, themes and context files reloaded</string>
     <string name="remote_reload_busy">The session is busy. Try again when it is idle.</string>
     <string name="remote_reload_unsupported">This computer cannot reload this session from the phone.</string>

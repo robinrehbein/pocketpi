@@ -4684,8 +4684,8 @@ class DefaultRemoteRepository(
         reloadingSession = sessionId
         val epoch = selectionEpoch
         return try {
-            // The host waits 30 s for pi's report before it answers.
-            val data = request("session.reload", epoch, "sessionId" to sessionId, timeoutMillis = 45_000)
+            // The host waits 30 s for pi's report, then resyncs, before it answers.
+            val data = request("session.reload", epoch, "sessionId" to sessionId, timeoutMillis = 60_000)
             val valid = runCatching { validatedReloaded(data, sessionId) }.isSuccess
             // Whatever the reply looks like, pi was asked to reload.
             refreshAfterReload(epoch)
@@ -4707,6 +4707,9 @@ class DefaultRemoteRepository(
     private fun refreshAfterReload(epoch: Long) {
         if (epoch != selectionEpoch || !state.value.connected) return
         snapshotAsync()
+        // A catalog request already in flight predates the reload: drop it and ask again.
+        commandsVersion++
+        update { it.copy(commandsLoading = false) }
         refreshCommands()
     }
 

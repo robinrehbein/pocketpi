@@ -52,7 +52,7 @@ internal fun reloadFailure(e: Exception): ReloadFailure =
                 "timeout" -> ReloadFailure.Unknown
                 "internal" ->
                     if (e.hostMessage?.startsWith(RELOAD_UNKNOWN_PREFIX) == true) ReloadFailure.Unknown
-                    else ReloadFailure.Failed(e.hostMessage?.takeIf(String::isNotBlank))
+                    else ReloadFailure.Failed(e.hostMessage?.takeIf { it.isNotBlank() && it != "Reload failed" })
                 else -> ReloadFailure.Failed(null)
             }
         is IllegalStateException ->

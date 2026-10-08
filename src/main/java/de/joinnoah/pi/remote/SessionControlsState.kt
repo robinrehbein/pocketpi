@@ -271,10 +271,18 @@ internal fun reloadAvailability(state: RemoteState): ReloadAvailability =
     }
 
 /** The description of [command] for the selected session; `/reload` explains a terminal session. */
-internal fun localCommandDescription(command: LocalCommand, state: RemoteState): Int =
-    if (command == LocalCommand.RELOAD && reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
-        R.string.remote_local_command_reload_terminal
-    else command.description
+internal fun localCommandDescription(
+    command: LocalCommand,
+    state: RemoteState,
+    reloading: Boolean = false,
+): Int =
+    when {
+        command != LocalCommand.RELOAD -> command.description
+        reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY ->
+            R.string.remote_local_command_reload_terminal
+        reloading -> R.string.remote_local_command_reload_running
+        else -> command.description
+    }
 
 /**
  * pi's built-in slash commands are not in the host's catalog, so the app maps the ones it has a
@@ -296,7 +304,7 @@ internal enum class LocalCommand(val commandName: String, val description: Int) 
  * where a new session has no project to open in. A command draft is sent only while the session
  * is idle, so nothing is offered before; `/tree` only reads, so it is offered while the session
  * runs too. `/reload` also stays listed for a terminal session, where it only explains itself,
- * and is withheld while [reloading] runs.
+ * and stays listed, as running, while [reloading].
  */
 internal fun availableLocalCommands(
     state: RemoteState,
@@ -314,7 +322,7 @@ internal fun availableLocalCommands(
             when (reloadAvailability(state)) {
                 ReloadAvailability.NONE -> false
                 ReloadAvailability.TERMINAL_ONLY -> true
-                ReloadAvailability.RUNS -> sendable && !reloading
+                ReloadAvailability.RUNS -> reloading || sendable
             }
         else sendable && localCommandAvailable(command, state, inChat, nowMillis)
     }

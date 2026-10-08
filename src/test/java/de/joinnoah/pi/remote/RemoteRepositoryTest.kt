@@ -4023,8 +4023,12 @@ class RemoteRepositoryTest {
         assertEquals(TreeLoadResult.Failed(TreeFailure.NOT_FOUND), repository.loadSessionTree("session"))
     }
 
-    private fun reloading(transport: Transport, result: (JsonObject) -> JsonObject? = { null }) {
-        configure(transport, sessions = listOf(session()))
+    private fun reloading(
+        transport: Transport,
+        origin: String = "rpc",
+        result: (JsonObject) -> JsonObject? = { null },
+    ) {
+        configure(transport, sessions = listOf(session(origin = origin)))
         // The command catalog is advertised at authentication, reload on the route.
         transport.capabilities = setOf(COMMANDS_CAPABILITY)
         advertising(transport, JsonArray(listOf(JsonPrimitive(RELOAD_CAPABILITY))))
@@ -4047,21 +4051,51 @@ class RemoteRepositoryTest {
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", "session"))
         assertEquals(ReloadResult.Failed(ReloadFailure.Unsupported), repository.reloadSession("session"))
+        // The terminal session has the capability, so only its origin refuses the reload.
         val terminal = Transport()
-        reloading(terminal)
-        configure(terminal, sessions = listOf(session(origin = "tui")))
+        reloading(terminal, origin = "tui", result = ::reloaded)
         val other = repository(terminal)
         other.activate(RemoteSelection("host", "project", "session"))
         assertEquals(ReloadResult.Failed(ReloadFailure.Unsupported), other.reloadSession("session"))
         assertEquals(ReloadResult.Failed(ReloadFailure.Failed(null)), other.reloadSession("elsewhere"))
         assertTrue(transport.sent.none { it.text("type") == "session.reload" })
         assertTrue(terminal.sent.none { it.text("type") == "session.reload" })
+        // Positive control: the same setup with a host-owned session does send it.
+        val owned = Transport()
+        reloading(owned, origin = "rpc", result = ::reloaded)
+        val rpc = repository(owned)
+        rpc.activate(RemoteSelection("host", "project", "session"))
+        assertEquals(ReloadResult.Done, rpc.reloadSession("session"))
+        assertEquals(1, owned.sent.count { it.text("type") == "session.reload" })
+    }
+
+    @Test
+    fun reloadRefreshesTheCatalogEvenWhenARequestIsAlreadyInFlight() = runTest {
+        val transport = Transport()
+        reloading(transport, result = ::reloaded)
+        var hold = true
+        val answering = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.commands.get" && hold) null else answering(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repository.state.value.commandsLoading)
+        assertTrue(repository.state.value.commands.isEmpty())
+        hold = false
+        val catalogs = transport.sent.count { it.text("type") == "session.commands.get" }
+        assertEquals(ReloadResult.Done, repository.reloadSession("session"))
+        runCurrent()
+        assertEquals(catalogs + 1, transport.sent.count { it.text("type") == "session.commands.get" })
+        assertFalse(repository.state.value.commandsLoading)
+        assertEquals(listOf("review"), repository.state.value.commands.map { it.name })
     }
 
     @Test
     fun reloadAsksTheHostAndRefreshesTheChatAndTheCommandCatalog() = runTest {
         val transport = Transport()
-        reloading(transport, ::reloaded)
+        reloading(transport, result = ::reloaded)
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", "session"))
         runCurrent()
@@ -4079,7 +4113,7 @@ class RemoteRepositoryTest {
     @Test
     fun reloadMapsErrorsAndRefreshesOnlyWhenTheResultIsUnknown() = runTest {
         val transport = Transport()
-        reloading(transport, ::reloaded)
+        reloading(transport, result = ::reloaded)
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", "session"))
         runCurrent()
@@ -4102,6 +4136,9 @@ class RemoteRepositoryTest {
             ReloadResult.Failed(ReloadFailure.Failed("Extension failed to load")),
             repository.reloadSession("session"),
         )
+        // The host's generic text is no detail worth repeating.
+        transport.failureMessage = { "Reload failed" }
+        assertEquals(ReloadResult.Failed(ReloadFailure.Failed(null)), repository.reloadSession("session"))
         transport.failureMessage = { "Reload result unknown; refresh" }
         val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
         assertEquals(ReloadResult.Failed(ReloadFailure.Unknown), repository.reloadSession("session"))
