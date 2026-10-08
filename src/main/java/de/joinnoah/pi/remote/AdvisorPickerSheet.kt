@@ -8,11 +8,20 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
@@ -35,12 +44,14 @@ internal fun AdvisorPickerSheet(
     val currentChoice = advisor?.choices?.firstOrNull { choice ->
         advisor.model == "${choice.provider}/${choice.id}"
     }
+    val groups = remember(advisor?.choices) { groupAdvisorChoices(advisor?.choices.orEmpty()) }
+    val currentLabel = stringResource(R.string.remote_advisor_current_label)
     val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.84f).dp
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().heightIn(max = maxHeight).navigationBarsPadding()) {
           LazyColumn(
-            modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+            modifier = Modifier.fillMaxWidth().weight(1f, fill = false).testTag("advisorPickerList"),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
           ) {
@@ -111,18 +122,36 @@ internal fun AdvisorPickerSheet(
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }
-                items(advisor.choices, key = { it.provider + ":" + it.id }) { choice ->
+                groups.forEach { group ->
+                  if (group.displayName.isNotBlank()) item(key = "advisorProvider/" + group.provider) {
+                    Text(
+                        group.displayName,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(start = 4.dp, top = 4.dp)
+                            .testTag("advisorProviderHeader-" + group.provider)
+                            .semantics { heading() },
+                    )
+                  }
+                  items(group.choices, key = { it.provider + ":" + it.id }) { choice ->
                     val selected = selectedChoice == choice
                     val current = advisor.enabled && currentChoice == choice
-                    val providerLabel = choice.name.substringBefore(": ", missingDelimiterValue = "")
-                    val modelLabel = choice.name.substringAfter(": ", missingDelimiterValue = choice.name)
+                    val providerLabel = advisorRowLabel(choice, group)
+                    val modelLabel = advisorRowModelName(choice)
+                    val description = listOfNotNull(
+                        group.displayName.takeIf { it.isNotBlank() }, providerLabel, modelLabel,
+                    ).joinToString(", ")
                     Surface(
                         modifier = Modifier.fillMaxWidth().selectable(
                             selected = selected,
                             enabled = canSelect,
                             role = Role.RadioButton,
                             onClick = { onSelectChoice(choice) },
-                        ),
+                        ).semantics {
+                            contentDescription = description
+                            if (current) stateDescription = currentLabel
+                        },
                         shape = RoundedCornerShape(18.dp),
                         color = if (selected) MaterialTheme.colorScheme.primaryContainer
                             else MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -134,7 +163,7 @@ internal fun AdvisorPickerSheet(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f)) {
-                                if (providerLabel.isNotEmpty())
+                                if (providerLabel != null)
                                     Text(
                                         providerLabel,
                                         style = MaterialTheme.typography.labelMedium,
@@ -157,6 +186,7 @@ internal fun AdvisorPickerSheet(
                             RadioButton(selected = selected, onClick = null, enabled = canSelect)
                         }
                     }
+                  }
                 }
                 item {
                     HorizontalDivider(Modifier.padding(top = 4.dp))
