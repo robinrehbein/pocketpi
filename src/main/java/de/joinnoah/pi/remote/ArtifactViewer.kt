@@ -149,8 +149,8 @@ internal fun ArtifactViewer(
                     Spacer(Modifier.weight(1f))
                     AssistChip(
                         onClick = {},
-                        label = { Text(stringResource(R.string.remote_artifact_no_network)) },
-                        modifier = Modifier.testTag("artifactNoNetwork"),
+                        label = { Text(stringResource(R.string.remote_artifact_libraries_only)) },
+                        modifier = Modifier.testTag("artifactLibrariesOnly"),
                     )
                 }
                 if (references.isNotEmpty() && !showCode)

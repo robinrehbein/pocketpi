@@ -497,7 +497,7 @@
     <string name="remote_artifact_share_title">Teilen</string>
     <string name="remote_artifact_preview">Vorschau</string>
     <string name="remote_artifact_code">Code</string>
-    <string name="remote_artifact_no_network">Nur Bibliotheken</string>
+    <string name="remote_artifact_libraries_only">Nur Bibliotheken</string>
     <string name="remote_artifact_external_references">Diese Seite verweist auf Dateien außerhalb der erlaubten Bibliotheken. Sie werden in der Vorschau nicht geladen.</string>
     <string name="remote_artifact_preview_failed">Die Vorschau funktioniert nicht mehr.</string>
     <string name="remote_artifact_export_failed">Die Datei konnte nicht vorbereitet werden.</string>

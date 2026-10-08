@@ -444,5 +444,39 @@ internal fun externalReferences(html: String): List<String> =
         .distinct()
         .toList()
 
-/** A protocol-relative reference resolves to https, because the sandbox document is served over https. */
-private fun absoluteReference(ref: String) = if (ref.startsWith("//")) "https:$ref" else ref
+/**
+ * The form WebView would request for [ref]: HTML entities decoded, a protocol-relative reference
+ * resolved to https (the sandbox document is served over https), scheme and host lower-cased and the
+ * default port dropped. Only used to decide whether to show the notice; the strict allowlist check
+ * still runs on the result.
+ */
+private fun absoluteReference(ref: String): String {
+    val decoded = decodeBasicEntities(ref.trim())
+    val url = if (decoded.startsWith("//")) "https:$decoded" else decoded
+    val schemeEnd = url.indexOf("://")
+    if (schemeEnd < 0) return url
+    val scheme = url.substring(0, schemeEnd).lowercase()
+    val rest = url.substring(schemeEnd + 3)
+    val authority = rest.takeWhile { it != '/' && it != '?' && it != '#' }
+    val tail = rest.substring(authority.length)
+    val host = authority.lowercase().removeSuffix(":443")
+    return "$scheme://$host$tail"
+}
+
+private val entityRegex = Regex("&(#[0-9]+|#[xX][0-9a-fA-F]+|amp|lt|gt|quot|apos);")
+
+private fun decodeBasicEntities(text: String): String =
+    entityRegex.replace(text) { m ->
+        when (val name = m.groupValues[1]) {
+            "amp" -> "&"
+            "lt" -> "<"
+            "gt" -> ">"
+            "quot" -> "\""
+            "apos" -> "'"
+            else ->
+                (if (name[1] == 'x' || name[1] == 'X') name.drop(2).toIntOrNull(16) else name.drop(1).toIntOrNull())
+                    ?.takeIf { it in 1..0x10FFFF && it !in 0xD800..0xDFFF }
+                    ?.let { String(Character.toChars(it)) }
+                    ?: m.value
+        }
+    }

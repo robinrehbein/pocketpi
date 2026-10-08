@@ -97,7 +97,7 @@ class ProjectArtifactCardUiTest {
         compose.onNodeWithTag("projectArtifact-a.html").performClick()
         compose.onNodeWithText("Open", useUnmergedTree = true).performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("artifactViewer", true).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithTag("artifactNoNetwork", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("artifactLibrariesOnly", useUnmergedTree = true).assertExists()
         compose.onNodeWithTag("artifactExternalNotice", useUnmergedTree = true).assertExists()
         compose.onNodeWithTag("artifactViewerReload", useUnmergedTree = true).assertExists()
         compose.onNodeWithTag("artifactTabCode", useUnmergedTree = true).performClick()

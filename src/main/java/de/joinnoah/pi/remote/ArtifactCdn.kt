@@ -7,6 +7,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
 /*
@@ -80,6 +81,10 @@ internal const val ARTIFACT_CDN_MAX_RESOURCE_BYTES = 8L * 1024 * 1024
 internal const val ARTIFACT_CDN_MAX_PAGE_BYTES = 32L * 1024 * 1024
 internal const val ARTIFACT_CDN_CONNECT_TIMEOUT_SECONDS = 10L
 internal const val ARTIFACT_CDN_READ_TIMEOUT_SECONDS = 20L
+internal const val ARTIFACT_CDN_CALL_TIMEOUT_SECONDS = 30L
+internal const val ARTIFACT_CDN_MAX_REQUESTS = 300
+internal const val ARTIFACT_CDN_CONCURRENT_FETCHES = 6
+internal const val ARTIFACT_CDN_PERMIT_WAIT_MILLIS = 5_000L
 internal const val ARTIFACT_CDN_CACHE_BYTES = 50L * 1024 * 1024
 
 /** One response from the network, before any policy. A redirect is reported, never followed. */
@@ -89,8 +94,12 @@ internal class ArtifactCdnRaw(
     val location: String?,
     val contentType: String?,
     val contentLength: Long,
-    /** Reads at most `limit` bytes, or null when the body is longer. */
-    val readBody: (limit: Long) -> ByteArray?,
+    /**
+     * Reads at most `limit` bytes, or null when the body is longer. Reports through `charge` every
+     * byte pulled from the source (decoded bytes, so a gzip body counts as it inflates) on every
+     * path: success, over the limit and a failed read.
+     */
+    val readBody: (limit: Long, charge: (Long) -> Unit) -> ByteArray?,
     val close: () -> Unit = {},
 )
 
@@ -101,8 +110,15 @@ internal interface ArtifactCdnTransport {
 }
 
 /** Per-view state: bytes still allowed for this page load, and cancellation when the view is disposed. */
-internal class ArtifactCdnBudget(private val totalBytes: Long = ARTIFACT_CDN_MAX_PAGE_BYTES) {
+internal class ArtifactCdnBudget(
+    private val totalBytes: Long = ARTIFACT_CDN_MAX_PAGE_BYTES,
+    private val maxRequests: Int = ARTIFACT_CDN_MAX_REQUESTS,
+    permits: Int = ARTIFACT_CDN_CONCURRENT_FETCHES,
+    private val permitWaitMillis: Long = ARTIFACT_CDN_PERMIT_WAIT_MILLIS,
+) {
     private var used = 0L
+    private var requests = 0
+    private val fetchPermits = Semaphore(permits)
     private val cancellations = mutableListOf<() -> Unit>()
 
     @Volatile
@@ -112,10 +128,40 @@ internal class ArtifactCdnBudget(private val totalBytes: Long = ARTIFACT_CDN_MAX
     @Synchronized
     fun remaining(): Long = totalBytes - used
 
+    /** Takes up to [max] bytes of the budget in one step and returns the amount granted (0 when none is left). */
+    @Synchronized
+    fun reserve(max: Long): Long {
+        val granted = max.coerceIn(0L, maxOf(0L, totalBytes - used))
+        used += granted
+        return granted
+    }
+
+    /** Gives back the unused part of a reservation. */
+    @Synchronized
+    fun refund(bytes: Long) {
+        used = maxOf(0L, used - bytes)
+    }
+
+    /** Charges bytes beyond what was reserved. */
     @Synchronized
     fun spend(bytes: Long) {
         used += bytes
     }
+
+    /** Counts one forwarded request, whatever its status. False once the per-view cap is used up. */
+    @Synchronized
+    fun countRequest(): Boolean = if (requests >= maxRequests) false else { requests++; true }
+
+    /** Waits for one of the concurrent-fetch permits. False when none frees up in time. */
+    fun acquireFetch(): Boolean =
+        try {
+            fetchPermits.tryAcquire(permitWaitMillis, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+
+    fun releaseFetch() = fetchPermits.release()
 
     /** Runs [action] if the view is disposed while a request is in flight. Returns how to unregister. */
     @Synchronized
@@ -158,40 +204,68 @@ internal class ArtifactCdnPolicyFetcher(private val transport: ArtifactCdnTransp
         var hops = 0
         while (true) {
             if (!artifactCdnAllowed(current) || budget.cancelled) return ArtifactCdnReply.Refused(403)
-            val raw =
-                try {
-                    transport.get(current, userAgent, budget)
-                } catch (_: IOException) {
-                    return ArtifactCdnReply.Refused(504)
-                } catch (_: RuntimeException) {
-                    return ArtifactCdnReply.Refused(504)
-                }
+            if (!budget.countRequest()) return ArtifactCdnReply.Refused(403)
+            if (!budget.acquireFetch()) return ArtifactCdnReply.Refused(504)
             try {
-                if (raw.status in REDIRECT_STATUSES) {
-                    if (++hops > ARTIFACT_CDN_MAX_REDIRECTS) return ArtifactCdnReply.Refused(403)
-                    val target = resolve(current, raw.location) ?: return ArtifactCdnReply.Refused(403)
-                    current = target
-                    continue
+                when (val step = hop(current, userAgent, budget)) {
+                    is Hop.Reply -> return step.reply
+                    is Hop.Redirect -> {
+                        if (++hops > ARTIFACT_CDN_MAX_REDIRECTS) return ArtifactCdnReply.Refused(403)
+                        current = step.target
+                    }
                 }
-                if (raw.status != 200) return ArtifactCdnReply.Refused(404)
-                if (!artifactCdnContentTypeAllowed(raw.contentType)) return ArtifactCdnReply.Refused(403)
-                val limit = minOf(ARTIFACT_CDN_MAX_RESOURCE_BYTES, budget.remaining())
-                if (limit <= 0 || raw.contentLength > limit) return ArtifactCdnReply.Refused(403)
+            } finally {
+                budget.releaseFetch()
+            }
+        }
+    }
+
+    private sealed interface Hop {
+        class Reply(val reply: ArtifactCdnReply) : Hop
+
+        class Redirect(val target: String) : Hop
+    }
+
+    private fun hop(current: String, userAgent: String, budget: ArtifactCdnBudget): Hop {
+        val raw =
+            try {
+                transport.get(current, userAgent, budget)
+            } catch (_: IOException) {
+                return Hop.Reply(ArtifactCdnReply.Refused(504))
+            } catch (_: RuntimeException) {
+                return Hop.Reply(ArtifactCdnReply.Refused(504))
+            }
+        try {
+            if (raw.status in REDIRECT_STATUSES) {
+                val target = resolve(current, raw.location) ?: return Hop.Reply(ArtifactCdnReply.Refused(403))
+                return Hop.Redirect(target)
+            }
+            if (raw.status != 200) return Hop.Reply(ArtifactCdnReply.Refused(404))
+            if (!artifactCdnContentTypeAllowed(raw.contentType)) return Hop.Reply(ArtifactCdnReply.Refused(403))
+            // Reserve before reading so concurrent fetches cannot overdraw the page budget together.
+            val limit = budget.reserve(ARTIFACT_CDN_MAX_RESOURCE_BYTES)
+            var charged = 0L
+            try {
+                if (limit <= 0 || raw.contentLength > limit) return Hop.Reply(ArtifactCdnReply.Refused(403))
                 val body =
                     try {
-                        raw.readBody(limit)
+                        raw.readBody(limit) { charged += it }
                     } catch (_: IOException) {
-                        return ArtifactCdnReply.Refused(504)
-                    } ?: return ArtifactCdnReply.Refused(403)
-                budget.spend(body.size.toLong())
-                return ArtifactCdnReply.Ok(
-                    raw.contentType!!.substringBefore(';').trim().lowercase(),
-                    artifactCdnCharset(raw.contentType),
-                    body,
+                        return Hop.Reply(ArtifactCdnReply.Refused(504))
+                    } ?: return Hop.Reply(ArtifactCdnReply.Refused(403))
+                return Hop.Reply(
+                    ArtifactCdnReply.Ok(
+                        raw.contentType!!.substringBefore(';').trim().lowercase(),
+                        artifactCdnCharset(raw.contentType),
+                        body,
+                    ),
                 )
             } finally {
-                runCatching(raw.close)
+                // Bytes pulled from the source stay charged even when the body was refused or the read failed.
+                if (charged < limit) budget.refund(limit - charged) else budget.spend(charged - limit)
             }
+        } finally {
+            runCatching(raw.close)
         }
     }
 
@@ -212,7 +286,11 @@ internal class ArtifactCdnPolicyFetcher(private val transport: ArtifactCdnTransp
 }
 
 /** The OkHttp transport: a client of its own, with no cookies, no interceptors, TLS only, and an app-private cache. */
-internal class OkHttpArtifactCdnTransport(cacheDirectory: File) : ArtifactCdnTransport {
+internal class OkHttpArtifactCdnTransport(
+    cacheDirectory: File,
+    /** Lets a JVM test point the transport at a plain-HTTP server; the app passes nothing. */
+    configure: OkHttpClient.Builder.() -> Unit = {},
+) : ArtifactCdnTransport {
     private val client: OkHttpClient =
         OkHttpClient.Builder()
             .followRedirects(false)
@@ -220,7 +298,9 @@ internal class OkHttpArtifactCdnTransport(cacheDirectory: File) : ArtifactCdnTra
             .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS))
             .connectTimeout(ARTIFACT_CDN_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(ARTIFACT_CDN_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .callTimeout(ARTIFACT_CDN_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .cache(Cache(cacheDirectory, ARTIFACT_CDN_CACHE_BYTES))
+            .apply(configure)
             .build()
 
     override fun get(url: String, userAgent: String, budget: ArtifactCdnBudget): ArtifactCdnRaw {
@@ -241,11 +321,21 @@ internal class OkHttpArtifactCdnTransport(cacheDirectory: File) : ArtifactCdnTra
             location = response.header("Location"),
             contentType = response.header("Content-Type"),
             contentLength = body.contentLength(),
-            readBody = { limit ->
+            readBody = { limit, charge ->
                 val source = body.source()
-                // Request one byte more than the limit to tell "exactly at the limit" from "longer".
-                source.request(limit + 1)
-                if (source.buffer.size > limit) null else source.readByteArray()
+                var pulled = 0L
+                try {
+                    // Request one byte more than the limit to tell "exactly at the limit" from "longer".
+                    // OkHttp gunzips transparently, so these are decoded bytes and Content-Length is gone.
+                    try {
+                        source.request(limit + 1)
+                    } finally {
+                        pulled = source.buffer.size
+                    }
+                    if (pulled > limit) null else source.readByteArray()
+                } finally {
+                    charge(pulled)
+                }
             },
             close = {
                 unregister()

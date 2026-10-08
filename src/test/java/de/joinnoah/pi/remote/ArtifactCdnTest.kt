@@ -154,7 +154,7 @@ class ArtifactCdnTest {
         onClose: () -> Unit = {},
     ) = ArtifactCdnRaw(
         status, location, type, length,
-        readBody = { limit -> if (body.size > limit) null else body },
+        readBody = { limit, charge -> if (body.size > limit) { charge(limit + 1); null } else { charge(body.size.toLong()); body } },
         close = onClose,
     )
 
@@ -227,7 +227,7 @@ class ArtifactCdnTest {
         val limits = mutableListOf<Long>()
         val streaming =
             Transport { _ ->
-                ArtifactCdnRaw(200, null, "text/css", -1, readBody = { limit -> limits += limit; null })
+                ArtifactCdnRaw(200, null, "text/css", -1, readBody = { limit, _ -> limits += limit; null })
             }
         assertEquals(403, refused(fetch(streaming, "https://unpkg.com/x")))
         assertEquals(listOf(ARTIFACT_CDN_MAX_RESOURCE_BYTES), limits)
@@ -250,7 +250,7 @@ class ArtifactCdnTest {
     @Test fun networkFailuresBecome504() {
         assertEquals(504, refused(fetch(Transport { _ -> throw IOException("offline") }, "https://unpkg.com/x")))
         assertEquals(504, refused(fetch(Transport { _ -> throw IllegalStateException("odd") }, "https://unpkg.com/x")))
-        val failing = ArtifactCdnRaw(200, null, "text/css", -1, readBody = { throw IOException("cut off") })
+        val failing = ArtifactCdnRaw(200, null, "text/css", -1, readBody = { _, _ -> throw IOException("cut off") })
         assertEquals(504, refused(fetch(Transport { _ -> failing }, "https://unpkg.com/x")))
     }
 
@@ -284,5 +284,52 @@ class ArtifactCdnTest {
         // The transport interface has no parameter for page headers, cookies, Referer or Origin.
         val method = ArtifactCdnTransport::class.java.methods.single { it.name == "get" }
         assertEquals(listOf(String::class.java, String::class.java, ArtifactCdnBudget::class.java), method.parameterTypes.toList())
+    }
+
+    @Test fun refusedAndFailedBodiesStillCostBudget() {
+        val budget = ArtifactCdnBudget(10_000)
+        // Over the limit: the source was read up to limit + 1 before the body was refused.
+        val over = Transport { _ -> ArtifactCdnRaw(200, null, "text/css", -1, readBody = { limit, charge -> charge(limit + 1); null }) }
+        assertEquals(403, refused(fetch(over, "https://unpkg.com/x", budget)))
+        assertTrue(budget.remaining() <= 0)
+        val failBudget = ArtifactCdnBudget(10_000)
+        val failing = Transport { _ -> ArtifactCdnRaw(200, null, "text/css", -1, readBody = { _, charge -> charge(4_000); throw IOException("cut") }) }
+        assertEquals(504, refused(fetch(failing, "https://unpkg.com/x", failBudget)))
+        assertEquals(6_000, failBudget.remaining())
+        // A refusal before any read refunds the whole reservation.
+        val untouched = ArtifactCdnBudget(10_000)
+        assertEquals(403, refused(fetch(Transport { _ -> raw(type = "text/html") }, "https://unpkg.com/x", untouched)))
+        assertEquals(10_000, untouched.remaining())
+    }
+
+    @Test fun reserveGrantsAtMostWhatIsLeftAndRefundGivesBack() {
+        val budget = ArtifactCdnBudget(1_000)
+        assertEquals(600, budget.reserve(600))
+        assertEquals(400, budget.reserve(600))
+        assertEquals(0, budget.reserve(600))
+        budget.refund(250)
+        assertEquals(250, budget.remaining())
+    }
+
+    @Test fun theRequestCapCountsEveryForwardedRequestWhateverItsStatus() {
+        val budget = ArtifactCdnBudget(maxRequests = 3)
+        val transport = Transport { raw(404) }
+        repeat(3) { assertEquals(404, refused(fetch(transport, "https://unpkg.com/x", budget))) }
+        assertEquals(403, refused(fetch(transport, "https://unpkg.com/x", budget)))
+        assertEquals(3, transport.urls.size)
+        assertEquals(300, ARTIFACT_CDN_MAX_REQUESTS)
+    }
+
+    @Test fun withoutAFetchPermitTheAnswerIs504AndNothingIsFetched() {
+        val budget = ArtifactCdnBudget(permits = 1, permitWaitMillis = 50)
+        assertTrue(budget.acquireFetch())
+        val transport = Transport { raw() }
+        assertEquals(504, refused(fetch(transport, "https://unpkg.com/x", budget)))
+        assertEquals(emptyList<String>(), transport.urls)
+        budget.releaseFetch()
+        assertTrue(fetch(transport, "https://unpkg.com/x", budget) is ArtifactCdnReply.Ok)
+        // The permit is released again after the fetch.
+        assertTrue(budget.acquireFetch())
+        assertEquals(6, ARTIFACT_CDN_CONCURRENT_FETCHES)
     }
 }

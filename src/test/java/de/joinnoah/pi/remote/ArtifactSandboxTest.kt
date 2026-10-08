@@ -391,6 +391,19 @@ class ArtifactSandboxTest {
         assertEquals(emptyList<String>(), externalReferences("<p>plain</p><svg><use href=\"#a\"/></svg>"))
     }
 
+    @Test fun externalReferencesCanonicaliseBeforeTheAllowlistCheck() {
+        val html =
+            """
+            <script src="HTTPS://CDN.JSDELIVR.NET/npm/a.js"></script>
+            <script src="https://unpkg.com:443/b.js"></script>
+            <link href="https://fonts.googleapis.com/css2?family=A&amp;display=swap">
+            <script src="//cdnjs.cloudflare.com/c.js"></script>
+            <script src="https://unpkg.com&#58;8443/x.js"></script>
+            <script src="https://evil.example/&amp;.js"></script>
+            """.trimIndent()
+        assertEquals(listOf("https://unpkg.com&#58;8443/x.js", "https://evil.example/&amp;.js"), externalReferences(html))
+    }
+
     @Test fun externalReferencesOnlyScanTheStart() {
         val html = "x".repeat(300 * 1024) + "<img src=\"late.png\">"
         assertEquals(emptyList<String>(), externalReferences(html))

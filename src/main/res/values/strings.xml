@@ -497,7 +497,7 @@
     <string name="remote_artifact_share_title">Share</string>
     <string name="remote_artifact_preview">Preview</string>
     <string name="remote_artifact_code">Code</string>
-    <string name="remote_artifact_no_network">Libraries only</string>
+    <string name="remote_artifact_libraries_only">Libraries only</string>
     <string name="remote_artifact_external_references">This page references files outside the allowed libraries. They are not loaded in the preview.</string>
     <string name="remote_artifact_preview_failed">The preview stopped working.</string>
     <string name="remote_artifact_export_failed">Could not prepare the file.</string>
