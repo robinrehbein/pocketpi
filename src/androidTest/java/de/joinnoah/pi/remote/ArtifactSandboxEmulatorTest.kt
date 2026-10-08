@@ -35,31 +35,52 @@ import org.junit.Test
 class ArtifactSandboxEmulatorTest {
     @get:Rule val compose = createComposeRule()
 
-    private val connections = AtomicInteger()
-    private val packets = AtomicInteger()
     private val servers = mutableListOf<AutoCloseable>()
 
     @After fun closeServers() = servers.forEach { runCatching { it.close() } }
 
-    /** A TCP and a UDP socket on the device itself; any connection or packet means the page got out. */
-    private fun listen(): Pair<Int, Int> {
+    /**
+     * One loopback listener per way out, so a failure names the channel that leaked: `http` for every
+     * URL load, `preconnect` for network hints, `turn` for the TURN-over-TCP ICE server and `stun` for
+     * the UDP one. Any connection or packet means the page got out.
+     */
+    private class Probe(val http: Int, val preconnect: Int, val turn: Int, val stun: Int, val hits: Map<String, AtomicInteger>) {
+        fun counts(): Map<String, Int> = hits.mapValues { it.value.get() }
+    }
+
+    private fun tcpListener(counter: AtomicInteger): Int {
         val tcp = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1")).also { servers += it }
-        val udp = DatagramSocket(0, InetAddress.getByName("127.0.0.1")).also { servers += it }
         Thread {
             try {
-                while (true) tcp.accept().also { connections.incrementAndGet(); it.close() }
+                while (true) tcp.accept().also { counter.incrementAndGet(); it.close() }
             } catch (_: SocketException) {}
         }.apply { isDaemon = true }.start()
+        return tcp.localPort
+    }
+
+    private fun udpListener(counter: AtomicInteger): Int {
+        val udp = DatagramSocket(0, InetAddress.getByName("127.0.0.1")).also { servers += it }
         Thread {
             try {
                 val buffer = ByteArray(2048)
                 while (true) {
                     udp.receive(DatagramPacket(buffer, buffer.size))
-                    packets.incrementAndGet()
+                    counter.incrementAndGet()
                 }
             } catch (_: SocketException) {}
         }.apply { isDaemon = true }.start()
-        return tcp.localPort to udp.localPort
+        return udp.localPort
+    }
+
+    private fun listen(): Probe {
+        val hits = linkedMapOf("http" to AtomicInteger(), "preconnect" to AtomicInteger(), "turn" to AtomicInteger(), "stun" to AtomicInteger())
+        return Probe(
+            http = tcpListener(hits.getValue("http")),
+            preconnect = tcpListener(hits.getValue("preconnect")),
+            turn = tcpListener(hits.getValue("turn")),
+            stun = udpListener(hits.getValue("stun")),
+            hits = hits,
+        )
     }
 
     private fun show(page: ArtifactPage, callbacks: ArtifactCallbacks): WebView {
@@ -81,12 +102,13 @@ class ArtifactSandboxEmulatorTest {
         return url
     }
 
-    private fun probePage(tcp: Int, udp: Int): String {
-        val base = "http://127.0.0.1:$tcp"
+    private fun probePage(probe: Probe): String {
+        val base = "http://127.0.0.1:${probe.http}"
+        val hint = "http://127.0.0.1:${probe.preconnect}"
         return """
             <!doctype html><html><head><title>probe</title>
             <meta http-equiv="refresh" content="0;url=$base/refresh">
-            <link rel="prefetch" href="$base/prefetch"><link rel="preconnect" href="$base"><link rel="dns-prefetch" href="$base">
+            <link rel="prefetch" href="$base/prefetch"><link rel="preconnect" href="$hint"><link rel="dns-prefetch" href="$hint">
             <link rel="stylesheet" href="$base/style.css">
             </head><body>
             <img src="$base/img.png"><iframe src="$base/frame"></iframe><script src="$base/script.js"></script>
@@ -96,11 +118,11 @@ class ArtifactSandboxEmulatorTest {
             attempt(function () { fetch("$base/fetch", { mode: "no-cors" }).catch(function () {}); });
             attempt(function () { var x = new XMLHttpRequest(); x.open("GET", "$base/xhr"); x.send(); });
             attempt(function () { navigator.sendBeacon("$base/beacon", "x"); });
-            attempt(function () { new WebSocket("ws://127.0.0.1:$tcp/ws"); });
+            attempt(function () { new WebSocket("ws://127.0.0.1:${probe.http}/ws"); });
             attempt(function () {
               var pc = new RTCPeerConnection({ iceServers: [
-                { urls: "stun:127.0.0.1:$udp" },
-                { urls: "turn:127.0.0.1:$tcp?transport=tcp", username: "user", credential: "secret" },
+                { urls: "stun:127.0.0.1:${probe.stun}" },
+                { urls: "turn:127.0.0.1:${probe.turn}?transport=tcp", username: "user", credential: "secret" },
               ] });
               pc.createDataChannel("x");
               pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).catch(function () {});
@@ -115,8 +137,8 @@ class ArtifactSandboxEmulatorTest {
     }
 
     @Test fun aHostilePageLoadsButReachesNoSocketAndStaysWhereItIs() {
-        val (tcp, udp) = listen()
-        val page = ArtifactPage(ArtifactKind.Html, probePage(tcp, udp))
+        val probe = listen()
+        val page = ArtifactPage(ArtifactKind.Html, probePage(probe))
         val done = CountDownLatch(1)
         var reported = ""
         val view = show(page, ArtifactCallbacks(onTitle = { if (it.startsWith("probe-done:")) { reported = it; done.countDown() } }))
@@ -128,8 +150,8 @@ class ArtifactSandboxEmulatorTest {
         assertEquals("probe-done:null", reported)
         // Give late connections (ICE, retries) time to show up.
         Thread.sleep(2_000)
-        assertEquals("TCP connections", 0, connections.get())
-        assertEquals("UDP packets", 0, packets.get())
+        val leaked = probe.counts().filterValues { it > 0 }
+        assertTrue("The sandboxed page reached the network: $leaked (all: ${probe.counts()})", leaked.isEmpty())
         assertEquals(page.url, currentUrl(view))
     }
 
@@ -140,7 +162,7 @@ class ArtifactSandboxEmulatorTest {
      * TURN-over-TCP ICE server) and the UDP side (the STUN ICE server).
      */
     @Test fun aPlainWebViewReachesTheListenersSoTheProbeCanSeeALeak() {
-        val (tcp, udp) = listen()
+        val probe = listen()
         val done = CountDownLatch(1)
         var reported = ""
         compose.setContent {
@@ -155,7 +177,7 @@ class ArtifactSandboxEmulatorTest {
                                     if (title?.startsWith("probe-done:") == true) { reported = title; done.countDown() }
                                 }
                             }
-                        view.loadDataWithBaseURL("http://127.0.0.1:$tcp/", probePage(tcp, udp), "text/html", "utf-8", null)
+                        view.loadDataWithBaseURL("http://127.0.0.1:${probe.http}/", probePage(probe), "text/html", "utf-8", null)
                     }
                 },
                 onRelease = ::disposeArtifactWebView,
@@ -163,10 +185,13 @@ class ArtifactSandboxEmulatorTest {
             )
         }
         assertTrue("The control page did not run", done.await(30, TimeUnit.SECONDS))
-        assertEquals("probe-done:http://127.0.0.1:$tcp", reported)
+        assertEquals("probe-done:http://127.0.0.1:${probe.http}", reported)
         Thread.sleep(2_000)
-        assertTrue("The control made no TCP connection, so the probe cannot see one", connections.get() > 0)
-        assertTrue("The control sent no UDP packet, so the probe cannot see one", packets.get() > 0)
+        val counts = probe.counts()
+        // Printed so a CI log shows which channels the control proves the listeners can see.
+        println("ArtifactSandboxEmulatorTest control counts: $counts")
+        assertTrue("The control made no HTTP connection, so the probe cannot see one: $counts", counts.getValue("http") > 0)
+        assertTrue("The control reached no WebRTC listener, so the probe cannot see one: $counts", counts.getValue("turn") + counts.getValue("stun") > 0)
     }
 
     @Test fun mermaidDrawsAValidDiagram() {
