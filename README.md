@@ -192,7 +192,7 @@ from commit `1b6b8d3871d52b66b876e95f080f69bf00bb4309`, the merge of pull reques
 artifacts behind `session.files.artifact.v1`) is a byte-for-byte copy from noah-monorepo commit
 `a07ba16e92e6613ac81a0032e2000c592fb2ed6f`, the merge of pull request #653.
 `session-reload-v1.json` (reloading extensions, skills, prompts and context files) is a
-byte-for-byte copy from noah-monorepo commit `PLACEHOLDER_RELOAD_COMMIT`. When the
+byte-for-byte copy from noah-monorepo commit `a6120a90b9ab580dc7684bad01fb494a6c2b2137`, the merge of pull request #663. When the
 upstream protocol fixtures change, copy the changed files into
 `src/test/resources/`, compare their bytes with the upstream source, and run
 `./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and
