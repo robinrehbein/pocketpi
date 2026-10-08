@@ -10,10 +10,6 @@
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
-        <intent>
-            <action android:name="android.intent.action.VIEW" />
-            <data android:mimeType="text/html" />
-        </intent>
     </queries>
     <application android:name=".RemoteApplication" android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules" android:fullBackupContent="false"

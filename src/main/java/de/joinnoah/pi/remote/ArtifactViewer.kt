@@ -1,9 +1,6 @@
 package de.joinnoah.pi.remote
 
-import android.content.ActivityNotFoundException
-import android.content.Intent
 import android.widget.Toast
-import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -63,7 +60,6 @@ internal fun ArtifactViewer(
     var showCode by remember { mutableStateOf(false) }
     var previewFailed by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
-    var confirmBrowser by remember { mutableStateOf(false) }
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val background = if (kind == ArtifactKind.Html) android.graphics.Color.WHITE else MaterialTheme.colorScheme.surface.toArgb()
     val references = remember(text) { if (kind == ArtifactKind.Html) externalReferences(text) else emptyList() }
@@ -71,9 +67,7 @@ internal fun ArtifactViewer(
     val exportFailed = stringResource(R.string.remote_artifact_export_failed)
     val reloadFailed = stringResource(R.string.remote_artifact_reload_failed)
     val copyFailed = stringResource(R.string.remote_artifact_copy_failed)
-    val noBrowser = stringResource(R.string.remote_artifact_no_browser)
     val shareTitle = stringResource(R.string.remote_artifact_share_title)
-    val browserTitle = stringResource(R.string.remote_artifact_open_in_browser)
     val mime = if (kind == ArtifactKind.Html) "text/html" else "text/plain"
     val exportName = remember(path, kind) { ArtifactStorage.safeName(path, if (kind == ArtifactKind.Html) "html" else "mmd") }
 
@@ -225,57 +219,7 @@ internal fun ArtifactViewer(
                             )
                         }
                 }
-                if (kind == ArtifactKind.Html)
-                    Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(12.dp)) {
-                        OutlinedButton(
-                            onClick = { confirmBrowser = true },
-                            enabled = !busy,
-                            modifier = Modifier.fillMaxWidth().testTag("artifactOpenInBrowser"),
-                        ) { Text(browserTitle) }
-                    }
             }
         }
-        if (confirmBrowser)
-            AlertDialog(
-                onDismissRequest = { confirmBrowser = false },
-                title = { Text(stringResource(R.string.remote_artifact_browser_title)) },
-                text = { Text(stringResource(R.string.remote_artifact_browser_message)) },
-                confirmButton = {
-                    TextButton(
-                        modifier = Modifier.testTag("artifactBrowserConfirm"),
-                        onClick = {
-                            confirmBrowser = false
-                            scope.launch {
-                                busy = true
-                                try {
-                                    val uri = export()
-                                    if (uri == null) Toast.makeText(context, exportFailed, Toast.LENGTH_SHORT).show()
-                                    else {
-                                        val view = artifactViewIntent(uri, "text/html", browserTitle)
-                                        // The chooser always resolves; ask for the real ACTION_VIEW target first.
-                                        val handler =
-                                            Intent(Intent.ACTION_VIEW).setDataAndType(uri, "text/html")
-                                                .resolveActivity(context.packageManager)
-                                        if (handler == null) Toast.makeText(context, noBrowser, Toast.LENGTH_SHORT).show()
-                                        else
-                                            try {
-                                                context.startActivity(view)
-                                            } catch (_: ActivityNotFoundException) {
-                                                Toast.makeText(context, noBrowser, Toast.LENGTH_SHORT).show()
-                                            }
-                                    }
-                                } finally {
-                                    busy = false
-                                }
-                            }
-                        },
-                    ) { Text(stringResource(R.string.remote_artifact_browser_confirm)) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { confirmBrowser = false }, modifier = Modifier.testTag("artifactBrowserCancel")) {
-                        Text(stringResource(R.string.remote_artifact_cancel))
-                    }
-                },
-            )
     }
 }

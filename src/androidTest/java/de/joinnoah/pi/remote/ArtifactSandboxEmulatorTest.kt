@@ -185,14 +185,19 @@ class ArtifactSandboxEmulatorTest {
         )
     }
 
-    private fun show(page: ArtifactPage, callbacks: ArtifactCallbacks, webRtcBlock: ((WebView) -> Boolean)? = null): WebView {
+    private fun show(
+        page: ArtifactPage,
+        callbacks: ArtifactCallbacks,
+        webRtcBlock: ((WebView) -> Boolean)? = null,
+        cdn: ArtifactCdnFetcher? = null,
+    ): WebView {
         var view: WebView? = null
         compose.setContent {
             AndroidView(
                 factory = { context ->
                     (
-                        if (webRtcBlock == null) createArtifactWebView(context, page, callbacks)
-                        else createArtifactWebView(context, page, callbacks, webRtcBlock = webRtcBlock)
+                        if (webRtcBlock == null) createArtifactWebView(context, page, callbacks, cdn = cdn)
+                        else createArtifactWebView(context, page, callbacks, webRtcBlock = webRtcBlock, cdn = cdn)
                     ).also { view = it }
                 },
                 onRelease = ::disposeArtifactWebView,
@@ -450,6 +455,51 @@ class ArtifactSandboxEmulatorTest {
         assertTrue("The control made no preconnect, so the probe cannot see one: $counts", counts.getValue("preconnect") > 0)
         assertTrue("The control made no loopback preconnect, so the probe cannot see one: $counts", counts.getValue("preconnectLoopback") > 0)
         assertTrue("The control reached no WebRTC listener, so the probe cannot see one: $counts", webRtc > 0)
+    }
+
+    /**
+     * The CDN path end to end without internet: an allowlisted script is answered by an injected
+     * fetcher, runs in the page, and sets the title. The probe listeners must still see nothing, so the
+     * WebView itself reached no socket, and a non-allowlisted host never reaches the fetcher.
+     */
+    @Test fun anAllowlistedScriptIsServedByTheFetcherAndNothingElseGetsOut() {
+        val probe = listen()
+        val requested = Collections.synchronizedList(mutableListOf<String>())
+        val fetcher =
+            ArtifactCdnFetcher { url, _, _ ->
+                requested += url
+                ArtifactCdnReply.Ok("text/javascript", "utf-8", "window.cdnMarker = 'cdn-ok';".toByteArray())
+            }
+        val html =
+            """
+            <!doctype html><html><head><title>start</title>
+            <script src="https://cdn.jsdelivr.net/npm/marker@1/marker.js"></script>
+            <script src="https://evil.example/x.js"></script>
+            <script src="https://cdn.jsdelivr.net.evil.example/x.js"></script>
+            <script src="http://${probe.ip}:${probe.http}/script.js"></script>
+            </head><body><script>
+            var viaFetch = "none";
+            fetch("https://unpkg.com/lib/data.json").then(function (r) { return r.text(); }).then(function () { viaFetch = "fetch-ok"; }).catch(function () { viaFetch = "fetch-blocked"; });
+            fetch("https://evil.example/data.json", { mode: "no-cors" }).catch(function () {});
+            setTimeout(function () { document.title = "cdn-done:" + window.cdnMarker + "|" + viaFetch; }, 3000);
+            </script></body></html>
+            """.trimIndent()
+        val done = CountDownLatch(1)
+        var reported = ""
+        show(
+            ArtifactPage(ArtifactKind.Html, html),
+            ArtifactCallbacks(onTitle = { if (it.startsWith("cdn-done:")) { reported = it; done.countDown() } }),
+            cdn = fetcher,
+        )
+        assertTrue("The CDN page did not run", done.await(30, TimeUnit.SECONDS))
+        assertEquals("cdn-done:cdn-ok|fetch-ok", reported)
+        assertTrue("The allowlisted script never reached the fetcher: $requested", "https://cdn.jsdelivr.net/npm/marker@1/marker.js" in requested)
+        val offList = synchronized(requested) { requested.filter { !artifactCdnAllowed(it) } }
+        assertTrue("A non-allowlisted URL reached the fetcher: $offList", offList.isEmpty())
+        assertFalse("evil.example" in requested.joinToString())
+        Thread.sleep(1_000)
+        val leaked = probe.counts().filterValues { it > 0 }
+        assertTrue("The WebView reached a socket while the CDN path was in use: $leaked", leaked.isEmpty())
     }
 
     @Test fun mermaidDrawsAValidDiagram() {

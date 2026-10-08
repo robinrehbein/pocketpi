@@ -66,16 +66,34 @@ class ArtifactSandboxTest {
     @Test fun theContentSecurityPolicyClosesEveryFetchDirective() {
         val html = artifactContentSecurityPolicy(ArtifactKind.Html, host)
         listOf(
-            "sandbox allow-scripts", "default-src 'none'", "connect-src 'none'", "frame-src 'none'",
-            "form-action 'none'", "base-uri 'none'", "img-src data: blob:", "font-src data:",
+            "sandbox allow-scripts", "default-src 'none'", "frame-src 'none'",
+            "form-action 'none'", "base-uri 'none'", "media-src data: blob:",
         ).forEach { assertTrue(it, it in html) }
-        assertFalse("http" in html)
+        assertFalse("connect-src 'none'" in html)
+        assertFalse("http:" in html)
+        assertFalse("*" in html)
         assertFalse("allow-same-origin" in html)
         val mermaid = artifactContentSecurityPolicy(ArtifactKind.Mermaid, host)
         assertTrue("script-src https://$host;" in mermaid)
         assertFalse("unsafe-eval" in mermaid)
         assertFalse("unsafe-inline'; style" in mermaid)
         assertTrue("connect-src 'none'" in mermaid)
+    }
+
+    @Test fun theHtmlPolicyNamesTheCdnAllowlistAndNothingElse() {
+        val html = artifactContentSecurityPolicy(ArtifactKind.Html, host)
+        val scripts = "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com https://cdn.tailwindcss.com https://code.jquery.com"
+        assertEquals(
+            "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' $scripts; " +
+                "style-src 'unsafe-inline' $scripts https://fonts.googleapis.com; img-src data: blob: $scripts; " +
+                "font-src data: https://fonts.gstatic.com $scripts; media-src data: blob:; " +
+                "connect-src $scripts; frame-src 'none'; form-action 'none'; base-uri 'none'",
+            html,
+        )
+        // Every host in the header is on the allowlist, and the header names no other.
+        val hosts = Regex("https://([^\\s;]+)").findAll(html).map { it.groupValues[1] }.toSet()
+        assertTrue(hosts.all { artifactCdnAllowed("https://$it/x") })
+        assertFalse(host in html)
     }
 
     @Test fun settingsAreLockedDown() {
@@ -377,5 +395,81 @@ class ArtifactSandboxTest {
         val html = "x".repeat(300 * 1024) + "<img src=\"late.png\">"
         assertEquals(emptyList<String>(), externalReferences(html))
         assertNotNull(externalReferences("<img src=\"early.png\">" + html).singleOrNull())
+    }
+
+    private class CountingFetcher(val reply: ArtifactCdnReply) : ArtifactCdnFetcher {
+        val urls = mutableListOf<String>()
+
+        override fun fetch(url: String, userAgent: String, budget: ArtifactCdnBudget): ArtifactCdnReply {
+            urls += url
+            return reply
+        }
+    }
+
+    private fun request(url: String, method: String = "GET", mainFrame: Boolean = false, headers: Map<String, String> = emptyMap()) =
+        object : android.webkit.WebResourceRequest {
+            override fun getUrl(): android.net.Uri = android.net.Uri.parse(url)
+            override fun isForMainFrame() = mainFrame
+            override fun isRedirect() = false
+            override fun hasGesture() = false
+            override fun getMethod() = method
+            override fun getRequestHeaders() = headers
+        }
+
+    private fun clientWith(fetcher: ArtifactCdnFetcher, kind: ArtifactKind = ArtifactKind.Html) =
+        ArtifactWebViewClient(context, ArtifactPage(kind, "<p>x</p>", host = host), ArtifactCallbacks(), lazyOf(fetcher), "UA")
+
+    @Test fun anAllowlistedGetIsAnsweredFromTheFetcherWithCorsHeaders() {
+        val fetcher = CountingFetcher(ArtifactCdnReply.Ok("text/javascript", "utf-8", "window.x=1".toByteArray()))
+        val response = clientWith(fetcher).shouldInterceptRequest(null, request("https://cdn.jsdelivr.net/npm/x.js", headers = mapOf("Cookie" to "a=b", "Referer" to "r")))!!
+        assertEquals(listOf("https://cdn.jsdelivr.net/npm/x.js"), fetcher.urls)
+        assertEquals(200, response.statusCode)
+        assertEquals("text/javascript", response.mimeType)
+        assertEquals("*", response.responseHeaders["Access-Control-Allow-Origin"])
+        assertEquals("cross-origin", response.responseHeaders["Cross-Origin-Resource-Policy"])
+        assertEquals("nosniff", response.responseHeaders["X-Content-Type-Options"])
+        assertEquals("window.x=1", response.data.readBytes().toString(Charsets.UTF_8))
+    }
+
+    @Test fun everythingElseStaysAnEmpty403AndNeverReachesTheFetcher() {
+        val fetcher = CountingFetcher(ArtifactCdnReply.Ok("text/javascript", null, ByteArray(1)))
+        val client = clientWith(fetcher)
+        listOf(
+            request("https://cdn.jsdelivr.net.evil.example/x.js"),
+            request("https://evil.example/x.js"),
+            request("http://cdn.jsdelivr.net/x.js"),
+            request("https://cdn.jsdelivr.net:8443/x.js"),
+            request("https://cdn.jsdelivr.net/x.js", method = "POST"),
+            request("https://cdn.jsdelivr.net/x.js", method = "HEAD"),
+            request("https://cdn.jsdelivr.net/x.js", mainFrame = true),
+        ).forEach {
+            val response = client.shouldInterceptRequest(null, it)!!
+            assertEquals("${it.method} ${it.url}", 403, response.statusCode)
+            assertEquals(0, response.data.readBytes().size)
+        }
+        assertEquals(emptyList<String>(), fetcher.urls)
+        // Mermaid has no CDN.
+        val mermaid = clientWith(fetcher, ArtifactKind.Mermaid)
+        assertEquals(403, mermaid.shouldInterceptRequest(null, request("https://cdn.jsdelivr.net/x.js"))!!.statusCode)
+        assertEquals(emptyList<String>(), fetcher.urls)
+    }
+
+    @Test fun aRefusedFetchReachesThePageAsAnEmptyErrorResponse() {
+        listOf(404, 504, 403).forEach { status ->
+            val response = clientWith(CountingFetcher(ArtifactCdnReply.Refused(status))).shouldInterceptRequest(null, request("https://unpkg.com/x.js"))!!
+            assertEquals(status, response.statusCode)
+            assertEquals(0, response.data.readBytes().size)
+        }
+    }
+
+    @Test fun referencesOnTheAllowlistAreNotListedAsExternal() {
+        val html =
+            """<script src="https://cdn.jsdelivr.net/npm/chart.js"></script><script src="//unpkg.com/x"></script>
+               <link href="https://fonts.googleapis.com/css2?family=Inter" rel="stylesheet">
+               <script src="https://cdn.jsdelivr.net.evil.example/x.js"></script><img src="http://unpkg.com/x.png"><img src="logo.png">"""
+        assertEquals(
+            listOf("https://cdn.jsdelivr.net.evil.example/x.js", "http://unpkg.com/x.png", "logo.png"),
+            externalReferences(html),
+        )
     }
 }

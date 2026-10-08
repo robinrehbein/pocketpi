@@ -1,6 +1,5 @@
 package de.joinnoah.pi.remote
 
-import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -8,7 +7,7 @@ import androidx.core.content.FileProvider
 import java.io.File
 
 /**
- * Writes artifacts the user chose to open elsewhere or share to `cacheDir/artifacts/`, a folder the
+ * Writes artifacts the user chose to share to `cacheDir/artifacts/`, a folder the
  * export FileProvider serves. Only the latest few files stay; [clear] runs at app start.
  */
 internal object ArtifactStorage {
@@ -55,16 +54,6 @@ internal object ArtifactStorage {
 internal fun storeArtifact(context: Context, name: String, text: String): Uri {
     val file = ArtifactStorage.write(context.cacheDir, name, text.toByteArray(Charsets.UTF_8))
     return FileProvider.getUriForFile(context, exportAuthority(context), file)
-}
-
-/** The chooser that opens [uri] in a browser or other viewer; the user picks the app. */
-internal fun artifactViewIntent(uri: Uri, mimeType: String, title: CharSequence): Intent {
-    val view =
-        Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, mimeType)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    view.clipData = ClipData.newRawUri(null, uri)
-    return Intent.createChooser(view, title).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 }
 
 /** The chooser that shares [uri] with another app. */

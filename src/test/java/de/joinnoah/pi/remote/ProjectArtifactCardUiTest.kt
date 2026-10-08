@@ -91,7 +91,7 @@ class ProjectArtifactCardUiTest {
         assertEquals(false, asked)
     }
 
-    @Test fun tappingThePageOpensTheViewerWithItsTabsAndTheBrowserConfirm() {
+    @Test fun tappingThePageOpensTheViewerWithItsTabsAndNoBrowserButton() {
         show("[x](a.html)", source { _, path, _ -> page(path, "<title>T</title><img src=\"logo.png\">") })
         compose.waitUntil(5_000) { compose.onAllNodesWithText("T").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("projectArtifact-a.html").performClick()
@@ -102,9 +102,7 @@ class ProjectArtifactCardUiTest {
         compose.onNodeWithTag("artifactViewerReload", useUnmergedTree = true).assertExists()
         compose.onNodeWithTag("artifactTabCode", useUnmergedTree = true).performClick()
         compose.onNodeWithText("<title>T</title><img src=\"logo.png\">", useUnmergedTree = true).assertExists()
-        compose.onNodeWithTag("artifactOpenInBrowser", useUnmergedTree = true).performClick()
-        compose.onNodeWithText("Opens in your browser. There this page can use the network.").assertExists()
-        compose.onNodeWithTag("artifactBrowserCancel").performClick()
+        compose.onNodeWithTag("artifactOpenInBrowser", useUnmergedTree = true).assertDoesNotExist()
         compose.onNodeWithTag("artifactViewerClose", useUnmergedTree = true).performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("artifactViewer", true).fetchSemanticsNodes().isEmpty() }
     }

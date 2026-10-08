@@ -36,6 +36,9 @@ import java.util.WeakHashMap
  * for Mermaid, its two bundled scripts) is answered with an empty 403 before it reaches the network
  * stack. A Content-Security-Policy header and blockNetworkLoads back that up.
  *
+ * The single exception is a GET for a library on the CDN allowlist (ArtifactCdn.kt). The WebView still
+ * does not connect: the app fetches it with a fresh request and hands the bytes back.
+ *
  * WebRTC and network hints (preconnect, dns-prefetch) bypass all of that. ArtifactNetworkLock.kt adds
  * the two layers for them: a process-wide proxy override to a dead proxy, which every TCP connection
  * the WebView opens must go through, and a document-start script that removes WebRTC, which is the
@@ -74,17 +77,22 @@ internal fun artifactRequestPolicy(url: String, method: String, host: String, ki
     }
 }
 
+private val CDN_SCRIPT_SOURCES = ARTIFACT_CDN_SCRIPT_HOSTS.joinToString(" ") { "https://$it" }
+
 /**
  * The CSP header. `sandbox allow-scripts` gives the page an opaque origin with no storage, forms,
  * popups or top navigation; the fetch directives close the rest. HTML artifacts may use inline
- * script and style; Mermaid only runs the two bundled scripts from [host].
+ * script and style and load from the CDN allowlist only; Mermaid only runs the two bundled scripts
+ * from [host] and has no CDN.
  */
 internal fun artifactContentSecurityPolicy(kind: ArtifactKind, host: String): String =
     when (kind) {
         ArtifactKind.Html ->
-            "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; " +
-                "style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; " +
-                "connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'"
+            "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' $CDN_SCRIPT_SOURCES; " +
+                "style-src 'unsafe-inline' $CDN_SCRIPT_SOURCES https://$ARTIFACT_CDN_FONT_CSS_HOST; " +
+                "img-src data: blob: $CDN_SCRIPT_SOURCES; " +
+                "font-src data: https://$ARTIFACT_CDN_FONT_FILE_HOST $CDN_SCRIPT_SOURCES; media-src data: blob:; " +
+                "connect-src $CDN_SCRIPT_SOURCES; frame-src 'none'; form-action 'none'; base-uri 'none'"
         ArtifactKind.Mermaid ->
             "sandbox allow-scripts; default-src 'none'; script-src https://$host; " +
                 "style-src 'unsafe-inline'; img-src data:; font-src data:; " +
@@ -114,6 +122,37 @@ internal class ArtifactPage(
 
 private val EMPTY_FORBIDDEN get() =
     WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+
+private fun cdnResponse(reply: ArtifactCdnReply): WebResourceResponse =
+    when (reply) {
+        is ArtifactCdnReply.Ok ->
+            WebResourceResponse(
+                reply.mediaType,
+                reply.charset,
+                200,
+                "OK",
+                mapOf(
+                    "Access-Control-Allow-Origin" to "*",
+                    "Cross-Origin-Resource-Policy" to "cross-origin",
+                    "X-Content-Type-Options" to "nosniff",
+                    "Cache-Control" to "no-store",
+                ),
+                ByteArrayInputStream(reply.body),
+            )
+        is ArtifactCdnReply.Refused ->
+            WebResourceResponse(
+                "text/plain",
+                "utf-8",
+                reply.status,
+                when (reply.status) {
+                    404 -> "Not Found"
+                    504 -> "Gateway Timeout"
+                    else -> "Forbidden"
+                },
+                emptyMap(),
+                ByteArrayInputStream(ByteArray(0)),
+            )
+    }
 
 private fun responseHeaders(csp: String) =
     mapOf(
@@ -235,8 +274,14 @@ internal class ArtifactWebViewClient(
     private val context: Context,
     private val page: ArtifactPage,
     private val callbacks: ArtifactCallbacks,
+    private val cdn: Lazy<ArtifactCdnFetcher> = lazy { ArtifactCdn.fetcher(context) },
+    private val userAgent: String = "",
 ) : WebViewClient() {
     private var finished = false
+    private val cdnBudget = ArtifactCdnBudget()
+
+    /** Stops CDN requests in flight; the view is being disposed. */
+    fun cancelNetwork() = cdnBudget.cancel()
 
     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?) = true
 
@@ -245,7 +290,13 @@ internal class ArtifactWebViewClient(
 
     override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
         val target = request ?: return EMPTY_FORBIDDEN
-        return artifactResponse(context, page, target.url.toString(), target.method)
+        val url = target.url.toString()
+        val local = artifactResponse(context, page, url, target.method)
+        if (local.statusCode != 403) return local
+        // Only a sub-resource GET, never the page itself, and only the allowlist. Request headers are not read.
+        if (target.method != "GET" || target.isForMainFrame || page.kind != ArtifactKind.Html || !artifactCdnAllowed(url))
+            return local
+        return cdnResponse(cdn.value.fetch(url, userAgent, cdnBudget))
     }
 
     @Deprecated("Deprecated in Java")
@@ -277,6 +328,8 @@ internal class ArtifactWebViewClient(
  * process loads a moment later. Without the proxy nothing is loaded and [ArtifactCallbacks.onFailed]
  * is called. Without the WebRTC block ([webRtcBlock] returns false) the view runs no JavaScript: an
  * HTML artifact shows without its scripts, and a Mermaid diagram is not loaded and fails.
+ *
+ * [cdn] answers requests for allowlisted hosts; null uses the app's own client, created on first use.
  */
 internal fun createArtifactWebView(
     context: Context,
@@ -285,11 +338,14 @@ internal fun createArtifactWebView(
     background: Int = Color.WHITE,
     networkLock: ArtifactNetworkLock = ArtifactNetworkLock.process,
     webRtcBlock: (WebView) -> Boolean = ::installArtifactWebRtcBlock,
+    cdn: ArtifactCdnFetcher? = null,
 ): WebView =
     WebView(context).also { view ->
         configureArtifactWebView(view)
         view.setBackgroundColor(background)
-        view.webViewClient = ArtifactWebViewClient(context, page, callbacks)
+        view.webViewClient =
+            if (cdn == null) ArtifactWebViewClient(context, page, callbacks, userAgent = view.settings.userAgentString.orEmpty())
+            else ArtifactWebViewClient(context, page, callbacks, lazyOf(cdn), view.settings.userAgentString.orEmpty())
         view.webChromeClient = ArtifactChromeClient(callbacks)
         if (Build.VERSION.SDK_INT >= 29) view.webViewRenderProcessClient = ArtifactRenderProcessClient()
         // Posted: this may run inside the factory that is still creating the view.
@@ -329,6 +385,7 @@ internal class ArtifactRenderProcessClient : WebViewRenderProcessClient() {
 internal fun disposeArtifactWebView(view: WebView) {
     disposedArtifactViews += view
     try {
+        runCatching { (view.webViewClient as? ArtifactWebViewClient)?.cancelNetwork() }
         runCatching { view.stopLoading() }
         runCatching { view.loadUrl("about:blank") }
         runCatching { view.clearHistory() }
@@ -372,8 +429,8 @@ private const val EXTERNAL_SCAN_CHARS = 256 * 1024
 
 /**
  * References in the first 256 KB of [html] that the sandbox cannot satisfy: anything other than a
- * `data:` or `blob:` URL, a `#fragment`, or `javascript:`. Used only for a notice; the sandbox
- * refuses these requests either way.
+ * `data:` or `blob:` URL, a `#fragment`, `javascript:`, or a file on the CDN allowlist. Used only for
+ * a notice; the sandbox refuses what is not allowlisted either way.
  */
 internal fun externalReferences(html: String): List<String> =
     externalReferenceRegex
@@ -382,7 +439,10 @@ internal fun externalReferences(html: String): List<String> =
         .filter { ref ->
             val value = ref.trim().lowercase()
             value.isNotEmpty() && !value.startsWith("#") && !value.startsWith("data:") &&
-                !value.startsWith("blob:") && !value.startsWith("javascript:")
+                !value.startsWith("blob:") && !value.startsWith("javascript:") && !artifactCdnAllowed(absoluteReference(ref.trim()))
         }
         .distinct()
         .toList()
+
+/** A protocol-relative reference resolves to https, because the sandbox document is served over https. */
+private fun absoluteReference(ref: String) = if (ref.startsWith("//")) "https:$ref" else ref
