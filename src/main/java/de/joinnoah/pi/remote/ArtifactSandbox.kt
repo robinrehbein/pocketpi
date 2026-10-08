@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
@@ -23,14 +25,23 @@ import android.webkit.WebViewRenderProcess
 import android.webkit.WebViewRenderProcessClient
 import java.io.ByteArrayInputStream
 import java.security.SecureRandom
+import java.util.Collections
+import java.util.WeakHashMap
 
 /*
  * The sandbox for HTML artifacts and Mermaid diagrams. Content here is written by an agent or by a
- * file the agent touched, so it is treated as hostile: JavaScript runs, but nothing leaves the
- * WebView. There is no JavaScript bridge (no addJavascriptInterface, no addWebMessageListener) on any
- * view made here, every navigation is refused, and every request except the one document (and, for
- * Mermaid, its two bundled scripts) is answered with an empty 403 before it reaches the network
+ * file the agent touched, so it is treated as hostile: JavaScript runs, but the page gets no way out
+ * that we know of. There is no JavaScript bridge (no addJavascriptInterface, no addWebMessageListener)
+ * on any view made here, every navigation is refused, and every request except the one document (and,
+ * for Mermaid, its two bundled scripts) is answered with an empty 403 before it reaches the network
  * stack. A Content-Security-Policy header and blockNetworkLoads back that up.
+ *
+ * WebRTC and network hints (preconnect, dns-prefetch) bypass all of that. ArtifactNetworkLock.kt adds
+ * the two layers for them: a process-wide proxy override to a dead proxy, which every TCP connection
+ * the WebView opens must go through, and a document-start script that removes WebRTC, which is the
+ * only thing that stops UDP. A view that cannot get the proxy loads nothing; a view that cannot get
+ * the script runs no JavaScript. These layers are measured on a device by ArtifactSandboxEmulatorTest,
+ * not proven: a WebView update could open a channel none of them covers.
  */
 
 internal enum class ArtifactKind { Html, Mermaid }
@@ -109,6 +120,7 @@ private fun responseHeaders(csp: String) =
         "Content-Security-Policy" to csp,
         "Cache-Control" to "no-store",
         "X-Content-Type-Options" to "nosniff",
+        "X-DNS-Prefetch-Control" to "off",
     )
 
 /** Answers a request from the page or denies it; never reaches the network. */
@@ -260,12 +272,19 @@ internal class ArtifactWebViewClient(
 /**
  * A configured, locked-down WebView showing [page]. [background] fills behind the page.
  * The caller owns it and must pass it to [disposeArtifactWebView].
+ *
+ * The page is loaded only once [networkLock] has the dead proxy in force, so the first view of a
+ * process loads a moment later. Without the proxy nothing is loaded and [ArtifactCallbacks.onFailed]
+ * is called. Without the WebRTC block ([webRtcBlock] returns false) the view runs no JavaScript: an
+ * HTML artifact shows without its scripts, and a Mermaid diagram is not loaded and fails.
  */
 internal fun createArtifactWebView(
     context: Context,
     page: ArtifactPage,
     callbacks: ArtifactCallbacks,
     background: Int = Color.WHITE,
+    networkLock: ArtifactNetworkLock = ArtifactNetworkLock.process,
+    webRtcBlock: (WebView) -> Boolean = ::installArtifactWebRtcBlock,
 ): WebView =
     WebView(context).also { view ->
         configureArtifactWebView(view)
@@ -273,8 +292,25 @@ internal fun createArtifactWebView(
         view.webViewClient = ArtifactWebViewClient(context, page, callbacks)
         view.webChromeClient = ArtifactChromeClient(callbacks)
         if (Build.VERSION.SDK_INT >= 29) view.webViewRenderProcessClient = ArtifactRenderProcessClient()
-        view.loadUrl(page.url)
+        // Posted: this may run inside the factory that is still creating the view.
+        val fail = { Handler(Looper.getMainLooper()).post { if (view !in disposedArtifactViews) callbacks.onFailed() } }
+        // Registered before the first load; a view without it must not run scripts at all.
+        if (!webRtcBlock(view)) {
+            view.settings.javaScriptEnabled = false
+            // A diagram cannot draw without scripts; fail now instead of showing a blank page.
+            if (page.kind == ArtifactKind.Mermaid) {
+                fail()
+                return@also
+            }
+        }
+        networkLock.ensure(
+            onReady = { if (view !in disposedArtifactViews) view.loadUrl(page.url) },
+            onUnsupported = { fail() },
+        )
     }
+
+/** Views passed to [disposeArtifactWebView], so a late network-lock callback leaves them alone. */
+private val disposedArtifactViews: MutableSet<WebView> = Collections.newSetFromMap(WeakHashMap())
 
 /**
  * Ends a renderer that stops answering (a page stuck in a loop). Terminating it lands in
@@ -291,6 +327,7 @@ internal class ArtifactRenderProcessClient : WebViewRenderProcessClient() {
 
 /** Tears a sandboxed view down so nothing it held outlives it; one failing step never skips the rest. */
 internal fun disposeArtifactWebView(view: WebView) {
+    disposedArtifactViews += view
     try {
         runCatching { view.stopLoading() }
         runCatching { view.loadUrl("about:blank") }

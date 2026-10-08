@@ -98,9 +98,157 @@ class ArtifactSandboxTest {
         }
     }
 
+    /** Stands in for WebView's proxy override; [applied] runs the pending callback. */
+    private class FakeProxy(var supported: Boolean = true, var throwOnApply: Boolean = false) : ArtifactProxyBackend {
+        val configs = mutableListOf<androidx.webkit.ProxyConfig>()
+        private var pending: (() -> Unit)? = null
+
+        override fun supported() = supported
+
+        override fun apply(config: androidx.webkit.ProxyConfig, executor: java.util.concurrent.Executor, onApplied: Runnable) {
+            if (throwOnApply) throw IllegalStateException("refused")
+            configs += config
+            pending = { executor.execute(onApplied) }
+        }
+
+        fun applied() {
+            checkNotNull(pending).invoke()
+            pending = null
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        }
+    }
+
+    private fun idle() = org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+    private fun lastLoaded(view: WebView) = org.robolectric.Shadows.shadowOf(view).lastLoadedUrl
+
+    private fun readyLock() =
+        FakeProxy().let { proxy -> ArtifactNetworkLock(proxy).also { it.ensure({}, {}); proxy.applied() } }
+
+    private fun sandboxed(
+        page: ArtifactPage,
+        lock: ArtifactNetworkLock,
+        callbacks: ArtifactCallbacks = ArtifactCallbacks(),
+        webRtcBlock: (WebView) -> Boolean = { true },
+    ) = createArtifactWebView(context, page, callbacks, networkLock = lock, webRtcBlock = webRtcBlock)
+
+    @Test fun theProxyConfigSendsEverythingToTheDeadProxy() {
+        val config = artifactProxyConfig()
+        val rule = config.proxyRules.single()
+        assertEquals("http://127.0.0.1:1", rule.url)
+        assertEquals(androidx.webkit.ProxyConfig.MATCH_ALL_SCHEMES, rule.schemeFilter)
+        // removeImplicitRules: loopback and link-local are not bypassed. No direct rule, no other bypass.
+        assertEquals(listOf("<-loopback>"), config.bypassRules)
+        assertFalse(config.isReverseBypassEnabled)
+        assertEquals("http://10.0.2.15:3128", artifactProxyConfig("http://10.0.2.15:3128").proxyRules.single().url)
+    }
+
+    @Test fun theFirstViewWaitsForTheProxyAndLaterViewsDoNot() {
+        val proxy = FakeProxy()
+        val lock = ArtifactNetworkLock(proxy)
+        val first = ArtifactPage(ArtifactKind.Html, "<p>1</p>")
+        val second = ArtifactPage(ArtifactKind.Html, "<p>2</p>")
+        val a = sandboxed(first, lock)
+        val b = sandboxed(second, lock)
+        idle()
+        assertEquals(null, lastLoaded(a))
+        assertEquals(null, lastLoaded(b))
+        assertFalse(lock.ready)
+        proxy.applied()
+        assertTrue(lock.ready)
+        assertEquals(first.url, lastLoaded(a))
+        assertEquals(second.url, lastLoaded(b))
+        val third = ArtifactPage(ArtifactKind.Html, "<p>3</p>")
+        assertEquals(third.url, lastLoaded(sandboxed(third, lock)))
+        assertEquals("the override is applied once per process", 1, proxy.configs.size)
+        assertEquals(artifactProxyConfig().proxyRules.single().url, proxy.configs.single().proxyRules.single().url)
+        assertEquals(listOf("<-loopback>"), proxy.configs.single().bypassRules)
+    }
+
+    @Test fun withoutTheProxyOverrideNothingLoadsAndTheViewFails() {
+        val proxy = FakeProxy(supported = false)
+        val lock = ArtifactNetworkLock(proxy)
+        var failed = 0
+        val view = sandboxed(ArtifactPage(ArtifactKind.Html, "<p>hi</p>"), lock, ArtifactCallbacks(onFailed = { failed++ }))
+        assertEquals("onFailed is posted, not called inside the factory", 0, failed)
+        idle()
+        assertEquals(1, failed)
+        assertEquals(null, lastLoaded(view))
+        assertTrue(proxy.configs.isEmpty())
+        // It stays refused for later views.
+        val next = sandboxed(ArtifactPage(ArtifactKind.Html, "<p>again</p>"), lock, ArtifactCallbacks(onFailed = { failed++ }))
+        idle()
+        assertEquals(2, failed)
+        assertEquals(null, lastLoaded(next))
+    }
+
+    @Test fun aRefusedOverrideFailsEveryWaiterAndIsTriedAgain() {
+        val proxy = FakeProxy(throwOnApply = true)
+        val lock = ArtifactNetworkLock(proxy)
+        var failed = 0
+        val view = sandboxed(ArtifactPage(ArtifactKind.Html, "<p>hi</p>"), lock, ArtifactCallbacks(onFailed = { failed++ }))
+        idle()
+        assertEquals(1, failed)
+        assertEquals(null, lastLoaded(view))
+        assertFalse(lock.ready)
+        proxy.throwOnApply = false
+        val page = ArtifactPage(ArtifactKind.Html, "<p>retry</p>")
+        val retry = sandboxed(page, lock)
+        proxy.applied()
+        assertEquals(page.url, lastLoaded(retry))
+    }
+
+    @Test fun aViewDisposedBeforeTheProxyIsReadyIsNotLoadedOrFailed() {
+        val proxy = FakeProxy()
+        val lock = ArtifactNetworkLock(proxy)
+        var failed = 0
+        val view = sandboxed(ArtifactPage(ArtifactKind.Html, "<p>hi</p>"), lock, ArtifactCallbacks(onFailed = { failed++ }))
+        disposeArtifactWebView(view)
+        proxy.applied()
+        assertEquals("about:blank", lastLoaded(view))
+        assertEquals(0, failed)
+    }
+
+    @Test fun withoutTheWebRtcBlockAnHtmlPageRunsNoScript() {
+        val lock = readyLock()
+        var blocked: WebView? = null
+        val page = ArtifactPage(ArtifactKind.Html, "<p>hi</p>")
+        val view = sandboxed(page, lock, webRtcBlock = { blocked = it; false })
+        assertTrue("the block is offered the view itself", blocked === view)
+        assertFalse(view.settings.javaScriptEnabled)
+        assertEquals(page.url, lastLoaded(view))
+        val withBlock = sandboxed(ArtifactPage(ArtifactKind.Html, "<p>ok</p>"), lock)
+        assertTrue(withBlock.settings.javaScriptEnabled)
+    }
+
+    @Test fun withoutTheWebRtcBlockAMermaidDiagramFailsAndIsNotLoaded() {
+        val proxy = FakeProxy()
+        val lock = ArtifactNetworkLock(proxy)
+        var failed = 0
+        val view = sandboxed(ArtifactPage(ArtifactKind.Mermaid, "graph TD\nA-->B"), lock, ArtifactCallbacks(onFailed = { failed++ }), webRtcBlock = { false })
+        idle()
+        assertEquals(1, failed)
+        assertFalse(view.settings.javaScriptEnabled)
+        assertEquals(null, lastLoaded(view))
+    }
+
+    @Test fun theWebRtcBlockRemovesEveryInterfaceForGood() {
+        val script = ARTIFACT_WEBRTC_BLOCK_SCRIPT
+        listOf(
+            "RTCPeerConnection", "webkitRTCPeerConnection", "RTCDataChannel", "RTCIceCandidate", "RTCSessionDescription",
+            "RTCRtpSender", "RTCRtpReceiver", "RTCRtpTransceiver", "RTCIceTransport", "RTCDtlsTransport",
+            "RTCSctpTransport", "RTCCertificate", "RTCDTMFSender", "RTCPeerConnectionIceEvent", "RTCDataChannelEvent",
+            "RTCTrackEvent", "RTCError", "RTCErrorEvent", "RTCEncodedAudioFrame", "RTCEncodedVideoFrame",
+            "RTCRtpScriptTransform",
+        ).forEach { assertTrue(it, "\"$it\"" in script) }
+        assertTrue("delete window[names[i]]" in script)
+        assertTrue("value: undefined, writable: false, enumerable: false, configurable: false" in script)
+    }
+
     @Test fun everyNavigationIsBlockedAndNothingIsBridged() {
         val page = ArtifactPage(ArtifactKind.Html, "<p>hi</p>")
-        val view = createArtifactWebView(context, page, ArtifactCallbacks())
+        val lock = readyLock()
+        val view = sandboxed(page, lock)
         val client = view.webViewClient as ArtifactWebViewClient
         assertTrue(client.shouldOverrideUrlLoading(view, null as android.webkit.WebResourceRequest?))
         @Suppress("DEPRECATION")
@@ -125,6 +273,7 @@ class ArtifactSandboxTest {
         assertEquals(200, response.statusCode)
         assertEquals("text/html", response.mimeType)
         assertEquals(artifactContentSecurityPolicy(ArtifactKind.Html, host), response.responseHeaders["Content-Security-Policy"])
+        assertEquals("off", response.responseHeaders["X-DNS-Prefetch-Control"])
         assertEquals("<p>héllo</p>", response.data.readBytes().toString(Charsets.UTF_8))
     }
 
