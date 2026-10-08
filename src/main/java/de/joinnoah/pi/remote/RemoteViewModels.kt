@@ -283,6 +283,11 @@ internal class ChatViewModel(
         if (cleared || !matches(repository.state.value)) ExportResult.Failed(ExportFailure.FAILED)
         else repository.exportSession(sessionId)
 
+    /** Reloads this chat's session; a destination that is no longer the shown chat gets a failure. */
+    suspend fun reloadSession(sessionId: String): ReloadResult =
+        if (cleared || !matches(repository.state.value)) ReloadResult.Failed(ReloadFailure.Failed(null))
+        else repository.reloadSession(sessionId)
+
     /** Reads the tree of this chat's session; a destination that is no longer the shown chat gets a failure. */
     suspend fun loadSessionTree(sessionId: String): TreeLoadResult =
         if (cleared || !matches(repository.state.value)) TreeLoadResult.Failed(TreeFailure.FAILED)

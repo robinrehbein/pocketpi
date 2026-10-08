@@ -177,7 +177,7 @@ Keystore and encrypted file recreation. With an attached emulator, run
 `./gradlew connectedDebugAndroidTest`. For the managed API 36 device used by CI, run
 `./gradlew pixel2Api36DebugAndroidTest`.
 
-Unit tests consume the eleven JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
+Unit tests consume the twelve JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
 of `packages/pi-remote/protocol/fixtures/` from noah-monorepo commit
 `1550dcc200459913b9b1dc9b16fc3439db341c68`. `provider-auth-v1.json` (provider login) is a
 byte-for-byte copy from noah-monorepo commit `daca1ee562ca661fb76ce2d61a75ca2fc8c8059f`, the
@@ -190,7 +190,9 @@ request #647. `session-tree-v1.json` (browsing, navigating and forking the sessi
 from commit `1b6b8d3871d52b66b876e95f080f69bf00bb4309`, the merge of pull request #650.
 `files-media-v1.json` (agent images read by path from the session folder, plus `text/html`
 artifacts behind `session.files.artifact.v1`) is a byte-for-byte copy from noah-monorepo commit
-`a07ba16e92e6613ac81a0032e2000c592fb2ed6f`, the merge of pull request #653. When the
+`a07ba16e92e6613ac81a0032e2000c592fb2ed6f`, the merge of pull request #653.
+`session-reload-v1.json` (reloading extensions, skills, prompts and context files) is a
+byte-for-byte copy from noah-monorepo commit `a6120a90b9ab580dc7684bad01fb494a6c2b2137`, the merge of pull request #663. When the
 upstream protocol fixtures change, copy the changed files into
 `src/test/resources/`, compare their bytes with the upstream source, and run
 `./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and
@@ -198,7 +200,7 @@ QR encoding, replay and tampering rejection, session request correlation, histor
 events, questionnaire defaults and the project file browser's list and read results, the provider
 login commands, results and events, the attachment manifest and content reads, the session export
 and its chunked download, the session tree with its navigate and fork commands, the agent image commands and their chunked
-download, and the denied-device message.
+download, the session reload command and its result, and the denied-device message.
 A built APK does not establish Samsung device, TalkBack, mobile-network or real Firebase
 delivery acceptance; those require the configured host, relay and device.
 
