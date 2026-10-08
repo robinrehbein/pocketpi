@@ -234,12 +234,16 @@ class ArtifactSandboxEmulatorTest {
             function attempt(f) { try { f(); } catch (e) {} }
             var realms = { main: typeof window.RTCPeerConnection, blank: "noframe", srcdoc: "noreport" };
             var blank = null;
-            attempt(function () {
+            try {
               var frame = document.createElement("iframe");
               document.body.appendChild(frame);
               blank = frame.contentWindow;
               realms.blank = typeof blank.RTCPeerConnection;
-            });
+            } catch (e) {
+              // A frame the page cannot reach into is no way around the block; say why it failed.
+              blank = null;
+              realms.blank = "unreachable-" + (e && e.name ? e.name : "error");
+            }
             window.addEventListener("message", function (e) {
               if (e.data && e.data.probe === "srcdoc") realms.srcdoc = String(e.data.type);
             });
@@ -321,7 +325,13 @@ class ArtifactSandboxEmulatorTest {
         assertEquals("null", report.origin)
         // Each frame is named, so a failure says which realm the WebRTC block did not reach.
         assertEquals("WebRTC is still there in the main frame", "undefined", report.realms["main"])
-        assertEquals("WebRTC is still there in a fresh about:blank frame (the document-start script did not reach it)", "undefined", report.realms["blank"])
+        // "unreachable-…" means the page could not touch the frame's window at all (the sandbox origin
+        // isolates it), so the frame offers no WebRTC either. Only "function" would be a hole.
+        val blank = report.realms["blank"].orEmpty()
+        assertTrue(
+            "WebRTC is reachable in a fresh about:blank frame (the document-start script did not reach it): $blank",
+            blank == "undefined" || blank.startsWith("unreachable-"),
+        )
         assertEquals(
             "WebRTC in a srcdoc frame: 'noreport' means the frame never answered (blocked or broken), anything else that the block missed it",
             "undefined",
@@ -411,7 +421,9 @@ class ArtifactSandboxEmulatorTest {
         val counts = probe.counts()
         // Printed so a CI log shows which channels the control proves the listeners can see.
         println("ArtifactSandboxEmulatorTest control counts: $counts")
-        assertTrue("The control made no HTTP connection, so the probe cannot see one: $counts", counts.getValue("http") > 0)
+        // Plain HTTP to the non-loopback address is refused by the debug cleartext policy, which only
+        // allows 127.0.0.1, so the loopback listener is the one that proves URL loads are visible.
+        assertTrue("The control made no HTTP connection, so the probe cannot see one: $counts", counts.getValue("httpLoopback") > 0)
         val webRtc = listOf("turn", "turnLoopback", "stun", "stunLoopback").sumOf { counts.getValue(it) }
         assertTrue("The control reached no WebRTC listener, so the probe cannot see one: $counts", webRtc > 0)
     }
