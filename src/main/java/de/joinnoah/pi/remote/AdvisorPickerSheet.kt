@@ -12,7 +12,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
@@ -111,11 +114,23 @@ internal fun AdvisorPickerSheet(
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }
-                items(advisor.choices, key = { it.provider + ":" + it.id }) { choice ->
+                groupAdvisorChoices(advisor.choices).forEach { group ->
+                  item(key = "advisorProvider/" + group.provider) {
+                    Text(
+                        group.displayName,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(start = 4.dp, top = 4.dp)
+                            .testTag("advisorProviderHeader-" + group.provider)
+                            .semantics { heading() },
+                    )
+                  }
+                  items(group.choices, key = { it.provider + ":" + it.id }) { choice ->
                     val selected = selectedChoice == choice
                     val current = advisor.enabled && currentChoice == choice
-                    val providerLabel = choice.name.substringBefore(": ", missingDelimiterValue = "")
-                    val modelLabel = choice.name.substringAfter(": ", missingDelimiterValue = choice.name)
+                    val providerLabel = advisorRowLabel(choice, group.displayName)
+                    val modelLabel = advisorRowModelName(choice)
                     Surface(
                         modifier = Modifier.fillMaxWidth().selectable(
                             selected = selected,
@@ -134,7 +149,7 @@ internal fun AdvisorPickerSheet(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column(Modifier.weight(1f)) {
-                                if (providerLabel.isNotEmpty())
+                                if (providerLabel != null)
                                     Text(
                                         providerLabel,
                                         style = MaterialTheme.typography.labelMedium,
@@ -157,6 +172,7 @@ internal fun AdvisorPickerSheet(
                             RadioButton(selected = selected, onClick = null, enabled = canSelect)
                         }
                     }
+                  }
                 }
                 item {
                     HorizontalDivider(Modifier.padding(top = 4.dp))

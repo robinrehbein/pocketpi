@@ -98,6 +98,7 @@ class AdvisorControlUiTest {
             capabilities = setOf(ADVISOR_CAPABILITY), advisor = advisor),
             set = { provider, id, level -> applied = Triple(provider, id, level) })
         compose.onNodeWithTag("advisorControl").performScrollTo().performClick()
+        compose.onNodeWithTag("advisorProviderHeader-provider").assertExists()
         compose.onNodeWithText("Advisor model").performClick()
         compose.onNodeWithText(compose.activity.getString(R.string.remote_advisor_apply)).performClick()
         assertEquals(Triple("provider", "model", "high"), applied)
