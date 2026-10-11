@@ -450,9 +450,10 @@ internal class RemoteNavigator(
 
     /**
      * Runs a two-pane keyboard shortcut and reports whether it was handled. Only the session list
-     * and its chat react; hosts, projects, folders and settings leave the keys alone.
+     * and its chat react; hosts, projects, folders and settings leave the keys alone. A [repeat]
+     * of a key that toggles or creates is swallowed only where its first press would apply.
      */
-    fun shortcut(shortcut: KeyboardShortcut, twoPane: TwoPaneState): Boolean {
+    fun shortcut(shortcut: KeyboardShortcut, twoPane: TwoPaneState, repeat: Boolean = false): Boolean {
         val top = stack.lastOrNull()
         val panes = listDetailPanes(stack.toList()) ?: return false
         val sessions = stack[panes.list] as? RemoteNavKey.Sessions ?: return false
@@ -472,11 +473,15 @@ internal class RemoteNavigator(
             }
             KeyboardShortcut.NEW_SESSION -> {
                 if (!canCreateSession(repository.state.value, sessions)) return false
+                // Holding the key must not create a session per repeat.
+                if (repeat) return true
                 createSession(sessions.routeId, sessions.projectId)
                 true
             }
             KeyboardShortcut.TOGGLE_LIST -> {
-                if (top !is RemoteNavKey.Chat || panes.detail == null) return false
+                if (top !is RemoteNavKey.Chat) return false
+                // Holding the key must not flicker the list.
+                if (repeat) return true
                 twoPane.listCollapsed = !twoPane.listCollapsed
                 true
             }
@@ -601,7 +606,7 @@ internal fun RemoteNavigation(
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // Recomputed on every size change: rotation, split-screen resizes and DeX windows.
-        val layout = paneLayout(maxWidth)
+        val layout = paneLayout(maxWidth, maxHeight)
         val twoPane = rememberSaveable(saver = TwoPaneState.Saver) { TwoPaneState() }
         // Keyed on the bucket, so resize ticks never get here; dragged widths reset per bucket.
         LaunchedEffect(twoPane, layout) { twoPane.adopt(layout) }
@@ -676,11 +681,7 @@ private fun RemoteNavigator.shortcut(event: KeyEvent, twoPane: TwoPaneState): Bo
     val shortcut =
         keyboardShortcut(event.key, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed)
             ?: return false
-    // Holding the key must not create a session per repeat or flicker the list.
-    if (event.nativeKeyEvent.repeatCount > 0 &&
-        (shortcut == KeyboardShortcut.NEW_SESSION || shortcut == KeyboardShortcut.TOGGLE_LIST)
-    ) return true
-    return shortcut(shortcut, twoPane)
+    return shortcut(shortcut, twoPane, repeat = event.nativeKeyEvent.repeatCount > 0)
 }
 
 @Composable

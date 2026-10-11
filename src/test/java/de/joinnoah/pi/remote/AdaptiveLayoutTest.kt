@@ -9,29 +9,45 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AdaptiveLayoutTest {
+    private companion object {
+        /** A window high enough for two panes, so the width alone picks the bucket. */
+        val TALL = 800.dp
+    }
+
+    @Test
+    fun lowWindowsKeepThePhoneLayoutAtAnyWidth() {
+        // A phone in landscape.
+        assertEquals(PaneLayout.Phone, paneLayout(780.dp, 360.dp))
+        assertEquals(PaneLayout.Phone, paneLayout(1600.dp, 479.dp))
+        assertTrue(paneLayout(800.dp, 480.dp).twoPane)
+        // A Galaxy Tab S11 in landscape and portrait.
+        assertTrue(paneLayout(1205.dp, 753.dp).twoPane)
+        assertTrue(paneLayout(753.dp, 1205.dp).twoPane)
+    }
+
     @Test
     fun phoneWidthsKeepTheSinglePaneLayout() {
-        for (width in listOf(320.dp, 411.dp, 600.dp, 719.dp)) assertEquals(PaneLayout.Phone, paneLayout(width))
+        for (width in listOf(320.dp, 411.dp, 600.dp, 719.dp)) assertEquals(PaneLayout.Phone, paneLayout(width, TALL))
     }
 
     @Test
     fun widthClassesFollowTheThresholds() {
-        assertTrue(paneLayout(720.dp).twoPane)
-        assertEquals(InspectorMode.OVERLAY, paneLayout(720.dp).inspector)
-        assertEquals(300.dp, paneLayout(720.dp).listWidth)
-        assertEquals(300.dp, paneLayout(959.dp).listWidth)
-        assertEquals(360.dp, paneLayout(960.dp).listWidth)
-        assertEquals(InspectorMode.OVERLAY, paneLayout(1099.dp).inspector)
-        assertEquals(InspectorMode.ON_DEMAND, paneLayout(1100.dp).inspector)
-        assertEquals(320.dp, paneLayout(1100.dp).listWidth)
-        assertEquals(360.dp, paneLayout(1100.dp).inspectorWidth)
-        assertEquals(InspectorMode.ON_DEMAND, paneLayout(1279.dp).inspector)
-        assertEquals(360.dp, paneLayout(1280.dp).listWidth)
-        assertEquals(400.dp, paneLayout(1280.dp).inspectorWidth)
-        assertEquals(InspectorMode.ON_DEMAND, paneLayout(1599.dp).inspector)
-        assertEquals(InspectorMode.PERSISTENT, paneLayout(1600.dp).inspector)
-        assertEquals(360.dp, paneLayout(1600.dp).listWidth)
-        assertEquals(480.dp, paneLayout(1600.dp).inspectorWidth)
+        assertTrue(paneLayout(720.dp, TALL).twoPane)
+        assertEquals(InspectorMode.OVERLAY, paneLayout(720.dp, TALL).inspector)
+        assertEquals(300.dp, paneLayout(720.dp, TALL).listWidth)
+        assertEquals(300.dp, paneLayout(959.dp, TALL).listWidth)
+        assertEquals(360.dp, paneLayout(960.dp, TALL).listWidth)
+        assertEquals(InspectorMode.OVERLAY, paneLayout(1099.dp, TALL).inspector)
+        assertEquals(InspectorMode.ON_DEMAND, paneLayout(1100.dp, TALL).inspector)
+        assertEquals(320.dp, paneLayout(1100.dp, TALL).listWidth)
+        assertEquals(360.dp, paneLayout(1100.dp, TALL).inspectorWidth)
+        assertEquals(InspectorMode.ON_DEMAND, paneLayout(1279.dp, TALL).inspector)
+        assertEquals(360.dp, paneLayout(1280.dp, TALL).listWidth)
+        assertEquals(400.dp, paneLayout(1280.dp, TALL).inspectorWidth)
+        assertEquals(InspectorMode.ON_DEMAND, paneLayout(1599.dp, TALL).inspector)
+        assertEquals(InspectorMode.PERSISTENT, paneLayout(1600.dp, TALL).inspector)
+        assertEquals(360.dp, paneLayout(1600.dp, TALL).listWidth)
+        assertEquals(480.dp, paneLayout(1600.dp, TALL).inspectorWidth)
     }
 
     @Test
@@ -67,7 +83,7 @@ class AdaptiveLayoutTest {
     @Test
     fun backExpandsACollapsedListBeforeLeavingTheChat() {
         val chat = RemoteNavKey.Chat("host", "project", "s1")
-        val wide = paneLayout(900.dp)
+        val wide = paneLayout(900.dp, TALL)
         assertEquals(BackStep.EXPAND_LIST, twoPaneBackStep(wide, listCollapsed = true, top = chat))
         assertEquals(BackStep.NAVIGATE, twoPaneBackStep(wide, listCollapsed = false, top = chat))
         assertEquals(BackStep.NAVIGATE, twoPaneBackStep(wide, listCollapsed = true, top = RemoteNavKey.Settings))
@@ -185,7 +201,7 @@ class AdaptiveLayoutTest {
     fun defaultsSurviveTheClampsAndTheChatKeepsItsMinimum() {
         for (window in 720..2560) {
             val width = window.dp
-            val layout = paneLayout(width)
+            val layout = paneLayout(width, TALL)
             val side = layout.inspector != InspectorMode.OVERLAY
             val list = listPaneWidth(layout.listWidth, width, layout.inspector)
             assertEquals("list at $window", layout.listWidth, list)
@@ -200,7 +216,7 @@ class AdaptiveLayoutTest {
 
     @Test
     fun draggedWidthsSurviveRecreation() {
-        val layout = paneLayout(1300.dp)
+        val layout = paneLayout(1300.dp, TALL)
         val state = TwoPaneState()
         state.adopt(layout)
         state.resizeList(layout, 420.dp)
@@ -219,15 +235,15 @@ class AdaptiveLayoutTest {
 
     @Test
     fun draggedWidthsResetOnlyWhenTheBucketChanges() {
-        val wide = paneLayout(1300.dp)
+        val wide = paneLayout(1300.dp, TALL)
         val state = TwoPaneState()
         state.adopt(wide)
         state.resizeList(wide, 420.dp)
         // Another width in the same bucket is the same layout.
-        state.adopt(paneLayout(1500.dp))
+        state.adopt(paneLayout(1500.dp, TALL))
         assertEquals(420.dp, state.listWidth(wide))
         // Another bucket shows its own default at once and drops the dragged width.
-        val narrow = paneLayout(900.dp)
+        val narrow = paneLayout(900.dp, TALL)
         assertEquals(narrow.listWidth, state.listWidth(narrow))
         state.adopt(narrow)
         state.adopt(wide)
@@ -249,7 +265,7 @@ class AdaptiveLayoutTest {
                 ) {}
             }
         fun scene(collapsed: Boolean) =
-            with(ListDetailSceneStrategy(paneLayout(900.dp), TwoPaneState(), collapsed)) {
+            with(ListDetailSceneStrategy(paneLayout(900.dp, TALL), TwoPaneState(), collapsed)) {
                 androidx.navigation3.scene.SceneStrategyScope<androidx.navigation3.runtime.NavKey>().calculateScene(entries)
             }!!
         // Collapsed: no preview of a popped chat; the scene's back handler expands the list.
@@ -259,7 +275,7 @@ class AdaptiveLayoutTest {
         assertEquals(entries.takeLast(2), scene(collapsed = false).entries)
         // Without a chat there is nothing to collapse: back leaves the sessions as usual.
         val sessionsOnly =
-            with(ListDetailSceneStrategy(paneLayout(900.dp), TwoPaneState(), true)) {
+            with(ListDetailSceneStrategy(paneLayout(900.dp, TALL), TwoPaneState(), true)) {
                 androidx.navigation3.scene.SceneStrategyScope<androidx.navigation3.runtime.NavKey>()
                     .calculateScene(entries.dropLast(1))
             }!!

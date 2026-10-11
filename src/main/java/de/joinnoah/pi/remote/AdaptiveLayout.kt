@@ -51,6 +51,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.Saver
@@ -75,11 +76,12 @@ import androidx.navigation3.scene.SceneStrategy
 import androidx.navigation3.scene.SceneStrategyScope
 
 /*
- * Tablet layout. The window width alone picks the layout, so portrait, landscape, split-screen
+ * Tablet layout. The window size alone picks the layout, so portrait, landscape, split-screen
  * and DeX windows all follow the same rules, and a resize simply picks again:
  *
- * - below 720 dp: the phone layout, one full-screen destination at a time (unchanged);
- * - from 720 dp: the session list on the left and the selected chat on the right. The list can
+ * - below 720 dp wide or 480 dp high: the phone layout, one full-screen destination at a time
+ *   (unchanged), so a phone in landscape keeps it;
+ * - from 720 dp wide and 480 dp high: the session list on the left and the selected chat on the right. The list can
  *   be collapsed so the chat gets the whole width;
  * - from 1100 dp: tool details and diffs open in an inspector pane beside the chat instead of
  *   covering it, and the pane closes with them;
@@ -94,6 +96,12 @@ import androidx.navigation3.scene.SceneStrategyScope
  */
 
 internal val TWO_PANE_MIN_WIDTH = 720.dp
+
+/**
+ * A phone in landscape is wide enough for two panes but only about 330 dp high, too little for a
+ * list and a chat with its composer and keyboard, so it keeps the phone layout.
+ */
+internal val TWO_PANE_MIN_HEIGHT = 480.dp
 internal val INSPECTOR_MIN_WIDTH = 1100.dp
 internal val PERSISTENT_INSPECTOR_MIN_WIDTH = 1600.dp
 
@@ -126,9 +134,9 @@ internal data class PaneLayout(
     }
 }
 
-internal fun paneLayout(width: Dp): PaneLayout =
+internal fun paneLayout(width: Dp, height: Dp): PaneLayout =
     when {
-        width < TWO_PANE_MIN_WIDTH -> PaneLayout.Phone
+        width < TWO_PANE_MIN_WIDTH || height < TWO_PANE_MIN_HEIGHT -> PaneLayout.Phone
         width < 960.dp -> PaneLayout(true, InspectorMode.OVERLAY, listWidth = 300.dp)
         width < INSPECTOR_MIN_WIDTH -> PaneLayout(true, InspectorMode.OVERLAY, listWidth = 360.dp)
         width < 1280.dp ->
@@ -181,13 +189,16 @@ internal fun inspectorPaneWidth(requested: Dp, available: Dp): Dp =
 internal fun PaneLayout.sizeKey(): String = "${inspector.name}:${listWidth.value}:${inspectorWidth.value}"
 
 /**
- * The invisible, [PANE_RESIZE_HANDLE_WIDTH] wide strip over a divider line. [onDrag] gets the
- * distance moved towards the layout's end side, so right-to-left layouts need no sign of their own.
- * Double tap resets; TalkBack offers [label] with wider, narrower and reset actions.
+ * The invisible, [PANE_RESIZE_HANDLE_WIDTH] wide strip over a divider line. A drag calls
+ * [onDragStart], then [onDrag] with the whole distance moved since the start towards the layout's
+ * end side, so right-to-left layouts need no sign of their own and a pane held at a limit lets go
+ * as soon as the finger comes back. Double tap resets; TalkBack offers [label] with wider,
+ * narrower ([onStep] moves by a delta) and reset actions.
  */
 @Composable
 internal fun PaneResizeHandle(
     label: String,
+    onDragStart: () -> Unit,
     onDrag: (Dp) -> Unit,
     onStep: (Dp) -> Unit,
     onReset: () -> Unit,
@@ -196,6 +207,9 @@ internal fun PaneResizeHandle(
     val density = LocalDensity.current
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val currentReset by rememberUpdatedState(onReset)
+    val currentDragStart by rememberUpdatedState(onDragStart)
+    val currentDrag by rememberUpdatedState(onDrag)
+    var dragged by remember { mutableFloatStateOf(0f) }
     val wider = stringResource(R.string.remote_pane_wider)
     val narrower = stringResource(R.string.remote_pane_narrower)
     val reset = stringResource(R.string.remote_pane_reset_width)
@@ -211,7 +225,15 @@ internal fun PaneResizeHandle(
             .pointerHoverIcon(hoverIcon)
             .draggable(
                 orientation = Orientation.Horizontal,
-                state = rememberDraggableState { px -> with(density) { onDrag((if (rtl) -px else px).toDp()) } },
+                state =
+                    rememberDraggableState { px ->
+                        dragged += if (rtl) -px else px
+                        with(density) { currentDrag(dragged.toDp()) }
+                    },
+                onDragStarted = {
+                    dragged = 0f
+                    currentDragStart()
+                },
             )
             .pointerInput(Unit) { detectTapGestures(onDoubleTap = { currentReset() }) }
             .semantics {
@@ -464,14 +486,15 @@ private data class ListDetailScene(
             }
             if (!collapsed) {
                 // Reads the state on every call: several drag events can arrive between frames.
-                fun resizeBy(delta: Dp) {
-                    val current = listPaneWidth(state.listWidth(layout), window, layout.inspector)
-                    state.resizeList(layout, listPaneWidth(current + delta, window, layout.inspector))
-                }
+                fun currentWidth() = listPaneWidth(state.listWidth(layout), window, layout.inspector)
+                fun resizeTo(width: Dp) = state.resizeList(layout, listPaneWidth(width, window, layout.inspector))
+                // A drag sets start + distance, so the divider follows the finger again after a clamp.
+                var dragStart by remember { mutableStateOf(0.dp) }
                 PaneResizeHandle(
                     label = stringResource(R.string.remote_pane_resize_list),
-                    onDrag = ::resizeBy,
-                    onStep = ::resizeBy,
+                    onDragStart = { dragStart = currentWidth() },
+                    onDrag = { resizeTo(dragStart + it) },
+                    onStep = { resizeTo(currentWidth() + it) },
                     onReset = { state.resizeList(layout, null) },
                     modifier =
                         Modifier.align(Alignment.CenterStart)
@@ -634,14 +657,14 @@ internal fun InspectorRow(
         }
         if (shown && onResize != null) {
             // The pane sits at the end side, so moving the divider towards the end narrows it.
-            fun resizeBy(delta: Dp) {
-                val current = inspectorPaneWidth(width(), available)
-                onResize(inspectorPaneWidth(current + delta, available))
-            }
+            fun currentWidth() = inspectorPaneWidth(width(), available)
+            fun resizeTo(width: Dp) = onResize(inspectorPaneWidth(width, available))
+            var dragStart by remember { mutableStateOf(0.dp) }
             PaneResizeHandle(
                 label = stringResource(R.string.remote_pane_resize_inspector),
-                onDrag = { resizeBy(-it) },
-                onStep = ::resizeBy,
+                onDragStart = { dragStart = currentWidth() },
+                onDrag = { resizeTo(dragStart - it) },
+                onStep = { resizeTo(currentWidth() + it) },
                 onReset = { onResize(null) },
                 modifier =
                     Modifier.align(Alignment.CenterEnd)

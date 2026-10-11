@@ -363,6 +363,17 @@ class TwoPaneNavigationTest {
         compose.waitForIdle()
     }
 
+    /** One gesture: out [first], then back by [second] (negative), without lifting the finger. */
+    private fun dragThereAndBack(tag: String, first: Dp, second: Dp) {
+        compose.onNodeWithTag(tag).performTouchInput {
+            down(center)
+            repeat(10) { moveBy(Offset(first.toPx() / 10, 0f)) }
+            repeat(10) { moveBy(Offset(second.toPx() / 10, 0f)) }
+            up()
+        }
+        compose.waitForIdle()
+    }
+
     private fun accessibilityAction(tag: String, label: String) {
         val action =
             compose.onNodeWithTag(tag).fetchSemanticsNode().config[SemanticsActions.CustomActions].single {
@@ -389,6 +400,18 @@ class TwoPaneNavigationTest {
         drag("sessionListDivider", 600.dp)
         compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(480.dp)
         assertTrue(widthOf("chatPane") >= CHAT_PANE_MIN_WIDTH)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun draggingPastTheLimitAndBackFollowsTheFingerAgain() {
+        render()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
+        // 300 + 300 - 150 = 450 once the first 48 dp or so of touch slop are lost; a drag that
+        // added its deltas to the clamped 480 dp would end near 330 dp instead.
+        dragThereAndBack("sessionListDivider", 300.dp, (-150).dp)
+        val width = widthOf("sessionListPane")
+        assertTrue("list is $width", width > 380.dp && width < 480.dp)
     }
 
     @Test
