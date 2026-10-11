@@ -1281,6 +1281,9 @@ internal fun RemoteScreen(
                                 }
                             }
                         }
+                        ThemeChoice("synthwave", R.string.remote_theme_synthwave, theme == "synthwave") {
+                            (model as SettingsViewModel).setTheme("synthwave")
+                        }
                     }
                 }
                 item {
@@ -2484,18 +2487,19 @@ private fun ThemeChoice(value: String, label: Int, selected: Boolean, onSelect: 
         horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        ThemePreview(dark = value == "dark")
+        ThemePreview(value)
         Text(stringResource(label), style = MaterialTheme.typography.labelLarge)
         RadioButton(selected = selected, onClick = null)
     }
 }
 
 @Composable
-private fun ThemePreview(dark: Boolean) {
-    val shell = if (dark) Color(0xFF30343C) else Color(0xFFECEEF3)
-    val panel = if (dark) Color(0xFF505968) else Color.White
-    val line = if (dark) Color(0xFFB8C2D1) else Color(0xFF6B7586)
-    val dot = if (dark) Color(0xFF90B9FF) else Color(0xFF245DC8)
+private fun ThemePreview(value: String) {
+    val colors = remoteColorScheme(dark = value != "light", synthwave = value == "synthwave")
+    val shell = colors.background
+    val panel = colors.surfaceContainerHigh
+    val line = colors.onSurfaceVariant
+    val dot = colors.primary
     Box(
         Modifier.fillMaxWidth().height(92.dp)
             .background(shell, RoundedCornerShape(12.dp))
@@ -2512,7 +2516,12 @@ private fun ThemePreview(dark: Boolean) {
                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Box(Modifier.size(8.dp).background(dot, CircleShape))
+                    Box(
+                        Modifier.size(8.dp).background(
+                            if (value == "synthwave" && index == 1) colors.secondary else dot,
+                            CircleShape,
+                        )
+                    )
                     Box(
                         Modifier.fillMaxWidth(if (index == 0) 0.82f else 0.6f)
                             .height(5.dp).background(line, RoundedCornerShape(3.dp))

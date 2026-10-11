@@ -71,8 +71,9 @@ internal fun diffRemovedContent(): Color =
     if (isDarkSurface()) Color(0xFFFFB4AE) else Color(0xFF8C1D18)
 
 /** The app's color scheme; the home-screen widget uses the same one through Glance. */
-internal fun remoteColorScheme(dark: Boolean): ColorScheme =
-if (dark)
+internal fun remoteColorScheme(dark: Boolean, synthwave: Boolean = false): ColorScheme =
+    if (synthwave) synthwaveColorScheme()
+    else if (dark)
         darkColorScheme(
             primary = Color(0xFFABC7FF),
             primaryContainer = Color(0xFF244977),
@@ -154,3 +155,43 @@ if (dark)
 /** Marks a folder that brings its own pi resources, which would run on the Mac once trusted. */
 @Composable
 internal fun folderWarningColor(): Color = waitingColor()
+
+/** Adapted from Robb Owen's SynthWave '84 palette. See NOTICE for attribution. */
+private fun synthwaveColorScheme(): ColorScheme = darkColorScheme(
+    primary = Color(0xFFFF7EDB),
+    onPrimary = Color(0xFF241B2F),
+    primaryContainer = Color(0xFF614D85),
+    onPrimaryContainer = Color.White,
+    inversePrimary = Color(0xFF8B256F),
+    secondary = Color(0xFF36F9F6),
+    onSecondary = Color(0xFF171520),
+    secondaryContainer = Color(0xFF23454F),
+    onSecondaryContainer = Color(0xFFB8FFFD),
+    tertiary = Color(0xFF72F1B8),
+    onTertiary = Color(0xFF171520),
+    tertiaryContainer = Color(0xFF244B3C),
+    onTertiaryContainer = Color(0xFFB9FFDD),
+    background = Color(0xFF241B2F),
+    onBackground = Color(0xFFF4EEFF),
+    surface = Color(0xFF262335),
+    onSurface = Color(0xFFF4EEFF),
+    surfaceVariant = Color(0xFF34294F),
+    onSurfaceVariant = Color(0xFFD5C9EA),
+    surfaceTint = Color(0xFFFF7EDB),
+    inverseSurface = Color(0xFFF4EEFF),
+    inverseOnSurface = Color(0xFF262335),
+    error = Color(0xFFFF8C98),
+    onError = Color(0xFF390B19),
+    errorContainer = Color(0xFF682338),
+    onErrorContainer = Color(0xFFFFD9DF),
+    outline = Color(0xFF9D8BCA),
+    outlineVariant = Color(0xFF614D85),
+    scrim = Color.Black,
+    surfaceBright = Color(0xFF463465),
+    surfaceDim = Color(0xFF171520),
+    surfaceContainerLowest = Color(0xFF171520),
+    surfaceContainerLow = Color(0xFF241B2F),
+    surfaceContainer = Color(0xFF2A2139),
+    surfaceContainerHigh = Color(0xFF34294F),
+    surfaceContainerHighest = Color(0xFF463465),
+)

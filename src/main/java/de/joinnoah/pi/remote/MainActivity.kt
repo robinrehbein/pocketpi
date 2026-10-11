@@ -121,7 +121,7 @@ internal fun RemoteApp(
     val theme = preferences.theme
     val dark =
         when (theme) {
-            "dark" -> true
+            "dark", "synthwave" -> true
             "light" -> false
             else -> isSystemInDarkTheme()
         }
@@ -140,7 +140,7 @@ internal fun RemoteApp(
             }
         }
     }
-    val colors = remoteColorScheme(dark)
+    val colors = remoteColorScheme(dark, synthwave = theme == "synthwave")
     MaterialTheme(
         colorScheme = colors,
         typography = RemoteTypography,
