@@ -4,34 +4,33 @@ import android.content.Context
 import android.text.format.DateUtils
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -40,22 +39,23 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
 
 /** What [ChangesPane] can ask for; the chat screen wires these to its view model. */
@@ -71,6 +71,7 @@ internal class ChangesActions(
     val onUseReview: (String) -> Boolean,
     /** Puts a quick action prompt into the composer. Nothing is sent. False when it did not fit. */
     val onPrefill: (String) -> Boolean,
+    val onRequestPreview: (String) -> Unit = {},
 )
 
 /**
@@ -79,7 +80,7 @@ internal class ChangesActions(
  * later tablet inspector can share it.
  */
 @Composable
-internal fun ChangesPane(state: ChangesState, actions: ChangesActions, modifier: Modifier = Modifier) {
+internal fun ChangesPane(state: ChangesState, actions: ChangesActions, modifier: Modifier = Modifier, projectName: String? = null) {
     BackHandler { if (state.file != null) actions.onOpenFile(null) else actions.onClose() }
     // One state object for the remembered actions below; a failed prefill belongs to the file
     // and base it happened on, so it resets when either changes.
@@ -96,55 +97,44 @@ internal fun ChangesPane(state: ChangesState, actions: ChangesActions, modifier:
                 actions.onRemoveComment,
                 onUseReview = { prompt -> actions.onUseReview(prompt).also { prefillFailed = !it } },
                 onPrefill = { prompt -> actions.onPrefill(prompt).also { prefillFailed = !it } },
+                onRequestPreview = actions.onRequestPreview,
             )
         }
+    val density = LocalDensity.current
+    var headerHeight by remember { mutableStateOf(64.dp) }
     Surface(modifier.fillMaxSize().testTag("changesPane")) {
-        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-            ChangesTopBar(state, actions)
-            HorizontalDivider()
-            if (prefillFailed)
-                Text(
-                    stringResource(R.string.remote_changes_prefill_failed),
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("changesPrefillFailed"),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
+        Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+            Column(Modifier.fillMaxSize()) {
+                if (prefillFailed)
+                    Text(
+                        stringResource(R.string.remote_changes_prefill_failed),
+                        Modifier.fillMaxWidth().padding(top = headerHeight).padding(horizontal = 16.dp, vertical = 8.dp).testTag("changesPrefillFailed"),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    val inset = if (prefillFailed) 0.dp else headerHeight
+                    val file = state.file
+                    if (file == null) ChangesOverview(state, checked, inset)
+                    else key(file) { ChangesFileDiff(state, file, checked, inset) }
+                }
+                if (state.comments.isNotEmpty()) ReviewBar(state.comments, checked)
+            }
+            Box(Modifier.align(Alignment.TopCenter).onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
+                PaneHeader(
+                    title = stringResource(R.string.remote_changes_title),
+                    subtitle = state.file ?: projectName?.takeIf(String::isNotBlank),
+                    nested = state.file != null,
+                    busy = state.loading || state.diffLoading,
+                    tag = "changes",
+                    backLabel = stringResource(R.string.remote_changes_back_to_files),
+                    closeLabel = stringResource(R.string.remote_changes_close),
+                    reloadLabel = stringResource(R.string.remote_changes_reload),
+                    onBack = { actions.onOpenFile(null) },
+                    onClose = actions.onClose,
+                    onReload = actions.onReload,
                 )
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                val file = state.file
-                if (file == null) ChangesOverview(state, checked)
-                // A new file starts with fresh scroll and dialog state.
-                else key(file) { ChangesFileDiff(state, file, checked) }
             }
-            if (state.comments.isNotEmpty()) ReviewBar(state.comments, checked)
-        }
-    }
-}
-
-@Composable
-private fun ChangesTopBar(state: ChangesState, actions: ChangesActions) {
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        if (state.file != null)
-            IconButton(onClick = { actions.onOpenFile(null) }, Modifier.testTag("changesBack")) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.remote_changes_back_to_files))
-            }
-        else
-            IconButton(onClick = actions.onClose, Modifier.testTag("changesClose")) {
-                Icon(Icons.Default.Close, stringResource(R.string.remote_changes_close))
-            }
-        Text(
-            state.file ?: stringResource(R.string.remote_changes_title),
-            Modifier.weight(1f),
-            style = MaterialTheme.typography.titleMedium,
-            fontFamily = if (state.file != null) FontFamily.Monospace else null,
-            maxLines = 1,
-            overflow = TextOverflow.StartEllipsis,
-        )
-        IconButton(onClick = actions.onReload, enabled = !state.loading, modifier = Modifier.testTag("changesReload")) {
-            Icon(Icons.Default.Refresh, stringResource(R.string.remote_changes_reload))
         }
     }
 }
@@ -221,7 +211,7 @@ private fun Loading() {
 }
 
 @Composable
-private fun ChangesOverview(state: ChangesState, actions: ChangesActions) {
+private fun ChangesOverview(state: ChangesState, actions: ChangesActions, headerHeight: Dp) {
     val context = LocalContext.current
     val status = state.status
     val shownBase = status?.base ?: state.base
@@ -229,70 +219,94 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions) {
         remember(state.comments, shownBase) {
             state.comments.filter { it.base == shownBase }.groupingBy { it.path }.eachCount()
         }
-    LazyColumn(Modifier.fillMaxSize().testTag("changesList")) {
-        item(key = "bases") {
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                GitBase.entries.forEach { base ->
-                    FilterChip(
-                        selected = base == shownBase,
-                        onClick = { if (base != shownBase || state.failure != null) actions.onSelectBase(base) },
-                        label = { Text(stringResource(baseLabel(base))) },
-                        modifier = Modifier.testTag("changesBase_${base.wire}"),
+    val gridState = rememberLazyGridState()
+    var peek by remember(state.status?.snapshotId) { mutableStateOf<Pair<String, IntRect>?>(null) }
+    LaunchedEffect(state.loading, state.failure) { if (state.loading || state.failure != null) peek = null }
+    LaunchedEffect(gridState.isScrollInProgress) { if (gridState.isScrollInProgress) peek = null }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(if (maxWidth < 600.dp) 2 else 3),
+            state = gridState,
+            modifier = Modifier.fillMaxSize().testTag("changesList"),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerHeight + 8.dp, bottom = 8.dp),
+        ) {
+            item(key = "bases", span = { GridItemSpan(maxLineSpan) }) {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    GitBase.entries.forEach { base ->
+                        FilterChip(
+                            selected = base == shownBase,
+                            onClick = { if (base != shownBase || state.failure != null) actions.onSelectBase(base) },
+                            label = { Text(stringResource(baseLabel(base))) },
+                            modifier = Modifier.testTag("changesBase_${base.wire}"),
+                        )
+                    }
+                }
+            }
+            if (state.sessionUnavailable != null)
+                item(key = "fallback", span = { GridItemSpan(maxLineSpan) }) {
+                    Notice(stringResource(R.string.remote_changes_session_fallback), Modifier.testTag("changesFallback"))
+                }
+            status?.since?.let { since ->
+                item(key = "since", span = { GridItemSpan(maxLineSpan) }) {
+                    val time = formatTime(context, since.at)
+                    Notice(
+                        stringResource(
+                            if (since.firstContact) R.string.remote_changes_since_first_contact
+                            else R.string.remote_changes_since_session_start,
+                            time,
+                        ),
+                        Modifier.testTag("changesSince"),
                     )
                 }
             }
-        }
-        if (state.sessionUnavailable != null)
-            item(key = "fallback") {
-                Notice(stringResource(R.string.remote_changes_session_fallback), Modifier.testTag("changesFallback"))
+            status?.devRef?.let { ref ->
+                item(key = "devRef", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_dev_ref, ref)) }
             }
-        status?.since?.let { since ->
-            item(key = "since") {
-                val time = formatTime(context, since.at)
-                Notice(
-                    stringResource(
-                        if (since.firstContact) R.string.remote_changes_since_first_contact
-                        else R.string.remote_changes_since_session_start,
-                        time,
-                    ),
-                    Modifier.testTag("changesSince"),
-                )
+            status?.branch?.let { branch ->
+                item(key = "branch", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_branch, branch)) }
             }
-        }
-        status?.devRef?.let { ref ->
-            item(key = "devRef") { Notice(stringResource(R.string.remote_changes_dev_ref, ref)) }
-        }
-        status?.branch?.let { branch ->
-            item(key = "branch") { Notice(stringResource(R.string.remote_changes_branch, branch)) }
-        }
-        val failure = state.failure
-        when {
-            failure != null -> item(key = "failure") { FailureNotice(failure, actions.onReload) }
-            state.loading || status == null -> item(key = "loading") { Loading() }
-            status.unavailable != null ->
-                item(key = "unavailable") {
-                    Notice(stringResource(unavailableText(status.unavailable)), Modifier.testTag("changesUnavailable"))
+            val failure = state.failure
+            when {
+                failure != null -> item(key = "failure", span = { GridItemSpan(maxLineSpan) }) { FailureNotice(failure, actions.onReload) }
+                state.loading || status == null -> item(key = "loading", span = { GridItemSpan(maxLineSpan) }) { Loading() }
+                status.unavailable != null ->
+                    item(key = "unavailable", span = { GridItemSpan(maxLineSpan) }) {
+                        Notice(stringResource(unavailableText(status.unavailable)), Modifier.testTag("changesUnavailable"))
+                    }
+                else -> {
+                    if (status.files.isEmpty())
+                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_empty)) }
+                    if (status.files.isNotEmpty())
+                        item(key = "filesHeader", span = { GridItemSpan(maxLineSpan) }) {
+                            Text(stringResource(R.string.remote_files_title), style = MaterialTheme.typography.titleSmall)
+                        }
+                    items(status.files.size, key = { "file:" + status.files[it].path }) { index ->
+                        val file = status.files[index]
+                        ChangesFileTile(file, commentCounts[file.path] ?: 0, state.previews[file.path],
+                            onRequestPreview = { actions.onRequestPreview(file.path) },
+                            onPeek = { anchor -> peek = file.path to anchor },
+                            onOpen = { actions.onOpenFile(file.path) })
+                    }
+                    if (status.truncated)
+                        item(key = "truncated", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_truncated)) }
+                    commits(state, context, actions.onReload)
                 }
-            else -> {
-                if (status.files.isEmpty())
-                    item(key = "empty") { Notice(stringResource(R.string.remote_changes_empty)) }
-                items(status.files, key = { "file:" + it.path }) { file ->
-                    FileRow(file, commentCounts[file.path] ?: 0) { actions.onOpenFile(file.path) }
-                }
-                if (status.truncated)
-                    item(key = "truncated") { Notice(stringResource(R.string.remote_changes_truncated)) }
-                commits(state, context, actions.onReload)
             }
+        }
+        peek?.let { (path, anchor) ->
+            FilePeekPopup(FilesPeek(path, FileEntryType.FILE), state.previews[path], anchor) { peek = null }
         }
     }
 }
 
-private fun LazyListScope.commits(state: ChangesState, context: Context, onRetry: () -> Unit) {
+private fun LazyGridScope.commits(state: ChangesState, context: Context, onRetry: () -> Unit) {
     if (state.status?.base == GitBase.HEAD) return
-    item(key = "commitsHeader") {
+    item(key = "commitsHeader", span = { GridItemSpan(maxLineSpan) }) {
         Text(
             stringResource(R.string.remote_changes_commits),
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp),
@@ -303,14 +317,15 @@ private fun LazyListScope.commits(state: ChangesState, context: Context, onRetry
     val failure = state.logFailure
     when {
         // A busy host (per-device or host-wide limit) clears up; the retry reloads status and log.
-        failure != null -> item(key = "commitsFailure") { FailureNotice(failure, onRetry) }
-        state.logLoading || log == null -> item(key = "commitsLoading") { Loading() }
+        failure != null -> item(key = "commitsFailure", span = { GridItemSpan(maxLineSpan) }) { FailureNotice(failure, onRetry) }
+        state.logLoading || log == null -> item(key = "commitsLoading", span = { GridItemSpan(maxLineSpan) }) { Loading() }
         log.unavailable != null ->
-            item(key = "commitsUnavailable") { Notice(stringResource(R.string.remote_changes_commits_unavailable)) }
+            item(key = "commitsUnavailable", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_commits_unavailable)) }
         else -> {
             if (log.commits.isEmpty())
-                item(key = "commitsEmpty") { Notice(stringResource(R.string.remote_changes_commits_empty)) }
-            items(log.commits, key = { "commit:" + it.sha }) { commit ->
+                item(key = "commitsEmpty", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_commits_empty)) }
+            items(log.commits.size, key = { "commit:" + log.commits[it].sha }, span = { GridItemSpan(maxLineSpan) }) { index ->
+                val commit = log.commits[index]
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).testTag("changesCommit")) {
                     Text(
                         commit.subject.ifEmpty { stringResource(R.string.remote_changes_commit_no_subject) },
@@ -333,65 +348,72 @@ private fun LazyListScope.commits(state: ChangesState, context: Context, onRetry
                 }
             }
             if (log.truncated)
-                item(key = "commitsTruncated") { Notice(stringResource(R.string.remote_changes_commits_truncated)) }
+                item(key = "commitsTruncated", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_commits_truncated)) }
         }
     }
 }
 
 @Composable
-private fun FileRow(file: GitFile, comments: Int, onOpen: () -> Unit) {
+private fun ChangesFileTile(
+    file: GitFile, comments: Int, preview: FileTilePreview?,
+    onRequestPreview: () -> Unit, onPeek: (IntRect) -> Unit, onOpen: () -> Unit,
+) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val counts =
         if (file.additions != null && file.deletions != null)
             stringResource(R.string.remote_changes_line_counts, file.additions, file.deletions)
         else null
-    Column(
-        Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(horizontal = 16.dp, vertical = 10.dp).testTag("changesFile")
-    ) {
-        Text(
-            file.path,
-            style = MaterialTheme.typography.bodyMedium,
-            fontFamily = FontFamily.Monospace,
-            maxLines = 1,
-            overflow = TextOverflow.StartEllipsis,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(stringResource(changeLabel(file.change)), style = MaterialTheme.typography.labelMedium, color = muted)
-            when {
-                file.omitted != null ->
-                    Text(
-                        stringResource(
-                            when (file.omitted) {
-                                GitOmitted.TOO_LARGE -> R.string.remote_changes_too_large
-                                GitOmitted.BASE_UNAVAILABLE -> R.string.remote_changes_base_content_gone
+    FileEntryTile(
+        entry = FileEntry(file.path.substringAfterLast('/'), FileEntryType.FILE),
+        preview = preview,
+        onOpen = onOpen,
+        onRequestPreview = onRequestPreview,
+        onPeek = onPeek,
+        tag = "changesFile",
+        detail = {
+            Column {
+                if ('/' in file.path)
+                    Text(file.path.substringBeforeLast('/'), style = MaterialTheme.typography.labelSmall,
+                        color = muted, maxLines = 1, overflow = TextOverflow.StartEllipsis)
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(stringResource(changeLabel(file.change)), style = MaterialTheme.typography.labelMedium, color = muted)
+                    when {
+                        file.omitted != null ->
+                            Text(
+                                stringResource(
+                                    when (file.omitted) {
+                                        GitOmitted.TOO_LARGE -> R.string.remote_changes_too_large
+                                        GitOmitted.BASE_UNAVAILABLE -> R.string.remote_changes_base_content_gone
+                                    }
+                                ),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = muted,
+                            )
+                        file.binary ->
+                            Text(stringResource(R.string.remote_changes_binary), style = MaterialTheme.typography.labelMedium, color = muted)
+                        counts != null ->
+                            Row(
+                                Modifier.semantics(mergeDescendants = true) { contentDescription = counts },
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text("+${file.additions}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                                Text("−${file.deletions}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
                             }
-                        ),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = muted,
-                    )
-                file.binary ->
-                    Text(stringResource(R.string.remote_changes_binary), style = MaterialTheme.typography.labelMedium, color = muted)
-                counts != null ->
-                    Row(
-                        Modifier.semantics(mergeDescendants = true) { contentDescription = counts },
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Text("+${file.additions}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                        Text("−${file.deletions}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
                     }
+                    if (comments > 0)
+                        Text(
+                            pluralStringResource(R.plurals.remote_changes_comment_count, comments, comments),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
+                }
             }
-            if (comments > 0)
-                Text(
-                    pluralStringResource(R.plurals.remote_changes_comment_count, comments, comments),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.tertiary,
-                )
-        }
-    }
+        },
+    )
 }
 
 @Composable
-private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesActions) {
+private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesActions, headerHeight: Dp) {
     val context = LocalContext.current
     val diff = state.diff?.takeIf { it.path == path }
     val lines = remember(diff?.patch) { diff?.patch?.let(::patchDiff).orEmpty() }
@@ -407,7 +429,7 @@ private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesA
     var editing by remember { mutableStateOf<DiffLine?>(null) }
     val addLabel = stringResource(R.string.remote_changes_comment_add)
     val editLabel = stringResource(R.string.remote_changes_comment_edit)
-    LazyColumn(Modifier.fillMaxSize().testTag("changesDiff")) {
+    LazyColumn(Modifier.fillMaxSize().testTag("changesDiff"), contentPadding = PaddingValues(top = headerHeight)) {
         item(key = "actions") {
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),

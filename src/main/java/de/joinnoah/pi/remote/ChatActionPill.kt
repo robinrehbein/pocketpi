@@ -124,6 +124,7 @@ internal fun changesActions(model: ChatViewModel, focusComposer: () -> Unit) =
         onSelectBase = model::selectChangesBase,
         onReload = model::reloadChanges,
         onOpenFile = model::openChangesFile,
+        onRequestPreview = model::requestChangesPreview,
         onSetComment = model::setReviewComment,
         onRemoveComment = model::removeReviewComment,
         onUseReview = { prompt -> model.useReview(prompt).also { if (it) focusComposer() } },
