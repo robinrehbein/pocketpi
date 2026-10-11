@@ -16,6 +16,9 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.assertWidthIsEqualTo
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
@@ -254,6 +257,37 @@ class TwoPaneNavigationTest {
     }
 
     @Test
+    @Config(qualifiers = "w753dp-h1205dp")
+    fun aTabletInPortraitShowsTheSessionListBesideTheChat() {
+        render()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        assertChatShown()
+    }
+
+    @Test
+    @Config(qualifiers = "w1205dp-h753dp")
+    fun aTabletInLandscapeOpensTheInspectorBesideTheChat() {
+        render()
+        openTool()
+        compose.onNode(hasTestTag("toolDetail") and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
+        assertChatShown()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun fullScreenPagesStayInACentredColumn() {
+        render()
+        // The two panes use the whole window.
+        compose.onNodeWithTag("pageColumn").assertDoesNotExist()
+        compose.onNode(hasContentDescription(label(R.string.remote_settings)) and hasAnyAncestor(hasTestTag("sessionListPane")))
+            .performClick()
+        compose.waitForIdle()
+        val page = compose.onNodeWithTag("pageColumn")
+        page.assertWidthIsEqualTo(720.dp)
+        assertEquals(280.dp, page.getUnclippedBoundsInRoot().left)
+    }
+
+    @Test
     @Config(qualifiers = "w1700dp-h1000dp")
     fun inspectorStaysOpenOnVeryWideWindows() {
         render()
@@ -357,6 +391,45 @@ class TwoPaneNavigationTest {
 
     @Test
     @Config(qualifiers = "w900dp-h1200dp")
+    fun ctrlNCreatesASessionInTheProject() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.N) } }
+        compose.waitForIdle()
+        assertEquals(1, repository.createdSessions)
+        // Like the button, it does nothing while disconnected.
+        repository.state.value = repository.state.value.copy(connected = false)
+        compose.waitForIdle()
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.N) } }
+        compose.waitForIdle()
+        assertEquals(1, repository.createdSessions)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun ctrlBTogglesTheListOnlyBesideAChat() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.B) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        // The list is gone, so the chat's composer still has focus for the second press.
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.B) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        // Without a chat there is nothing to give the room to.
+        back()
+        compose.onNodeWithTag("chatPlaceholder").assertIsDisplayed()
+        compose.onNodeWithTag("sessionSearch").performClick()
+        compose.onNodeWithTag("sessionSearch").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.B) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
     fun ctrlAndAltArrowsSwitchSessions() {
         render(hardwareKeyboard = true)
         compose.onNodeWithTag("composerField").performClick()
@@ -385,6 +458,9 @@ class TwoPaneNavigationTest {
         compose.waitForIdle()
         assertEquals(count, repository.activations.size)
         assertTrue(repository.activations.none { it.first.sessionId == "s2" })
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.N) } }
+        compose.waitForIdle()
+        assertEquals(0, repository.createdSessions)
     }
 
     @Test

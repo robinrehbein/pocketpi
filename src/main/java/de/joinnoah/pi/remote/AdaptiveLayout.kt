@@ -4,6 +4,12 @@ import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -52,24 +58,33 @@ import androidx.navigation3.scene.SceneStrategyScope
  * Tablet layout. The window width alone picks the layout, so portrait, landscape, split-screen
  * and DeX windows all follow the same rules, and a resize simply picks again:
  *
- * - below 800 dp: the phone layout, one full-screen destination at a time (unchanged);
- * - from 800 dp: the session list on the left and the selected chat on the right. The list can
+ * - below 720 dp: the phone layout, one full-screen destination at a time (unchanged);
+ * - from 720 dp: the session list on the left and the selected chat on the right. The list can
  *   be collapsed so the chat gets the whole width;
- * - from 1280 dp: tool details and diffs open in an inspector pane beside the chat instead of
+ * - from 1100 dp: tool details and diffs open in an inspector pane beside the chat instead of
  *   covering it, and the pane closes with them;
  * - from 1600 dp (DeX): the inspector pane stays open, empty until something is inspected.
+ *
+ * A Galaxy Tab S11 reports about 753-800 dp in portrait and 1205-1280 dp in landscape, depending
+ * on the display zoom, so both orientations land in a two-pane bucket.
  *
  * The back stack stays the single source of truth in every layout: the two-pane layout is only a
  * different way to show the same [RemoteNavKey.Sessions] + [RemoteNavKey.Chat] entries, so
  * rotation, split-screen resizes and deep links keep the selected session and its draft.
  */
 
-internal val TWO_PANE_MIN_WIDTH = 800.dp
-internal val INSPECTOR_MIN_WIDTH = 1280.dp
+internal val TWO_PANE_MIN_WIDTH = 720.dp
+internal val INSPECTOR_MIN_WIDTH = 1100.dp
 internal val PERSISTENT_INSPECTOR_MIN_WIDTH = 1600.dp
 
 /** Widest a chat bubble column and the composer grow; wider chat panes centre them. */
 internal val MAX_READING_WIDTH = 840.dp
+
+/**
+ * Widest a full-screen page (hosts, projects, folders, providers, settings) grows; wider windows
+ * centre it.
+ */
+internal val MAX_PAGE_WIDTH = 720.dp
 
 internal enum class InspectorMode {
     /** Tool details and diffs cover the chat, as on a phone. */
@@ -94,12 +109,32 @@ internal data class PaneLayout(
 internal fun paneLayout(width: Dp): PaneLayout =
     when {
         width < TWO_PANE_MIN_WIDTH -> PaneLayout.Phone
-        width < INSPECTOR_MIN_WIDTH ->
-            PaneLayout(true, InspectorMode.OVERLAY, listWidth = if (width < 1000.dp) 320.dp else 360.dp)
+        width < 960.dp -> PaneLayout(true, InspectorMode.OVERLAY, listWidth = 300.dp)
+        width < INSPECTOR_MIN_WIDTH -> PaneLayout(true, InspectorMode.OVERLAY, listWidth = 360.dp)
+        width < 1280.dp ->
+            PaneLayout(true, InspectorMode.ON_DEMAND, listWidth = 320.dp, inspectorWidth = 360.dp)
         width < PERSISTENT_INSPECTOR_MIN_WIDTH ->
             PaneLayout(true, InspectorMode.ON_DEMAND, listWidth = 360.dp, inspectorWidth = 400.dp)
         else -> PaneLayout(true, InspectorMode.PERSISTENT, listWidth = 360.dp, inspectorWidth = 480.dp)
     }
+
+/**
+ * Hosts a full-screen page no wider than [MAX_PAGE_WIDTH], centred in wider windows. The page
+ * background fills the gutters so transitions never show the window behind them.
+ */
+@Composable
+internal fun CenteredPage(content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Box(
+            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Box(Modifier.widthIn(max = MAX_PAGE_WIDTH).fillMaxWidth().fillMaxHeight().testTag("pageColumn")) {
+                content()
+            }
+        }
+    }
+}
 
 /** The layout of the current window; the phone layout wherever nothing provides one. */
 internal val LocalPaneLayout = staticCompositionLocalOf { PaneLayout.Phone }
@@ -290,18 +325,30 @@ internal fun hardwareKeyboardAttached(): Boolean {
         configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
 }
 
-internal enum class KeyboardShortcut { SEARCH, PREVIOUS_SESSION, NEXT_SESSION }
+internal enum class KeyboardShortcut { SEARCH, PREVIOUS_SESSION, NEXT_SESSION, NEW_SESSION, TOGGLE_LIST }
 
-/** Ctrl+K or Ctrl+F search the sessions; Ctrl or Alt with Up/Down switch to the adjacent one. */
+/**
+ * Ctrl+K or Ctrl+F search the sessions; Ctrl or Alt with Up/Down switch to the adjacent one; Ctrl+N
+ * starts a new session in the project and Ctrl+B collapses or expands the session list.
+ */
 internal fun keyboardShortcut(key: Key, ctrl: Boolean, alt: Boolean, shift: Boolean): KeyboardShortcut? {
     if (shift) return null
     return when {
         ctrl && !alt && (key == Key.K || key == Key.F) -> KeyboardShortcut.SEARCH
+        ctrl && !alt && key == Key.N -> KeyboardShortcut.NEW_SESSION
+        ctrl && !alt && key == Key.B -> KeyboardShortcut.TOGGLE_LIST
         (ctrl != alt) && key == Key.DirectionUp -> KeyboardShortcut.PREVIOUS_SESSION
         (ctrl != alt) && key == Key.DirectionDown -> KeyboardShortcut.NEXT_SESSION
         else -> null
     }
 }
+
+/** Ctrl+N's condition, the same as the "new session" button: connected, not loading, in this project. */
+internal fun canCreateSession(state: RemoteState, sessions: RemoteNavKey.Sessions): Boolean =
+    state.connected &&
+        !state.loading &&
+        state.selection.routeId == sessions.routeId &&
+        state.selection.projectId == sessions.projectId
 
 /** The session [step] rows away from [current] in [ids]; from no selection, the first or last. */
 internal fun adjacentSession(ids: List<String>, current: String?, step: Int): String? {
@@ -354,7 +401,7 @@ internal fun filterSessions(items: List<SessionListItem>, query: String): List<S
 
 /**
  * The chat with its inspector pane beside it while [shown]. The chat keeps its place in the
- * composition either way, so opening or closing the pane (or a resize across 1280 dp) keeps its
+ * composition either way, so opening or closing the pane (or a resize across 1100 dp) keeps its
  * scroll position and open tool.
  */
 @Composable

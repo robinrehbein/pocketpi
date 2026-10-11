@@ -227,7 +227,7 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
     LaunchedEffect(gridState.isScrollInProgress) { if (gridState.isScrollInProgress) peek = null }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         LazyVerticalGrid(
-            columns = GridCells.Fixed(if (maxWidth < 600.dp) 2 else 3),
+            columns = GridCells.Fixed(fileGridColumns(maxWidth)),
             state = gridState,
             modifier = Modifier.fillMaxSize().testTag("changesList"),
             horizontalArrangement = Arrangement.spacedBy(10.dp),

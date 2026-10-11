@@ -227,7 +227,7 @@ private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: D
         }
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val columns = if (maxWidth < 600.dp) 2 else 3
+        val columns = fileGridColumns(maxWidth)
         LazyVerticalGrid(
             columns = GridCells.Fixed(columns),
             modifier = Modifier.fillMaxSize().testTag("filesList"),

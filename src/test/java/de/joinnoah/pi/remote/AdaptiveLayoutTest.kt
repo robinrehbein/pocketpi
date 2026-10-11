@@ -11,19 +11,27 @@ import org.junit.Test
 class AdaptiveLayoutTest {
     @Test
     fun phoneWidthsKeepTheSinglePaneLayout() {
-        for (width in listOf(320.dp, 411.dp, 600.dp, 799.dp)) assertEquals(PaneLayout.Phone, paneLayout(width))
+        for (width in listOf(320.dp, 411.dp, 600.dp, 719.dp)) assertEquals(PaneLayout.Phone, paneLayout(width))
     }
 
     @Test
     fun widthClassesFollowTheThresholds() {
-        assertTrue(paneLayout(800.dp).twoPane)
-        assertEquals(InspectorMode.OVERLAY, paneLayout(800.dp).inspector)
-        assertEquals(InspectorMode.OVERLAY, paneLayout(1279.dp).inspector)
-        assertEquals(InspectorMode.ON_DEMAND, paneLayout(1280.dp).inspector)
+        assertTrue(paneLayout(720.dp).twoPane)
+        assertEquals(InspectorMode.OVERLAY, paneLayout(720.dp).inspector)
+        assertEquals(300.dp, paneLayout(720.dp).listWidth)
+        assertEquals(300.dp, paneLayout(959.dp).listWidth)
+        assertEquals(360.dp, paneLayout(960.dp).listWidth)
+        assertEquals(InspectorMode.OVERLAY, paneLayout(1099.dp).inspector)
+        assertEquals(InspectorMode.ON_DEMAND, paneLayout(1100.dp).inspector)
+        assertEquals(320.dp, paneLayout(1100.dp).listWidth)
+        assertEquals(360.dp, paneLayout(1100.dp).inspectorWidth)
+        assertEquals(InspectorMode.ON_DEMAND, paneLayout(1279.dp).inspector)
+        assertEquals(360.dp, paneLayout(1280.dp).listWidth)
+        assertEquals(400.dp, paneLayout(1280.dp).inspectorWidth)
         assertEquals(InspectorMode.ON_DEMAND, paneLayout(1599.dp).inspector)
         assertEquals(InspectorMode.PERSISTENT, paneLayout(1600.dp).inspector)
-        assertEquals(320.dp, paneLayout(800.dp).listWidth)
-        assertEquals(360.dp, paneLayout(1100.dp).listWidth)
+        assertEquals(360.dp, paneLayout(1600.dp).listWidth)
+        assertEquals(480.dp, paneLayout(1600.dp).inspectorWidth)
     }
 
     @Test
@@ -82,6 +90,22 @@ class AdaptiveLayoutTest {
         )
         assertNull(keyboardShortcut(Key.DirectionUp, ctrl = false, alt = false, shift = false))
         assertNull(keyboardShortcut(Key.DirectionUp, ctrl = true, alt = false, shift = true))
+        assertEquals(KeyboardShortcut.NEW_SESSION, keyboardShortcut(Key.N, ctrl = true, alt = false, shift = false))
+        assertEquals(KeyboardShortcut.TOGGLE_LIST, keyboardShortcut(Key.B, ctrl = true, alt = false, shift = false))
+        assertNull(keyboardShortcut(Key.N, ctrl = false, alt = false, shift = false))
+        assertNull(keyboardShortcut(Key.B, ctrl = false, alt = false, shift = false))
+        assertNull(keyboardShortcut(Key.N, ctrl = false, alt = true, shift = false))
+        assertNull(keyboardShortcut(Key.N, ctrl = true, alt = false, shift = true))
+    }
+
+    @Test
+    fun canCreateSessionFollowsTheFab() {
+        val sessions = RemoteNavKey.Sessions("host", "project")
+        val ready = RemoteState(connected = true, selection = RemoteSelection("host", "project"))
+        assertTrue(canCreateSession(ready, sessions))
+        assertFalse(canCreateSession(ready.copy(loading = true), sessions))
+        assertFalse(canCreateSession(ready.copy(connected = false), sessions))
+        assertFalse(canCreateSession(ready.copy(selection = RemoteSelection("host", "other")), sessions))
     }
 
     @Test
