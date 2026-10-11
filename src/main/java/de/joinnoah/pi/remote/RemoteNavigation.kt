@@ -603,6 +603,8 @@ internal fun RemoteNavigation(
         // Recomputed on every size change: rotation, split-screen resizes and DeX windows.
         val layout = paneLayout(maxWidth)
         val twoPane = rememberSaveable(saver = TwoPaneState.Saver) { TwoPaneState() }
+        // Keyed on the bucket, so resize ticks never get here; dragged widths reset per bucket.
+        LaunchedEffect(twoPane, layout) { twoPane.adopt(layout) }
         val hardwareKeyboard = hardwareKeyboardAttached()
         val shortcuts = layout.twoPane && hardwareKeyboard
         val collapsed = twoPane.listCollapsed

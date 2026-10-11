@@ -165,6 +165,79 @@ class AdaptiveLayoutTest {
     }
 
     @Test
+    fun listWidthStaysWithinItsBoundsAndLeavesTheChatRoom() {
+        assertEquals(240.dp, listPaneWidth(100.dp, 1600.dp, InspectorMode.PERSISTENT))
+        assertEquals(480.dp, listPaneWidth(900.dp, 1600.dp, InspectorMode.PERSISTENT))
+        // 400 dp of chat and the divider line.
+        assertEquals(319.dp, listPaneWidth(500.dp, 720.dp, InspectorMode.OVERLAY))
+        // Also the narrowest inspector pane and its divider.
+        assertEquals(398.dp, listPaneWidth(500.dp, 1100.dp, InspectorMode.ON_DEMAND))
+    }
+
+    @Test
+    fun inspectorWidthStaysWithinItsBoundsAndLeavesTheChatRoom() {
+        assertEquals(378.dp, inspectorPaneWidth(900.dp, 779.dp))
+        assertEquals(300.dp, inspectorPaneWidth(100.dp, 779.dp))
+        assertEquals(720.dp, inspectorPaneWidth(900.dp, 2000.dp))
+    }
+
+    @Test
+    fun defaultsSurviveTheClampsAndTheChatKeepsItsMinimum() {
+        for (window in 720..2560) {
+            val width = window.dp
+            val layout = paneLayout(width)
+            val side = layout.inspector != InspectorMode.OVERLAY
+            val list = listPaneWidth(layout.listWidth, width, layout.inspector)
+            assertEquals("list at $window", layout.listWidth, list)
+            if (side) assertEquals("inspector at $window", layout.inspectorWidth, inspectorPaneWidth(layout.inspectorWidth, width - list - 1.dp))
+            // The widest both panes can be dragged still leaves the chat its minimum.
+            val widestList = listPaneWidth(10_000.dp, width, layout.inspector)
+            val chatPane = width - widestList - 1.dp
+            val chat = if (side) chatPane - inspectorPaneWidth(10_000.dp, chatPane) - 1.dp else chatPane
+            assertTrue("chat at $window is $chat", chat >= CHAT_PANE_MIN_WIDTH)
+        }
+    }
+
+    @Test
+    fun draggedWidthsSurviveRecreation() {
+        val layout = paneLayout(1300.dp)
+        val state = TwoPaneState()
+        state.adopt(layout)
+        state.resizeList(layout, 420.dp)
+        state.resizeInspector(layout, 500.dp)
+        val scope = androidx.compose.runtime.saveable.SaverScope { true }
+        val restored = TwoPaneState.Saver.restore(with(TwoPaneState.Saver) { scope.save(state) }!!)!!
+        // Adopting the same bucket after recreation keeps them.
+        restored.adopt(layout)
+        assertEquals(420.dp, restored.listWidth(layout))
+        assertEquals(500.dp, restored.inspectorWidth(layout))
+        // Untouched widths come back as the defaults.
+        val fresh = TwoPaneState.Saver.restore(with(TwoPaneState.Saver) { scope.save(TwoPaneState()) }!!)!!
+        assertEquals(layout.listWidth, fresh.listWidth(layout))
+        assertEquals(layout.inspectorWidth, fresh.inspectorWidth(layout))
+    }
+
+    @Test
+    fun draggedWidthsResetOnlyWhenTheBucketChanges() {
+        val wide = paneLayout(1300.dp)
+        val state = TwoPaneState()
+        state.adopt(wide)
+        state.resizeList(wide, 420.dp)
+        // Another width in the same bucket is the same layout.
+        state.adopt(paneLayout(1500.dp))
+        assertEquals(420.dp, state.listWidth(wide))
+        // Another bucket shows its own default at once and drops the dragged width.
+        val narrow = paneLayout(900.dp)
+        assertEquals(narrow.listWidth, state.listWidth(narrow))
+        state.adopt(narrow)
+        state.adopt(wide)
+        assertEquals(wide.listWidth, state.listWidth(wide))
+        state.resizeList(wide, 420.dp)
+        state.resizeList(wide, null)
+        assertEquals(wide.listWidth, state.listWidth(wide))
+    }
+
+    @Test
     fun backPreviewWithACollapsedListKeepsTheChat() {
         val keys = RemoteSelection("host", "project", "s1").keys()
         val entries =

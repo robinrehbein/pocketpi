@@ -11,6 +11,13 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.doubleClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -339,6 +346,140 @@ class TwoPaneNavigationTest {
         assertChatShown()
         compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
         assertEquals(RemoteSelection("host", "project", "s1"), repository.activations.last().first)
+    }
+
+    // ---- Resizable dividers -------------------------------------------------------------
+
+    private fun widthOf(tag: String): Dp = compose.onNodeWithTag(tag).getUnclippedBoundsInRoot().let { it.right - it.left }
+
+    /** Drags the divider [tag] by [distance] in small steps; the touch slop at the start is lost. */
+    private fun drag(tag: String, distance: Dp) {
+        compose.onNodeWithTag(tag).performTouchInput {
+            val step = distance.toPx() / 10
+            down(center)
+            repeat(10) { moveBy(Offset(step, 0f)) }
+            up()
+        }
+        compose.waitForIdle()
+    }
+
+    private fun accessibilityAction(tag: String, label: String) {
+        val action =
+            compose.onNodeWithTag(tag).fetchSemanticsNode().config[SemanticsActions.CustomActions].single {
+                it.label == label
+            }
+        compose.runOnUiThread { action.action() }
+        compose.waitForIdle()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun draggingTheListDividerWidensTheListAcrossRecreation() {
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent { App() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
+        drag("sessionListDivider", 120.dp)
+        val dragged = widthOf("sessionListPane")
+        assertTrue("list is $dragged", dragged > 340.dp)
+        restoration.emulateSavedInstanceStateRestore()
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(dragged)
+        // The chat keeps its minimum however far the divider goes.
+        drag("sessionListDivider", 600.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(480.dp)
+        assertTrue(widthOf("chatPane") >= CHAT_PANE_MIN_WIDTH)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun theListDividerIsAccessible() {
+        render()
+        val divider = compose.onNodeWithTag("sessionListDivider")
+        divider.assertWidthIsEqualTo(24.dp)
+        divider.assert(hasContentDescription(label(R.string.remote_pane_resize_list)))
+        accessibilityAction("sessionListDivider", label(R.string.remote_pane_wider))
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(340.dp)
+        accessibilityAction("sessionListDivider", label(R.string.remote_pane_narrower))
+        accessibilityAction("sessionListDivider", label(R.string.remote_pane_narrower))
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(260.dp)
+        accessibilityAction("sessionListDivider", label(R.string.remote_pane_reset_width))
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun doubleTapOnTheDividerResetsTheList() {
+        render()
+        drag("sessionListDivider", 120.dp)
+        assertTrue(widthOf("sessionListPane") > 340.dp)
+        compose.onNodeWithTag("sessionListDivider").performTouchInput { doubleClick() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun aCollapsedListHasNoDivider() {
+        render()
+        compose.onNodeWithTag("toggleSessionList").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListDivider").assertDoesNotExist()
+        // Below the inspector width there is no inspector divider either.
+        openTool()
+        compose.onNodeWithTag("inspectorDivider").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun rightToLeftDraggingTowardsTheChatWidensTheList() {
+        compose.setContent {
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) { App() }
+        }
+        compose.waitForIdle()
+        // The list is on the right; the chat is to its left.
+        drag("sessionListDivider", (-120).dp)
+        assertTrue(widthOf("sessionListPane") > 340.dp)
+    }
+
+    @Test
+    @Config(qualifiers = "w1300dp-h800dp")
+    fun draggingTheInspectorDividerWidensTheInspector() {
+        render()
+        compose.onNodeWithTag("inspectorDivider").assertDoesNotExist()
+        openTool()
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(400.dp)
+        compose.onNodeWithTag("inspectorDivider")
+            .assert(hasContentDescription(label(R.string.remote_pane_resize_inspector)))
+        drag("inspectorDivider", (-120).dp)
+        assertTrue(widthOf("inspectorPane") > 440.dp)
+        // The open tool and the chat stay.
+        compose.onNode(hasTestTag("toolDetail") and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
+        assertChatShown()
+        accessibilityAction("inspectorDivider", label(R.string.remote_pane_reset_width))
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(400.dp)
+    }
+
+    @Test
+    @Config(qualifiers = "w1700dp-h1000dp")
+    fun aNewLayoutBucketResetsTheDraggedWidths() {
+        val window = mutableStateOf<Dp>(1300.dp)
+        compose.setContent {
+            Box(Modifier.width(window.value).fillMaxHeight()) { App() }
+        }
+        compose.waitForIdle()
+        accessibilityAction("sessionListDivider", label(R.string.remote_pane_wider))
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
+        // Within the bucket the dragged width stays.
+        window.value = 1400.dp
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
+        window.value = 900.dp
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
+        window.value = 1300.dp
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(360.dp)
     }
 
     // ---- Hardware keyboard ---------------------------------------------------------------

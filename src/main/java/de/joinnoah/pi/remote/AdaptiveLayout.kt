@@ -3,6 +3,26 @@ package de.joinnoah.pi.remote
 import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -118,6 +138,103 @@ internal fun paneLayout(width: Dp): PaneLayout =
         else -> PaneLayout(true, InspectorMode.PERSISTENT, listWidth = 360.dp, inspectorWidth = 480.dp)
     }
 
+/*
+ * The dividers beside the session list and the inspector pane can be dragged. A width set that
+ * way holds until the layout bucket changes; every clamp leaves the chat at least
+ * [CHAT_PANE_MIN_WIDTH] wide, counting the 1 dp divider lines.
+ */
+
+internal val LIST_PANE_MIN_WIDTH = 240.dp
+internal val LIST_PANE_MAX_WIDTH = 480.dp
+internal val INSPECTOR_PANE_MIN_WIDTH = 300.dp
+internal val INSPECTOR_PANE_MAX_WIDTH = 720.dp
+internal val CHAT_PANE_MIN_WIDTH = 400.dp
+
+/** How far the "wider" and "narrower" accessibility actions move a divider. */
+internal val PANE_RESIZE_STEP = 40.dp
+
+private val PANE_DIVIDER_WIDTH = 1.dp
+private val PANE_RESIZE_HANDLE_WIDTH = 24.dp
+
+/**
+ * The session list's width for [requested] in a [window] wide layout: it leaves room for the
+ * chat and, where one can open beside it, the narrowest inspector pane.
+ */
+internal fun listPaneWidth(requested: Dp, window: Dp, inspector: InspectorMode): Dp {
+    val inspectorReserve =
+        if (inspector == InspectorMode.OVERLAY) 0.dp else INSPECTOR_PANE_MIN_WIDTH + PANE_DIVIDER_WIDTH
+    val reserve = CHAT_PANE_MIN_WIDTH + PANE_DIVIDER_WIDTH + inspectorReserve
+    return requested.coerceIn(LIST_PANE_MIN_WIDTH, maxOf(LIST_PANE_MIN_WIDTH, minOf(LIST_PANE_MAX_WIDTH, window - reserve)))
+}
+
+/** The inspector pane's width for [requested] beside a chat with [available] room for both. */
+internal fun inspectorPaneWidth(requested: Dp, available: Dp): Dp =
+    requested.coerceIn(
+        INSPECTOR_PANE_MIN_WIDTH,
+        maxOf(
+            INSPECTOR_PANE_MIN_WIDTH,
+            minOf(INSPECTOR_PANE_MAX_WIDTH, available - CHAT_PANE_MIN_WIDTH - PANE_DIVIDER_WIDTH),
+        ),
+    )
+
+/** Identifies a layout bucket for [TwoPaneState]; a dragged width belongs to one bucket. */
+internal fun PaneLayout.sizeKey(): String = "${inspector.name}:${listWidth.value}:${inspectorWidth.value}"
+
+/**
+ * The invisible, [PANE_RESIZE_HANDLE_WIDTH] wide strip over a divider line. [onDrag] gets the
+ * distance moved towards the layout's end side, so right-to-left layouts need no sign of their own.
+ * Double tap resets; TalkBack offers [label] with wider, narrower and reset actions.
+ */
+@Composable
+internal fun PaneResizeHandle(
+    label: String,
+    onDrag: (Dp) -> Unit,
+    onStep: (Dp) -> Unit,
+    onReset: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val currentReset by rememberUpdatedState(onReset)
+    val wider = stringResource(R.string.remote_pane_wider)
+    val narrower = stringResource(R.string.remote_pane_narrower)
+    val reset = stringResource(R.string.remote_pane_reset_width)
+    val context = LocalContext.current
+    val hoverIcon =
+        remember(context) {
+            PointerIcon(android.view.PointerIcon.getSystemIcon(context, android.view.PointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW))
+        }
+    Box(
+        modifier
+            .width(PANE_RESIZE_HANDLE_WIDTH)
+            .fillMaxHeight()
+            .pointerHoverIcon(hoverIcon)
+            .draggable(
+                orientation = Orientation.Horizontal,
+                state = rememberDraggableState { px -> with(density) { onDrag((if (rtl) -px else px).toDp()) } },
+            )
+            .pointerInput(Unit) { detectTapGestures(onDoubleTap = { currentReset() }) }
+            .semantics {
+                contentDescription = label
+                customActions =
+                    listOf(
+                        CustomAccessibilityAction(wider) {
+                            onStep(PANE_RESIZE_STEP)
+                            true
+                        },
+                        CustomAccessibilityAction(narrower) {
+                            onStep(-PANE_RESIZE_STEP)
+                            true
+                        },
+                        CustomAccessibilityAction(reset) {
+                            onReset()
+                            true
+                        },
+                    )
+            }
+    )
+}
+
 /**
  * Hosts a full-screen page no wider than [MAX_PAGE_WIDTH], centred in wider windows. The page
  * background fills the gutters so transitions never show the window behind them.
@@ -140,12 +257,51 @@ internal fun CenteredPage(content: @Composable () -> Unit) {
 internal val LocalPaneLayout = staticCompositionLocalOf { PaneLayout.Phone }
 
 /**
- * Two-pane state that is not part of the back stack. Only the collapsed list survives
- * recreation; the rest is rebuilt by the panes themselves.
+ * Two-pane state that is not part of the back stack. The collapsed list and the dragged pane
+ * widths survive recreation; the rest is rebuilt by the panes themselves.
  */
 @Stable
 internal class TwoPaneState(listCollapsed: Boolean = false) {
     var listCollapsed by mutableStateOf(listCollapsed)
+
+    /** Dragged widths, null for the layout's default; they belong to the bucket [sizedFor]. */
+    private var listOverride by mutableStateOf<Dp?>(null)
+    private var inspectorOverride by mutableStateOf<Dp?>(null)
+    private var sizedFor by mutableStateOf<String?>(null)
+
+    /** The session list's requested width in [layout], before [listPaneWidth] clamps it. */
+    fun listWidth(layout: PaneLayout): Dp =
+        listOverride?.takeIf { sizedFor == layout.sizeKey() } ?: layout.listWidth
+
+    /** The inspector pane's requested width in [layout], before [inspectorPaneWidth] clamps it. */
+    fun inspectorWidth(layout: PaneLayout): Dp =
+        inspectorOverride?.takeIf { sizedFor == layout.sizeKey() } ?: layout.inspectorWidth
+
+    /** Sets the session list's width in [layout]; null goes back to its default. */
+    fun resizeList(layout: PaneLayout, width: Dp?) {
+        adopt(layout)
+        listOverride = width
+    }
+
+    /** Sets the inspector pane's width in [layout]; null goes back to its default. */
+    fun resizeInspector(layout: PaneLayout, width: Dp?) {
+        adopt(layout)
+        inspectorOverride = width
+    }
+
+    /**
+     * Drops the dragged widths once the layout bucket changes. The same bucket, also right after
+     * recreation, keeps them.
+     */
+    fun adopt(layout: PaneLayout) {
+        val key = layout.sizeKey()
+        if (sizedFor == key) return
+        if (sizedFor != null) {
+            listOverride = null
+            inspectorOverride = null
+        }
+        sizedFor = key
+    }
 
     /** Ctrl+K asks the list to focus its search field; the list handles each request once. */
     var searchRequests by mutableIntStateOf(0)
@@ -160,8 +316,24 @@ internal class TwoPaneState(listCollapsed: Boolean = false) {
     }
 
     companion object {
-        val Saver: Saver<TwoPaneState, Boolean> =
-            Saver(save = { it.listCollapsed }, restore = { TwoPaneState(it) })
+        val Saver: Saver<TwoPaneState, Any> =
+            listSaver(
+                save = {
+                    listOf(
+                        it.listCollapsed,
+                        it.listOverride?.value ?: -1f,
+                        it.inspectorOverride?.value ?: -1f,
+                        it.sizedFor ?: "",
+                    )
+                },
+                restore = {
+                    TwoPaneState(it[0] as Boolean).apply {
+                        listOverride = (it[1] as Float).takeIf { width -> width >= 0f }?.dp
+                        inspectorOverride = (it[2] as Float).takeIf { width -> width >= 0f }?.dp
+                        sizedFor = (it[3] as String).ifEmpty { null }
+                    }
+                },
+            )
     }
 }
 
@@ -269,22 +441,43 @@ private data class ListDetailScene(
         // Registered before the chat's own handlers, so an open tool detail or diff still closes
         // first; without a predictive preview (see previousEntries).
         BackHandler(enabled = collapsed) { state.listCollapsed = false }
-        Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-            // Only a shown chat can take the list's room; without one the list is all there is.
-            if (!collapsed) {
-                Box(Modifier.width(layout.listWidth).fillMaxHeight().testTag("sessionListPane")) {
-                    CompositionLocalProvider(LocalListPane provides ListPane(selectedSessionId)) {
-                        list.Content()
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val window by rememberUpdatedState(maxWidth)
+            val listWidth = listPaneWidth(state.listWidth(layout), maxWidth, layout.inspector)
+            Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                // Only a shown chat can take the list's room; without one the list is all there is.
+                if (!collapsed) {
+                    Box(Modifier.width(listWidth).fillMaxHeight().testTag("sessionListPane")) {
+                        CompositionLocalProvider(LocalListPane provides ListPane(selectedSessionId)) {
+                            list.Content()
+                        }
                     }
+                    VerticalDivider()
                 }
-                VerticalDivider()
+                Box(Modifier.weight(1f).fillMaxHeight().testTag("chatPane")) {
+                    if (detail == null) DetailPlaceholder()
+                    else
+                        key(detail.contentKey) {
+                            CompositionLocalProvider(LocalDetailPane provides true) { detail.Content() }
+                        }
+                }
             }
-            Box(Modifier.weight(1f).fillMaxHeight().testTag("chatPane")) {
-                if (detail == null) DetailPlaceholder()
-                else
-                    key(detail.contentKey) {
-                        CompositionLocalProvider(LocalDetailPane provides true) { detail.Content() }
-                    }
+            if (!collapsed) {
+                // Reads the state on every call: several drag events can arrive between frames.
+                fun resizeBy(delta: Dp) {
+                    val current = listPaneWidth(state.listWidth(layout), window, layout.inspector)
+                    state.resizeList(layout, listPaneWidth(current + delta, window, layout.inspector))
+                }
+                PaneResizeHandle(
+                    label = stringResource(R.string.remote_pane_resize_list),
+                    onDrag = ::resizeBy,
+                    onStep = ::resizeBy,
+                    onReset = { state.resizeList(layout, null) },
+                    modifier =
+                        Modifier.align(Alignment.CenterStart)
+                            .offset(x = listWidth + PANE_DIVIDER_WIDTH / 2 - PANE_RESIZE_HANDLE_WIDTH / 2)
+                            .testTag("sessionListDivider"),
+                )
             }
         }
     }
@@ -403,33 +596,58 @@ internal fun filterSessions(items: List<SessionListItem>, query: String): List<S
  * The chat with its inspector pane beside it while [shown]. The chat keeps its place in the
  * composition either way, so opening or closing the pane (or a resize across 1100 dp) keeps its
  * scroll position and open tool.
+ *
+ * [width] is the requested pane width, read again on every drag event; with [onResize] the
+ * divider can be dragged, and null resets the width.
  */
 @Composable
 internal fun InspectorRow(
     shown: Boolean,
-    width: Dp,
+    width: () -> Dp,
+    onResize: ((Dp?) -> Unit)?,
     inspector: (@Composable () -> Unit)?,
     content: @Composable () -> Unit,
 ) {
-    Row(Modifier.fillMaxSize()) {
-        Box(Modifier.weight(1f).fillMaxHeight()) { content() }
-        if (shown) {
-            VerticalDivider()
-            Box(Modifier.width(width).fillMaxHeight().testTag("inspectorPane")) {
-                if (inspector != null) inspector()
-                else
-                    Box(
-                        Modifier.fillMaxSize().padding(32.dp).testTag("inspectorPlaceholder"),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            stringResource(R.string.remote_inspector_empty),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                        )
-                    }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val available by rememberUpdatedState(maxWidth)
+        val paneWidth = inspectorPaneWidth(width(), maxWidth)
+        Row(Modifier.fillMaxSize()) {
+            Box(Modifier.weight(1f).fillMaxHeight()) { content() }
+            if (shown) {
+                VerticalDivider()
+                Box(Modifier.width(paneWidth).fillMaxHeight().testTag("inspectorPane")) {
+                    if (inspector != null) inspector()
+                    else
+                        Box(
+                            Modifier.fillMaxSize().padding(32.dp).testTag("inspectorPlaceholder"),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                stringResource(R.string.remote_inspector_empty),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                }
             }
+        }
+        if (shown && onResize != null) {
+            // The pane sits at the end side, so moving the divider towards the end narrows it.
+            fun resizeBy(delta: Dp) {
+                val current = inspectorPaneWidth(width(), available)
+                onResize(inspectorPaneWidth(current + delta, available))
+            }
+            PaneResizeHandle(
+                label = stringResource(R.string.remote_pane_resize_inspector),
+                onDrag = { resizeBy(-it) },
+                onStep = ::resizeBy,
+                onReset = { onResize(null) },
+                modifier =
+                    Modifier.align(Alignment.CenterEnd)
+                        .offset(x = -(paneWidth + PANE_DIVIDER_WIDTH / 2 - PANE_RESIZE_HANDLE_WIDTH / 2))
+                        .testTag("inspectorDivider"),
+            )
         }
     }
 }
