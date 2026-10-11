@@ -834,22 +834,36 @@ private fun jobStatusLabel(job: BackgroundJob): String =
         JobStatus.TIMEOUT -> stringResource(R.string.remote_jobs_status_timeout)
     }
 
-/** A chip for [SessionControls]: shown only when the host and session have background jobs. */
+/** The selected session's status chip and overview; only job details navigate away. */
 @Composable
-internal fun BackgroundJobsChip(jobs: JobsState, colors: ChipColors, onOpen: () -> Unit) {
+internal fun BackgroundJobsChip(jobs: JobsState, actions: JobsActions) {
+    var expanded by androidx.compose.runtime.saveable.rememberSaveable(jobs.sessionId) { mutableStateOf(false) }
     val running = jobs.jobs.count { it.status == JobStatus.RUNNING }
     val label =
         if (running > 0) pluralStringResource(R.plurals.remote_jobs_running_count, running, running)
         else stringResource(R.string.remote_jobs_title)
-    AssistChip(
-        onClick = onOpen,
-        shape = androidx.compose.foundation.shape.CircleShape,
-        colors = colors,
-        border = null,
-        leadingIcon = { Icon(Icons.Outlined.Terminal, null, Modifier.size(AssistChipDefaults.IconSize)) },
-        label = { Text(label, maxLines = 1) },
-        modifier = Modifier.testTag("jobsChip"),
-    )
+    StatusPopover(
+        summary = label,
+        running = running > 0,
+        expanded = expanded,
+        onExpandedChange = {
+            expanded = it
+            if (it) actions.onRefresh()
+        },
+        expandDescription = stringResource(R.string.remote_jobs_expand),
+        collapseDescription = stringResource(R.string.remote_jobs_collapse),
+        title = stringResource(R.string.remote_jobs_title),
+        closeDescription = stringResource(R.string.remote_jobs_close),
+        chipTag = "jobsChip",
+        popoverTag = "jobsPopover",
+        actions = {
+            IconButton(onClick = actions.onRefresh, enabled = !jobs.loading, modifier = Modifier.testTag("jobsRefresh")) {
+                Icon(Icons.Default.Refresh, stringResource(R.string.remote_refresh))
+            }
+        },
+    ) {
+        JobListContent(jobs, { id -> expanded = false; actions.onOpenJob(id) }, Modifier.heightIn(max = 320.dp))
+    }
 }
 
 internal class JobsActions(
@@ -901,15 +915,21 @@ private fun JobList(state: JobsState, actions: JobsActions) {
         }
     }
     HorizontalDivider()
+    JobListContent(state, actions.onOpenJob, Modifier.fillMaxSize())
+}
+
+@Composable
+private fun JobListContent(state: JobsState, onOpenJob: (String) -> Unit, modifier: Modifier) {
     when {
         state.jobs.isEmpty() && state.loading && !state.loaded ->
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            Box(modifier, contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         state.jobs.isEmpty() ->
             JobsMessage(
-                stringResource(if (state.failure != null) R.string.remote_jobs_failed else R.string.remote_jobs_empty)
+                stringResource(if (state.failure != null) R.string.remote_jobs_failed else R.string.remote_jobs_empty),
+                modifier,
             )
         else ->
-            LazyColumn(Modifier.fillMaxSize().testTag("jobsList")) {
+            LazyColumn(modifier.testTag("jobsList")) {
                 if (state.failure != null)
                     item { JobsMessage(stringResource(R.string.remote_jobs_failed), Modifier) }
                 itemsIndexed(state.jobs.sortedByDescending { it.startedAt }, key = { _, job -> job.id }) { _, job ->
@@ -933,7 +953,7 @@ private fun JobList(state: JobsState, actions: JobsActions) {
                             }
                         },
                         modifier =
-                            Modifier.clickable(role = Role.Button) { actions.onOpenJob(job.id) }.testTag("job-${job.id}"),
+                            Modifier.clickable(role = Role.Button) { onOpenJob(job.id) }.testTag("job-${job.id}"),
                     )
                     HorizontalDivider()
                 }

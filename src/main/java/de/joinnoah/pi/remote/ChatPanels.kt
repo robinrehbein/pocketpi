@@ -256,6 +256,43 @@ internal fun SubagentStrip(
         if (strip.running > 0)
             pluralStringResource(R.plurals.remote_panel_subagents_running, strip.running, strip.running)
         else pluralStringResource(R.plurals.remote_panel_subagents_queued, strip.entries.size, strip.entries.size)
+    StatusPopover(
+        summary = summary,
+        running = strip.running > 0,
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        expandDescription = stringResource(R.string.remote_panel_subagents_expand),
+        collapseDescription = stringResource(R.string.remote_panel_subagents_collapse),
+        title = stringResource(R.string.remote_subagent_popover_title),
+        closeDescription = stringResource(R.string.remote_subagent_popover_close),
+        chipTag = "subagentStrip",
+        popoverTag = "subagentPopover",
+    ) {
+        LazyColumn(Modifier.heightIn(max = 320.dp)) {
+            items(strip.entries) { entry ->
+                SubagentStripRow(entry, canAbort(entry),
+                    onOpen = { expanded = false; onOpen(it) }, onAbort = onAbort)
+            }
+        }
+    }
+}
+
+/** Shared status chip and anchored, dismissible overview used above the composer. */
+@Composable
+internal fun StatusPopover(
+    summary: String,
+    running: Boolean,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    expandDescription: String,
+    collapseDescription: String,
+    title: String,
+    closeDescription: String,
+    chipTag: String,
+    popoverTag: String,
+    actions: @Composable RowScope.() -> Unit = {},
+    content: @Composable () -> Unit,
+) {
     Box {
         Surface(
             shape = CircleShape,
@@ -263,8 +300,8 @@ internal fun SubagentStrip(
             border = if (expanded) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
         ) {
             Row(
-                Modifier.clickable(role = Role.Button) { expanded = !expanded }
-                    .testTag("subagentStrip")
+                Modifier.clickable(role = Role.Button) { onExpandedChange(!expanded) }
+                    .testTag(chipTag)
                     .minimumInteractiveComponentSize()
                     .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -272,7 +309,7 @@ internal fun SubagentStrip(
             ) {
                 StatusDot(
                     sessionStatusColor(
-                        if (strip.running > 0) SessionAvailability.RUNNING else SessionAvailability.IDLE
+                        if (running) SessionAvailability.RUNNING else SessionAvailability.IDLE
                     )
                 )
                 Text(
@@ -283,10 +320,7 @@ internal fun SubagentStrip(
                 Icon(
                     if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription =
-                        stringResource(
-                            if (expanded) R.string.remote_panel_subagents_collapse
-                            else R.string.remote_panel_subagents_expand
-                        ),
+                        if (expanded) collapseDescription else expandDescription,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -295,7 +329,7 @@ internal fun SubagentStrip(
             val margin = with(LocalDensity.current) { 12.dp.roundToPx() }
             Popup(
                 popupPositionProvider = remember(margin) { SubagentPopoverPosition(margin) },
-                onDismissRequest = { expanded = false },
+                onDismissRequest = { onExpandedChange(false) },
                 properties = PopupProperties(focusable = true),
             ) {
                 Surface(
@@ -303,21 +337,17 @@ internal fun SubagentStrip(
                     color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     shadowElevation = 8.dp,
-                    modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth().testTag("subagentPopover"),
+                    modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth().testTag(popoverTag),
                 ) {
                     Column {
                         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.remote_subagent_popover_title), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                            IconButton(onClick = { expanded = false }) {
-                                Icon(Icons.Default.Close, stringResource(R.string.remote_subagent_popover_close))
+                            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                            actions()
+                            IconButton(onClick = { onExpandedChange(false) }) {
+                                Icon(Icons.Default.Close, closeDescription)
                             }
                         }
-                        LazyColumn(Modifier.heightIn(max = 320.dp)) {
-                            items(strip.entries) { entry ->
-                                SubagentStripRow(entry, canAbort(entry),
-                                    onOpen = { expanded = false; onOpen(it) }, onAbort = onAbort)
-                            }
-                        }
+                        content()
                     }
                 }
             }
