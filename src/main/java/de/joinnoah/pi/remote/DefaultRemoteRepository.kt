@@ -4261,6 +4261,8 @@ class DefaultRemoteRepository(
 
     override fun openChangesFile(path: String?) = changesLoader.openFile(path)
 
+    override fun requestChangesPreview(path: String) = changesLoader.requestPreview(path)
+
     // ---- Project files (session.files.v1) ------------------------------------------------
 
     private fun requireFiles(sessionId: String) {

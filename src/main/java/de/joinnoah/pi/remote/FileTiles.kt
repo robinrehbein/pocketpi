@@ -64,6 +64,7 @@ internal fun FileEntryTile(
     onPeek: (IntRect) -> Unit,
     modifier: Modifier = Modifier,
     tag: String = "fileTile:${entry.name}",
+    detail: (@Composable () -> Unit)? = null,
 ) {
     val openable = entry.type == FileEntryType.DIR || entry.type == FileEntryType.FILE
     val kind = stringResource(
@@ -148,7 +149,8 @@ internal fun FileEntryTile(
                     maxLines = 1,
                     overflow = TextOverflow.MiddleEllipsis,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (detail != null) detail()
+                else Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(kind, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (fileSize != null) {
                         Text(fileSize, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

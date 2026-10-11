@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
@@ -93,13 +94,33 @@ class ChangesPaneTest {
                     android.text.format.DateUtils.FORMAT_ABBREV_MONTH,
             )
         compose.onNodeWithText(context.getString(R.string.remote_changes_since_first_contact, time)).assertExists()
-        compose.onAllNodesWithTag("changesFile").assertCountEquals(4)
-        compose.onNodeWithText(context.getString(R.string.remote_changes_base_content_gone)).assertExists()
-        compose.onNodeWithText(context.getString(R.string.remote_changes_binary)).assertExists()
-        compose.onNodeWithText(context.getString(R.string.remote_changes_too_large)).assertExists()
-        compose.onNodeWithText("+2000").assertExists()
-        compose.onNodeWithText("big.kt").performClick()
+        // Tiles are lazy: bring each file into view before checking its detail.
+        listOf(
+            "notes.md" to context.getString(R.string.remote_changes_base_content_gone),
+            "logo.png" to context.getString(R.string.remote_changes_binary),
+            "dump.sql" to context.getString(R.string.remote_changes_too_large),
+            "big.kt" to "+2000",
+        ).forEach { (path, detail) ->
+            compose.onNodeWithTag("changesList").performScrollToNode(androidx.compose.ui.test.hasText(path))
+            compose.onNodeWithText(detail, useUnmergedTree = true).assertExists()
+        }
+        compose.onNodeWithText("big.kt", useUnmergedTree = true).performClick()
         assertEquals(listOf<String?>("big.kt"), recorder.opened)
+    }
+
+    @Test
+    fun longPressShowsDiffPeekWithoutOpeningFile() {
+        val recorder = Recorder()
+        val excerpt = "@@ -1 +1 @@\n-old\n+new\n context"
+        render(ChangesState("s", loading = false, status = status.copy(files = listOf(status.files.first())),
+            log = GitLog(), previews = mapOf("big.kt" to FileTilePreview(loading = false, content = excerpt))), recorder)
+        compose.onNodeWithTag("changesList").performScrollToNode(androidx.compose.ui.test.hasText("big.kt"))
+        compose.onNodeWithTag("changesFile").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnLongClick) { it() }
+        compose.onNodeWithTag("filePeek").assertExists()
+        compose.onNodeWithText(excerpt, useUnmergedTree = true).assertExists()
+        assertTrue(recorder.opened.isEmpty())
+        compose.onNodeWithTag("filePeekDismiss").performClick()
+        compose.onNodeWithTag("filePeek").assertDoesNotExist()
     }
 
     @Test

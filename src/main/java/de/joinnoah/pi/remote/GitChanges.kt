@@ -181,6 +181,7 @@ data class ChangesState(
     val logLoading: Boolean = false,
     val logFailure: ChangesFailure? = null,
     val comments: List<ReviewComment> = emptyList(),
+    val previews: Map<String, FileTilePreview> = emptyMap(),
 )
 
 internal fun canViewChanges(state: RemoteState): Boolean =

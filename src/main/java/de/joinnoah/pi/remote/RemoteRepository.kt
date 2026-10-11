@@ -277,6 +277,8 @@ interface RemoteRepository {
     /** Shows the diff of [path], or the file list again for null. */
     fun openChangesFile(path: String?) {}
 
+    fun requestChangesPreview(path: String) {}
+
     /** `session.files.list`; only with [FILES_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing =
         throw RemoteRequestException("unsupported")

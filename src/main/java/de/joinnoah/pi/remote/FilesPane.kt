@@ -10,8 +10,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,26 +19,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -46,18 +38,19 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -71,6 +64,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -116,21 +110,27 @@ internal fun FilesPane(
     var prefillFailed by remember { mutableStateOf(false) }
     LaunchedEffect(state.file?.path, state.path) { prefillFailed = false }
     val send: (String) -> Unit = { prompt -> prefillFailed = !actions.onSend(prompt) }
+    val density = LocalDensity.current
+    var headerHeight by remember { mutableStateOf(64.dp) }
     Surface(modifier.fillMaxSize().testTag("filesPane")) {
-        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-            FilesTopBar(state, actions, back, projectName)
-            if (prefillFailed)
-                Text(
-                    stringResource(R.string.remote_files_prefill_failed),
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("filesPrefillFailed"),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                val file = state.file
-                // Every folder and file starts with fresh scroll state.
-                if (file == null) key(state.path) { FolderList(state, actions) }
-                else key(file.path) { FileView(file, actions, send) }
+        Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+            Column(Modifier.fillMaxSize()) {
+                if (prefillFailed)
+                    Text(
+                        stringResource(R.string.remote_files_prefill_failed),
+                        Modifier.fillMaxWidth().padding(top = headerHeight).padding(horizontal = 16.dp, vertical = 8.dp).testTag("filesPrefillFailed"),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    val inset = if (prefillFailed) 0.dp else headerHeight
+                    val file = state.file
+                    if (file == null) key(state.path) { FolderList(state, actions, inset) }
+                    else key(file.path) { FileView(file, actions, send, inset) }
+                }
+            }
+            Box(Modifier.align(Alignment.TopCenter).onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
+                FilesTopBar(state, actions, back, projectName)
             }
         }
     }
@@ -139,70 +139,19 @@ internal fun FilesPane(
 @Composable
 private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Unit, projectName: String?) {
     val nested = state.file != null || state.path.isNotEmpty()
-    val subtitle = (state.file?.path ?: state.path).takeIf(String::isNotEmpty) ?: projectName?.takeIf(String::isNotBlank)
-    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        val actionWidth = if (nested) 96.dp else 48.dp
-        val maxPillWidth = maxWidth - 48.dp - 8.dp
-        val maxTextWidth = (maxWidth - 48.dp - 8.dp - 8.dp - 20.dp - actionWidth - 12.dp).coerceAtLeast(24.dp)
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            FloatingSurface(
-                modifier = Modifier.widthIn(max = maxPillWidth).testTag("filesHeaderPill"),
-                shape = CircleShape,
-            ) {
-                Row(
-                    Modifier.padding(start = 8.dp, end = 20.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(
-                        onClick = if (nested) back else actions.onClose,
-                        modifier = Modifier.size(48.dp).testTag(if (nested) "filesBack" else "filesClose"),
-                    ) {
-                        Icon(
-                            if (nested) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Close,
-                            stringResource(if (nested) R.string.remote_files_back else R.string.remote_files_close),
-                        )
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.widthIn(min = minOf(120.dp, maxTextWidth), max = maxTextWidth)) {
-                        Text(
-                            stringResource(R.string.remote_files_title),
-                            Modifier.fillMaxWidth().testTag("filesTitle"),
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                        )
-                        if (subtitle != null)
-                            Text(
-                                subtitle,
-                                Modifier.fillMaxWidth().testTag("filesSubtitle"),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontFamily = if (nested) FontFamily.Monospace else null,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                    }
-                    if (nested)
-                        IconButton(onClick = actions.onClose, modifier = Modifier.size(48.dp).testTag("filesClose")) {
-                            Icon(Icons.Default.Close, stringResource(R.string.remote_files_close))
-                        }
-                }
-            }
-            val busy = state.file?.loading ?: state.loading
-            FloatingSurface(modifier = Modifier.testTag("filesReloadPill"), shape = CircleShape) {
-                IconButton(
-                    onClick = actions.onReload,
-                    enabled = !busy,
-                    modifier = Modifier.size(48.dp).testTag("filesReload"),
-                ) {
-                    Icon(Icons.Default.Refresh, stringResource(R.string.remote_files_reload))
-                }
-            }
-        }
-    }
+    PaneHeader(
+        title = stringResource(R.string.remote_files_title),
+        subtitle = (state.file?.path ?: state.path).takeIf(String::isNotEmpty) ?: projectName?.takeIf(String::isNotBlank),
+        nested = nested,
+        busy = state.file?.loading ?: state.loading,
+        tag = "files",
+        backLabel = stringResource(R.string.remote_files_back),
+        closeLabel = stringResource(R.string.remote_files_close),
+        reloadLabel = stringResource(R.string.remote_files_reload),
+        onBack = back,
+        onClose = actions.onClose,
+        onReload = actions.onReload,
+    )
 }
 
 private fun failureText(failure: FilesFailure): Int =
@@ -262,7 +211,7 @@ private fun LazyListScope.loadMore(loading: Boolean, failure: FilesFailure?, onL
 }
 
 @Composable
-private fun FolderList(state: FilesState, actions: FilesActions) {
+private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: Dp) {
     val gridState = rememberLazyGridState()
     var peekAnchor by remember { mutableStateOf<IntRect?>(null) }
     LaunchedEffect(state.path, state.listing, state.file) {
@@ -285,7 +234,7 @@ private fun FolderList(state: FilesState, actions: FilesActions) {
             state = gridState,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerHeight + 8.dp, bottom = 8.dp),
         ) {
             item(key = "crumbs", span = { GridItemSpan(maxLineSpan) }) { Breadcrumbs(state.path, actions.onOpenDir) }
             val listing = state.listing
@@ -408,7 +357,7 @@ private fun syntaxColors(): SyntaxColors {
 }
 
 @Composable
-private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Unit) {
+private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Unit, headerHeight: Dp) {
     val context = LocalContext.current
     val lines = remember(file.content) { fileLines(file.content) }
     val language = remember(file.path) { languageFor(file.path) }
@@ -439,7 +388,7 @@ private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Un
             else stringResource(R.string.remote_files_selection_lines, it.first, it.last)
         }
     Column(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("filesFile")) {
+        LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("filesFile"), contentPadding = PaddingValues(top = headerHeight)) {
             if (file.reopened)
                 item(key = "reopened") {
                     FilesNotice(stringResource(R.string.remote_files_reopened), Modifier.testTag("filesReopened"))

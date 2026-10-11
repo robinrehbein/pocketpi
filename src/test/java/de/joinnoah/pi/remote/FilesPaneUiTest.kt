@@ -151,6 +151,14 @@ class FilesPaneUiTest {
     }
 
     @Test
+    fun folderGridExtendsBehindFloatingHeader() {
+        render(FilesState("s", loading = false, listing = root))
+        val list = compose.onNodeWithTag("filesList").getUnclippedBoundsInRoot()
+        val header = compose.onNodeWithTag("filesHeaderPill").getUnclippedBoundsInRoot()
+        assertEquals(true, list.top < header.bottom)
+    }
+
+    @Test
     fun rootHeaderShowsProjectNameWhenAvailable() {
         render(FilesState("s", loading = false, listing = root), projectName = "PocketPi")
         compose.onNodeWithTag("filesSubtitle").assertTextEquals("PocketPi")
