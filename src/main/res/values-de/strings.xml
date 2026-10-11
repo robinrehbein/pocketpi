@@ -364,6 +364,11 @@
     <string name="remote_inspector_empty">Tool-Details und Dateiänderungen öffnen sich hier.</string>
     <string name="remote_session_list_hide">Sitzungsliste ausblenden</string>
     <string name="remote_session_list_show">Sitzungsliste einblenden</string>
+    <string name="remote_pane_resize_list">Breite der Sitzungsliste ändern</string>
+    <string name="remote_pane_resize_inspector">Breite des Seitenbereichs ändern</string>
+    <string name="remote_pane_wider">Breiter</string>
+    <string name="remote_pane_narrower">Schmaler</string>
+    <string name="remote_pane_reset_width">Breite zurücksetzen</string>
     <string name="remote_session_search">Sitzungen durchsuchen</string>
     <string name="remote_session_search_empty">Keine Sitzung passt zur Suche.</string>
     <string name="remote_keyboard_title">Hardware-Tastatur</string>

@@ -119,13 +119,13 @@ class FilesPaneUiTest {
 
     @Test
     @Config(qualifiers = "w800dp-h700dp")
-    fun widePaneUsesThreeTileColumns() {
-        val listing = FileListing("", listOf("src", "docs", "scripts").map { FileEntry(it, FileEntryType.DIR) })
+    fun widePaneUsesMoreTileColumns() {
+        val names = listOf("src", "docs", "scripts", "tests")
+        val listing = FileListing("", names.map { FileEntry(it, FileEntryType.DIR) })
         render(FilesState("s", loading = false, listing = listing))
-        val tiles = listOf("src", "docs", "scripts").map { compose.onNodeWithTag("filesEntry:$it").getUnclippedBoundsInRoot() }
-        assertEquals(tiles[0].top, tiles[1].top)
-        assertEquals(tiles[1].top, tiles[2].top)
-        assertEquals(true, tiles[0].left < tiles[1].left && tiles[1].left < tiles[2].left)
+        val tiles = names.map { compose.onNodeWithTag("filesEntry:$it").getUnclippedBoundsInRoot() }
+        for (tile in tiles.drop(1)) assertEquals(tiles[0].top, tile.top)
+        assertEquals(true, tiles.zipWithNext().all { (a, b) -> a.left < b.left })
     }
 
     @Test

@@ -449,19 +449,19 @@ internal class RemoteNavigator(
     }
 
     /**
-     * Runs a two-pane keyboard shortcut. Only the session list and its chat react; hosts,
-     * projects, folders and settings leave the keys alone.
+     * Runs a two-pane keyboard shortcut and reports whether it was handled. Only the session list
+     * and its chat react; hosts, projects, folders and settings leave the keys alone. A [repeat]
+     * of a key that toggles or creates is swallowed only where its first press would apply.
      */
-    fun shortcut(shortcut: KeyboardShortcut, twoPane: TwoPaneState): Boolean {
+    fun shortcut(shortcut: KeyboardShortcut, twoPane: TwoPaneState, repeat: Boolean = false): Boolean {
         val top = stack.lastOrNull()
-        val sessions =
-            when (top) {
-                is RemoteNavKey.Chat -> RemoteNavKey.Sessions(top.routeId, top.projectId)
-                is RemoteNavKey.Sessions -> top
-                else -> return false
+        val panes = listDetailPanes(stack.toList()) ?: return false
+        val sessions = stack[panes.list] as? RemoteNavKey.Sessions ?: return false
+        return when (shortcut) {
+            KeyboardShortcut.SEARCH -> {
+                twoPane.requestSearch()
+                true
             }
-        when (shortcut) {
-            KeyboardShortcut.SEARCH -> twoPane.requestSearch()
             KeyboardShortcut.PREVIOUS_SESSION,
             KeyboardShortcut.NEXT_SESSION -> {
                 val step = if (shortcut == KeyboardShortcut.NEXT_SESSION) 1 else -1
@@ -469,9 +469,23 @@ internal class RemoteNavigator(
                 adjacentSession(twoPane.visibleSessionIds, current, step)
                     ?.takeIf { it != current }
                     ?.let { open(RemoteNavKey.Chat(sessions.routeId, sessions.projectId, it)) }
+                true
+            }
+            KeyboardShortcut.NEW_SESSION -> {
+                if (!canCreateSession(repository.state.value, sessions)) return false
+                // Holding the key must not create a session per repeat.
+                if (repeat) return true
+                createSession(sessions.routeId, sessions.projectId)
+                true
+            }
+            KeyboardShortcut.TOGGLE_LIST -> {
+                if (top !is RemoteNavKey.Chat) return false
+                // Holding the key must not flicker the list.
+                if (repeat) return true
+                twoPane.listCollapsed = !twoPane.listCollapsed
+                true
             }
         }
-        return true
     }
 
     fun disconnect() {
@@ -592,8 +606,10 @@ internal fun RemoteNavigation(
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // Recomputed on every size change: rotation, split-screen resizes and DeX windows.
-        val layout = paneLayout(maxWidth)
+        val layout = paneLayout(maxWidth, maxHeight)
         val twoPane = rememberSaveable(saver = TwoPaneState.Saver) { TwoPaneState() }
+        // Keyed on the bucket, so resize ticks never get here; dragged widths reset per bucket.
+        LaunchedEffect(twoPane, layout) { twoPane.adopt(layout) }
         val hardwareKeyboard = hardwareKeyboardAttached()
         val shortcuts = layout.twoPane && hardwareKeyboard
         val collapsed = twoPane.listCollapsed
@@ -665,7 +681,7 @@ private fun RemoteNavigator.shortcut(event: KeyEvent, twoPane: TwoPaneState): Bo
     val shortcut =
         keyboardShortcut(event.key, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed)
             ?: return false
-    return shortcut(shortcut, twoPane)
+    return shortcut(shortcut, twoPane, repeat = event.nativeKeyEvent.repeatCount > 0)
 }
 
 @Composable
@@ -695,11 +711,15 @@ private fun RemoteNavDisplay(
             entryProvider {
                 entry<RemoteNavKey.Hosts> { key ->
                     val model = viewModel { HostsViewModel(repository) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                    CenteredPage {
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                    }
                 }
                 entry<RemoteNavKey.Projects> { key ->
                     val model = viewModel { ProjectsViewModel(repository, key) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                    CenteredPage {
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                    }
                 }
                 entry<RemoteNavKey.Sessions>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { SessionsViewModel(repository, key, settings) }
@@ -707,11 +727,11 @@ private fun RemoteNavDisplay(
                 }
                 entry<RemoteNavKey.FolderBrowser> { key ->
                     val model = viewModel { FolderBrowserViewModel(repository, key) }
-                    FolderBrowserScreen(key, model, navigator)
+                    CenteredPage { FolderBrowserScreen(key, model, navigator) }
                 }
                 entry<RemoteNavKey.Providers> { key ->
                     val model = viewModel { ProvidersViewModel(repository, key) }
-                    ProvidersScreen(key, model, navigator)
+                    CenteredPage { ProvidersScreen(key, model, navigator) }
                 }
                 entry<RemoteNavKey.Chat>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ChatViewModel(repository, key, settings) }
@@ -725,7 +745,9 @@ private fun RemoteNavDisplay(
                     },
                 ) { key ->
                     val model = viewModel { SettingsViewModel(repository, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                    CenteredPage {
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                    }
                 }
             },
         transitionSpec = { depthTransition(forward = true) },

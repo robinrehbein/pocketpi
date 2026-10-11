@@ -364,6 +364,11 @@
     <string name="remote_inspector_empty">Tool details and file changes open here.</string>
     <string name="remote_session_list_hide">Hide session list</string>
     <string name="remote_session_list_show">Show session list</string>
+    <string name="remote_pane_resize_list">Resize session list</string>
+    <string name="remote_pane_resize_inspector">Resize side pane</string>
+    <string name="remote_pane_wider">Wider</string>
+    <string name="remote_pane_narrower">Narrower</string>
+    <string name="remote_pane_reset_width">Reset width</string>
     <string name="remote_session_search">Search sessions</string>
     <string name="remote_session_search_empty">No session matches your search.</string>
     <string name="remote_keyboard_title">Hardware keyboard</string>

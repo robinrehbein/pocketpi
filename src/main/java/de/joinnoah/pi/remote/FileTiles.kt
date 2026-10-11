@@ -44,6 +44,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -54,6 +55,13 @@ import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.platform.testTag
 import kotlin.math.roundToInt
+
+/** The narrowest a file tile gets before the grid drops a column. */
+internal val FILE_TILE_MIN_WIDTH = 176.dp
+
+/** Tile columns for a grid [width] wide (16 dp side padding, 10 dp gaps): never fewer than 2, at most 6. */
+internal fun fileGridColumns(width: Dp): Int =
+    ((width - 32.dp + 10.dp) / (FILE_TILE_MIN_WIDTH + 10.dp)).toInt().coerceIn(2, 6)
 
 @Composable
 internal fun FileEntryTile(

@@ -11,11 +11,21 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.doubleClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.assertWidthIsEqualTo
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
@@ -254,6 +264,37 @@ class TwoPaneNavigationTest {
     }
 
     @Test
+    @Config(qualifiers = "w753dp-h1205dp")
+    fun aTabletInPortraitShowsTheSessionListBesideTheChat() {
+        render()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        assertChatShown()
+    }
+
+    @Test
+    @Config(qualifiers = "w1205dp-h753dp")
+    fun aTabletInLandscapeOpensTheInspectorBesideTheChat() {
+        render()
+        openTool()
+        compose.onNode(hasTestTag("toolDetail") and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
+        assertChatShown()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun fullScreenPagesStayInACentredColumn() {
+        render()
+        // The two panes use the whole window.
+        compose.onNodeWithTag("pageColumn").assertDoesNotExist()
+        compose.onNode(hasContentDescription(label(R.string.remote_settings)) and hasAnyAncestor(hasTestTag("sessionListPane")))
+            .performClick()
+        compose.waitForIdle()
+        val page = compose.onNodeWithTag("pageColumn")
+        page.assertWidthIsEqualTo(720.dp)
+        assertEquals(280.dp, page.getUnclippedBoundsInRoot().left)
+    }
+
+    @Test
     @Config(qualifiers = "w1700dp-h1000dp")
     fun inspectorStaysOpenOnVeryWideWindows() {
         render()
@@ -307,6 +348,163 @@ class TwoPaneNavigationTest {
         assertEquals(RemoteSelection("host", "project", "s1"), repository.activations.last().first)
     }
 
+    // ---- Resizable dividers -------------------------------------------------------------
+
+    private fun widthOf(tag: String): Dp = compose.onNodeWithTag(tag).getUnclippedBoundsInRoot().let { it.right - it.left }
+
+    /** Drags the divider [tag] by [distance] in small steps; the touch slop at the start is lost. */
+    private fun drag(tag: String, distance: Dp) {
+        compose.onNodeWithTag(tag).performTouchInput {
+            val step = distance.toPx() / 10
+            down(center)
+            repeat(10) { moveBy(Offset(step, 0f)) }
+            up()
+        }
+        compose.waitForIdle()
+    }
+
+    /** One gesture: out [first], then back by [second] (negative), without lifting the finger. */
+    private fun dragThereAndBack(tag: String, first: Dp, second: Dp) {
+        compose.onNodeWithTag(tag).performTouchInput {
+            down(center)
+            repeat(10) { moveBy(Offset(first.toPx() / 10, 0f)) }
+            repeat(10) { moveBy(Offset(second.toPx() / 10, 0f)) }
+            up()
+        }
+        compose.waitForIdle()
+    }
+
+    private fun accessibilityAction(tag: String, label: String) {
+        val action =
+            compose.onNodeWithTag(tag).fetchSemanticsNode().config[SemanticsActions.CustomActions].single {
+                it.label == label
+            }
+        compose.runOnUiThread { action.action() }
+        compose.waitForIdle()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun draggingTheListDividerWidensTheListAcrossRecreation() {
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent { App() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
+        drag("sessionListDivider", 120.dp)
+        val dragged = widthOf("sessionListPane")
+        assertTrue("list is $dragged", dragged > 340.dp)
+        restoration.emulateSavedInstanceStateRestore()
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(dragged)
+        // The chat keeps its minimum however far the divider goes.
+        drag("sessionListDivider", 600.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(480.dp)
+        assertTrue(widthOf("chatPane") >= CHAT_PANE_MIN_WIDTH)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun draggingPastTheLimitAndBackFollowsTheFingerAgain() {
+        render()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
+        // 300 + 300 - 150 = 450 once the first 48 dp or so of touch slop are lost; a drag that
+        // added its deltas to the clamped 480 dp would end near 330 dp instead.
+        dragThereAndBack("sessionListDivider", 300.dp, (-150).dp)
+        val width = widthOf("sessionListPane")
+        assertTrue("list is $width", width > 380.dp && width < 480.dp)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun theListDividerIsAccessible() {
+        render()
+        val divider = compose.onNodeWithTag("sessionListDivider")
+        divider.assertWidthIsEqualTo(24.dp)
+        divider.assert(hasContentDescription(label(R.string.remote_pane_resize_list)))
+        accessibilityAction("sessionListDivider", label(R.string.remote_pane_wider))
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(340.dp)
+        accessibilityAction("sessionListDivider", label(R.string.remote_pane_narrower))
+        accessibilityAction("sessionListDivider", label(R.string.remote_pane_narrower))
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(260.dp)
+        accessibilityAction("sessionListDivider", label(R.string.remote_pane_reset_width))
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun doubleTapOnTheDividerResetsTheList() {
+        render()
+        drag("sessionListDivider", 120.dp)
+        assertTrue(widthOf("sessionListPane") > 340.dp)
+        compose.onNodeWithTag("sessionListDivider").performTouchInput { doubleClick() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun aCollapsedListHasNoDivider() {
+        render()
+        compose.onNodeWithTag("toggleSessionList").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListDivider").assertDoesNotExist()
+        // Below the inspector width there is no inspector divider either.
+        openTool()
+        compose.onNodeWithTag("inspectorDivider").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun rightToLeftDraggingTowardsTheChatWidensTheList() {
+        compose.setContent {
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) { App() }
+        }
+        compose.waitForIdle()
+        // The list is on the right; the chat is to its left.
+        drag("sessionListDivider", (-120).dp)
+        assertTrue(widthOf("sessionListPane") > 340.dp)
+    }
+
+    @Test
+    @Config(qualifiers = "w1300dp-h800dp")
+    fun draggingTheInspectorDividerWidensTheInspector() {
+        render()
+        compose.onNodeWithTag("inspectorDivider").assertDoesNotExist()
+        openTool()
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(400.dp)
+        compose.onNodeWithTag("inspectorDivider")
+            .assert(hasContentDescription(label(R.string.remote_pane_resize_inspector)))
+        drag("inspectorDivider", (-120).dp)
+        assertTrue(widthOf("inspectorPane") > 440.dp)
+        // The open tool and the chat stay.
+        compose.onNode(hasTestTag("toolDetail") and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
+        assertChatShown()
+        accessibilityAction("inspectorDivider", label(R.string.remote_pane_reset_width))
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(400.dp)
+    }
+
+    @Test
+    @Config(qualifiers = "w1700dp-h1000dp")
+    fun aNewLayoutBucketResetsTheDraggedWidths() {
+        val window = mutableStateOf<Dp>(1300.dp)
+        compose.setContent {
+            Box(Modifier.width(window.value).fillMaxHeight()) { App() }
+        }
+        compose.waitForIdle()
+        accessibilityAction("sessionListDivider", label(R.string.remote_pane_wider))
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
+        // Within the bucket the dragged width stays.
+        window.value = 1400.dp
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
+        window.value = 900.dp
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
+        window.value = 1300.dp
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(360.dp)
+    }
+
     // ---- Hardware keyboard ---------------------------------------------------------------
 
     private fun focusComposerAndType(text: String) {
@@ -357,6 +555,45 @@ class TwoPaneNavigationTest {
 
     @Test
     @Config(qualifiers = "w900dp-h1200dp")
+    fun ctrlNCreatesASessionInTheProject() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.N) } }
+        compose.waitForIdle()
+        assertEquals(1, repository.createdSessions)
+        // Like the button, it does nothing while disconnected.
+        repository.state.value = repository.state.value.copy(connected = false)
+        compose.waitForIdle()
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.N) } }
+        compose.waitForIdle()
+        assertEquals(1, repository.createdSessions)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun ctrlBTogglesTheListOnlyBesideAChat() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.B) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        // The list is gone, so the chat's composer still has focus for the second press.
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.B) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        // Without a chat there is nothing to give the room to.
+        back()
+        compose.onNodeWithTag("chatPlaceholder").assertIsDisplayed()
+        compose.onNodeWithTag("sessionSearch").performClick()
+        compose.onNodeWithTag("sessionSearch").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.B) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
     fun ctrlAndAltArrowsSwitchSessions() {
         render(hardwareKeyboard = true)
         compose.onNodeWithTag("composerField").performClick()
@@ -385,6 +622,9 @@ class TwoPaneNavigationTest {
         compose.waitForIdle()
         assertEquals(count, repository.activations.size)
         assertTrue(repository.activations.none { it.first.sessionId == "s2" })
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.N) } }
+        compose.waitForIdle()
+        assertEquals(0, repository.createdSessions)
     }
 
     @Test

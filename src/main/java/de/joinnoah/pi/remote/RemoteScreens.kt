@@ -935,7 +935,8 @@ internal fun RemoteScreen(
         }
     InspectorRow(
         shown = sideInspector && (paneLayout.inspector == InspectorMode.PERSISTENT || inspectorContent != null),
-        width = paneLayout.inspectorWidth,
+        width = { twoPane?.inspectorWidth(paneLayout) ?: paneLayout.inspectorWidth },
+        onResize = twoPane?.let { pane -> { width -> pane.resizeInspector(paneLayout, width) } },
         inspector = inspectorContent,
     ) {
     Scaffold(
