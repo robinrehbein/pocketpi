@@ -1501,10 +1501,16 @@ class RemoteNavigationUiTest {
         thinking().assertIsOff()
         compose.runOnIdle { assertEquals("status", uiSettings.state.value.thinkingDisplay) }
 
-        val themes = listOf("themeSystem" to "system", "themeLight" to "light", "themeDark" to "dark")
+        val themes = listOf(
+            "themeSystem" to "system",
+            "themeLight" to "light",
+            "themeDark" to "dark",
+            "themeSynthwave" to "synthwave",
+        )
         compose.onNodeWithTag("themeSystem").assertIsSelected()
         for ((tag, value) in themes.drop(1) + themes.first()) {
             compose.onNodeWithTag(tag)
+                .performScrollTo()
                 .assert(hasClickAction())
                 .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
                 .performClick()
@@ -1541,7 +1547,7 @@ class RemoteNavigationUiTest {
                 .putString("thinking_display", "text")
                 .putBoolean("hide_offline_sessions", true)
                 .commit()
-            for (theme in listOf("system", "light", "dark")) {
+            for (theme in listOf("system", "light", "dark", "synthwave")) {
                 DefaultSettingsRepository(context).setTheme(theme)
                 assertEquals(theme, preferences.getString("theme", null))
                 val restored = DefaultSettingsRepository(context).state.value
@@ -1553,7 +1559,7 @@ class RemoteNavigationUiTest {
             repository.setThinkingDisplay("status")
             val restored = DefaultSettingsRepository(context).state.value
             assertEquals("status", restored.thinkingDisplay)
-            assertEquals("dark", restored.theme)
+            assertEquals("synthwave", restored.theme)
             assertTrue(restored.hideOfflineSessions)
         } finally {
             preferences.edit().clear().commit()

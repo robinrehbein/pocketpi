@@ -77,7 +77,7 @@ class DefaultSettingsRepository(context: Context) : SettingsRepository {
     override val state = mutable.asStateFlow()
 
     override fun setTheme(theme: String) {
-        require(theme in setOf("system", "light", "dark"))
+        require(theme in setOf("system", "light", "dark", "synthwave"))
         preferences.edit().putString("theme", theme).apply()
         mutable.value = mutable.value.copy(theme = theme)
     }
