@@ -150,6 +150,21 @@ class GitChangesTest {
     }
 
     @Test
+    fun parsesTheDevBaseOfEveryStatus() {
+        val dev = parseGitStatus(valid("status-dev").obj("data"), sessionId, GitBase.DEV)
+        assertEquals(GitDevBase("origin/dev"), dev.devBase)
+        assertEquals("origin/dev", dev.devRef)
+        val main = parseGitStatus(valid("status-dev-default-branch").obj("data"), sessionId, GitBase.DEV)
+        assertEquals(GitDevBase("origin/main"), main.devBase)
+        assertEquals(null, main.devRef)
+        assertEquals("main", devBaseName(main.devBase))
+        val none = parseGitStatus(valid("status-head-without-dev-base").obj("data"), sessionId, GitBase.HEAD)
+        assertEquals(GitDevBase(null), none.devBase)
+        assertEquals(null, parseGitStatus(valid("status-session-start").obj("data"), sessionId, GitBase.SESSION).devBase)
+        assertEquals("dev", devBaseName(null))
+    }
+
+    @Test
     fun rejectsEveryInvalidFixtureResult() {
         for (entry in entries("invalid")) {
             val payload = entry.obj("payload")
@@ -236,6 +251,38 @@ class GitChangesTest {
         runCurrent()
         assertEquals(command("status-command-dev"), JsonObject(transport.git().last { it.text("type") == "session.git.status" } - "requestId"))
         assertEquals("origin/dev", repository.state.value.changes?.status?.devRef)
+        assertEquals(GitDevBase("origin/dev"), repository.state.value.changes?.devBase)
+    }
+
+    @Test
+    fun devBaseOutlivesOtherBasesUntilTheHostReportsItGone() = runTest {
+        val transport = Transport()
+        var devGone = false
+        transport.configure(gitCapabilities) { request ->
+            when {
+                request.text("type") != "session.git.status" -> withRequest(valid("log"), request)
+                request.text("base") == "head" -> withRequest(valid("status-head-unborn"), request)
+                devGone -> withRequest(valid("status-unavailable"), request)
+                else -> JsonObject(withRequest(valid("status-dev"), request) + ("base" to JsonPrimitive(request.text("base"))))
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        repository.openChanges()
+        runCurrent()
+        repository.selectChangesBase(GitBase.DEV)
+        runCurrent()
+        assertEquals(GitDevBase("origin/dev"), repository.state.value.changes?.devBase)
+        // A status without devBase (an older host's, here HEAD) keeps the last one.
+        repository.selectChangesBase(GitBase.HEAD)
+        runCurrent()
+        assertEquals(GitBase.HEAD, repository.state.value.changes?.status?.base)
+        assertEquals(GitDevBase("origin/dev"), repository.state.value.changes?.devBase)
+        devGone = true
+        repository.selectChangesBase(GitBase.DEV)
+        runCurrent()
+        assertEquals(GitUnavailable.BASE_UNAVAILABLE, repository.state.value.changes?.status?.unavailable)
+        assertEquals(GitDevBase(null), repository.state.value.changes?.devBase)
     }
 
     @Test

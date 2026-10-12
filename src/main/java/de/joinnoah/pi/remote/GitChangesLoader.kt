@@ -182,6 +182,12 @@ internal class GitChangesLoader(
                             log = if (status.available && !shownLog) GitLog() else null,
                             logLoading = shownLog,
                             logFailure = null,
+                            // Base dev gone since the last status: the repository has no such branch any more.
+                            devBase = status.devBase
+                                ?: GitDevBase(null).takeIf {
+                                    status.base == GitBase.DEV && status.unavailable == GitUnavailable.BASE_UNAVAILABLE
+                                }
+                                ?: changes.devBase,
                         )
                     }
                     status

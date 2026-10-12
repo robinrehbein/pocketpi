@@ -120,7 +120,7 @@ internal fun ChangesPane(state: ChangesState, actions: ChangesActions, modifier:
                     if (file == null) ChangesOverview(state, checked, inset)
                     else key(file) { ChangesFileDiff(state, file, checked, inset) }
                 }
-                if (state.comments.isNotEmpty()) ReviewBar(state.comments, checked)
+                if (state.comments.isNotEmpty()) ReviewBar(state.comments, state.devBase, checked)
             }
             Box(Modifier.align(Alignment.TopCenter).onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
                 PaneHeader(
@@ -166,11 +166,12 @@ private fun unavailableText(reason: GitUnavailable): Int =
         GitUnavailable.SESSION_UNSUPPORTED -> R.string.remote_changes_unavailable_session
     }
 
-private fun baseLabel(base: GitBase): Int =
+@Composable
+private fun baseLabel(base: GitBase, devBase: GitDevBase?): String =
     when (base) {
-        GitBase.SESSION -> R.string.remote_changes_base_session
-        GitBase.HEAD -> R.string.remote_changes_base_head
-        GitBase.DEV -> R.string.remote_changes_base_dev
+        GitBase.SESSION -> stringResource(R.string.remote_changes_base_session)
+        GitBase.HEAD -> stringResource(R.string.remote_changes_base_head)
+        GitBase.DEV -> devBaseName(devBase)
     }
 
 private fun changeLabel(change: GitChange): Int =
@@ -239,11 +240,13 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    GitBase.entries.forEach { base ->
+                    // A repository without a branch to compare against loses that choice, unless it is the one shown.
+                    val noDevBase = state.devBase?.ref == null && state.devBase != null
+                    GitBase.entries.filter { it != GitBase.DEV || !noDevBase || it == shownBase || it == state.base }.forEach { base ->
                         FilterChip(
                             selected = base == shownBase,
                             onClick = { if (base != shownBase || state.failure != null) actions.onSelectBase(base) },
-                            label = { Text(stringResource(baseLabel(base))) },
+                            label = { Text(baseLabel(base, state.devBase)) },
                             modifier = Modifier.testTag("changesBase_${base.wire}"),
                         )
                     }
@@ -266,7 +269,7 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
                     )
                 }
             }
-            status?.devRef?.let { ref ->
+            status?.takeIf { it.base == GitBase.DEV }?.let { it.devBase?.ref ?: it.devRef }?.let { ref ->
                 item(key = "devRef", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_dev_ref, ref)) }
             }
             status?.branch?.let { branch ->
@@ -438,17 +441,17 @@ private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesA
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 AssistChip(
-                    onClick = { actions.onPrefill(quickActionPrompt(context, QuickAction.REVERT, path, base)) },
+                    onClick = { actions.onPrefill(quickActionPrompt(context, QuickAction.REVERT, path, base, state.devBase)) },
                     label = { Text(stringResource(R.string.remote_changes_action_revert)) },
                     modifier = Modifier.testTag("changesActionRevert"),
                 )
                 AssistChip(
-                    onClick = { actions.onPrefill(quickActionPrompt(context, QuickAction.TESTS, path, base)) },
+                    onClick = { actions.onPrefill(quickActionPrompt(context, QuickAction.TESTS, path, base, state.devBase)) },
                     label = { Text(stringResource(R.string.remote_changes_action_tests)) },
                     modifier = Modifier.testTag("changesActionTests"),
                 )
                 AssistChip(
-                    onClick = { actions.onPrefill(quickActionPrompt(context, QuickAction.EXPLAIN, path, base)) },
+                    onClick = { actions.onPrefill(quickActionPrompt(context, QuickAction.EXPLAIN, path, base, state.devBase)) },
                     label = { Text(stringResource(R.string.remote_changes_action_explain)) },
                     modifier = Modifier.testTag("changesActionExplain"),
                 )
@@ -581,7 +584,7 @@ private fun CommentDialog(
 }
 
 @Composable
-private fun ReviewBar(comments: List<ReviewComment>, actions: ChangesActions) {
+private fun ReviewBar(comments: List<ReviewComment>, devBase: GitDevBase?, actions: ChangesActions) {
     val context = LocalContext.current
     HorizontalDivider()
     Row(
@@ -595,7 +598,7 @@ private fun ReviewBar(comments: List<ReviewComment>, actions: ChangesActions) {
             style = MaterialTheme.typography.bodyMedium,
         )
         Button(
-            onClick = { actions.onUseReview(reviewPrompt(context, comments)) },
+            onClick = { actions.onUseReview(reviewPrompt(context, comments, devBase)) },
             modifier = Modifier.testTag("changesUseReview"),
         ) {
             Text(stringResource(R.string.remote_changes_use_review))
@@ -610,37 +613,39 @@ internal enum class QuickAction {
 }
 
 /** The composer text for a per-file quick action. */
-internal fun quickActionPrompt(context: Context, action: QuickAction, path: String, base: GitBase): String =
+internal fun quickActionPrompt(
+    context: Context,
+    action: QuickAction,
+    path: String,
+    base: GitBase,
+    devBase: GitDevBase? = null,
+): String =
     when (action) {
         QuickAction.REVERT ->
             context.getString(
                 R.string.remote_changes_prompt_revert,
                 path,
-                context.getString(
-                    when (base) {
-                        GitBase.SESSION -> R.string.remote_changes_prompt_base_session
-                        GitBase.HEAD -> R.string.remote_changes_prompt_base_head
-                        GitBase.DEV -> R.string.remote_changes_prompt_base_dev
-                    }
-                ),
+                when (base) {
+                    GitBase.SESSION -> context.getString(R.string.remote_changes_prompt_base_session)
+                    GitBase.HEAD -> context.getString(R.string.remote_changes_prompt_base_head)
+                    GitBase.DEV -> context.getString(R.string.remote_changes_prompt_base_dev, devBaseRef(devBase))
+                },
             )
         QuickAction.TESTS -> context.getString(R.string.remote_changes_prompt_tests, path)
         QuickAction.EXPLAIN -> context.getString(R.string.remote_changes_prompt_explain, path)
     }
 
 /** The composer text for all pending [comments]. */
-internal fun reviewPrompt(context: Context, comments: List<ReviewComment>): String =
+internal fun reviewPrompt(context: Context, comments: List<ReviewComment>, devBase: GitDevBase? = null): String =
     reviewPrompt(context.getString(R.string.remote_changes_review_intro), comments) { path, line, removed, base ->
         context.getString(
             if (removed) R.string.remote_changes_review_removed_line else R.string.remote_changes_review_line,
             path,
             line,
-            context.getString(
-                when (base) {
-                    GitBase.SESSION -> R.string.remote_changes_review_base_session
-                    GitBase.HEAD -> R.string.remote_changes_review_base_head
-                    GitBase.DEV -> R.string.remote_changes_review_base_dev
-                }
-            ),
+            when (base) {
+                GitBase.SESSION -> context.getString(R.string.remote_changes_review_base_session)
+                GitBase.HEAD -> context.getString(R.string.remote_changes_review_base_head)
+                GitBase.DEV -> context.getString(R.string.remote_changes_review_base_dev, devBaseRef(devBase))
+            },
         )
     }

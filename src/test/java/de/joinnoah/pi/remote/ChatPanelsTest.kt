@@ -41,12 +41,13 @@ class ChatPanelsTest {
             MaterialTheme { TouchedFilesSummary(files, TouchedLineCounts(12, 4)) { taps++ } }
         }
         val summary = compose.onNodeWithTag("touchedFilesSummary")
-        summary.assertTextContains(context.resources.getQuantityString(R.plurals.remote_panel_files_count, 3, 3))
+        summary.assertTextContains(context.resources.getQuantityString(R.plurals.remote_panel_files_changed, 2, 2))
         summary.assertTextContains("+12")
         summary.assertTextContains("−4")
         val description =
             listOf(
-                context.resources.getQuantityString(R.plurals.remote_panel_files_touched, 3, 3),
+                context.resources.getQuantityString(R.plurals.remote_panel_files_changed_description, 2, 2),
+                context.resources.getQuantityString(R.plurals.remote_panel_files_read_description, 1, 1),
                 context.resources.getQuantityString(R.plurals.remote_panel_lines_added, 12, 12),
                 context.resources.getQuantityString(R.plurals.remote_panel_lines_removed, 4, 4),
             ).joinToString(", ")
@@ -61,7 +62,22 @@ class ChatPanelsTest {
         val texts =
             compose.onNodeWithTag("touchedFilesSummary").fetchSemanticsNode().config[SemanticsProperties.Text]
                 .map { it.text }
-        assertEquals(listOf(context.resources.getQuantityString(R.plurals.remote_panel_files_count, 3, 3)), texts)
+        assertEquals(listOf(context.resources.getQuantityString(R.plurals.remote_panel_files_changed, 2, 2)), texts)
+    }
+
+    @Test
+    fun touchedFilesSummaryOfAReadOnlyChatSaysRead() {
+        val readOnly = TouchedFiles(changed = emptyList(), read = files.changed + files.read)
+        compose.setContent { MaterialTheme { TouchedFilesSummary(readOnly, lines = null) {} } }
+        val texts =
+            compose.onNodeWithTag("touchedFilesSummary").fetchSemanticsNode().config[SemanticsProperties.Text]
+                .map { it.text }
+        assertEquals(listOf(context.resources.getQuantityString(R.plurals.remote_panel_files_read, 3, 3)), texts)
+        compose
+            .onNodeWithContentDescription(
+                context.resources.getQuantityString(R.plurals.remote_panel_files_read_description, 3, 3)
+            )
+            .assertExists()
     }
 
     @Test

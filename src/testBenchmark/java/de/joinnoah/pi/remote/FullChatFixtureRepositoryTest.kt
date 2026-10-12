@@ -22,7 +22,10 @@ class FullChatFixtureRepositoryTest {
         assertEquals(FULL_CHAT_READY, state.messages.last().text("text"))
         val projected = conversationItems(state.messages)
         assertEquals(48, projected.filterIsInstance<ConversationItem.Activity>().size)
-        assertEquals(48, touchedFiles(projected).total)
+        // The four failed edits changed nothing, so they are neither changed nor read files.
+        val touched = touchedFiles(projected)
+        assertEquals(20, touched.changed.size)
+        assertEquals(24, touched.read.size)
         assertEquals(TouchedLineCounts(20, 20), touchedLineCounts(projected))
         assertEquals(4, projected.count(::isErrorItem))
         val markers = timelineMarkers(projected)
