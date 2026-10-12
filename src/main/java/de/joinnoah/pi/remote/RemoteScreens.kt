@@ -214,9 +214,10 @@ internal fun RemoteScreen(
     val chatModel = model as? ChatViewModel
     val jobsAvailable = canUseBackgroundJobs(state)
     val jobsLeasable = canLeaseJobsList(state)
-    // Preserve list refreshes on selection, reconnect and a newly advertised list lease.
-    LaunchedEffect(state.selection.sessionId, state.connected, jobsAvailable, jobsLeasable) {
-        if (state.connected && jobsAvailable) chatModel?.refreshJobs()
+    // A destination cannot refresh while loading. Retry when its snapshot is ready so the
+    // initial list (and its event lease) is not lost when capabilities arrive before the snapshot.
+    LaunchedEffect(state.selection.sessionId, state.connected, state.loading, jobsAvailable, jobsLeasable) {
+        if (state.connected && !state.loading && jobsAvailable) chatModel?.refreshJobs()
     }
     val statusJobs = visibleJobs(state)?.takeIf { chatModel != null }
     val sentImages =
