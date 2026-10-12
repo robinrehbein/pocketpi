@@ -85,7 +85,6 @@ internal fun WatchListScope.watchChanges(state: RemoteState, model: WatchViewMod
             WatchAction(when (base) {
                 GitBase.SESSION -> stringResource(R.string.remote_changes_base_session)
                 GitBase.HEAD -> stringResource(R.string.remote_changes_base_head)
-                // Named after the branch the host compares with, as on the phone.
                 GitBase.DEV -> devBaseName(changes.devBase)
             }, { changePage(0); repository.selectChangesBase(base) }, ready && !changes.loading, selected = changes.base == base)
         } }
