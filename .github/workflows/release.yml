@@ -119,7 +119,7 @@ jobs:
           printf '%s' "$POCKETPI_UPLOAD_KEYSTORE_B64" | base64 --decode > "$POCKETPI_UPLOAD_KEYSTORE"
           test -s "$POCKETPI_UPLOAD_KEYSTORE"
           export POCKETPI_UPLOAD_KEYSTORE
-          ./gradlew --no-daemon bundleRelease \
+          ./gradlew --no-daemon :bundleRelease \
             "-PPOCKETPI_VERSION_CODE=$VERSION_CODE" \
             "-PPOCKETPI_VERSION_NAME=$VERSION_NAME"
           bundle='build/outputs/bundle/release/pocketpi-release.aab'

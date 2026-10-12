@@ -43,9 +43,9 @@ jobs:
       - name: English and German resource parity
         run: python3 scripts/i18n-check.py .
       - name: Unit tests and debug APK
-        run: ./gradlew testDebugUnitTest assembleDebug
+        run: ./gradlew testDebugUnitTest assembleDebug :wear:testDebugUnitTest :wear:assembleDebug
       - name: Android Lint
-        run: ./gradlew lintDebug
+        run: ./gradlew lintDebug :wear:lintDebug
       - name: Enable emulator acceleration
         run: |
           test -e /dev/kvm
@@ -61,4 +61,6 @@ jobs:
             build/reports/
             build/test-results/
             build/outputs/androidTest-results/
+            wear/build/reports/
+            wear/build/test-results/
           if-no-files-found: ignore

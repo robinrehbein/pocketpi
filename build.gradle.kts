@@ -84,6 +84,8 @@ val requiredPushProperties =
     listOf("API_KEY", "APP_ID", "PROJECT_ID", "GCM_SENDER_ID")
         .map { "PI_REMOTE_FIREBASE_$it" }
 val missingReleasePushProperties = requiredPushProperties.filter { remoteProperty(it).isBlank() }
+val firebaseBuildFields = requiredPushProperties.associateWith { quoted(remoteProperty(it)) }
+extra["pocketpiFirebaseBuildFields"] = firebaseBuildFields
 val validateReleasePushConfiguration = tasks.register<ValidateReleasePushConfiguration>(
     "validateReleasePushConfiguration"
 ) {
@@ -171,7 +173,7 @@ android {
             buildConfigField(
                 "String",
                 "PI_REMOTE_FIREBASE_$key",
-                quoted(remoteProperty("PI_REMOTE_FIREBASE_$key")),
+                firebaseBuildFields.getValue("PI_REMOTE_FIREBASE_$key"),
             )
         }
     }
@@ -209,6 +211,7 @@ if (providers.gradleProperty("composeMetrics").isPresent) {
 }
 
 dependencies {
+    implementation(libs.play.services.wearable)
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)

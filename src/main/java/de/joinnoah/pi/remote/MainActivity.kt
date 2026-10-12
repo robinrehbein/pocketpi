@@ -91,8 +91,9 @@ class MainActivity : ComponentActivity() {
         // Reopening from Recents replays the task's original intent; it must not reopen a session
         // from an old notification, widget row or shortcut.
         if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
-        val route = intent.getStringExtra("routeId") ?: return
-        val session = intent.getStringExtra("target") ?: return
+        val watchTarget = parseWatchHandoff(intent)
+        val route = watchTarget?.first ?: intent.getStringExtra("routeId") ?: return
+        val session = watchTarget?.second ?: intent.getStringExtra("target") ?: return
         notification =
             RemoteNotification(
                 route,
