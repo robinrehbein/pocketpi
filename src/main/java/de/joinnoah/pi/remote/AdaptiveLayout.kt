@@ -1,7 +1,23 @@
 package de.joinnoah.pi.remote
 
 import android.content.res.Configuration
+import android.animation.ValueAnimator
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.lerp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -81,18 +97,22 @@ import androidx.navigation3.scene.SceneStrategyScope
  *
  * - below 720 dp wide or 480 dp high: the phone layout, one full-screen destination at a time
  *   (unchanged), so a phone in landscape keeps it;
- * - from 720 dp wide and 480 dp high: the session list on the left and the selected chat on the right. The list can
- *   be collapsed so the chat gets the whole width;
- * - from 1100 dp: tool details and diffs open in an inspector pane beside the chat instead of
+ * - from 720 dp wide and 480 dp high: columns. The host's projects on the left, the selected
+ *   project's sessions beside them and the selected chat on the right. Once a chat is open, the
+ *   projects column narrows to a strip of project avatars, so another project is one tap away.
+ *   The session list can be collapsed so the chat gets the rest of the width;
+ * - from 1180 dp: tool details and diffs open in an inspector pane beside the chat instead of
  *   covering it, and the pane closes with them;
  * - from 1600 dp (DeX): the inspector pane stays open, empty until something is inspected.
  *
  * A Galaxy Tab S11 reports about 753-800 dp in portrait and 1205-1280 dp in landscape, depending
- * on the display zoom, so both orientations land in a two-pane bucket.
+ * on the display zoom, so both orientations land in a column bucket. Every bucket leaves an open
+ * chat at least [CHAT_PANE_MIN_WIDTH] beside the strip and the default session list.
  *
- * The back stack stays the single source of truth in every layout: the two-pane layout is only a
- * different way to show the same [RemoteNavKey.Sessions] + [RemoteNavKey.Chat] entries, so
- * rotation, split-screen resizes and deep links keep the selected session and its draft.
+ * The back stack stays the single source of truth in every layout: the columns are only a
+ * different way to show the same [RemoteNavKey.Projects], [RemoteNavKey.Sessions] and
+ * [RemoteNavKey.Chat] entries, so rotation, split-screen resizes and deep links keep the selected
+ * project, session and draft.
  */
 
 internal val TWO_PANE_MIN_WIDTH = 720.dp
@@ -102,7 +122,7 @@ internal val TWO_PANE_MIN_WIDTH = 720.dp
  * list and a chat with its composer and keyboard, so it keeps the phone layout.
  */
 internal val TWO_PANE_MIN_HEIGHT = 480.dp
-internal val INSPECTOR_MIN_WIDTH = 1100.dp
+internal val INSPECTOR_MIN_WIDTH = 1180.dp
 internal val PERSISTENT_INSPECTOR_MIN_WIDTH = 1600.dp
 
 /** Widest a chat bubble column and the composer grow; wider chat panes centre them. */
@@ -128,6 +148,8 @@ internal data class PaneLayout(
     val inspector: InspectorMode,
     val listWidth: Dp = 0.dp,
     val inspectorWidth: Dp = 0.dp,
+    /** The projects column's width while no chat is open; it is not resizable. */
+    val projectsWidth: Dp = 0.dp,
 ) {
     companion object {
         val Phone = PaneLayout(twoPane = false, inspector = InspectorMode.OVERLAY)
@@ -137,19 +159,28 @@ internal data class PaneLayout(
 internal fun paneLayout(width: Dp, height: Dp): PaneLayout =
     when {
         width < TWO_PANE_MIN_WIDTH || height < TWO_PANE_MIN_HEIGHT -> PaneLayout.Phone
-        width < 960.dp -> PaneLayout(true, InspectorMode.OVERLAY, listWidth = 300.dp)
-        width < INSPECTOR_MIN_WIDTH -> PaneLayout(true, InspectorMode.OVERLAY, listWidth = 360.dp)
+        width < 750.dp -> PaneLayout(true, InspectorMode.OVERLAY, listWidth = 240.dp, projectsWidth = 240.dp)
+        width < 960.dp -> PaneLayout(true, InspectorMode.OVERLAY, listWidth = 280.dp, projectsWidth = 240.dp)
+        width < INSPECTOR_MIN_WIDTH ->
+            PaneLayout(true, InspectorMode.OVERLAY, listWidth = 360.dp, projectsWidth = 280.dp)
         width < 1280.dp ->
-            PaneLayout(true, InspectorMode.ON_DEMAND, listWidth = 320.dp, inspectorWidth = 360.dp)
+            PaneLayout(
+                true, InspectorMode.ON_DEMAND, listWidth = 320.dp, inspectorWidth = 360.dp, projectsWidth = 280.dp,
+            )
         width < PERSISTENT_INSPECTOR_MIN_WIDTH ->
-            PaneLayout(true, InspectorMode.ON_DEMAND, listWidth = 360.dp, inspectorWidth = 400.dp)
-        else -> PaneLayout(true, InspectorMode.PERSISTENT, listWidth = 360.dp, inspectorWidth = 480.dp)
+            PaneLayout(
+                true, InspectorMode.ON_DEMAND, listWidth = 360.dp, inspectorWidth = 400.dp, projectsWidth = 280.dp,
+            )
+        else ->
+            PaneLayout(
+                true, InspectorMode.PERSISTENT, listWidth = 360.dp, inspectorWidth = 480.dp, projectsWidth = 280.dp,
+            )
     }
 
 /*
  * The dividers beside the session list and the inspector pane can be dragged. A width set that
  * way holds until the layout bucket changes; every clamp leaves the chat at least
- * [CHAT_PANE_MIN_WIDTH] wide, counting the 1 dp divider lines.
+ * [CHAT_PANE_MIN_WIDTH] wide beside the project strip, counting the 1 dp divider lines.
  */
 
 internal val LIST_PANE_MIN_WIDTH = 240.dp
@@ -161,8 +192,17 @@ internal val CHAT_PANE_MIN_WIDTH = 400.dp
 /** How far the "wider" and "narrower" accessibility actions move a divider. */
 internal val PANE_RESIZE_STEP = 40.dp
 
-private val PANE_DIVIDER_WIDTH = 1.dp
+internal val PANE_DIVIDER_WIDTH = 1.dp
 private val PANE_RESIZE_HANDLE_WIDTH = 24.dp
+
+/** The projects column's width while a chat is open: a strip of project avatars. */
+internal val PROJECT_STRIP_WIDTH = 64.dp
+
+/**
+ * What the project strip and its divider take from the window. The session list is clamped
+ * against the rest at every level, so it keeps its width when a chat opens.
+ */
+internal val PROJECT_STRIP_RESERVE = PROJECT_STRIP_WIDTH + PANE_DIVIDER_WIDTH
 
 /**
  * The session list's width for [requested] in a [window] wide layout: it leaves room for the
@@ -362,8 +402,16 @@ internal class TwoPaneState(listCollapsed: Boolean = false) {
 /** The two-pane state; null in the phone layout. */
 internal val LocalTwoPane = staticCompositionLocalOf<TwoPaneState?> { null }
 
-/** Set around the session list while it is the left pane; [selectedSessionId] is the chat shown. */
-internal data class ListPane(val selectedSessionId: String?)
+/**
+ * Set around the session list while it is a column. [selectedSessionId] is the chat shown beside
+ * it; [besideProjects] says the projects column is on its left, and [projectsStrip] that the
+ * column is the narrow strip.
+ */
+internal data class ListPane(
+    val selectedSessionId: String?,
+    val besideProjects: Boolean = false,
+    val projectsStrip: Boolean = false,
+)
 
 internal val LocalListPane = staticCompositionLocalOf<ListPane?> { null }
 
@@ -373,23 +421,30 @@ internal val LocalHardwareKeyboard = staticCompositionLocalOf { false }
 /** True around the chat while it is the right pane of the two-pane layout. */
 internal val LocalDetailPane = staticCompositionLocalOf { false }
 
-/** Metadata key under which each Sessions and Chat entry carries its [RemoteNavKey]. */
+/** Metadata key under which each Projects, Sessions and Chat entry carries its [RemoteNavKey]. */
 internal const val NAV_KEY_METADATA = "de.joinnoah.pi.remote.navKey"
 
 internal fun navKeyMetadata(key: RemoteNavKey): Map<String, Any> = mapOf(NAV_KEY_METADATA to key)
 
-/** Which back stack positions the two panes show: a Sessions list and, optionally, a chat. */
-internal data class ListDetailPanes(val list: Int, val detail: Int?)
+/**
+ * Which back stack positions the columns show: the host's projects, a project's sessions and a
+ * chat. Each is null when that column has nothing to show.
+ */
+internal data class ColumnPanes(val projects: Int?, val list: Int?, val detail: Int?)
 
 /**
- * The two-pane split of [keys], or null when the top destination is not part of it (hosts,
- * projects, folders, settings: those stay full screen). A chat pairs with the Sessions entry of
- * its project below it, skipping the parent chats a child chat is stacked on.
+ * The column split of [keys], or null when the top destination is not part of it (hosts,
+ * folders, providers, settings: those stay full screen). A chat pairs with the Sessions entry of
+ * its project below it, skipping the parent chats a child chat is stacked on; the Sessions entry
+ * pairs with its host's Projects right below it.
  */
-internal fun listDetailPanes(keys: List<Any?>): ListDetailPanes? {
+internal fun columnPanes(keys: List<Any?>): ColumnPanes? {
     val lastIndex = keys.lastIndex
+    fun projectsBelow(index: Int, routeId: String): Int? =
+        (index - 1).takeIf { it >= 0 && keys[it] == RemoteNavKey.Projects(routeId) }
     return when (val top = keys.lastOrNull()) {
-        is RemoteNavKey.Sessions -> ListDetailPanes(lastIndex, null)
+        is RemoteNavKey.Projects -> ColumnPanes(lastIndex, null, null)
+        is RemoteNavKey.Sessions -> ColumnPanes(projectsBelow(lastIndex, top.routeId), lastIndex, null)
         is RemoteNavKey.Chat -> {
             var index = lastIndex - 1
             while (index >= 0) {
@@ -398,7 +453,7 @@ internal fun listDetailPanes(keys: List<Any?>): ListDetailPanes? {
                         if (below.routeId != top.routeId || below.projectId != top.projectId) return null
                     is RemoteNavKey.Sessions ->
                         return if (below.routeId == top.routeId && below.projectId == top.projectId)
-                            ListDetailPanes(index, lastIndex)
+                            ColumnPanes(projectsBelow(index, top.routeId), index, lastIndex)
                         else null
                     else -> return null
                 }
@@ -410,13 +465,15 @@ internal fun listDetailPanes(keys: List<Any?>): ListDetailPanes? {
     }
 }
 
-private data class ListDetailSceneKey(val routeId: String, val projectId: String)
+private data class ProjectColumnsSceneKey(val routeId: String)
 
 /**
- * Shows [RemoteNavKey.Sessions] and the chat above it side by side. Selecting another session
- * replaces the chat entry, so the scene key stays and only the right pane changes.
+ * Shows a host's [RemoteNavKey.Projects], the [RemoteNavKey.Sessions] of the selected project and
+ * the chat above it as columns. One scene covers all three levels of a host, so opening a
+ * project, a session or another project keeps the scene and only changes its columns; the
+ * columns animate their own entrance (see [rememberEnterProgress]).
  */
-internal class ListDetailSceneStrategy(
+internal class ProjectColumnsSceneStrategy(
     private val layout: PaneLayout,
     private val state: TwoPaneState,
     /** A new strategy per value, so the scene and its back preview follow the list. */
@@ -426,13 +483,21 @@ internal class ListDetailSceneStrategy(
         entries: List<NavEntry<NavKey>>,
     ): Scene<NavKey>? {
         if (!layout.twoPane) return null
-        val panes = listDetailPanes(entries.map { it.metadata[NAV_KEY_METADATA] }) ?: return null
-        val sessions = entries[panes.list].metadata[NAV_KEY_METADATA] as RemoteNavKey.Sessions
+        val keys = entries.map { it.metadata[NAV_KEY_METADATA] }
+        val panes = columnPanes(keys) ?: return null
+        val routeId =
+            when (val top = keys.last()) {
+                is RemoteNavKey.Projects -> top.routeId
+                is RemoteNavKey.Sessions -> top.routeId
+                is RemoteNavKey.Chat -> top.routeId
+                else -> return null
+            }
         val detail = panes.detail?.let(entries::get)
         val collapsed = detail != null && listCollapsed
-        return ListDetailScene(
-            key = ListDetailSceneKey(sessions.routeId, sessions.projectId),
-            list = entries[panes.list],
+        return ProjectColumnsScene(
+            key = ProjectColumnsSceneKey(routeId),
+            projects = panes.projects?.let(entries::get),
+            list = panes.list?.let(entries::get),
             detail = detail,
             // Back with the list collapsed only expands it (see twoPaneBackStep): the chat stays.
             // Navigation 3 can only preview a shorter stack, so this state offers no predictive
@@ -441,20 +506,33 @@ internal class ListDetailSceneStrategy(
             layout = layout,
             state = state,
             collapsed = collapsed,
+            onBack = onBack,
         )
     }
 }
 
-private data class ListDetailScene(
+/** The easing of the column animations: a quick start that settles softly. */
+private val ColumnEasing = CubicBezierEasing(0.2f, 0.8f, 0.2f, 1f)
+
+/** How far a column slides in from, and how far the back preview moves the top one. */
+private val COLUMN_SLIDE = 48.dp
+
+private data class ProjectColumnsScene(
     override val key: Any,
-    private val list: NavEntry<NavKey>,
+    private val projects: NavEntry<NavKey>?,
+    private val list: NavEntry<NavKey>?,
     private val detail: NavEntry<NavKey>?,
     override val previousEntries: List<NavEntry<NavKey>>,
     private val layout: PaneLayout,
     private val state: TwoPaneState,
     private val collapsed: Boolean,
+    private val onBack: () -> Unit,
 ) : Scene<NavKey> {
-    override val entries: List<NavEntry<NavKey>> = if (collapsed) listOfNotNull(detail) else listOfNotNull(list, detail)
+    // The Projects entry stays part of the scene beside a chat: it shows the strip.
+    override val entries: List<NavEntry<NavKey>> = listOfNotNull(projects, list?.takeUnless { collapsed }, detail)
+
+    private val selectedProjectId =
+        (list?.metadata?.get(NAV_KEY_METADATA) as? RemoteNavKey.Sessions)?.projectId
 
     private val selectedSessionId =
         (detail?.metadata?.get(NAV_KEY_METADATA) as? RemoteNavKey.Chat)?.sessionId
@@ -463,33 +541,93 @@ private data class ListDetailScene(
         // Registered before the chat's own handlers, so an open tool detail or diff still closes
         // first; without a predictive preview (see previousEntries).
         BackHandler(enabled = collapsed) { state.listCollapsed = false }
+        // Back from the sessions or a chat stays in this scene, so Navigation 3 has no other scene
+        // to preview; the scene previews it itself. Registered before the chat's own handlers too.
+        val backPreview = rememberBackPreview(enabled = list != null && !collapsed, resetKey = (detail ?: list)?.contentKey, onBack = onBack)
+        val listEnter = rememberEnterProgress(list?.contentKey)
+        val detailEnter = rememberEnterProgress(detail?.contentKey)
+        val strip = detail != null
+        val projectsTarget = if (strip) PROJECT_STRIP_WIDTH else layout.projectsWidth
+        val projectsAnimated by
+            animateDpAsState(projectsTarget, tween(320, easing = ColumnEasing), label = "projectsWidth")
+        val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val window by rememberUpdatedState(maxWidth)
-            val listWidth = listPaneWidth(state.listWidth(layout), maxWidth, layout.inspector)
+            val reserve = if (projects != null) PROJECT_STRIP_RESERVE else 0.dp
+            val listWidth = listPaneWidth(state.listWidth(layout), maxWidth - reserve, layout.inspector)
+            // A back gesture from a chat widens the strip towards the full column it goes back to.
+            val projectsWidth =
+                if (strip) lerp(projectsAnimated, layout.projectsWidth, backPreview.value) else projectsAnimated
+            val slide = with(LocalDensity.current) { COLUMN_SLIDE.toPx() } * if (rtl) -1f else 1f
+            // Slides a column in from the end side and, while it is the top one, moves it with a
+            // back gesture. Read while drawing, so neither animation recomposes the column.
+            fun Modifier.column(enter: Animatable<Float, AnimationVector1D>, top: Boolean) =
+                graphicsLayer {
+                    val back = if (top) backPreview.value else 0f
+                    translationX = (1f - enter.value + back) * slide
+                    alpha = enter.value * (1f - 0.5f * back)
+                }
             Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                if (projects != null) {
+                    Box(
+                        Modifier.width(projectsWidth)
+                            .fillMaxHeight()
+                            .clipToBounds()
+                            .testTag(if (strip) "projectStrip" else "projectsPane")
+                    ) {
+                        // Laid out at the width it is heading for, so the content never reflows
+                        // while the column grows or shrinks; the clip shows the part that fits.
+                        Box(
+                            Modifier.wrapContentWidth(Alignment.Start, unbounded = true)
+                                .width(projectsTarget)
+                                .fillMaxHeight()
+                        ) {
+                            CompositionLocalProvider(
+                                LocalProjectsColumn provides ProjectsColumn(selectedProjectId, strip)
+                            ) {
+                                projects.Content()
+                            }
+                        }
+                    }
+                    VerticalDivider()
+                }
                 // Only a shown chat can take the list's room; without one the list is all there is.
-                if (!collapsed) {
-                    Box(Modifier.width(listWidth).fillMaxHeight().testTag("sessionListPane")) {
-                        CompositionLocalProvider(LocalListPane provides ListPane(selectedSessionId)) {
+                if (list != null && !collapsed) {
+                    Box(
+                        Modifier.width(listWidth)
+                            .fillMaxHeight()
+                            .testTag("sessionListPane")
+                            .column(listEnter, top = detail == null)
+                    ) {
+                        CompositionLocalProvider(
+                            LocalListPane provides ListPane(selectedSessionId, projects != null, strip)
+                        ) {
                             list.Content()
                         }
                     }
                     VerticalDivider()
                 }
                 Box(Modifier.weight(1f).fillMaxHeight().testTag("chatPane")) {
-                    if (detail == null) DetailPlaceholder()
-                    else
-                        key(detail.contentKey) {
-                            CompositionLocalProvider(LocalDetailPane provides true) { detail.Content() }
-                        }
+                    when {
+                        list == null -> DetailPlaceholder(R.string.remote_projects_column_empty, "projectsPlaceholder")
+                        detail == null -> DetailPlaceholder(R.string.remote_two_pane_empty, "chatPlaceholder")
+                        else ->
+                            key(detail.contentKey) {
+                                Box(Modifier.fillMaxSize().column(detailEnter, top = true)) {
+                                    CompositionLocalProvider(LocalDetailPane provides true) { detail.Content() }
+                                }
+                            }
+                    }
                 }
             }
-            if (!collapsed) {
+            if (list != null && !collapsed) {
                 // Reads the state on every call: several drag events can arrive between frames.
-                fun currentWidth() = listPaneWidth(state.listWidth(layout), window, layout.inspector)
-                fun resizeTo(width: Dp) = state.resizeList(layout, listPaneWidth(width, window, layout.inspector))
+                fun currentWidth() = listPaneWidth(state.listWidth(layout), window - reserve, layout.inspector)
+                fun resizeTo(width: Dp) =
+                    state.resizeList(layout, listPaneWidth(width, window - reserve, layout.inspector))
                 // A drag sets start + distance, so the divider follows the finger again after a clamp.
                 var dragStart by remember { mutableStateOf(0.dp) }
+                val listStart = if (projects != null) projectsWidth + PANE_DIVIDER_WIDTH else 0.dp
                 PaneResizeHandle(
                     label = stringResource(R.string.remote_pane_resize_list),
                     onDragStart = { dragStart = currentWidth() },
@@ -498,7 +636,7 @@ private data class ListDetailScene(
                     onReset = { state.resizeList(layout, null) },
                     modifier =
                         Modifier.align(Alignment.CenterStart)
-                            .offset(x = listWidth + PANE_DIVIDER_WIDTH / 2 - PANE_RESIZE_HANDLE_WIDTH / 2)
+                            .offset(x = listStart + listWidth + PANE_DIVIDER_WIDTH / 2 - PANE_RESIZE_HANDLE_WIDTH / 2)
                             .testTag("sessionListDivider"),
                 )
             }
@@ -506,11 +644,55 @@ private data class ListDetailScene(
     }
 }
 
+/**
+ * 0 to 1 while a column with [key] slides in. A new key animates from 0; the first composition
+ * (a restore, a rotation, a resize into the columns), a null key and disabled animations start
+ * at 1. Only entrances animate: a popped entry is gone at once and never drawn on its way out.
+ */
 @Composable
-private fun DetailPlaceholder() {
-    Box(Modifier.fillMaxSize().padding(32.dp).testTag("chatPlaceholder"), contentAlignment = Alignment.Center) {
+private fun rememberEnterProgress(key: Any?): Animatable<Float, AnimationVector1D> {
+    val seen = remember { BooleanArray(1) }
+    val progress =
+        remember(key) {
+            Animatable(if (seen[0] && key != null && ValueAnimator.areAnimatorsEnabled()) 0f else 1f)
+        }
+    SideEffect { seen[0] = true }
+    LaunchedEffect(progress) { progress.animateTo(1f, tween(340, easing = ColumnEasing)) }
+    return progress
+}
+
+/**
+ * The progress, 0 to 1, of a back gesture that leaves the top column. Letting go runs [onBack];
+ * a cancelled gesture eases back to 0. A plain Back press reaches [onBack] the same way.
+ */
+@Composable
+private fun rememberBackPreview(
+    enabled: Boolean,
+    resetKey: Any?,
+    onBack: () -> Unit,
+): Animatable<Float, AnimationVector1D> {
+    val progress = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val currentOnBack by rememberUpdatedState(onBack)
+    LaunchedEffect(resetKey) { progress.snapTo(0f) }
+    PredictiveBackHandler(enabled = enabled) { events ->
+        try {
+            events.collect { progress.snapTo(it.progress) }
+            currentOnBack()
+            progress.snapTo(0f)
+        } catch (e: CancellationException) {
+            scope.launch { progress.animateTo(0f, tween(200, easing = ColumnEasing)) }
+            throw e
+        }
+    }
+    return progress
+}
+
+@Composable
+private fun DetailPlaceholder(text: Int, tag: String) {
+    Box(Modifier.fillMaxSize().padding(24.dp).testTag(tag), contentAlignment = Alignment.Center) {
         Text(
-            stringResource(R.string.remote_two_pane_empty),
+            stringResource(text),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -525,7 +707,8 @@ private fun DetailPlaceholder() {
  * 1. Settings on top closes (regular navigation).
  * 2. A chat shown with the session list collapsed brings the list back.
  * 3. Everything else is the phone's back stack: a child chat returns to its parent, a chat to
- *    its project's sessions (list and an empty chat pane), the sessions to the projects.
+ *    its project's sessions (the full projects column, the list and an empty chat pane), the
+ *    sessions to the projects alone and the projects to the hosts.
  */
 internal enum class BackStep { EXPAND_LIST, NAVIGATE }
 
@@ -541,11 +724,20 @@ internal fun hardwareKeyboardAttached(): Boolean {
         configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
 }
 
-internal enum class KeyboardShortcut { SEARCH, PREVIOUS_SESSION, NEXT_SESSION, NEW_SESSION, TOGGLE_LIST }
+internal enum class KeyboardShortcut {
+    SEARCH,
+    PREVIOUS_SESSION,
+    NEXT_SESSION,
+    NEW_SESSION,
+    TOGGLE_LIST,
+    PREVIOUS_PROJECT,
+    NEXT_PROJECT,
+}
 
 /**
  * Ctrl+K or Ctrl+F search the sessions; Ctrl or Alt with Up/Down switch to the adjacent one; Ctrl+N
  * starts a new session in the project and Ctrl+B collapses or expands the session list.
+ * Alt+Page Up/Page Down switch to the adjacent project.
  */
 internal fun keyboardShortcut(key: Key, ctrl: Boolean, alt: Boolean, shift: Boolean): KeyboardShortcut? {
     if (shift) return null
@@ -555,6 +747,8 @@ internal fun keyboardShortcut(key: Key, ctrl: Boolean, alt: Boolean, shift: Bool
         ctrl && !alt && key == Key.B -> KeyboardShortcut.TOGGLE_LIST
         (ctrl != alt) && key == Key.DirectionUp -> KeyboardShortcut.PREVIOUS_SESSION
         (ctrl != alt) && key == Key.DirectionDown -> KeyboardShortcut.NEXT_SESSION
+        alt && !ctrl && key == Key.PageUp -> KeyboardShortcut.PREVIOUS_PROJECT
+        alt && !ctrl && key == Key.PageDown -> KeyboardShortcut.NEXT_PROJECT
         else -> null
     }
 }
@@ -566,8 +760,11 @@ internal fun canCreateSession(state: RemoteState, sessions: RemoteNavKey.Session
         state.selection.routeId == sessions.routeId &&
         state.selection.projectId == sessions.projectId
 
-/** The session [step] rows away from [current] in [ids]; from no selection, the first or last. */
-internal fun adjacentSession(ids: List<String>, current: String?, step: Int): String? {
+/**
+ * The session or project [step] rows away from [current] in [ids]; from no selection, the first
+ * or last.
+ */
+internal fun adjacentId(ids: List<String>, current: String?, step: Int): String? {
     if (ids.isEmpty()) return null
     val index = ids.indexOf(current)
     if (index < 0) return if (step > 0) ids.first() else ids.last()

@@ -173,6 +173,9 @@ internal fun RemoteScreen(
     val paneLayout = LocalPaneLayout.current
     val twoPane = LocalTwoPane.current
     val listPane = LocalListPane.current?.takeIf { key is RemoteNavKey.Sessions }
+    // The projects column of the tablet layout; a selected project has its sessions beside it.
+    val projectsColumn = LocalProjectsColumn.current?.takeIf { key is RemoteNavKey.Projects }
+    val projectSelected = projectsColumn?.selectedProjectId != null
     val detailPane = LocalDetailPane.current && key is RemoteNavKey.Chat
     val sideInspector = key is RemoteNavKey.Chat && paneLayout.inspector != InspectorMode.OVERLAY
     // Hardware Enter and Ctrl+Enter only send in the two-pane layout; phones keep Enter as a newline.
@@ -1142,9 +1145,11 @@ internal fun RemoteScreen(
                 }
             // Chat feedback belongs beside the composer, not above the conversation.
             // Do not carry an unavailable-command warning into the session overview.
+            // Beside a project's sessions, the session list shows the error, not both columns.
             if (state.error != null && key !is RemoteNavKey.Chat &&
                 state.error != R.string.remote_command_unknown &&
-                listPane?.selectedSessionId == null
+                listPane?.selectedSessionId == null &&
+                !projectSelected
             ) {
                 leading++
                 item {
@@ -1343,6 +1348,7 @@ internal fun RemoteScreen(
                                 R.string.remote_keyboard_shortcut_send,
                                 R.string.remote_keyboard_shortcut_search,
                                 R.string.remote_keyboard_shortcut_switch,
+                                R.string.remote_keyboard_shortcut_project,
                             ).forEach {
                                 Text(
                                     stringResource(it),
@@ -1511,15 +1517,18 @@ internal fun RemoteScreen(
                                 ProjectRow(
                                     projectId = projectId,
                                     name = project.text("name"),
-                                    unshare = projectUnshare(state.connected, state.loading, state.capabilities),
-                                    onClick = {
-                                        navigator.open(RemoteNavKey.Sessions(key.routeId, projectId))
-                                    },
+                                    // The host only unshares while no project is open.
+                                    unshare =
+                                        if (projectSelected) ProjectUnshare.NONE
+                                        else projectUnshare(state.connected, state.loading, state.capabilities),
+                                    onClick = { openProject(navigator, twoPane, key.routeId, projectId) },
                                     onUnshare = { unsharing = projectId to project.text("name") },
+                                    selected = projectId == projectsColumn?.selectedProjectId,
                                 )
                             }
                         }
-                        if (state.projectChats.isNotEmpty()) {
+                        // Quick chats only refresh while no project is open; beside one they hide.
+                        if (state.projectChats.isNotEmpty() && !projectSelected) {
                             item(key = "project_chats_heading") {
                                 Text(
                                     stringResource(R.string.remote_projects_quick_chats),
@@ -1730,7 +1739,8 @@ internal fun RemoteScreen(
                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (key != RemoteNavKey.Hosts)
+                    // Beside the projects column, its own Back pill leads back.
+                    if (key != RemoteNavKey.Hosts && listPane?.besideProjects != true)
                         FloatingSurface(
                             modifier = Modifier.testTag("navigationPill"),
                             shape = CircleShape,
@@ -1743,7 +1753,9 @@ internal fun RemoteScreen(
                             }
                         }
                     Spacer(Modifier.weight(1f))
-                    if (!settings)
+                    // The full projects column beside the list already offers refresh and settings;
+                    // the strip beside a chat does not.
+                    if (!settings && !(listPane?.besideProjects == true && !listPane.projectsStrip))
                         FloatingSurface(
                             modifier = Modifier.testTag("headerActionsPill"),
                             shape = CircleShape,

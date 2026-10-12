@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -127,6 +128,8 @@ internal fun ProjectRow(
     unshare: ProjectUnshare,
     onClick: () -> Unit,
     onUnshare: () -> Unit,
+    /** The session list beside the projects column shows this project. */
+    selected: Boolean = false,
 ) {
     val context = LocalContext.current
     val unshareLabel = stringResource(R.string.remote_project_unshare)
@@ -169,7 +172,13 @@ internal fun ProjectRow(
         Row(
             Modifier.fillMaxWidth()
                 .background(MaterialTheme.colorScheme.background)
+                .then(
+                    if (selected)
+                        Modifier.background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(16.dp))
+                    else Modifier
+                )
                 .semantics {
+                    if (selected) this.selected = true
                     if (action != null) customActions = listOf(
                         CustomAccessibilityAction(swipeActionLabel) {
                             action()

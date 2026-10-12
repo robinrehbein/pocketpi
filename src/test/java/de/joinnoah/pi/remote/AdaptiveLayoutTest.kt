@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -34,13 +35,19 @@ class AdaptiveLayoutTest {
     fun widthClassesFollowTheThresholds() {
         assertTrue(paneLayout(720.dp, TALL).twoPane)
         assertEquals(InspectorMode.OVERLAY, paneLayout(720.dp, TALL).inspector)
-        assertEquals(300.dp, paneLayout(720.dp, TALL).listWidth)
-        assertEquals(300.dp, paneLayout(959.dp, TALL).listWidth)
+        assertEquals(240.dp, paneLayout(720.dp, TALL).listWidth)
+        assertEquals(240.dp, paneLayout(720.dp, TALL).projectsWidth)
+        assertEquals(240.dp, paneLayout(749.dp, TALL).listWidth)
+        assertEquals(280.dp, paneLayout(750.dp, TALL).listWidth)
+        assertEquals(240.dp, paneLayout(750.dp, TALL).projectsWidth)
+        assertEquals(280.dp, paneLayout(959.dp, TALL).listWidth)
         assertEquals(360.dp, paneLayout(960.dp, TALL).listWidth)
-        assertEquals(InspectorMode.OVERLAY, paneLayout(1099.dp, TALL).inspector)
-        assertEquals(InspectorMode.ON_DEMAND, paneLayout(1100.dp, TALL).inspector)
-        assertEquals(320.dp, paneLayout(1100.dp, TALL).listWidth)
-        assertEquals(360.dp, paneLayout(1100.dp, TALL).inspectorWidth)
+        assertEquals(280.dp, paneLayout(960.dp, TALL).projectsWidth)
+        assertEquals(InspectorMode.OVERLAY, paneLayout(1179.dp, TALL).inspector)
+        assertEquals(InspectorMode.ON_DEMAND, paneLayout(1180.dp, TALL).inspector)
+        assertEquals(320.dp, paneLayout(1180.dp, TALL).listWidth)
+        assertEquals(360.dp, paneLayout(1180.dp, TALL).inspectorWidth)
+        assertEquals(280.dp, paneLayout(1180.dp, TALL).projectsWidth)
         assertEquals(InspectorMode.ON_DEMAND, paneLayout(1279.dp, TALL).inspector)
         assertEquals(360.dp, paneLayout(1280.dp, TALL).listWidth)
         assertEquals(400.dp, paneLayout(1280.dp, TALL).inspectorWidth)
@@ -48,13 +55,21 @@ class AdaptiveLayoutTest {
         assertEquals(InspectorMode.PERSISTENT, paneLayout(1600.dp, TALL).inspector)
         assertEquals(360.dp, paneLayout(1600.dp, TALL).listWidth)
         assertEquals(480.dp, paneLayout(1600.dp, TALL).inspectorWidth)
+        assertEquals(280.dp, paneLayout(1600.dp, TALL).projectsWidth)
     }
 
     @Test
-    fun aChatPairsWithTheSessionsOfItsProject() {
-        val keys = RemoteSelection("host", "project", "s1").keys()
-        assertEquals(ListDetailPanes(2, 3), listDetailPanes(keys))
-        assertEquals(ListDetailPanes(2, null), listDetailPanes(keys.dropLast(1)))
+    fun theProjectsColumnIsAlwaysTheBottomOfItsHost() {
+        val chat = RemoteSelection("host", "project", "s1").keys()
+        assertEquals(ColumnPanes(1, null, null), columnPanes(chat.take(2)))
+        assertEquals(ColumnPanes(1, 2, null), columnPanes(chat.take(3)))
+        assertEquals(ColumnPanes(1, 2, 3), columnPanes(chat))
+        // Sessions without their host's Projects below show no projects column.
+        assertEquals(ColumnPanes(null, 1, null), columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Sessions("host", "project"))))
+        assertEquals(
+            ColumnPanes(null, 1, null),
+            columnPanes(listOf(RemoteNavKey.Projects("other"), RemoteNavKey.Sessions("host", "project"))),
+        )
     }
 
     @Test
@@ -62,21 +77,21 @@ class AdaptiveLayoutTest {
         val keys =
             RemoteSelection("host", "project", "parent").keys() +
                 RemoteNavKey.Chat("host", "project", "child")
-        assertEquals(ListDetailPanes(2, 4), listDetailPanes(keys))
+        assertEquals(ColumnPanes(1, 2, 4), columnPanes(keys))
     }
 
     @Test
     fun otherDestinationsStayFullScreen() {
-        assertNull(listDetailPanes(listOf(RemoteNavKey.Hosts)))
-        assertNull(listDetailPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"))))
+        assertNull(columnPanes(listOf(RemoteNavKey.Hosts)))
         assertNull(
-            listDetailPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.FolderBrowser("host")))
+            columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.FolderBrowser("host")))
         )
-        assertNull(listDetailPanes(RemoteSelection("host", "project", "s1").keys() + RemoteNavKey.Settings))
+        assertNull(columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.Providers("host"))))
+        assertNull(columnPanes(RemoteSelection("host", "project", "s1").keys() + RemoteNavKey.Settings))
         // A chat without its project's Sessions below it has nothing to pair with.
-        assertNull(listDetailPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Chat("host", "project", "s1"))))
+        assertNull(columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Chat("host", "project", "s1"))))
         assertNull(
-            listDetailPanes(listOf(RemoteNavKey.Sessions("host", "other"), RemoteNavKey.Chat("host", "project", "s1")))
+            columnPanes(listOf(RemoteNavKey.Sessions("host", "other"), RemoteNavKey.Chat("host", "project", "s1")))
         )
     }
 
@@ -112,6 +127,11 @@ class AdaptiveLayoutTest {
         assertNull(keyboardShortcut(Key.B, ctrl = false, alt = false, shift = false))
         assertNull(keyboardShortcut(Key.N, ctrl = false, alt = true, shift = false))
         assertNull(keyboardShortcut(Key.N, ctrl = true, alt = false, shift = true))
+        assertEquals(KeyboardShortcut.PREVIOUS_PROJECT, keyboardShortcut(Key.PageUp, ctrl = false, alt = true, shift = false))
+        assertEquals(KeyboardShortcut.NEXT_PROJECT, keyboardShortcut(Key.PageDown, ctrl = false, alt = true, shift = false))
+        assertNull(keyboardShortcut(Key.PageDown, ctrl = false, alt = false, shift = false))
+        assertNull(keyboardShortcut(Key.PageDown, ctrl = true, alt = true, shift = false))
+        assertNull(keyboardShortcut(Key.PageDown, ctrl = false, alt = true, shift = true))
     }
 
     @Test
@@ -125,15 +145,27 @@ class AdaptiveLayoutTest {
     }
 
     @Test
-    fun adjacentSessionStopsAtTheEnds() {
+    fun adjacentIdStopsAtTheEnds() {
         val ids = listOf("a", "b", "c")
-        assertEquals("b", adjacentSession(ids, "a", 1))
-        assertEquals("a", adjacentSession(ids, "b", -1))
-        assertNull(adjacentSession(ids, "c", 1))
-        assertNull(adjacentSession(ids, "a", -1))
-        assertEquals("a", adjacentSession(ids, null, 1))
-        assertEquals("c", adjacentSession(ids, null, -1))
-        assertNull(adjacentSession(emptyList(), null, 1))
+        assertEquals("b", adjacentId(ids, "a", 1))
+        assertEquals("a", adjacentId(ids, "b", -1))
+        assertNull(adjacentId(ids, "c", 1))
+        assertNull(adjacentId(ids, "a", -1))
+        assertEquals("a", adjacentId(ids, null, 1))
+        assertEquals("c", adjacentId(ids, null, -1))
+        assertNull(adjacentId(emptyList(), null, 1))
+    }
+
+    @Test
+    fun projectInitialsTakeTwoWords() {
+        assertEquals("NM", projectInitials("noah-monorepo"))
+        assertEquals("PP", projectInitials("PocketPi"))
+        assertEquals("PO", projectInitials("pocketpi"))
+        assertEquals("MA", projectInitials("my_app v2"))
+        assertEquals("X", projectInitials("--x--"))
+        assertEquals("ÄB", projectInitials("äpfel birnen"))
+        assertEquals("?", projectInitials("   "))
+        assertEquals("?", projectInitials(""))
     }
 
     @Test
@@ -191,6 +223,27 @@ class AdaptiveLayoutTest {
     }
 
     @Test
+    fun aGalaxyTabS11KeepsTheChatReadableBesideTheStrip() {
+        fun chatWidth(window: Int): Dp {
+            val layout = paneLayout(window.dp, TALL)
+            val list = listPaneWidth(layout.listWidth, window.dp - PROJECT_STRIP_RESERVE, layout.inspector)
+            return window.dp - PROJECT_STRIP_RESERVE - list - 1.dp
+        }
+        // Portrait: strip 65, list 281, chat 407.
+        assertEquals(280.dp, paneLayout(753.dp, 1205.dp).listWidth)
+        assertEquals(240.dp, paneLayout(753.dp, 1205.dp).projectsWidth)
+        assertEquals(407.dp, chatWidth(753))
+        // Landscape: strip 65, list 321, chat and inspector 819.
+        val landscape = paneLayout(1205.dp, 753.dp)
+        assertEquals(InspectorMode.ON_DEMAND, landscape.inspector)
+        assertEquals(819.dp, chatWidth(1205))
+        assertEquals(360.dp, inspectorPaneWidth(landscape.inspectorWidth, chatWidth(1205)))
+        assertTrue(chatWidth(1205) - 361.dp >= CHAT_PANE_MIN_WIDTH)
+        // Without a chat, the full projects column, the list and an empty pane.
+        assertEquals(231.dp, 753.dp - 240.dp - 1.dp - 280.dp - 1.dp)
+    }
+
+    @Test
     fun inspectorWidthStaysWithinItsBoundsAndLeavesTheChatRoom() {
         assertEquals(378.dp, inspectorPaneWidth(900.dp, 779.dp))
         assertEquals(300.dp, inspectorPaneWidth(100.dp, 779.dp))
@@ -203,12 +256,19 @@ class AdaptiveLayoutTest {
             val width = window.dp
             val layout = paneLayout(width, TALL)
             val side = layout.inspector != InspectorMode.OVERLAY
-            val list = listPaneWidth(layout.listWidth, width, layout.inspector)
+            // The project strip takes its share first.
+            val available = width - PROJECT_STRIP_RESERVE
+            val list = listPaneWidth(layout.listWidth, available, layout.inspector)
             assertEquals("list at $window", layout.listWidth, list)
-            if (side) assertEquals("inspector at $window", layout.inspectorWidth, inspectorPaneWidth(layout.inspectorWidth, width - list - 1.dp))
+            if (side)
+                assertEquals(
+                    "inspector at $window",
+                    layout.inspectorWidth,
+                    inspectorPaneWidth(layout.inspectorWidth, available - list - 1.dp),
+                )
             // The widest both panes can be dragged still leaves the chat its minimum.
-            val widestList = listPaneWidth(10_000.dp, width, layout.inspector)
-            val chatPane = width - widestList - 1.dp
+            val widestList = listPaneWidth(10_000.dp, available, layout.inspector)
+            val chatPane = available - widestList - 1.dp
             val chat = if (side) chatPane - inspectorPaneWidth(10_000.dp, chatPane) - 1.dp else chatPane
             assertTrue("chat at $window is $chat", chat >= CHAT_PANE_MIN_WIDTH)
         }
@@ -261,24 +321,34 @@ class AdaptiveLayoutTest {
                 androidx.navigation3.runtime.NavEntry<androidx.navigation3.runtime.NavKey>(
                     key,
                     key.toString(),
-                    if (key is RemoteNavKey.Sessions || key is RemoteNavKey.Chat) navKeyMetadata(key) else emptyMap(),
+                    if (key == RemoteNavKey.Hosts) emptyMap() else navKeyMetadata(key),
                 ) {}
             }
-        fun scene(collapsed: Boolean) =
-            with(ListDetailSceneStrategy(paneLayout(900.dp, TALL), TwoPaneState(), collapsed)) {
+        fun scene(entries: List<androidx.navigation3.runtime.NavEntry<androidx.navigation3.runtime.NavKey>>, collapsed: Boolean) =
+            with(ProjectColumnsSceneStrategy(paneLayout(900.dp, TALL), TwoPaneState(), collapsed)) {
                 androidx.navigation3.scene.SceneStrategyScope<androidx.navigation3.runtime.NavKey>().calculateScene(entries)
             }!!
-        // Collapsed: no preview of a popped chat; the scene's back handler expands the list.
-        assertEquals(emptyList<Any>(), scene(collapsed = true).previousEntries)
-        assertEquals(listOf(entries[3]), scene(collapsed = true).entries)
-        assertEquals(entries.dropLast(1), scene(collapsed = false).previousEntries)
-        assertEquals(entries.takeLast(2), scene(collapsed = false).entries)
+        // Collapsed: no preview of a popped chat; the scene's back handler expands the list. The
+        // strip stays beside the chat.
+        assertEquals(emptyList<Any>(), scene(entries, collapsed = true).previousEntries)
+        assertEquals(listOf(entries[1], entries[3]), scene(entries, collapsed = true).entries)
+        assertEquals(entries.dropLast(1), scene(entries, collapsed = false).previousEntries)
+        assertEquals(entries.drop(1), scene(entries, collapsed = false).entries)
         // Without a chat there is nothing to collapse: back leaves the sessions as usual.
-        val sessionsOnly =
-            with(ListDetailSceneStrategy(paneLayout(900.dp, TALL), TwoPaneState(), true)) {
-                androidx.navigation3.scene.SceneStrategyScope<androidx.navigation3.runtime.NavKey>()
-                    .calculateScene(entries.dropLast(1))
-            }!!
-        assertEquals(entries.dropLast(2), sessionsOnly.previousEntries)
+        val sessionsOnly = scene(entries.dropLast(1), collapsed = true)
+        assertEquals(entries.take(2), sessionsOnly.previousEntries)
+        assertEquals(entries.subList(1, 3), sessionsOnly.entries)
+        // The projects alone go back to the hosts, a page of its own.
+        val projectsOnly = scene(entries.take(2), collapsed = false)
+        assertEquals(entries.take(1), projectsOnly.previousEntries)
+        assertEquals(listOf(entries[1]), projectsOnly.entries)
+        // One scene for every level of a host.
+        assertEquals(projectsOnly.key, scene(entries, collapsed = false).key)
+        // Hosts stay a page of their own.
+        assertNull(
+            with(ProjectColumnsSceneStrategy(paneLayout(900.dp, TALL), TwoPaneState(), false)) {
+                androidx.navigation3.scene.SceneStrategyScope<androidx.navigation3.runtime.NavKey>().calculateScene(entries.take(1))
+            }
+        )
     }
 }
