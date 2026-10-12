@@ -207,6 +207,7 @@ class ToolPresentationTest {
                 activity("6", "bash", """{"command":"ls"}"""),
                 activity("7", "edit", """{"path":"a.kt","edits":[]}"""),
                 ConversationItem.Bubble("8", "8", "user", null, "hi", null, false, null),
+                activity("9", "edit", """{"path":"d.kt","edits":[]}""", state = "error"),
             )
         val touched = touchedFiles(items)
         assertEquals(listOf(TouchedFile("a.kt", 2, "7"), TouchedFile("c.kt", 1, "4")), touched.changed)

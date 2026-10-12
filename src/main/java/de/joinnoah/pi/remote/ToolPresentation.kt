@@ -245,8 +245,9 @@ internal fun touchedFiles(items: List<ConversationItem>): TouchedFiles {
         val target =
             when (item.name) {
                 "read" -> read
+                // A failed edit or write changed nothing.
                 "edit",
-                "write" -> changed
+                "write" -> if (item.state == "error") continue else changed
                 else -> continue
             }
         val path = toolPath(item) ?: continue

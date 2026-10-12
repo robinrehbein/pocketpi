@@ -628,7 +628,7 @@ internal fun quickActionPrompt(
                 when (base) {
                     GitBase.SESSION -> context.getString(R.string.remote_changes_prompt_base_session)
                     GitBase.HEAD -> context.getString(R.string.remote_changes_prompt_base_head)
-                    GitBase.DEV -> context.getString(R.string.remote_changes_prompt_base_dev, devBaseName(devBase))
+                    GitBase.DEV -> context.getString(R.string.remote_changes_prompt_base_dev, devBaseRef(devBase))
                 },
             )
         QuickAction.TESTS -> context.getString(R.string.remote_changes_prompt_tests, path)
@@ -645,7 +645,7 @@ internal fun reviewPrompt(context: Context, comments: List<ReviewComment>, devBa
             when (base) {
                 GitBase.SESSION -> context.getString(R.string.remote_changes_review_base_session)
                 GitBase.HEAD -> context.getString(R.string.remote_changes_review_base_head)
-                GitBase.DEV -> context.getString(R.string.remote_changes_review_base_dev, devBaseName(devBase))
+                GitBase.DEV -> context.getString(R.string.remote_changes_review_base_dev, devBaseRef(devBase))
             },
         )
     }

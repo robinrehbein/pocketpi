@@ -255,6 +255,37 @@ class GitChangesTest {
     }
 
     @Test
+    fun devBaseOutlivesOtherBasesUntilTheHostReportsItGone() = runTest {
+        val transport = Transport()
+        var devGone = false
+        transport.configure(gitCapabilities) { request ->
+            when {
+                request.text("type") != "session.git.status" -> withRequest(valid("log"), request)
+                request.text("base") == "head" -> withRequest(valid("status-head-unborn"), request)
+                devGone -> withRequest(valid("status-unavailable"), request)
+                else -> JsonObject(withRequest(valid("status-dev"), request) + ("base" to JsonPrimitive(request.text("base"))))
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        repository.openChanges()
+        runCurrent()
+        repository.selectChangesBase(GitBase.DEV)
+        runCurrent()
+        assertEquals(GitDevBase("origin/dev"), repository.state.value.changes?.devBase)
+        // A status without devBase (an older host's, here HEAD) keeps the last one.
+        repository.selectChangesBase(GitBase.HEAD)
+        runCurrent()
+        assertEquals(GitBase.HEAD, repository.state.value.changes?.status?.base)
+        assertEquals(GitDevBase("origin/dev"), repository.state.value.changes?.devBase)
+        devGone = true
+        repository.selectChangesBase(GitBase.DEV)
+        runCurrent()
+        assertEquals(GitUnavailable.BASE_UNAVAILABLE, repository.state.value.changes?.status?.unavailable)
+        assertEquals(GitDevBase(null), repository.state.value.changes?.devBase)
+    }
+
+    @Test
     fun sessionStartFallsBackToHeadWhenUnavailable() = runTest {
         val transport = Transport()
         transport.configure(gitCapabilities) { request ->

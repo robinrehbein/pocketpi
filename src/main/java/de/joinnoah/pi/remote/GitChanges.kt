@@ -63,6 +63,9 @@ data class GitDevBase(val ref: String?)
 /** What the [GitBase.DEV] choice is called: the branch without its `origin/`, or `dev` before the host said. */
 internal fun devBaseName(devBase: GitDevBase?): String = devBase?.ref?.removePrefix("origin/") ?: GitBase.DEV.wire
 
+/** The full ref for prompts, so the agent compares with `origin/main` and not a lagging local `main`. */
+internal fun devBaseRef(devBase: GitDevBase?): String = devBase?.ref ?: GitBase.DEV.wire
+
 /** When the session snapshot was taken; [firstContact] means later than the session start. */
 data class GitSince(val firstContact: Boolean, val at: Long)
 
@@ -264,8 +267,9 @@ internal fun parseGitStatus(data: JsonObject, sessionId: String, base: GitBase):
         data["devBase"]?.let { value ->
             require(value is JsonObject && value.keys.all { it == "ref" })
             GitDevBase(
-                value.optionalText("ref")?.also {
-                    require(branchName.matches(it) && it.encodeToByteArray().size <= 256)
+                value["ref"]?.let { ref ->
+                    require(ref is JsonPrimitive && ref.isString)
+                    ref.content.also { require(branchName.matches(it) && it.encodeToByteArray().size <= 256) }
                 }
             )
         }

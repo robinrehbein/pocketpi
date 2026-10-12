@@ -259,12 +259,12 @@ class ChangesPaneTest {
             context.getString(
                 R.string.remote_changes_prompt_revert,
                 "a.kt",
-                context.getString(R.string.remote_changes_prompt_base_dev, "main"),
+                context.getString(R.string.remote_changes_prompt_base_dev, "origin/main"),
             ),
             quickActionPrompt(context, QuickAction.REVERT, "a.kt", GitBase.DEV, main),
         )
         val comment = ReviewComment("a.kt", null, 3, "x", "why?", GitBase.DEV)
-        assertTrue(reviewPrompt(context, listOf(comment), main).contains(context.getString(R.string.remote_changes_review_base_dev, "main")))
+        assertTrue(reviewPrompt(context, listOf(comment), main).contains(context.getString(R.string.remote_changes_review_base_dev, "origin/main")))
         assertTrue(reviewPrompt(context, listOf(comment)).contains(context.getString(R.string.remote_changes_review_base_dev, "dev")))
     }
 
