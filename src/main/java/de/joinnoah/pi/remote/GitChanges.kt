@@ -12,6 +12,7 @@ internal const val GIT_CAPABILITY = "session.git.v1"
 private const val MAX_GIT_FILES = 1000
 private const val MAX_GIT_COMMITS = 50
 private val commitId = Regex("[0-9a-f]{40}|[0-9a-f]{64}")
+private val branchName = Regex("[A-Za-z0-9._][A-Za-z0-9._/-]*")
 
 /** What the working tree is compared with. */
 enum class GitBase(val wire: String) {
@@ -53,6 +54,15 @@ data class GitFile(
     val omitted: GitOmitted? = null,
 )
 
+/**
+ * The branch [GitBase.DEV] compares against (`origin/dev`, `dev`, the remote's default branch,
+ * `main` or `master`); [ref] is null when the repository has none.
+ */
+data class GitDevBase(val ref: String?)
+
+/** What the [GitBase.DEV] choice is called: the branch without its `origin/`, or `dev` before the host said. */
+internal fun devBaseName(devBase: GitDevBase?): String = devBase?.ref?.removePrefix("origin/") ?: GitBase.DEV.wire
+
 /** When the session snapshot was taken; [firstContact] means later than the session start. */
 data class GitSince(val firstContact: Boolean, val at: Long)
 
@@ -66,6 +76,8 @@ data class GitStatus(
     val devRef: String? = null,
     val branch: String? = null,
     val unavailable: GitUnavailable? = null,
+    /** Sent with every base by hosts that know it; null from older hosts. */
+    val devBase: GitDevBase? = null,
 ) {
     val available: Boolean get() = unavailable == null
 }
@@ -182,6 +194,8 @@ data class ChangesState(
     val logFailure: ChangesFailure? = null,
     val comments: List<ReviewComment> = emptyList(),
     val previews: Map<String, FileTilePreview> = emptyMap(),
+    /** The latest [GitStatus.devBase] of this session, kept while other bases are shown. */
+    val devBase: GitDevBase? = null,
 )
 
 internal fun canViewChanges(state: RemoteState): Boolean =
@@ -246,7 +260,26 @@ internal fun parseGitStatus(data: JsonObject, sessionId: String, base: GitBase):
     val branch = data.optionalText("branch")?.also {
         require(it.isNotEmpty() && it.encodeToByteArray().size <= 256)
     }
-    return GitStatus(base, snapshotId, files, data.flag("truncated"), since, baseCommit, devRef, branch)
+    val devBase =
+        data["devBase"]?.let { value ->
+            require(value is JsonObject && value.keys.all { it == "ref" })
+            GitDevBase(
+                value.optionalText("ref")?.also {
+                    require(branchName.matches(it) && it.encodeToByteArray().size <= 256)
+                }
+            )
+        }
+    return GitStatus(
+        base,
+        snapshotId,
+        files,
+        data.flag("truncated"),
+        since,
+        baseCommit,
+        devRef,
+        branch,
+        devBase = devBase,
+    )
 }
 
 /** Validates a `git.diff` result against the request that produced it. */

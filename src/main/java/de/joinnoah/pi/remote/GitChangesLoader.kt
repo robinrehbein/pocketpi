@@ -182,6 +182,7 @@ internal class GitChangesLoader(
                             log = if (status.available && !shownLog) GitLog() else null,
                             logLoading = shownLog,
                             logFailure = null,
+                            devBase = status.devBase ?: changes.devBase,
                         )
                     }
                     status

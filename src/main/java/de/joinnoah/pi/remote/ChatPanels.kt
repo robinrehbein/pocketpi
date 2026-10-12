@@ -80,15 +80,19 @@ import kotlin.math.roundToInt
 // ---- Touched files ------------------------------------------------------------------------
 
 /**
- * Git-style summary beside the composer: how many files the chat touched and, when its edits
- * carry diffs, the lines they added (green) and removed (red).
+ * Git-style summary beside the composer: how many files the chat changed (or, when it changed none,
+ * read) and, when its edits carry diffs, the lines they added (green) and removed (red).
  */
 @Composable
 internal fun TouchedFilesSummary(files: TouchedFiles, lines: TouchedLineCounts?, onClick: () -> Unit) {
     if (files.total == 0) return
+    val changed = files.changed.size
+    val read = files.read.size
     val description =
         listOfNotNull(
-                pluralStringResource(R.plurals.remote_panel_files_touched, files.total, files.total),
+                if (changed > 0) pluralStringResource(R.plurals.remote_panel_files_changed_description, changed, changed)
+                else null,
+                if (read > 0) pluralStringResource(R.plurals.remote_panel_files_read_description, read, read) else null,
                 lines?.let { pluralStringResource(R.plurals.remote_panel_lines_added, it.added, it.added) },
                 lines?.let { pluralStringResource(R.plurals.remote_panel_lines_removed, it.removed, it.removed) },
             )
@@ -109,8 +113,10 @@ internal fun TouchedFilesSummary(files: TouchedFiles, lines: TouchedLineCounts?,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp),
             )
+            // Changed files lead; a chat that only read files says so instead of looking like edits.
             Text(
-                pluralStringResource(R.plurals.remote_panel_files_count, files.total, files.total),
+                if (changed > 0) pluralStringResource(R.plurals.remote_panel_files_changed, changed, changed)
+                else pluralStringResource(R.plurals.remote_panel_files_read, read, read),
                 style = MaterialTheme.typography.labelLarge,
             )
             if (lines != null) {

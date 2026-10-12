@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -216,6 +217,55 @@ class ChangesPaneTest {
         compose.onNodeWithText(context.getString(R.string.remote_changes_comment_cancel)).performClick()
         compose.onNodeWithTag("changesActionTests").performClick()
         compose.onNodeWithTag("changesPrefillFailed").assertExists()
+    }
+
+    @Test
+    fun devChoiceIsNamedAfterTheHostsBranchAndHiddenWithoutOne() {
+        val recorder = Recorder()
+        val loaded = ChangesState("s", loading = false, status = status, log = GitLog())
+        var state by mutableStateOf(loaded)
+        compose.setContent {
+            MaterialTheme {
+                ChangesPane(
+                    state,
+                    ChangesActions(
+                        onClose = {},
+                        onSelectBase = {},
+                        onReload = {},
+                        onOpenFile = {},
+                        onSetComment = { true },
+                        onRemoveComment = {},
+                        onUseReview = { recorder.reviews += it; true },
+                        onPrefill = { recorder.prefills += it; true },
+                    ),
+                )
+            }
+        }
+        // An older host names no branch: the choice stays and is called dev.
+        compose.onNodeWithTag("changesBase_dev").assertTextEquals("dev")
+        state = loaded.copy(devBase = GitDevBase("origin/main"))
+        compose.onNodeWithTag("changesBase_dev").assertTextEquals("main")
+        state = loaded.copy(devBase = GitDevBase(null))
+        compose.onNodeWithTag("changesBase_dev").assertDoesNotExist()
+        // Still shown while it is the base the user asked for.
+        state = loaded.copy(base = GitBase.DEV, devBase = GitDevBase(null))
+        compose.onNodeWithTag("changesBase_dev").assertExists()
+    }
+
+    @Test
+    fun devPromptsNameTheBranch() {
+        val main = GitDevBase("origin/main")
+        assertEquals(
+            context.getString(
+                R.string.remote_changes_prompt_revert,
+                "a.kt",
+                context.getString(R.string.remote_changes_prompt_base_dev, "main"),
+            ),
+            quickActionPrompt(context, QuickAction.REVERT, "a.kt", GitBase.DEV, main),
+        )
+        val comment = ReviewComment("a.kt", null, 3, "x", "why?", GitBase.DEV)
+        assertTrue(reviewPrompt(context, listOf(comment), main).contains(context.getString(R.string.remote_changes_review_base_dev, "main")))
+        assertTrue(reviewPrompt(context, listOf(comment)).contains(context.getString(R.string.remote_changes_review_base_dev, "dev")))
     }
 
     @Test

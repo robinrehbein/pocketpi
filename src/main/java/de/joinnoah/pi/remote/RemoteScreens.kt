@@ -1897,7 +1897,7 @@ internal fun RemoteScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 TouchedFilesSummary(touched, touchedLines) {
-                                    when (touchedFilesTarget(canViewChanges(state) && state.connected)) {
+                                    when (touchedFilesTarget(canViewChanges(state) && state.connected, touched.changed.isNotEmpty())) {
                                         TouchedFilesTarget.CHANGES -> chatModel?.openChanges()
                                         TouchedFilesTarget.SHEET -> touchedSheet = true
                                     }

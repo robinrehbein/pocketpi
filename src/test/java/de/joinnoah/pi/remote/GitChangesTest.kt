@@ -150,6 +150,21 @@ class GitChangesTest {
     }
 
     @Test
+    fun parsesTheDevBaseOfEveryStatus() {
+        val dev = parseGitStatus(valid("status-dev").obj("data"), sessionId, GitBase.DEV)
+        assertEquals(GitDevBase("origin/dev"), dev.devBase)
+        assertEquals("origin/dev", dev.devRef)
+        val main = parseGitStatus(valid("status-dev-default-branch").obj("data"), sessionId, GitBase.DEV)
+        assertEquals(GitDevBase("origin/main"), main.devBase)
+        assertEquals(null, main.devRef)
+        assertEquals("main", devBaseName(main.devBase))
+        val none = parseGitStatus(valid("status-head-without-dev-base").obj("data"), sessionId, GitBase.HEAD)
+        assertEquals(GitDevBase(null), none.devBase)
+        assertEquals(null, parseGitStatus(valid("status-session-start").obj("data"), sessionId, GitBase.SESSION).devBase)
+        assertEquals("dev", devBaseName(null))
+    }
+
+    @Test
     fun rejectsEveryInvalidFixtureResult() {
         for (entry in entries("invalid")) {
             val payload = entry.obj("payload")
@@ -236,6 +251,7 @@ class GitChangesTest {
         runCurrent()
         assertEquals(command("status-command-dev"), JsonObject(transport.git().last { it.text("type") == "session.git.status" } - "requestId"))
         assertEquals("origin/dev", repository.state.value.changes?.status?.devRef)
+        assertEquals(GitDevBase("origin/dev"), repository.state.value.changes?.devBase)
     }
 
     @Test

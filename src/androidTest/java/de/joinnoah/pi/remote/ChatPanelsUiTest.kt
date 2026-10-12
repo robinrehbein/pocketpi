@@ -54,8 +54,13 @@ class ChatPanelsUiTest {
                     )
             }
         }
-        val description = resources.getQuantityString(R.plurals.remote_panel_files_touched, 3, 3)
-        compose.onNodeWithTag("touchedFilesSummary").assertIsDisplayed().assertTextContains("3", substring = true)
+        val description =
+            listOf(
+                    resources.getQuantityString(R.plurals.remote_panel_files_changed_description, 2, 2),
+                    resources.getQuantityString(R.plurals.remote_panel_files_read_description, 1, 1),
+                )
+                .joinToString(", ")
+        compose.onNodeWithTag("touchedFilesSummary").assertIsDisplayed().assertTextContains("2", substring = true)
         compose.onNodeWithContentDescription(description).assertExists()
         compose.onNodeWithTag("touchedFilesSummary").performClick()
         compose.waitUntil(5_000) {

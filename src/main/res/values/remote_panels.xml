@@ -1,16 +1,24 @@
 <resources>
     <!-- English fallback for all unsupported locales. -->
-    <plurals name="remote_panel_files_touched">
-        <item quantity="one">%d file touched</item>
-        <item quantity="other">%d files touched</item>
+    <plurals name="remote_panel_files_changed_description">
+        <item quantity="one">%d file changed</item>
+        <item quantity="other">%d files changed</item>
+    </plurals>
+    <plurals name="remote_panel_files_read_description">
+        <item quantity="one">%d file read</item>
+        <item quantity="other">%d files read</item>
     </plurals>
     <plurals name="remote_panel_file_uses">
         <item quantity="one">Used %d time</item>
         <item quantity="other">Used %d times</item>
     </plurals>
-    <plurals name="remote_panel_files_count">
-        <item quantity="one">%d file</item>
-        <item quantity="other">%d files</item>
+    <plurals name="remote_panel_files_changed">
+        <item quantity="one">%d changed</item>
+        <item quantity="other">%d changed</item>
+    </plurals>
+    <plurals name="remote_panel_files_read">
+        <item quantity="one">%d read</item>
+        <item quantity="other">%d read</item>
     </plurals>
     <plurals name="remote_panel_lines_added">
         <item quantity="one">%d line added</item>

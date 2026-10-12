@@ -294,9 +294,12 @@ internal enum class TouchedFilesTarget {
     SHEET,
 }
 
-/** The host's changes view when it offers one; otherwise the list of files the chat touched. */
-internal fun touchedFilesTarget(changesAvailable: Boolean): TouchedFilesTarget =
-    if (changesAvailable) TouchedFilesTarget.CHANGES else TouchedFilesTarget.SHEET
+/**
+ * The host's changes view when it offers one and the chat changed a file; otherwise the list of
+ * files the chat touched, so a chat that only read files never lands on an empty changes view.
+ */
+internal fun touchedFilesTarget(changesAvailable: Boolean, filesChanged: Boolean): TouchedFilesTarget =
+    if (changesAvailable && filesChanged) TouchedFilesTarget.CHANGES else TouchedFilesTarget.SHEET
 
 // ---- Timeline and errors ------------------------------------------------------------------
 

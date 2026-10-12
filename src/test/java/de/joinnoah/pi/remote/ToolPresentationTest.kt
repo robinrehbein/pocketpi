@@ -241,9 +241,10 @@ class ToolPresentationTest {
     }
 
     @Test
-    fun touchedFilesTapOpensChangesOnlyWhenTheHostHasThem() {
-        assertEquals(TouchedFilesTarget.CHANGES, touchedFilesTarget(changesAvailable = true))
-        assertEquals(TouchedFilesTarget.SHEET, touchedFilesTarget(changesAvailable = false))
+    fun touchedFilesTapOpensChangesOnlyWhenTheHostHasThemAndAFileChanged() {
+        assertEquals(TouchedFilesTarget.CHANGES, touchedFilesTarget(changesAvailable = true, filesChanged = true))
+        assertEquals(TouchedFilesTarget.SHEET, touchedFilesTarget(changesAvailable = false, filesChanged = true))
+        assertEquals(TouchedFilesTarget.SHEET, touchedFilesTarget(changesAvailable = true, filesChanged = false))
     }
 
     @Test
