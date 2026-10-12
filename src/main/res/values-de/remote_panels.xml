@@ -1,15 +1,23 @@
 <resources>
-    <plurals name="remote_panel_files_touched">
-        <item quantity="one">%d Datei bearbeitet oder gelesen</item>
-        <item quantity="other">%d Dateien bearbeitet oder gelesen</item>
+    <plurals name="remote_panel_files_changed_description">
+        <item quantity="one">%d Datei geändert</item>
+        <item quantity="other">%d Dateien geändert</item>
+    </plurals>
+    <plurals name="remote_panel_files_read_description">
+        <item quantity="one">%d Datei gelesen</item>
+        <item quantity="other">%d Dateien gelesen</item>
     </plurals>
     <plurals name="remote_panel_file_uses">
         <item quantity="one">%d-mal verwendet</item>
         <item quantity="other">%d-mal verwendet</item>
     </plurals>
-    <plurals name="remote_panel_files_count">
-        <item quantity="one">%d Datei</item>
-        <item quantity="other">%d Dateien</item>
+    <plurals name="remote_panel_files_changed">
+        <item quantity="one">%d geändert</item>
+        <item quantity="other">%d geändert</item>
+    </plurals>
+    <plurals name="remote_panel_files_read">
+        <item quantity="one">%d gelesen</item>
+        <item quantity="other">%d gelesen</item>
     </plurals>
     <plurals name="remote_panel_lines_added">
         <item quantity="one">%d Zeile hinzugefügt</item>
@@ -33,18 +41,14 @@
     <string name="remote_panel_subagents_expand">Unteragenten anzeigen</string>
     <string name="remote_panel_subagents_collapse">Unteragenten ausblenden</string>
     <string name="remote_panel_subagent_abort">Unteragent stoppen</string>
-    <string name="remote_panel_timeline">Chat-Zeitleiste</string>
-    <string name="remote_panel_timeline_show">Chat-Zeitleiste einblenden</string>
-    <string name="remote_panel_timeline_hide">Chat-Zeitleiste ausblenden</string>
-    <string name="remote_panel_jump_error">Zum letzten Fehler springen</string>
-    <string name="remote_panel_jump_question">Zur letzten Frage springen</string>
-    <string name="remote_panel_jump_edit">Zur letzten Änderung springen</string>
-    <string name="remote_panel_jump_plan">Zum letzten Plan springen</string>
     <string name="remote_panel_marker_error">Fehler</string>
     <string name="remote_panel_marker_question">Frage</string>
     <string name="remote_panel_marker_edit">Änderung</string>
     <string name="remote_panel_marker_plan">Plan</string>
-    <string name="remote_panel_timeline_legend">Markierungen in der Zeitleiste</string>
+    <string name="remote_panel_marker_user">Deine Nachricht</string>
+    <string name="remote_chat_history">Verlauf</string>
+    <string name="remote_chat_history_close">Verlauf schließen</string>
+    <string name="remote_chat_history_empty">Deine Nachrichten, Fragen, Änderungen und Fehler erscheinen hier.</string>
     <string name="remote_panel_errors_filter">Fehler (%d)</string>
     <string name="remote_panel_compacting">Kontext wird verdichtet…</string>
     <string name="remote_panel_compaction_manual">Manuell gestartet</string>

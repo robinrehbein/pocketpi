@@ -149,10 +149,13 @@ internal class NavigationFakeRepository : RemoteRepository {
     }
 
     var createdSessions = 0
+    var create: suspend (String, String) -> RemoteSelection = { routeId, projectId ->
+        RemoteSelection(routeId, projectId, "created")
+    }
 
     override suspend fun createSession(routeId: String, projectId: String): RemoteSelection {
         createdSessions++
-        return RemoteSelection(routeId, projectId, "created")
+        return create(routeId, projectId)
     }
 
     override suspend fun openNotification(routeId: String, sessionId: String) = notificationLookup()

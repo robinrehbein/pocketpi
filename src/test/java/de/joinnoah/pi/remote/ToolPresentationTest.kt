@@ -207,6 +207,7 @@ class ToolPresentationTest {
                 activity("6", "bash", """{"command":"ls"}"""),
                 activity("7", "edit", """{"path":"a.kt","edits":[]}"""),
                 ConversationItem.Bubble("8", "8", "user", null, "hi", null, false, null),
+                activity("9", "edit", """{"path":"d.kt","edits":[]}""", state = "error"),
             )
         val touched = touchedFiles(items)
         assertEquals(listOf(TouchedFile("a.kt", 2, "7"), TouchedFile("c.kt", 1, "4")), touched.changed)
@@ -241,9 +242,10 @@ class ToolPresentationTest {
     }
 
     @Test
-    fun touchedFilesTapOpensChangesOnlyWhenTheHostHasThem() {
-        assertEquals(TouchedFilesTarget.CHANGES, touchedFilesTarget(changesAvailable = true))
-        assertEquals(TouchedFilesTarget.SHEET, touchedFilesTarget(changesAvailable = false))
+    fun touchedFilesTapOpensChangesOnlyWhenTheHostHasThemAndAFileChanged() {
+        assertEquals(TouchedFilesTarget.CHANGES, touchedFilesTarget(changesAvailable = true, filesChanged = true))
+        assertEquals(TouchedFilesTarget.SHEET, touchedFilesTarget(changesAvailable = false, filesChanged = true))
+        assertEquals(TouchedFilesTarget.SHEET, touchedFilesTarget(changesAvailable = true, filesChanged = false))
     }
 
     @Test
@@ -263,22 +265,81 @@ class ToolPresentationTest {
         val markers = timelineMarkers(items)
         assertEquals(
             listOf(
-                TimelineMarker("q", TimelineMarkerKind.QUESTION, 1f / 8),
-                TimelineMarker("e", TimelineMarkerKind.EDIT, 2f / 8),
-                TimelineMarker("w", TimelineMarkerKind.ERROR, 3f / 8),
-                TimelineMarker("p", TimelineMarkerKind.PLAN, 4f / 8),
-                TimelineMarker("s", TimelineMarkerKind.ERROR, 5f / 8),
-                TimelineMarker("b", TimelineMarkerKind.ERROR, 6f / 8),
+                TimelineMarker("u", TimelineMarkerKind.USER, 0),
+                TimelineMarker("q", TimelineMarkerKind.QUESTION, 1),
+                TimelineMarker("e", TimelineMarkerKind.EDIT, 2),
+                TimelineMarker("w", TimelineMarkerKind.ERROR, 3),
+                TimelineMarker("p", TimelineMarkerKind.PLAN, 4),
+                TimelineMarker("s", TimelineMarkerKind.ERROR, 5),
+                TimelineMarker("b", TimelineMarkerKind.ERROR, 6),
             ),
             markers,
         )
         assertEquals(listOf("w", "s", "b"), onlyErrors(items).map { it.id })
-        assertEquals(0f, timelineMarkers(listOf(activity("x", "edit", "{}"))).single().position)
-        val many = (0 until 250).map { activity("m$it", "edit", "{}") }
-        val capped = timelineMarkers(many)
-        assertEquals(200, capped.size)
-        assertEquals("m50", capped.first().itemId)
-        assertEquals(1f, capped.last().position)
+        // A failed user message counts as an error, not as the user's message.
+        val failed = ConversationItem.Bubble("f", "f", "user", null, "hi", null, false, null, error = true)
+        assertEquals(TimelineMarkerKind.ERROR, timelineMarkers(listOf(failed)).single().kind)
+        // No cap: the scrollbar thins ticks along the whole track instead of dropping early ones.
+        val many = timelineMarkers((0 until 250).map { activity("m$it", "edit", "{}") })
+        assertEquals(250, many.size)
+        assertEquals(0, many.first().index)
+        assertEquals(249, many.last().index)
+    }
+
+    @Test
+    fun chatHistoryListsEveryMarkedItemWithOneLineOfText() {
+        val items =
+            listOf(
+                ConversationItem.Bubble("u", "u", "user", null, "  Build the\n  tablet column  ", null, false, 1_000L),
+                ConversationItem.Bubble("a", "a", "assistant", null, "Sure", null, false, 2_000L),
+                activity(
+                    "q",
+                    "questionnaire",
+                    """{"questions":[{"id":"x","prompt":"Inspector at 1100 or 1180 dp?"}]}""",
+                ),
+                activity("e", "edit", """{"path":"src/main/AdaptiveLayout.kt"}"""),
+                activity("p", "submit_plan", """{"plan":"\n## Plan: tablet scene\n\nDetails"}"""),
+                activity("w", "bash", """{"command":"./gradlew test"}""", state = "error"),
+                subagent("s", AgentProgress("explorer", "failed", null, null)),
+                ConversationItem.Bubble("i", "i", "user", null, "", null, false, null),
+                activity("r", "read", "{}"),
+            )
+        assertEquals(
+            listOf(
+                ChatHistoryEntry("u", TimelineMarkerKind.USER, "Build the tablet column", 1_000L),
+                ChatHistoryEntry("q", TimelineMarkerKind.QUESTION, "Inspector at 1100 or 1180 dp?"),
+                ChatHistoryEntry("e", TimelineMarkerKind.EDIT, "AdaptiveLayout.kt"),
+                ChatHistoryEntry("p", TimelineMarkerKind.PLAN, "Plan: tablet scene"),
+                ChatHistoryEntry("w", TimelineMarkerKind.ERROR, "bash: ./gradlew test"),
+                ChatHistoryEntry("s", TimelineMarkerKind.ERROR, "explorer"),
+                // A message with only an attachment has no text; the row shows its kind.
+                ChatHistoryEntry("i", TimelineMarkerKind.USER, null),
+            ),
+            chatHistory(items),
+        )
+        // Unlike the scrollbar's markers, the history keeps everything.
+        assertEquals(250, chatHistory((0 until 250).map { activity("m$it", "edit", "{}") }).size)
+        // Malformed arguments leave the text out instead of failing.
+        assertEquals(null, chatHistory(listOf(activity("x", "questionnaire", "not json"))).single().text)
+        assertEquals(160, historyLine("x".repeat(500))?.length)
+        assertEquals(null, historyLine(" \n\t "))
+        assertEquals("a b", historyLine("a" + " ".repeat(100) + "b"))
+    }
+
+    @Test
+    fun historyOpensAtTheEntryForTheTopOfTheViewport() {
+        val history =
+            listOf(
+                ChatHistoryEntry("u1", TimelineMarkerKind.USER, "one"),
+                ChatHistoryEntry("e", TimelineMarkerKind.EDIT, null),
+                ChatHistoryEntry("u2", TimelineMarkerKind.USER, "two"),
+            )
+        val order = listOf("u1", "a1", "e", "a2", "u2", "a3")
+        assertEquals(1, historyAnchor(history, order, "a2"))
+        assertEquals(2, historyAnchor(history, order, "u2"))
+        assertEquals(0, historyAnchor(history, order, "u1"))
+        assertEquals(0, historyAnchor(history, order, null))
+        assertEquals(0, historyAnchor(history, order, "gone"))
     }
 
     @Test
@@ -339,6 +400,9 @@ class ToolPresentationTest {
                 SubagentStripEntry("c2", null, "waiting child", "running", "asks", true),
                 SubagentStripEntry(null, "reviewer", "Review the diff", "running", "looking", false),
                 SubagentStripEntry("missing-1", "planner", "Plan it", "queued", null, false, openable = false),
+                SubagentStripEntry("c3", null, "idle child", "ended", null, false),
+                SubagentStripEntry(null, "finished", "finished", "succeeded", null, false),
+                SubagentStripEntry(null, "done", "done", "succeeded", null, false),
             ),
             strip.entries,
         )
@@ -355,6 +419,122 @@ class ToolPresentationTest {
         assertEquals(listOf(SubagentStripEntry("c", "reviewer", "reviewer: Review the diff", "running", "grep", true)), strip.entries)
         assertEquals(0, strip.unmatchedRunning)
         assertTrue(strip.missingSessionIds.isEmpty())
+    }
+
+    @Test
+    fun subagentStripRetainsTerminalHistoryAndLatestStateWithoutDuplicates() {
+        val items = listOf(
+            subagent("first", AgentProgress("scout", "running", null, "reading", sessionId = "c1")),
+            subagent("final", AgentProgress("scout", "succeeded", "result", null, sessionId = "c1")),
+            subagent("failed", AgentProgress("reviewer", "failed", "test failure", null, sessionId = "c2")),
+            subagent("cancelled", AgentProgress("planner", "cancelled", null, null, sessionId = "c3")),
+            subagent("recent", AgentProgress("new", "running", null, null, sessionId = "missing")),
+        )
+        val sessions = listOf(
+            session("c1", "Scout", availability = SessionAvailability.IDLE),
+            session("c2", "Reviewer", availability = SessionAvailability.IDLE),
+            session("c3", "Planner", availability = SessionAvailability.IDLE),
+        )
+        val strip = subagentStrip(items, sessions, "parent")
+        assertEquals(listOf("running", "succeeded", "failed", "cancelled"), strip.entries.map { it.state })
+        assertEquals(1, strip.entries.count { it.sessionId == "c1" })
+        assertEquals("result", strip.entries.first { it.sessionId == "c1" }.activity)
+        assertTrue(strip.entries.none { it.abortable })
+        assertTrue(strip.entries.filter { it.sessionId != "missing" }.all { it.openable })
+        assertEquals(1, strip.running)
+    }
+
+    @Test
+    fun subagentStripDoesNotAssumeIdleChildrenSucceededOrResurrectStaleRunningProgress() {
+        val items = listOf(subagent("s", AgentProgress("scout", "running", "reading", null, sessionId = "c1")))
+        val strip = subagentStrip(items, listOf(session("c1", "Scout", availability = SessionAvailability.IDLE)), "parent")
+        assertEquals("ended", strip.entries.single().state)
+        assertFalse(strip.entries.single().abortable)
+        assertEquals(0, strip.running)
+        assertEquals(0, strip.unmatchedRunning)
+    }
+
+    @Test
+    fun subagentStripKeepsAllCompletedEntriesBeyondPreviousLimits() {
+        val items = (1..25).map { index ->
+            subagent("s$index", AgentProgress("scout", "succeeded", "result $index", null, sessionId = "c$index"))
+        }
+        val strip = subagentStrip(items, emptyList(), "parent")
+        assertEquals(25, strip.entries.size)
+        assertEquals((1..25).map { "c$it" }.toSet(), strip.entries.map { it.sessionId }.toSet())
+        assertTrue(strip.entries.all { it.state == "succeeded" && !it.openable && !it.abortable })
+    }
+
+    @Test
+    fun subagentStripUsesCurrentLiveChildrenAndExcludesOtherParents() {
+        val items = listOf(
+            subagent("s", AgentProgress("scout", "succeeded", null, null, sessionId = "c1")),
+            subagent("foreign", AgentProgress("other", "failed", null, null, sessionId = "foreign")),
+        )
+        val sessions = listOf(session("c1", "Scout"), session("foreign", "Other", parent = "elsewhere"))
+        val strip = subagentStrip(items, sessions, "parent")
+        assertEquals(listOf("c1"), strip.entries.map { it.sessionId })
+        assertEquals("running", strip.entries.single().state)
+        assertTrue(strip.entries.single().abortable)
+        assertTrue(subagentStrip(items, sessions, "unrelated").entries.isEmpty())
+    }
+
+    @Test
+    fun subagentStripMatchesCompletedProgressToIdleChildByTask() {
+        val items = listOf(subagent("s", AgentProgress("reviewer", "succeeded", "done", null, task = "Review the diff")))
+        val sessions = listOf(session("c", "reviewer: Review the diff", availability = SessionAvailability.IDLE))
+        val strip = subagentStrip(items, sessions, "parent")
+        assertEquals(listOf(SubagentStripEntry("c", "reviewer", "reviewer: Review the diff", "succeeded", "done", false)), strip.entries)
+    }
+
+    @Test
+    fun subagentStripPreservesDistinctIdlessTasksMatchingTheSameChild() {
+        val items = listOf(
+            subagent("first", AgentProgress("reviewer", "failed", "First result", null, task = "Check first task")),
+            subagent("second", AgentProgress("reviewer", "succeeded", "Second result", null, task = "Check second task")),
+        )
+        val strip = subagentStrip(items, listOf(session("c", "reviewer", availability = SessionAvailability.IDLE)), "parent")
+        assertEquals(2, strip.entries.size)
+        assertEquals(setOf("First result", "Second result"), strip.entries.map { it.activity }.toSet())
+        assertEquals(setOf("failed", "succeeded"), strip.entries.map { it.state }.toSet())
+        assertEquals("Second result", strip.entries.single { it.sessionId == "c" }.activity)
+        assertTrue(strip.entries.none { it.abortable })
+    }
+
+    @Test
+    fun subagentStripDoesNotReviveMatchedIdlessRunningProgressAfterCompletion() {
+        val items = listOf(
+            subagent("first", AgentProgress("reviewer", "running", "Reading", null, task = "Review the diff")),
+            subagent("last", AgentProgress("reviewer", "succeeded", "Done", null, task = "Review the diff")),
+        )
+        val strip = subagentStrip(items, listOf(session("c", "reviewer: Review the diff", availability = SessionAvailability.IDLE)), "parent")
+        assertEquals(listOf("succeeded"), strip.entries.map { it.state })
+        assertEquals(0, strip.running)
+        assertEquals(0, strip.unmatchedRunning)
+        assertFalse(strip.entries.single().abortable)
+    }
+
+    @Test
+    fun subagentStripPreservesActiveProgressWhileDisconnectedWithoutAllowingStop() {
+        val items = listOf(subagent("s",
+            AgentProgress("scout", "running", "Reading", null, sessionId = "c1"),
+            AgentProgress("planner", "queued", null, null, sessionId = "c2"),
+        ))
+        val sessions = sessionListItems(listOf(
+            Wire.objectOf("id" to "c1", "title" to "Scout", "status" to "running", "origin" to "rpc", "parentSessionId" to "parent"),
+            Wire.objectOf("id" to "c2", "title" to "Planner", "status" to "waiting", "origin" to "rpc", "parentSessionId" to "parent"),
+        ), connected = false, loading = false)
+        val strip = subagentStrip(items, sessions, "parent")
+        assertEquals(listOf("running", "queued"), strip.entries.map { it.state })
+        assertEquals(1, strip.running)
+        assertTrue(strip.entries.none { it.abortable })
+    }
+
+    @Test
+    fun subagentStripDoesNotAssumeOfflineChildWithNoProgressHasEnded() {
+        val strip = subagentStrip(emptyList(), listOf(session("c", "Scout", availability = SessionAvailability.OFFLINE)), "parent")
+        assertEquals("offline", strip.entries.single().state)
+        assertFalse(strip.entries.single().abortable)
     }
 
     @Test

@@ -245,8 +245,9 @@ internal fun touchedFiles(items: List<ConversationItem>): TouchedFiles {
         val target =
             when (item.name) {
                 "read" -> read
+                // A failed edit or write changed nothing.
                 "edit",
-                "write" -> changed
+                "write" -> if (item.state == "error") continue else changed
                 else -> continue
             }
         val path = toolPath(item) ?: continue
@@ -294,22 +295,26 @@ internal enum class TouchedFilesTarget {
     SHEET,
 }
 
-/** The host's changes view when it offers one; otherwise the list of files the chat touched. */
-internal fun touchedFilesTarget(changesAvailable: Boolean): TouchedFilesTarget =
-    if (changesAvailable) TouchedFilesTarget.CHANGES else TouchedFilesTarget.SHEET
+/**
+ * The host's changes view when it offers one and the chat changed a file; otherwise the list of
+ * files the chat touched, so a chat that only read files never lands on an empty changes view.
+ */
+internal fun touchedFilesTarget(changesAvailable: Boolean, filesChanged: Boolean): TouchedFilesTarget =
+    if (changesAvailable && filesChanged) TouchedFilesTarget.CHANGES else TouchedFilesTarget.SHEET
 
 // ---- Timeline and errors ------------------------------------------------------------------
 
 internal enum class TimelineMarkerKind {
+    /** One of the user's own messages. */
+    USER,
     ERROR,
     QUESTION,
     EDIT,
     PLAN,
 }
 
-internal data class TimelineMarker(val itemId: String, val kind: TimelineMarkerKind, val position: Float)
-
-private const val MAX_TIMELINE_MARKERS = 200
+/** A marked item; [index] is its position in the item list the markers were built from. */
+internal data class TimelineMarker(val itemId: String, val kind: TimelineMarkerKind, val index: Int)
 
 internal fun isErrorItem(item: ConversationItem): Boolean =
     when (item) {
@@ -321,22 +326,108 @@ internal fun isErrorItem(item: ConversationItem): Boolean =
 
 internal fun onlyErrors(items: List<ConversationItem>): List<ConversationItem> = items.filter(::isErrorItem)
 
-/** Markers over the visible list, positioned 0..1 by index; only the most recent 200 are kept. */
-internal fun timelineMarkers(items: List<ConversationItem>): List<TimelineMarker> {
-    val last = items.lastIndex
-    val markers = items.mapIndexedNotNull { index, item ->
-        val kind =
-            when {
-                isErrorItem(item) -> TimelineMarkerKind.ERROR
-                item !is ConversationItem.Activity -> null
-                item.name == "questionnaire" -> TimelineMarkerKind.QUESTION
-                item.name == "edit" || item.name == "write" -> TimelineMarkerKind.EDIT
-                item.name == "submit_plan" -> TimelineMarkerKind.PLAN
-                else -> null
-            } ?: return@mapIndexedNotNull null
-        TimelineMarker(item.id, kind, if (last <= 0) 0f else index.toFloat() / last)
+/** What a marker or a history entry calls [item], or null when it is not worth finding again. */
+internal fun timelineMarkerKind(item: ConversationItem): TimelineMarkerKind? =
+    when {
+        isErrorItem(item) -> TimelineMarkerKind.ERROR
+        item is ConversationItem.Bubble -> if (item.role == "user") TimelineMarkerKind.USER else null
+        item !is ConversationItem.Activity -> null
+        item.name == "questionnaire" -> TimelineMarkerKind.QUESTION
+        item.name == "edit" || item.name == "write" -> TimelineMarkerKind.EDIT
+        item.name == "submit_plan" -> TimelineMarkerKind.PLAN
+        else -> null
     }
-    return markers.takeLast(MAX_TIMELINE_MARKERS)
+
+/** Markers over the visible list, by index. The scrollbar thins them to what its track can show. */
+internal fun timelineMarkers(items: List<ConversationItem>): List<TimelineMarker> =
+    items.mapIndexedNotNull { index, item ->
+        timelineMarkerKind(item)?.let { TimelineMarker(item.id, it, index) }
+    }
+
+// ---- Chat history -------------------------------------------------------------------------
+
+/** One row of the chat history: a marked item with a one-line text, when it has one. */
+internal data class ChatHistoryEntry(
+    val itemId: String,
+    val kind: TimelineMarkerKind,
+    val text: String?,
+    val timestamp: Long? = null,
+)
+
+/** Longer texts are cut; a history row shows one line anyway. */
+private const val HISTORY_TEXT_CHARS = 160
+
+private val WHITESPACE = Regex("\\s+")
+
+/** [text] on one line: whitespace runs collapse to one space, blank text is null. */
+internal fun historyLine(text: String?): String? =
+    // Cut first: a long message is not worth collapsing in full for one line.
+    text?.trim()?.take(HISTORY_TEXT_CHARS * 2)?.replace(WHITESPACE, " ")?.take(HISTORY_TEXT_CHARS)?.trim()
+        ?.takeIf(String::isNotEmpty)
+
+/**
+ * Every marked item in conversation order, with no cap: the history is a lazy list. Unlike the
+ * scrollbar's markers it carries text, so the user finds a place by what was said there.
+ */
+internal fun chatHistory(items: List<ConversationItem>): List<ChatHistoryEntry> =
+    items.mapNotNull { item ->
+        val kind = timelineMarkerKind(item) ?: return@mapNotNull null
+        ChatHistoryEntry(
+            item.id,
+            kind,
+            historyText(item, kind),
+            (item as? ConversationItem.Bubble)?.timestamp,
+        )
+    }
+
+/**
+ * The history entry to show first: the last one at or before [currentId] in [order], the item at
+ * the top of the chat's viewport; 0 when there is none.
+ */
+internal fun historyAnchor(history: List<ChatHistoryEntry>, order: List<String>, currentId: String?): Int {
+    val current = currentId?.let(order::indexOf)?.takeIf { it >= 0 } ?: return 0
+    val positions = order.withIndex().associate { it.value to it.index }
+    return history.indexOfLast { (positions[it.itemId] ?: Int.MAX_VALUE) <= current }.coerceAtLeast(0)
+}
+
+private fun historyText(item: ConversationItem, kind: TimelineMarkerKind): String? =
+    when (item) {
+        is ConversationItem.Bubble -> historyLine(item.text)
+        is ConversationItem.Subagent ->
+            historyLine(item.agents.filter { it.state == "failed" }.joinToString(", ") { it.name })
+        is ConversationItem.Thinking -> null
+        is ConversationItem.Activity ->
+            when (kind) {
+                TimelineMarkerKind.QUESTION -> historyLine(questionnaireTitle(item.arguments))
+                TimelineMarkerKind.PLAN -> historyLine(planTitle(item.arguments))
+                TimelineMarkerKind.EDIT -> historyLine(item.summary.detail?.let(::fileName))
+                TimelineMarkerKind.ERROR ->
+                    historyLine(
+                        listOfNotNull(item.name, item.summary.detail ?: item.output?.lineSequence()?.firstOrNull { it.isNotBlank() })
+                            .joinToString(": ")
+                    )
+                TimelineMarkerKind.USER -> null
+            }
+    }
+
+private fun fileName(path: String): String = path.trimEnd('/').substringAfterLast('/').ifEmpty { path }
+
+private fun JsonObject.firstText(vararg keys: String): String? =
+    keys.firstNotNullOfOrNull { key ->
+        (get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank)
+    }
+
+/** The first question's prompt of a questionnaire call, or its title. */
+private fun questionnaireTitle(arguments: String?): String? {
+    val args = arguments?.let(::parsedToolArguments) ?: return null
+    val first = (args["questions"] as? JsonArray)?.firstOrNull() as? JsonObject
+    return first?.firstText("prompt", "question", "label") ?: args.firstText("title", "prompt", "question")
+}
+
+/** The first non-blank line of a submitted plan, without its heading marks. */
+private fun planTitle(arguments: String?): String? {
+    val plan = arguments?.let(::parsedToolArguments)?.firstText("plan") ?: return null
+    return plan.lineSequence().map { it.trim().trimStart('#').trim() }.firstOrNull(String::isNotEmpty)
 }
 
 // ---- Subagent children --------------------------------------------------------------------
@@ -411,11 +502,12 @@ internal data class SubagentStrip(
 )
 
 private const val STRIP_RECENT_SUBAGENTS = 3
-private const val MAX_STRIP_ENTRIES = 16
 
 /**
- * The running subagents of a session: its live child sessions (abortable), enriched with the
- * latest progress, plus running or queued progress agents that have no live child yet.
+ * The subagents of a session, including finished children and terminal progress. Live child
+ * sessions remain authoritative for running/abortable state; an idle child without terminal
+ * progress is simply ended, not assumed successful. Only recent active progress contributes
+ * unresolved running agents, so historical progress cannot resurrect a stale running entry.
  */
 internal fun subagentStrip(
     items: List<ConversationItem>,
@@ -423,45 +515,63 @@ internal fun subagentStrip(
     parentSessionId: String,
 ): SubagentStrip {
     val knownIds = sessions.mapTo(HashSet()) { it.id }
-    val runningChildren = sessions.filter { it.parentSessionId == parentSessionId && it.live() }
-    val runningChildIds = runningChildren.mapTo(HashSet()) { it.id }
+    val children = sessions.filter { it.parentSessionId == parentSessionId }
+    val childIds = children.mapTo(HashSet()) { it.id }
     val subagents = items.filterIsInstance<ConversationItem.Subagent>()
     val latestBySession = HashMap<String, AgentProgress>()
     for (item in subagents) for (agent in item.agents) agent.sessionId?.let { latestBySession[it] = agent }
 
     data class Recent(val agent: AgentProgress, val match: String?)
     val recent =
-        subagents.takeLast(STRIP_RECENT_SUBAGENTS).flatMap { item ->
+        subagents.flatMapIndexed { itemIndex, item ->
             item.agents.mapIndexedNotNull { index, agent ->
-                if (!agent.active()) return@mapIndexedNotNull null
+                if (agent.active() && itemIndex < subagents.size - STRIP_RECENT_SUBAGENTS)
+                    return@mapIndexedNotNull null
+                if (agent.sessionId != null) {
+                    if (latestBySession[agent.sessionId] != agent) return@mapIndexedNotNull null
+                    // A known session under a different parent must never leak into this overview.
+                    if (agent.sessionId in knownIds && agent.sessionId !in childIds) return@mapIndexedNotNull null
+                }
                 val match =
-                    if (agent.sessionId != null) agent.sessionId.takeIf { it in knownIds }
+                    if (agent.sessionId != null) agent.sessionId.takeIf { it in childIds }
                     else
-                        (resolveSubagentChild(item, index, parentSessionId, sessions) as? ChildResolution.Exact)
+                        (resolveSubagentChild(item, index, parentSessionId, children) as? ChildResolution.Exact)
                             ?.sessionId
                 Recent(agent, match)
             }
         }
-    val heuristic = HashMap<String, AgentProgress>()
-    recent.forEach { if (it.agent.sessionId == null && it.match != null) heuristic.putIfAbsent(it.match, it.agent) }
+    val heuristic = HashMap<String, Recent>()
+    recent.asReversed().forEach {
+        if (it.agent.sessionId == null && it.match != null) heuristic.putIfAbsent(it.match, it)
+    }
 
     val entries = buildList {
-        for (child in runningChildren) {
-            val agent = latestBySession[child.id] ?: heuristic[child.id]
+        for (child in children) {
+            val agent = latestBySession[child.id] ?: heuristic[child.id]?.agent
             add(
                 SubagentStripEntry(
                     sessionId = child.id,
                     agent = agent?.name,
                     title = child.title,
-                    state = agent?.state?.takeIf { it == "queued" } ?: "running",
+                    state =
+                        when {
+                            child.live() -> agent?.state?.takeIf { it == "queued" } ?: "running"
+                            child.availability == SessionAvailability.OFFLINE -> agent?.state ?: "offline"
+                            else -> agent?.state?.takeUnless { agent.active() } ?: "ended"
+                        },
                     activity = if (agent != null) agent.activity ?: agent.preview else child.preview,
-                    abortable = true,
+                    abortable = child.live(),
                 )
             )
         }
         val seen = HashSet<String>()
-        for ((agent, match) in recent) {
-            if (match != null && match in runningChildIds) continue
+        for (record in recent.asReversed()) {
+            val (agent, match) = record
+            // Matched active progress is represented by the child's authoritative state. Retain
+            // distinct id-less terminal tasks, consuming only the record used to enrich the child.
+            if (match != null && match in childIds &&
+                (agent.active() || agent.sessionId != null ||
+                    (latestBySession[match] == null && heuristic[match] === record))) continue
             if (agent.sessionId != null && !seen.add(agent.sessionId)) continue
             add(
                 SubagentStripEntry(
@@ -476,12 +586,20 @@ internal fun subagentStrip(
             )
         }
     }
-    val ordered = entries.sortedBy { if (it.state == "queued") 1 else 0 }.take(MAX_STRIP_ENTRIES)
+    val ordered = entries.sortedBy {
+        when (it.state) {
+            "running" -> 0
+            "queued" -> 1
+            else -> 2
+        }
+    }
     return SubagentStrip(
         entries = ordered,
         running = ordered.count { it.state == "running" },
         missingSessionIds = recent.mapNotNullTo(HashSet()) { r -> r.agent.sessionId?.takeIf { it !in knownIds } },
-        unmatchedRunning = recent.count { it.agent.state == "running" && it.match == null },
+        unmatchedRunning = recent.count {
+            it.agent.state == "running" && it.match == null && it.agent.sessionId !in childIds
+        },
     )
 }
 

@@ -10,7 +10,6 @@
     <string name="remote_changes_loading">Loading changes</string>
     <string name="remote_changes_base_session">Session start</string>
     <string name="remote_changes_base_head">HEAD</string>
-    <string name="remote_changes_base_dev">dev</string>
     <string name="remote_changes_since_session_start">Since session start, %1$s</string>
     <string name="remote_changes_since_first_contact">Since %1$s, not session start</string>
     <string name="remote_changes_session_fallback">Session start is not available for this conversation. Showing changes since HEAD.</string>
@@ -63,7 +62,7 @@
     <string name="remote_changes_prompt_revert">Revert the changes in %1$s so the file matches %2$s again.</string>
     <string name="remote_changes_prompt_base_session">its state at session start</string>
     <string name="remote_changes_prompt_base_head">the last commit (HEAD)</string>
-    <string name="remote_changes_prompt_base_dev">the merge base with dev</string>
+    <string name="remote_changes_prompt_base_dev">the merge base with %1$s</string>
     <string name="remote_changes_prompt_tests">Write tests for the changes in %1$s.</string>
     <string name="remote_changes_prompt_explain">Explain the changes in %1$s: what changed and why.</string>
     <string name="remote_changes_line_counts">Added: %1$d, removed: %2$d</string>
@@ -73,7 +72,7 @@
     <string name="remote_changes_review_removed_line">%1$s:%2$d (removed line, vs %3$s)</string>
     <string name="remote_changes_review_base_session">session start</string>
     <string name="remote_changes_review_base_head">HEAD</string>
-    <string name="remote_changes_review_base_dev">the merge base with dev</string>
+    <string name="remote_changes_review_base_dev">the merge base with %1$s</string>
     <string name="remote_changes_comment_edit">Edit comment</string>
     <string name="remote_changes_comment_limit">Comment limit reached (%1$d). Send or delete some first.</string>
     <string name="remote_changes_comment_failed">The comment could not be saved.</string>

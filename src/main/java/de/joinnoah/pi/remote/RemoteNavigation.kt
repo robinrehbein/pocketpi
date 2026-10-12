@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -102,28 +101,6 @@ internal fun RemoteSelection.keys(): List<RemoteNavKey> = buildList {
     sessionId?.let { add(RemoteNavKey.Chat(route, project, it)) }
 }
 
-/** Keeps each chat's timeline choice when its navigation entry is replaced by another chat. */
-internal class TimelineVisibility(initialCollapsed: Set<String> = emptySet()) {
-    private var collapsed by mutableStateOf(initialCollapsed)
-
-    private fun id(key: RemoteNavKey.Chat): String =
-        listOf(key.routeId, key.projectId, key.sessionId).joinToString("") { "${it.length}:$it" }
-
-    fun expanded(key: RemoteNavKey.Chat): Boolean = id(key) !in collapsed
-
-    fun toggle(key: RemoteNavKey.Chat) {
-        val id = id(key)
-        collapsed = if (id in collapsed) collapsed - id else collapsed + id
-    }
-
-    companion object {
-        val Saver = Saver<TimelineVisibility, ArrayList<String>>(
-            save = { ArrayList(it.collapsed) },
-            restore = { TimelineVisibility(it.toSet()) },
-        )
-    }
-}
-
 internal class RemoteNavigator(
     private val repository: RemoteRepository,
     private val stack: MutableList<NavKey>,
@@ -133,6 +110,11 @@ internal class RemoteNavigator(
 ) {
     private var request = 0L
     private var activation: Job? = null
+    private var mutation: Job? = null
+
+    /** True while a create or fork request is in flight; further ones are ignored meanwhile. */
+    var mutating by mutableStateOf(false)
+        private set
     private var consumePendingNotification: (() -> Unit)? = null
 
     private fun invalidate(): Long {
@@ -315,12 +297,26 @@ internal class RemoteNavigator(
         if (stack.lastOrNull() != RemoteNavKey.Settings) stack.add(RemoteNavKey.Settings)
     }
 
-    fun createSession(routeId: String, projectId: String) {
+    /**
+     * Runs a create or fork on the host. A second request while one is in flight is ignored:
+     * invalidate() would cancel the first coroutine after the host may already have created its
+     * session, leaving an orphan. Other navigation still cancels it, which also releases the guard.
+     */
+    private fun mutate(call: suspend () -> RemoteSelection) {
+        if (mutation?.isActive == true) return
         val current = invalidate()
-        activation = scope.launch {
-            val selection = repository.createSession(routeId, projectId)
+        val job = scope.launch {
+            val selection = call()
             if (current == request) replace(selection, keepSettings = false)
         }
+        activation = job
+        mutation = job
+        mutating = true
+        job.invokeOnCompletion { if (mutation === job) mutating = false }
+    }
+
+    fun createSession(routeId: String, projectId: String) {
+        mutate { repository.createSession(routeId, projectId) }
     }
 
     /**
@@ -329,11 +325,7 @@ internal class RemoteNavigator(
      */
     fun forkSession(source: RemoteNavKey.Chat, messageId: String, mode: ForkMode) {
         if (topKey() != source) return
-        val current = invalidate()
-        activation = scope.launch {
-            val selection = repository.forkSession(source.selection(), messageId, mode)
-            if (current == request) replace(selection, keepSettings = false)
-        }
+        mutate { repository.forkSession(source.selection(), messageId, mode) }
     }
 
     /**
@@ -342,11 +334,7 @@ internal class RemoteNavigator(
      */
     fun forkSessionAtNode(source: RemoteNavKey.Chat, nodeId: String) {
         if (topKey() != source) return
-        val current = invalidate()
-        activation = scope.launch {
-            val selection = repository.forkSessionAtNode(source.selection(), nodeId)
-            if (current == request) replace(selection, keepSettings = false)
-        }
+        mutate { repository.forkSessionAtNode(source.selection(), nodeId) }
     }
 
     /**
@@ -628,7 +616,6 @@ internal fun RemoteNavigation(
             },
         )
     }
-    val timelineVisibility = rememberSaveable(saver = TimelineVisibility.Saver) { TimelineVisibility() }
     val chatViewports = rememberSaveable(saver = ChatViewportPositions.Saver) { ChatViewportPositions() }
     LaunchedEffect(navigator) {
         navigator.restore()
@@ -704,7 +691,6 @@ internal fun RemoteNavigation(
                     pushConfigured,
                     pushSettings.pushEnabled,
                     enablePush,
-                    timelineVisibility,
                     disablePush,
                 )
             }
@@ -732,7 +718,6 @@ private fun RemoteNavDisplay(
     pushConfigured: Boolean,
     pushEnabled: Boolean,
     enablePush: () -> Unit,
-    timelineVisibility: TimelineVisibility,
     disablePush: () -> Unit,
 ) {
     NavDisplay(
@@ -749,7 +734,7 @@ private fun RemoteNavDisplay(
                 entry<RemoteNavKey.Hosts> { key ->
                     val model = viewModel { HostsViewModel(repository) }
                     CenteredPage {
-                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush)
                     }
                 }
                 entry<RemoteNavKey.Projects>(metadata = { key -> navKeyMetadata(key) }) { key ->
@@ -757,7 +742,7 @@ private fun RemoteNavDisplay(
                     val column = LocalProjectsColumn.current
                     if (column == null)
                         CenteredPage {
-                            RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                            RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush)
                         }
                     else {
                         // Keeps the full column's scroll position while the strip stands in for it.
@@ -768,13 +753,13 @@ private fun RemoteNavDisplay(
                             }
                         else
                             holder.SaveableStateProvider("column") {
-                                RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                                RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush)
                             }
                     }
                 }
                 entry<RemoteNavKey.Sessions>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { SessionsViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush)
                 }
                 entry<RemoteNavKey.FolderBrowser> { key ->
                     val model = viewModel { FolderBrowserViewModel(repository, key) }
@@ -786,7 +771,7 @@ private fun RemoteNavDisplay(
                 }
                 entry<RemoteNavKey.Chat>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ChatViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush)
                 }
                 entry<RemoteNavKey.Settings>(
                     metadata = metadata {
@@ -797,7 +782,7 @@ private fun RemoteNavDisplay(
                 ) { key ->
                     val model = viewModel { SettingsViewModel(repository, settings) }
                     CenteredPage {
-                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush)
                     }
                 }
             },

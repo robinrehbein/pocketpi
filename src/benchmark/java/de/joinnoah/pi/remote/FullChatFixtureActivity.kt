@@ -31,7 +31,6 @@ class FullChatFixtureActivity : ComponentActivity() {
                 val stack = remember { mutableStateListOf<NavKey>().apply { addAll(fullChatKey.selection().keys()) } }
                 val navigator = remember { RemoteNavigator(repository, stack, scope) }
                 val model = viewModel { ChatViewModel(repository, fullChatKey, settings) }
-                val visibility = remember { TimelineVisibility() }
                 Column(Modifier.fillMaxSize().statusBarsPadding().semantics { testTagsAsResourceId = true }) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(
@@ -53,7 +52,7 @@ class FullChatFixtureActivity : ComponentActivity() {
                         }
                     }
                     Box(Modifier.weight(1f)) {
-                        RemoteScreen(fullChatKey, model, navigator, false, false, {}, visibility)
+                        RemoteScreen(fullChatKey, model, navigator, false, false, {})
                     }
                 }
             }

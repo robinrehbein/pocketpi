@@ -10,7 +10,6 @@
     <string name="remote_changes_loading">Änderungen werden geladen</string>
     <string name="remote_changes_base_session">Sitzungsstart</string>
     <string name="remote_changes_base_head">HEAD</string>
-    <string name="remote_changes_base_dev">dev</string>
     <string name="remote_changes_since_session_start">Seit Sitzungsstart, %1$s</string>
     <string name="remote_changes_since_first_contact">Seit %1$s, nicht seit Sitzungsstart</string>
     <string name="remote_changes_session_fallback">Für dieses Gespräch gibt es keinen Sitzungsstart. Angezeigt werden die Änderungen seit HEAD.</string>
@@ -63,7 +62,7 @@
     <string name="remote_changes_prompt_revert">Setze die Änderungen in %1$s zurück, sodass die Datei wieder %2$s entspricht.</string>
     <string name="remote_changes_prompt_base_session">ihrem Stand beim Sitzungsstart</string>
     <string name="remote_changes_prompt_base_head">dem letzten Commit (HEAD)</string>
-    <string name="remote_changes_prompt_base_dev">der Merge-Basis mit dev</string>
+    <string name="remote_changes_prompt_base_dev">der Merge-Basis mit %1$s</string>
     <string name="remote_changes_prompt_tests">Schreibe Tests für die Änderungen in %1$s.</string>
     <string name="remote_changes_prompt_explain">Erkläre die Änderungen in %1$s: was sich geändert hat und warum.</string>
     <string name="remote_changes_line_counts">Hinzugefügt: %1$d, entfernt: %2$d</string>
@@ -73,7 +72,7 @@
     <string name="remote_changes_review_removed_line">%1$s:%2$d (entfernte Zeile, gegenüber %3$s)</string>
     <string name="remote_changes_review_base_session">Sitzungsstart</string>
     <string name="remote_changes_review_base_head">HEAD</string>
-    <string name="remote_changes_review_base_dev">der Merge-Basis mit dev</string>
+    <string name="remote_changes_review_base_dev">der Merge-Basis mit %1$s</string>
     <string name="remote_changes_comment_edit">Kommentar bearbeiten</string>
     <string name="remote_changes_comment_limit">Kommentarlimit erreicht (%1$d). Sende oder lösche zuerst welche.</string>
     <string name="remote_changes_comment_failed">Der Kommentar konnte nicht gespeichert werden.</string>
