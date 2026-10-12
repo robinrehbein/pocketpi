@@ -7,13 +7,16 @@ import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.lerp
 import kotlinx.coroutines.CancellationException
@@ -541,24 +544,31 @@ private data class ProjectColumnsScene(
         // Registered before the chat's own handlers, so an open tool detail or diff still closes
         // first; without a predictive preview (see previousEntries).
         BackHandler(enabled = collapsed) { state.listCollapsed = false }
-        // Back from the sessions or a chat stays in this scene, so Navigation 3 has no other scene
-        // to preview; the scene previews it itself. Registered before the chat's own handlers too.
-        val backPreview = rememberBackPreview(enabled = list != null && !collapsed, resetKey = (detail ?: list)?.contentKey, onBack = onBack)
-        val listEnter = rememberEnterProgress(list?.contentKey)
-        val detailEnter = rememberEnterProgress(detail?.contentKey)
         val strip = detail != null
         val projectsTarget = if (strip) PROJECT_STRIP_WIDTH else layout.projectsWidth
-        val projectsAnimated by
-            animateDpAsState(projectsTarget, tween(320, easing = ColumnEasing), label = "projectsWidth")
+        val projectsWidth = rememberProjectsWidth(projectsTarget)
+        // Back from the sessions or a chat stays in this scene, so Navigation 3 has no other scene
+        // to preview; the scene previews it itself. Registered before the chat's own handlers too.
+        val backPreview =
+            rememberBackPreview(enabled = list != null && !collapsed, resetKey = (detail ?: list)?.contentKey) { progress ->
+                // The strip goes on growing from where the gesture left it instead of jumping back.
+                if (strip) projectsWidth.snapTo(lerp(projectsWidth.value, layout.projectsWidth, progress))
+                onBack()
+            }
+        val listEnter = rememberEnterProgress(list?.contentKey)
+        val detailEnter = rememberEnterProgress(detail?.contentKey)
         val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+        val background = MaterialTheme.colorScheme.background
+        // The projects column's width on screen. A back gesture from a chat widens the strip
+        // towards the full column it goes back to. Only read while placing or drawing.
+        fun projectsShown(): Dp =
+            if (strip) lerp(projectsWidth.value, layout.projectsWidth, backPreview.value) else projectsWidth.value
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val window by rememberUpdatedState(maxWidth)
             val reserve = if (projects != null) PROJECT_STRIP_RESERVE else 0.dp
             val listWidth = listPaneWidth(state.listWidth(layout), maxWidth - reserve, layout.inspector)
-            // A back gesture from a chat widens the strip towards the full column it goes back to.
-            val projectsWidth =
-                if (strip) lerp(projectsAnimated, layout.projectsWidth, backPreview.value) else projectsAnimated
-            val slide = with(LocalDensity.current) { COLUMN_SLIDE.toPx() } * if (rtl) -1f else 1f
+            val direction = if (rtl) -1f else 1f
+            val slide = with(LocalDensity.current) { COLUMN_SLIDE.toPx() } * direction
             // Slides a column in from the end side and, while it is the top one, moves it with a
             // back gesture. Read while drawing, so neither animation recomposes the column.
             fun Modifier.column(enter: Animatable<Float, AnimationVector1D>, top: Boolean) =
@@ -567,56 +577,77 @@ private data class ProjectColumnsScene(
                     translationX = (1f - enter.value + back) * slide
                     alpha = enter.value * (1f - 0.5f * back)
                 }
-            Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+            // The row lays the projects column out at the width it is heading for at once, so the
+            // session list and the chat are measured once per change and never while the column
+            // grows or shrinks. The column draws its changing width above them, and they follow
+            // its edge by moving only.
+            Row(Modifier.fillMaxSize().background(background)) {
                 if (projects != null) {
                     Box(
-                        Modifier.width(projectsWidth)
+                        Modifier.width(projectsTarget)
                             .fillMaxHeight()
-                            .clipToBounds()
+                            .zIndex(1f)
                             .testTag(if (strip) "projectStrip" else "projectsPane")
                     ) {
-                        // Laid out at the width it is heading for, so the content never reflows
-                        // while the column grows or shrinks; the clip shows the part that fits.
                         Box(
                             Modifier.wrapContentWidth(Alignment.Start, unbounded = true)
-                                .width(projectsTarget)
+                                .width(maxOf(projectsTarget, layout.projectsWidth))
                                 .fillMaxHeight()
+                                .drawWithContent {
+                                    val shown = projectsShown().toPx()
+                                    val left = if (rtl) size.width - shown else 0f
+                                    clipRect(left = left, right = left + shown) {
+                                        drawRect(background)
+                                        this@drawWithContent.drawContent()
+                                    }
+                                }
                         ) {
-                            CompositionLocalProvider(
-                                LocalProjectsColumn provides ProjectsColumn(selectedProjectId, strip)
-                            ) {
-                                projects.Content()
-                            }
-                        }
-                    }
-                    VerticalDivider()
-                }
-                // Only a shown chat can take the list's room; without one the list is all there is.
-                if (list != null && !collapsed) {
-                    Box(
-                        Modifier.width(listWidth)
-                            .fillMaxHeight()
-                            .testTag("sessionListPane")
-                            .column(listEnter, top = detail == null)
-                    ) {
-                        CompositionLocalProvider(
-                            LocalListPane provides ListPane(selectedSessionId, projects != null, strip)
-                        ) {
-                            list.Content()
-                        }
-                    }
-                    VerticalDivider()
-                }
-                Box(Modifier.weight(1f).fillMaxHeight().testTag("chatPane")) {
-                    when {
-                        list == null -> DetailPlaceholder(R.string.remote_projects_column_empty, "projectsPlaceholder")
-                        detail == null -> DetailPlaceholder(R.string.remote_two_pane_empty, "chatPlaceholder")
-                        else ->
-                            key(detail.contentKey) {
-                                Box(Modifier.fillMaxSize().column(detailEnter, top = true)) {
-                                    CompositionLocalProvider(LocalDetailPane provides true) { detail.Content() }
+                            // At the target width too, so the content never reflows either.
+                            Box(Modifier.width(projectsTarget).fillMaxHeight()) {
+                                CompositionLocalProvider(
+                                    LocalProjectsColumn provides ProjectsColumn(selectedProjectId, strip)
+                                ) {
+                                    projects.Content()
                                 }
                             }
+                        }
+                    }
+                }
+                Row(
+                    Modifier.weight(1f)
+                        .fillMaxHeight()
+                        .graphicsLayer {
+                            if (projects != null) translationX = (projectsShown() - projectsTarget).toPx() * direction
+                        }
+                ) {
+                    if (projects != null) VerticalDivider()
+                    // Only a shown chat can take the list's room; without one the list is all there is.
+                    if (list != null && !collapsed) {
+                        Box(
+                            Modifier.width(listWidth)
+                                .fillMaxHeight()
+                                .testTag("sessionListPane")
+                                .column(listEnter, top = detail == null)
+                        ) {
+                            CompositionLocalProvider(
+                                LocalListPane provides ListPane(selectedSessionId, projects != null, strip)
+                            ) {
+                                list.Content()
+                            }
+                        }
+                        VerticalDivider()
+                    }
+                    Box(Modifier.weight(1f).fillMaxHeight().testTag("chatPane")) {
+                        when {
+                            list == null -> DetailPlaceholder(R.string.remote_projects_column_empty, "projectsPlaceholder")
+                            detail == null -> DetailPlaceholder(R.string.remote_two_pane_empty, "chatPlaceholder")
+                            else ->
+                                key(detail.contentKey) {
+                                    Box(Modifier.fillMaxSize().column(detailEnter, top = true)) {
+                                        CompositionLocalProvider(LocalDetailPane provides true) { detail.Content() }
+                                    }
+                                }
+                        }
                     }
                 }
             }
@@ -627,7 +658,6 @@ private data class ProjectColumnsScene(
                     state.resizeList(layout, listPaneWidth(width, window - reserve, layout.inspector))
                 // A drag sets start + distance, so the divider follows the finger again after a clamp.
                 var dragStart by remember { mutableStateOf(0.dp) }
-                val listStart = if (projects != null) projectsWidth + PANE_DIVIDER_WIDTH else 0.dp
                 PaneResizeHandle(
                     label = stringResource(R.string.remote_pane_resize_list),
                     onDragStart = { dragStart = currentWidth() },
@@ -636,12 +666,34 @@ private data class ProjectColumnsScene(
                     onReset = { state.resizeList(layout, null) },
                     modifier =
                         Modifier.align(Alignment.CenterStart)
-                            .offset(x = listStart + listWidth + PANE_DIVIDER_WIDTH / 2 - PANE_RESIZE_HANDLE_WIDTH / 2)
+                            .offset {
+                                // Placed, not composed, at the projects column's edge on screen.
+                                val listStart = if (projects != null) projectsShown() + PANE_DIVIDER_WIDTH else 0.dp
+                                IntOffset(
+                                    (listStart + listWidth + PANE_DIVIDER_WIDTH / 2 - PANE_RESIZE_HANDLE_WIDTH / 2).roundToPx(),
+                                    0,
+                                )
+                            }
                             .testTag("sessionListDivider"),
                 )
             }
         }
     }
+}
+
+/**
+ * The projects column's width, heading for [target]: the first composition starts there, later
+ * targets animate unless animations are off. A back gesture snaps it to where the finger left the
+ * column first, so the animation carries on from there.
+ */
+@Composable
+private fun rememberProjectsWidth(target: Dp): Animatable<Dp, AnimationVector1D> {
+    val width = remember { Animatable(target, Dp.VectorConverter) }
+    LaunchedEffect(target) {
+        if (ValueAnimator.areAnimatorsEnabled()) width.animateTo(target, tween(320, easing = ColumnEasing))
+        else width.snapTo(target)
+    }
+    return width
 }
 
 /**
@@ -662,14 +714,15 @@ private fun rememberEnterProgress(key: Any?): Animatable<Float, AnimationVector1
 }
 
 /**
- * The progress, 0 to 1, of a back gesture that leaves the top column. Letting go runs [onBack];
- * a cancelled gesture eases back to 0. A plain Back press reaches [onBack] the same way.
+ * The progress, 0 to 1, of a back gesture that leaves the top column. Letting go runs [onBack]
+ * with the progress it reached; a cancelled gesture eases back to 0. A plain Back press reaches
+ * [onBack] the same way, with 0.
  */
 @Composable
 private fun rememberBackPreview(
     enabled: Boolean,
     resetKey: Any?,
-    onBack: () -> Unit,
+    onBack: suspend (progress: Float) -> Unit,
 ): Animatable<Float, AnimationVector1D> {
     val progress = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -678,7 +731,7 @@ private fun rememberBackPreview(
     PredictiveBackHandler(enabled = enabled) { events ->
         try {
             events.collect { progress.snapTo(it.progress) }
-            currentOnBack()
+            currentOnBack(progress.value)
             progress.snapTo(0f)
         } catch (e: CancellationException) {
             scope.launch { progress.animateTo(0f, tween(200, easing = ColumnEasing)) }

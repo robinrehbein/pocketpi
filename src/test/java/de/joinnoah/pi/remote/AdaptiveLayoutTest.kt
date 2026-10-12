@@ -164,6 +164,13 @@ class AdaptiveLayoutTest {
         assertEquals("MA", projectInitials("my_app v2"))
         assertEquals("X", projectInitials("--x--"))
         assertEquals("ÄB", projectInitials("äpfel birnen"))
+        // Decomposed accents, as macOS file names spell them, count as part of their letter.
+        assertEquals("ÜB", projectInitials("U\u0308ber"))
+        assertEquals("ÄP", projectInitials("A\u0308pfel"))
+        assertEquals("ÄB", projectInitials("a\u0308pfel bi\u0308rnen"))
+        assertEquals("ÄB", projectInitials("a\u0308B"))
+        // A mark without a precomposed letter stays with its letter.
+        assertEquals("Q\u0308R", projectInitials("q\u0308rs"))
         assertEquals("?", projectInitials("   "))
         assertEquals("?", projectInitials(""))
     }

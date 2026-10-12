@@ -15,6 +15,8 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.performTouchInput
@@ -295,6 +297,8 @@ class TwoPaneNavigationTest {
         assertTrue(widthOf("chatPane") >= CHAT_PANE_MIN_WIDTH)
         compose.onNodeWithContentDescription("Open noah-monorepo").assertIsSelected()
         compose.onNodeWithContentDescription("Open pocketpi").assertIsNotSelected()
+        // TalkBack reads only "Open <name>", not the initials.
+        compose.onNodeWithText("NM", useUnmergedTree = true).assertDoesNotExist()
         compose.onNode(hasText("noah-monorepo") and hasTestTag("projectStripLabel")).assertExists()
         compose.onNodeWithTag("pageColumn").assertDoesNotExist()
         openTool()
@@ -356,6 +360,7 @@ class TwoPaneNavigationTest {
         compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
         compose.onNodeWithTag("pageColumn").assertDoesNotExist()
         compose.onNode(isSelected()).assertDoesNotExist()
+        compose.onNodeWithTag("projectRow-project").assertIsNotSelected()
         back()
         // The hosts, a page of their own.
         compose.onNodeWithTag("projectsPane").assertDoesNotExist()
@@ -396,7 +401,7 @@ class TwoPaneNavigationTest {
         compose.waitForIdle()
         assertEquals(RemoteSelection("host", "other") to ActivationMode.USER_OPEN, repository.activations.last())
         compose.onNodeWithTag("projectRow-other").assertIsSelected()
-        compose.onNode(hasTestTag("projectRow-project") and isSelected()).assertDoesNotExist()
+        compose.onNodeWithTag("projectRow-project").assertIsNotSelected()
         compose.onNodeWithTag("chatPlaceholder").assertIsDisplayed()
     }
 
@@ -413,6 +418,8 @@ class TwoPaneNavigationTest {
         compose.onNodeWithTag("projectsPane").assertDoesNotExist()
         compose.onNodeWithTag("projectsPlaceholder").assertDoesNotExist()
         compose.onNode(isSelected()).assertDoesNotExist()
+        // A page of its own has nothing to select.
+        compose.onNodeWithTag("projectRow-project").assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.Selected))
     }
 
     @Test
@@ -420,25 +427,52 @@ class TwoPaneNavigationTest {
     fun aCancelledBackGestureKeepsTheChatAndACommittedOneClosesIt() {
         render()
         val dispatcher = compose.activity.onBackPressedDispatcher
+        val stripEdge = PROJECT_STRIP_RESERVE
+        // Halfway, the strip has grown halfway to the 240 dp column and the list moved with it.
+        val halfway = PROJECT_STRIP_RESERVE + (240.dp - PROJECT_STRIP_WIDTH) / 2
+        fun listLeft() = compose.onNodeWithTag("sessionListPane").getUnclippedBoundsInRoot().left
+        fun assertNear(expected: Dp, actual: Dp) =
+            assertTrue("expected about $expected, was $actual", (actual - expected).value in -1f..1f)
+        assertNear(stripEdge, listLeft())
         compose.runOnUiThread {
             dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT))
             dispatcher.dispatchOnBackProgressed(BackEventCompat(100f, 0f, 0.5f, BackEventCompat.EDGE_LEFT))
         }
         compose.waitForIdle()
+        // The scene's own handler has the gesture: its preview is on screen.
         assertChatShown()
+        assertNear(halfway, listLeft())
+        compose.onNodeWithTag("projectStrip").assertWidthIsEqualTo(PROJECT_STRIP_WIDTH)
         compose.runOnUiThread { dispatcher.dispatchOnBackCancelled() }
         compose.waitForIdle()
         assertChatShown()
-        compose.onNodeWithTag("projectStrip").assertWidthIsEqualTo(PROJECT_STRIP_WIDTH)
+        assertNear(stripEdge, listLeft())
+        compose.mainClock.autoAdvance = false
         compose.runOnUiThread {
             dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT))
             dispatcher.dispatchOnBackProgressed(BackEventCompat(100f, 0f, 0.5f, BackEventCompat.EDGE_LEFT))
             dispatcher.onBackPressed()
         }
+        compose.mainClock.advanceTimeByFrame()
+        compose.mainClock.advanceTimeByFrame()
+        // The column goes on growing from where the gesture let go instead of starting over.
+        compose.onNodeWithTag("chatPlaceholder").assertExists()
+        assertTrue(listLeft() >= halfway - 1.dp)
+        compose.mainClock.autoAdvance = true
         compose.waitForIdle()
         compose.onNodeWithTag("chatPlaceholder").assertIsDisplayed()
         compose.onNodeWithTag("projectsPane").assertWidthIsEqualTo(240.dp)
         compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        assertNear(240.dp + PANE_DIVIDER_WIDTH, listLeft())
+    }
+
+    @Test
+    @Config(qualifiers = "w1205dp-h753dp")
+    fun theStripScrollsTheSelectedProjectIntoView() {
+        val many = (1..30).map { project("p$it", "Project $it") } + projects[0]
+        repository.state.value = repository.state.value.copy(projects = many)
+        render()
+        compose.onNodeWithTag("projectAvatar-project").assertIsDisplayed().assertIsSelected()
     }
 
     // ---- Resizes and recreation ----------------------------------------------------------

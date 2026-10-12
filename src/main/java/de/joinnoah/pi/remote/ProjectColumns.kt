@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -26,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -35,12 +37,14 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.text.Normalizer
 
 /**
  * Set around the Projects entry while it is the left column of the tablet layout.
@@ -81,6 +85,18 @@ internal fun ProjectStrip(
     val selectedName =
         state.projects.firstOrNull { it.text("id") == selectedProjectId }?.text("name")
             ?: state.project?.optionalText("name")
+    val selectedIndex = state.projects.indexOfFirst { it.text("id") == selectedProjectId }
+    val listState = rememberLazyListState()
+    // The strip opens with every chat, also after a switch or a restore: keep its avatar in view.
+    LaunchedEffect(selectedIndex) {
+        if (selectedIndex < 0) return@LaunchedEffect
+        val info = listState.layoutInfo
+        val item = info.visibleItemsInfo.firstOrNull { it.index == selectedIndex }
+        val fullyVisible =
+            item != null && item.offset >= info.viewportStartOffset &&
+                item.offset + item.size <= info.viewportEndOffset
+        if (!fullyVisible) listState.scrollToItem(selectedIndex)
+    }
     Column(
         Modifier.fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
@@ -96,6 +112,7 @@ internal fun ProjectStrip(
         Spacer(Modifier.height(28.dp))
         LazyColumn(
             Modifier.weight(1f, fill = false),
+            state = listState,
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -136,6 +153,8 @@ private fun ProjectAvatar(name: String, projectId: String, selected: Boolean, on
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
+                // The avatar's "Open <name>" says it all; the letters would only repeat it.
+                modifier = Modifier.clearAndSetSemantics {},
             )
         }
     }
@@ -173,32 +192,57 @@ private fun VerticalLabel(text: String, modifier: Modifier = Modifier) {
  * Up to two letters for a project avatar: the first letters of the first two words, where words
  * are split at anything but letters and digits and at lower-to-upper case changes
  * (`noah-monorepo` is "NM", `PocketPi` "PP"); a single word gives its first two letters
- * (`pocketpi` is "PO"). A blank name gives "?".
+ * (`pocketpi` is "PO"). A blank name gives "?". Accents count as part of their letter, whether
+ * the name spells them precomposed or as combining marks.
  */
 internal fun projectInitials(name: String): String {
+    fun isMark(codePoint: Int): Boolean =
+        when (Character.getType(codePoint).toByte()) {
+            Character.NON_SPACING_MARK, Character.COMBINING_SPACING_MARK, Character.ENCLOSING_MARK -> true
+            else -> false
+        }
     val words = mutableListOf<String>()
     val word = StringBuilder()
+    // The last letter or digit, so a mark between two letters cannot hide a case change.
     var previous = 0
     fun endWord() {
         if (word.isNotEmpty()) words += word.toString()
         word.clear()
     }
-    name.codePoints().forEach { codePoint ->
-        if (!Character.isLetterOrDigit(codePoint)) {
-            endWord()
-        } else {
-            if (word.isNotEmpty() && Character.isLowerCase(previous) && Character.isUpperCase(codePoint)) endWord()
-            word.appendCodePoint(codePoint)
+    Normalizer.normalize(name, Normalizer.Form.NFC).codePoints().forEach { codePoint ->
+        when {
+            isMark(codePoint) -> if (word.isNotEmpty()) word.appendCodePoint(codePoint)
+            !Character.isLetterOrDigit(codePoint) -> {
+                endWord()
+                previous = codePoint
+            }
+            else -> {
+                if (word.isNotEmpty() && Character.isLowerCase(previous) && Character.isUpperCase(codePoint)) endWord()
+                word.appendCodePoint(codePoint)
+                previous = codePoint
+            }
         }
-        previous = codePoint
     }
     endWord()
-    fun String.firstCodePoints(count: Int): String = substring(0, offsetByCodePoints(0, minOf(count, codePointCount(0, length))))
+    // The first [count] letters together with the marks that follow them.
+    fun String.firstLetters(count: Int): String {
+        var end = 0
+        var letters = 0
+        while (end < length) {
+            val codePoint = codePointAt(end)
+            if (!isMark(codePoint)) {
+                if (letters == count) break
+                letters++
+            }
+            end += Character.charCount(codePoint)
+        }
+        return substring(0, end)
+    }
     val initials =
         when {
-            words.size >= 2 -> words[0].firstCodePoints(1) + words[1].firstCodePoints(1)
-            words.size == 1 -> words[0].firstCodePoints(2)
-            else -> name.trim().firstCodePoints(2)
+            words.size >= 2 -> words[0].firstLetters(1) + words[1].firstLetters(1)
+            words.size == 1 -> words[0].firstLetters(2)
+            else -> name.trim().firstLetters(2)
         }
-    return initials.uppercase().ifBlank { "?" }
+    return Normalizer.normalize(initials.uppercase(), Normalizer.Form.NFC).ifBlank { "?" }
 }

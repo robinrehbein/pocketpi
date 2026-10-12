@@ -1523,7 +1523,7 @@ internal fun RemoteScreen(
                                         else projectUnshare(state.connected, state.loading, state.capabilities),
                                     onClick = { openProject(navigator, twoPane, key.routeId, projectId) },
                                     onUnshare = { unsharing = projectId to project.text("name") },
-                                    selected = projectId == projectsColumn?.selectedProjectId,
+                                    selected = projectsColumn?.let { projectId == it.selectedProjectId },
                                 )
                             }
                         }

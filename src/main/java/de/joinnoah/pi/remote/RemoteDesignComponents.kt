@@ -128,8 +128,11 @@ internal fun ProjectRow(
     unshare: ProjectUnshare,
     onClick: () -> Unit,
     onUnshare: () -> Unit,
-    /** The session list beside the projects column shows this project. */
-    selected: Boolean = false,
+    /**
+     * Whether the session list beside the projects column shows this project; null where the
+     * projects are a page of their own and nothing can be selected.
+     */
+    selected: Boolean? = null,
 ) {
     val context = LocalContext.current
     val unshareLabel = stringResource(R.string.remote_project_unshare)
@@ -173,12 +176,14 @@ internal fun ProjectRow(
             Modifier.fillMaxWidth()
                 .background(MaterialTheme.colorScheme.background)
                 .then(
-                    if (selected)
+                    if (selected == true)
                         Modifier.background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(16.dp))
                     else Modifier
                 )
                 .semantics {
-                    if (selected) this.selected = true
+                    // In the column every row says whether it is the open project, so TalkBack
+                    // reads the rows as a group of choices.
+                    if (selected != null) this.selected = selected
                     if (action != null) customActions = listOf(
                         CustomAccessibilityAction(swipeActionLabel) {
                             action()
