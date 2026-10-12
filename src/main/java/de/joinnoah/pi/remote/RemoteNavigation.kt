@@ -350,7 +350,14 @@ internal class RemoteNavigator(
                 (top is RemoteNavKey.Chat && top.routeId == routeId)
         if (!routeOpen) return false
         setStack(RemoteSelection(routeId).keys(), keepSettings = false)
-        activate(RemoteNavKey.Projects(routeId), ActivationMode.RESTORE)
+        val current = invalidate()
+        activation = scope.launch {
+            val canonical = repository.activate(RemoteSelection(routeId), ActivationMode.RESTORE)
+            if (current != request) return@launch
+            // A restore that failed on this host hands back the session it came from; the page
+            // stays open over the projects instead of closing for the chat. A lost host still wins.
+            if (canonical.routeId != routeId) replace(canonical)
+        }
         return true
     }
 

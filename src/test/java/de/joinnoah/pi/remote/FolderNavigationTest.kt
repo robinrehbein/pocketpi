@@ -106,4 +106,35 @@ class FolderNavigationTest {
             assertEquals(projects, stack)
         }
     }
+
+    @Test
+    fun `a failed restore beside the projects column keeps the page open`() = runTest {
+        val open = RemoteSelection("host", "project", "s1")
+        val pages =
+            listOf<Pair<(RemoteNavigator) -> Unit, NavKey>>(
+                { it: RemoteNavigator -> it.openFolders("host") } to RemoteNavKey.FolderBrowser("host"),
+                { it: RemoteNavigator -> it.openProviders("host") } to RemoteNavKey.Providers("host"),
+            )
+        for ((openPage, page) in pages) {
+            val repository = NavigationFakeRepository()
+            // The repository answers a failed restore with the selection it still holds.
+            repository.activation = { _, _ -> open }
+            val stack = open.keys().toMutableList<NavKey>()
+            val navigation = RemoteNavigator(repository, stack, backgroundScope)
+            openPage(navigation)
+            runCurrent()
+            assertEquals(projects + page, stack)
+        }
+    }
+
+    @Test
+    fun `a host lost while the projects restore still leaves the page`() = runTest {
+        val repository = NavigationFakeRepository()
+        repository.activation = { _, _ -> RemoteSelection() }
+        val stack = RemoteSelection("host", "project", "s1").keys().toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.openFolders("host")
+        runCurrent()
+        assertEquals(listOf<NavKey>(RemoteNavKey.Hosts), stack)
+    }
 }

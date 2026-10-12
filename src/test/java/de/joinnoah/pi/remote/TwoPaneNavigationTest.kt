@@ -48,6 +48,10 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -337,6 +341,34 @@ class TwoPaneNavigationTest {
 
     private fun navigationPillIn(tag: String) =
         compose.onNode(hasTestTag("navigationPill") and hasAnyAncestor(hasTestTag(tag)))
+
+    @Test
+    @Config(qualifiers = "w1205dp-h753dp")
+    fun aSideCutoutIndentsOnlyTheColumnAtTheScreenEdge() {
+        render()
+        back()
+        fun left(text: String, pane: String) =
+            compose.onNode(hasText(text) and hasAnyAncestor(hasTestTag(pane))).getUnclippedBoundsInRoot().left -
+                compose.onNodeWithTag(pane).getUnclippedBoundsInRoot().left
+        val projectBefore = left("pocketpi", "projectsPane")
+        val sessionBefore = left("Second session", "sessionListPane")
+        val cutout = 48
+        compose.runOnUiThread {
+            val decor = compose.activity.window.decorView
+            WindowCompat.setDecorFitsSystemWindows(compose.activity.window, false)
+            ViewCompat.dispatchApplyWindowInsets(
+                decor,
+                WindowInsetsCompat.Builder()
+                    .setInsets(WindowInsetsCompat.Type.displayCutout(), Insets.of(cutout, 0, 0, 0))
+                    .build(),
+            )
+        }
+        compose.waitForIdle()
+        val inset = with(compose.density) { cutout.toDp() }
+        // The projects column at the screen edge moves clear of the cutout; the list beside it does not.
+        assertEquals((projectBefore + inset).value, left("pocketpi", "projectsPane").value, 0.5f)
+        assertEquals(sessionBefore.value, left("Second session", "sessionListPane").value, 0.5f)
+    }
 
     @Test
     @Config(qualifiers = "w900dp-h1200dp")
