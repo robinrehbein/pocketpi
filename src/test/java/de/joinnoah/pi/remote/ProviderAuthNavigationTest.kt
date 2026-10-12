@@ -38,4 +38,20 @@ class ProviderAuthNavigationTest {
     fun `the providers key saves only the route`() {
         assertEquals(RemoteSelection("host"), RemoteNavKey.Providers("host").selection())
     }
+
+    @Test
+    fun `beside the projects column the providers close the open project first`() = runTest {
+        for (open in listOf(RemoteSelection("host", "project"), RemoteSelection("host", "project", "s1"))) {
+            val repository = NavigationFakeRepository()
+            val stack = open.keys().toMutableList<NavKey>()
+            val navigation = RemoteNavigator(repository, stack, backgroundScope)
+            navigation.openProviders("other")
+            assertEquals(open.keys(), stack)
+            navigation.openProviders("host")
+            runCurrent()
+            assertEquals(projects + RemoteNavKey.Providers("host"), stack)
+            assertEquals(RemoteSelection("host") to ActivationMode.RESTORE, repository.activations.last())
+            assertEquals(listOf("host"), repository.providersBrowsed)
+        }
+    }
 }

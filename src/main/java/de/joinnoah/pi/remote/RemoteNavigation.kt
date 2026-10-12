@@ -348,9 +348,26 @@ internal class RemoteNavigator(
         }
     }
 
+    /**
+     * Makes the host's Projects the top destination for a page that opens on top of it. Beside
+     * the projects column the user may be in a project's sessions or chat: those close first,
+     * so Back from the page lands on the projects. False when [routeId] is not the open host.
+     */
+    private fun projectsOnTop(routeId: String): Boolean {
+        val top = topKey()
+        if (top == RemoteNavKey.Projects(routeId)) return true
+        val routeOpen =
+            (top is RemoteNavKey.Sessions && top.routeId == routeId) ||
+                (top is RemoteNavKey.Chat && top.routeId == routeId)
+        if (!routeOpen) return false
+        setStack(RemoteSelection(routeId).keys(), keepSettings = false)
+        activate(RemoteNavKey.Projects(routeId), ActivationMode.RESTORE)
+        return true
+    }
+
     /** Opens the folder browser at the browse root, on top of the host's Projects. */
     fun openFolders(routeId: String) {
-        if (topKey() != RemoteNavKey.Projects(routeId)) return
+        if (!projectsOnTop(routeId)) return
         repository.cancelFolderTrust()
         repository.dismissFolderNotice()
         repository.browseFolder(routeId, "")
@@ -359,7 +376,7 @@ internal class RemoteNavigator(
 
     /** Opens the providers of [routeId] on top of the host's Projects. */
     fun openProviders(routeId: String) {
-        if (topKey() != RemoteNavKey.Projects(routeId)) return
+        if (!projectsOnTop(routeId)) return
         repository.dismissProviderNotice()
         repository.browseProviders(routeId)
         stack.add(RemoteNavKey.Providers(routeId))
