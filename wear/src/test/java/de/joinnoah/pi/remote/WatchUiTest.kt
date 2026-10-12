@@ -43,6 +43,23 @@ class WatchUiTest {
             assertEquals(0, repository.prompts)
         }
     }
+    @Test fun `git base keeps discovered branch label while status is cleared`() {
+        val repository = WatchFakeRepository()
+        val model = model(repository)
+        val state = repository.state.value.copy(
+            changes = ChangesState("s", loading = false, status = null, devBase = GitDevBase("origin/main")),
+        )
+        compose.setContent {
+            MaterialTheme {
+                WatchList("Changes", "changes", false, {}) {
+                    watchChanges(state, model, 0, {})
+                }
+            }
+        }
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("main"))
+        compose.onNodeWithText("main").assertExists()
+        compose.onNodeWithText("dev").assertDoesNotExist()
+    }
     @Test fun `questionnaire uses separate questions and review before sending`() {
         val repository = WatchFakeRepository()
         val questions = JsonArray((1..2).map { number -> Wire.objectOf(
