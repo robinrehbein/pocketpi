@@ -350,8 +350,8 @@ class RemoteNavigationUiTest {
 
     @Test
     @Suppress("DEPRECATION")
-    fun systemBarIconsFollowResolvedThemeAndManualOverrides() {
-        for (theme in listOf("light", "dark", "light", "system", "dark", "system")) {
+    fun systemBarIconsFollowDeviceAppearanceForBothDesigns() {
+        for (theme in listOf("system", "synthwave", "system")) {
             compose.runOnIdle { uiSettings.setTheme(theme) }
             compose.waitForIdle()
             compose.runOnIdle {
@@ -359,12 +359,7 @@ class RemoteNavigationUiTest {
                     compose.activity.resources.configuration.uiMode and
                         android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
                         android.content.res.Configuration.UI_MODE_NIGHT_YES
-                val dark =
-                    when (theme) {
-                        "dark" -> true
-                        "light" -> false
-                        else -> systemDark
-                    }
+                val dark = systemDark
                 val controller =
                     androidx.core.view.WindowCompat.getInsetsController(
                         compose.activity.window,
