@@ -178,8 +178,10 @@ internal class GitChangesLoader(
                 loadStatusAndLog(sessionId, base, fallback, retry, ::active)
             } finally {
                 // The subagents wait for the session's own status and log, so their requests do not
-                // compete with those for the host's per-device limit.
-                if (version == statusVersion) startPendingSubagents()
+                // compete with those for the host's per-device limit, and are not asked at all when
+                // the session's own status failed.
+                val loaded = changes()?.let { it.status != null && it.failure == null } == true
+                if (version == statusVersion && loaded) startPendingSubagents()
             }
         }
     }
@@ -479,8 +481,12 @@ internal class GitChangesLoader(
                 val reason = failure(e)
                 if (reason == ChangesFailure.NOT_FOUND && retry) {
                     // Snapshots expire after ten minutes: take a fresh one and reopen the file.
-                    if (subagent == null) reload(retry = false)
-                    else loadSubagents(sessionId, reopen = subagent to path)
+                    when {
+                        subagent == null -> reload(retry = false)
+                        // A reload in flight asks the subagents next; it takes the reopen along.
+                        pendingSubagents?.first == sessionId -> pendingSubagents = sessionId to (subagent to path)
+                        else -> loadSubagents(sessionId, reopen = subagent to path)
+                    }
                     return@launch
                 }
                 write(sessionId) { it.copy(diffLoading = false, diffFailure = reason) }
