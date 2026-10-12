@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "pocketpi"
-include(":benchmarks")
+include(":benchmarks", ":wear")
