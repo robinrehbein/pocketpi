@@ -301,13 +301,16 @@ internal fun touchedFilesTarget(changesAvailable: Boolean): TouchedFilesTarget =
 // ---- Timeline and errors ------------------------------------------------------------------
 
 internal enum class TimelineMarkerKind {
+    /** One of the user's own messages. */
+    USER,
     ERROR,
     QUESTION,
     EDIT,
     PLAN,
 }
 
-internal data class TimelineMarker(val itemId: String, val kind: TimelineMarkerKind, val position: Float)
+/** A marked item; [index] is its position in the item list the markers were built from. */
+internal data class TimelineMarker(val itemId: String, val kind: TimelineMarkerKind, val index: Int)
 
 private const val MAX_TIMELINE_MARKERS = 200
 
@@ -321,22 +324,96 @@ internal fun isErrorItem(item: ConversationItem): Boolean =
 
 internal fun onlyErrors(items: List<ConversationItem>): List<ConversationItem> = items.filter(::isErrorItem)
 
-/** Markers over the visible list, positioned 0..1 by index; only the most recent 200 are kept. */
+/** What a marker or a history entry calls [item], or null when it is not worth finding again. */
+internal fun timelineMarkerKind(item: ConversationItem): TimelineMarkerKind? =
+    when {
+        isErrorItem(item) -> TimelineMarkerKind.ERROR
+        item is ConversationItem.Bubble -> if (item.role == "user") TimelineMarkerKind.USER else null
+        item !is ConversationItem.Activity -> null
+        item.name == "questionnaire" -> TimelineMarkerKind.QUESTION
+        item.name == "edit" || item.name == "write" -> TimelineMarkerKind.EDIT
+        item.name == "submit_plan" -> TimelineMarkerKind.PLAN
+        else -> null
+    }
+
+/** Markers over the visible list, by index; only the most recent 200 are kept. */
 internal fun timelineMarkers(items: List<ConversationItem>): List<TimelineMarker> {
-    val last = items.lastIndex
     val markers = items.mapIndexedNotNull { index, item ->
-        val kind =
-            when {
-                isErrorItem(item) -> TimelineMarkerKind.ERROR
-                item !is ConversationItem.Activity -> null
-                item.name == "questionnaire" -> TimelineMarkerKind.QUESTION
-                item.name == "edit" || item.name == "write" -> TimelineMarkerKind.EDIT
-                item.name == "submit_plan" -> TimelineMarkerKind.PLAN
-                else -> null
-            } ?: return@mapIndexedNotNull null
-        TimelineMarker(item.id, kind, if (last <= 0) 0f else index.toFloat() / last)
+        timelineMarkerKind(item)?.let { TimelineMarker(item.id, it, index) }
     }
     return markers.takeLast(MAX_TIMELINE_MARKERS)
+}
+
+// ---- Chat history -------------------------------------------------------------------------
+
+/** One row of the chat history: a marked item with a one-line text, when it has one. */
+internal data class ChatHistoryEntry(
+    val itemId: String,
+    val kind: TimelineMarkerKind,
+    val text: String?,
+    val timestamp: Long? = null,
+)
+
+/** Longer texts are cut; a history row shows one line anyway. */
+private const val HISTORY_TEXT_CHARS = 160
+
+/** [text] on one line: whitespace runs collapse to one space, blank text is null. */
+internal fun historyLine(text: String?): String? =
+    text?.trim()?.replace(Regex("\\s+"), " ")?.take(HISTORY_TEXT_CHARS)?.takeIf(String::isNotEmpty)
+
+/**
+ * Every marked item in conversation order, with no cap: the history is a lazy list. Unlike the
+ * scrollbar's markers it carries text, so the user finds a place by what was said there.
+ */
+internal fun chatHistory(items: List<ConversationItem>): List<ChatHistoryEntry> =
+    items.mapNotNull { item ->
+        val kind = timelineMarkerKind(item) ?: return@mapNotNull null
+        ChatHistoryEntry(
+            item.id,
+            kind,
+            historyText(item, kind),
+            (item as? ConversationItem.Bubble)?.timestamp,
+        )
+    }
+
+private fun historyText(item: ConversationItem, kind: TimelineMarkerKind): String? =
+    when (item) {
+        is ConversationItem.Bubble -> historyLine(item.text)
+        is ConversationItem.Subagent ->
+            historyLine(item.agents.filter { it.state == "failed" }.joinToString(", ") { it.name })
+        is ConversationItem.Thinking -> null
+        is ConversationItem.Activity ->
+            when (kind) {
+                TimelineMarkerKind.QUESTION -> historyLine(questionnaireTitle(item.arguments))
+                TimelineMarkerKind.PLAN -> historyLine(planTitle(item.arguments))
+                TimelineMarkerKind.EDIT -> historyLine(item.summary.detail?.let(::fileName))
+                TimelineMarkerKind.ERROR ->
+                    historyLine(
+                        listOfNotNull(item.name, item.summary.detail ?: item.output?.lineSequence()?.firstOrNull { it.isNotBlank() })
+                            .joinToString(": ")
+                    )
+                TimelineMarkerKind.USER -> null
+            }
+    }
+
+private fun fileName(path: String): String = path.trimEnd('/').substringAfterLast('/').ifEmpty { path }
+
+private fun JsonObject.firstText(vararg keys: String): String? =
+    keys.firstNotNullOfOrNull { key ->
+        (get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank)
+    }
+
+/** The first question's prompt of a questionnaire call, or its title. */
+private fun questionnaireTitle(arguments: String?): String? {
+    val args = arguments?.let(::parsedToolArguments) ?: return null
+    val first = (args["questions"] as? JsonArray)?.firstOrNull() as? JsonObject
+    return first?.firstText("prompt", "question", "label") ?: args.firstText("title", "prompt", "question")
+}
+
+/** The first non-blank line of a submitted plan, without its heading marks. */
+private fun planTitle(arguments: String?): String? {
+    val plan = arguments?.let(::parsedToolArguments)?.firstText("plan") ?: return null
+    return plan.lineSequence().map { it.trim().trimStart('#').trim() }.firstOrNull(String::isNotEmpty)
 }
 
 // ---- Subagent children --------------------------------------------------------------------
