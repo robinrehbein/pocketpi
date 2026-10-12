@@ -751,11 +751,11 @@ internal fun RemoteScreen(
             val hasTuiInfo =
                 state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
             val headerColor = floatingHeaderColor()
+            // History never competes for the pill's ranked places: it would push Settings into the menu.
             fun actionLayout(withHistory: Boolean) =
                 chatActionLayout(
                     chatModel?.chatActions ?: DEFAULT_CHAT_ACTIONS,
                     buildSet {
-                        if (withHistory) add(ChatAction.HISTORY)
                         if (canViewChanges(state) && state.connected) add(ChatAction.CHANGES)
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
                         if (canRename) add(ChatAction.RENAME)
@@ -766,7 +766,7 @@ internal fun RemoteScreen(
                         add(ChatAction.REFRESH)
                         add(ChatAction.SETTINGS)
                     },
-                )
+                ).let { if (withHistory) it.withHistory() else it }
             fun runAction(action: ChatAction) {
                 chatModel?.recordChatAction(action)
                 when (action) {

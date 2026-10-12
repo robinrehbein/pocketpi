@@ -12,7 +12,7 @@ enum class ChatAction {
     NEW_SESSION,
     /** The session's pi settings sheet; [SETTINGS] is the app's own settings. */
     SESSION_SETTINGS,
-    /** The chat history; a header wide enough shows it as its own button instead. */
+    /** The chat history; a header wide enough shows it as its own button instead, see [withHistory]. */
     HISTORY,
 }
 
@@ -54,3 +54,11 @@ internal fun chatActionLayout(ranked: List<ChatAction>, available: Set<ChatActio
     if (usable.size <= 3) return ChatActionLayout(usable.sortedBy { it.ordinal }, emptyList())
     return ChatActionLayout(usable.take(2).sortedBy { it.ordinal }, usable.drop(2).sortedBy { it.ordinal })
 }
+
+/**
+ * [this] plus History without displacing any action: it joins the menu when there is one and
+ * otherwise takes a button of its own, so the other actions sit exactly where they would without it.
+ */
+internal fun ChatActionLayout.withHistory(): ChatActionLayout =
+    if (menu.isEmpty()) copy(shown = (shown + ChatAction.HISTORY).sortedBy { it.ordinal })
+    else copy(menu = (menu + ChatAction.HISTORY).sortedBy { it.ordinal })

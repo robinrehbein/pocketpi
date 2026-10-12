@@ -430,6 +430,18 @@ class GitChangesTest {
         assertTrue(offline.menu.isEmpty())
     }
 
+    @Test
+    fun historyJoinsThePillWithoutDisplacingAnAction() {
+        val few = chatActionLayout(DEFAULT_CHAT_ACTIONS, setOf(ChatAction.REFRESH, ChatAction.SETTINGS, ChatAction.NEW_SESSION))
+        assertEquals(
+            ChatActionLayout(listOf(ChatAction.REFRESH, ChatAction.SETTINGS, ChatAction.NEW_SESSION, ChatAction.HISTORY), emptyList()),
+            few.withHistory(),
+        )
+        val many = chatActionLayout(DEFAULT_CHAT_ACTIONS, ChatAction.entries.toSet() - ChatAction.HISTORY)
+        assertEquals(many.shown, many.withHistory().shown)
+        assertEquals(many.menu + ChatAction.HISTORY, many.withHistory().menu)
+    }
+
     // ---- Review round 1 -----------------------------------------------------------------
 
     private fun TestScope.opened(
