@@ -8,6 +8,11 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -26,13 +31,12 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentPaste
-import androidx.compose.material.icons.filled.ChevronLeft
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FilterAlt
@@ -96,6 +100,9 @@ private class LeadingItems {
 
 /** Rail marker for a pending question; it has no conversation item and jumps to the latest one. */
 private const val PENDING_QUESTION_MARKER = "__pending_question__"
+
+/** From this header width on, History gets its own button beside the action pill. */
+private val HISTORY_BUTTON_MIN_HEADER = 600.dp
 private const val CHILD_REFRESH_ATTEMPTS = 12
 private const val CHILD_REFRESH_INTERVAL_MILLIS = 5_000L
 private const val JUMP_HIGHLIGHT_MILLIS = 2_000L
@@ -149,7 +156,6 @@ internal fun RemoteScreen(
     pushConfigured: Boolean,
     pushEnabled: Boolean,
     enablePush: () -> Unit,
-    timelineVisibility: TimelineVisibility,
     disablePush: () -> Unit = {},
 ) {
     val state by model.state.collectAsStateWithLifecycle()
@@ -282,8 +288,20 @@ internal fun RemoteScreen(
         remember(shownItems, questionPending) {
             timelineMarkers(shownItems) +
                 if (questionPending)
-                    listOf(TimelineMarker(PENDING_QUESTION_MARKER, TimelineMarkerKind.QUESTION, 1f))
+                    listOf(TimelineMarker(PENDING_QUESTION_MARKER, TimelineMarkerKind.QUESTION, shownItems.size))
                 else emptyList()
+        }
+    var historyOpen by rememberSaveable(key) { mutableStateOf(false) }
+    // The history lists the whole chat, also while the error filter narrows the list. It is built
+    // only while open: a streamed delta rebuilds the conversation many times a second.
+    val history =
+        remember(visibleConversation, questionPending, historyOpen) {
+            if (!historyOpen) emptyList()
+            else
+                chatHistory(visibleConversation) +
+                    if (questionPending)
+                        listOf(ChatHistoryEntry(PENDING_QUESTION_MARKER, TimelineMarkerKind.QUESTION, null))
+                    else emptyList()
         }
     // The host announces no new child session, and progress can name a child before its bridge
     // registers: poll the session list for a while so the strip and "open" can find it.
@@ -319,18 +337,8 @@ internal fun RemoteScreen(
     val headerHeight = with(LocalDensity.current) { headerSize.height.toDp() }
     val listScope = rememberCoroutineScope()
     var autoFollow by rememberSaveable(key) { mutableStateOf(savedViewport?.following ?: true) }
-    var timelineScrollActive by remember(key) { mutableStateOf(false) }
     var tuiInfoOpen by remember { mutableStateOf(false) }
     var scrollingProgrammatically by remember { mutableStateOf(false) }
-    LaunchedEffect(key, listState.isScrollInProgress) {
-        if (listState.isScrollInProgress) {
-            if (!scrollingProgrammatically) timelineScrollActive = true
-        } else {
-            // Leave time to tap a marker or the collapse button after lifting a finger.
-            delay(1500)
-            timelineScrollActive = false
-        }
-    }
     var waitingForOutput by remember { mutableStateOf(false) }
     LaunchedEffect(sessionActive, state.status, state.questions, conversation) {
         waitingForOutput = false
@@ -445,7 +453,8 @@ internal fun RemoteScreen(
         highlightedId = null
         scrollingProgrammatically = true
         try {
-            listState.animateScrollToItem(leadingItems.count + index)
+            if (ValueAnimator.areAnimatorsEnabled()) listState.animateScrollToItem(leadingItems.count + index)
+            else listState.scrollToItem(leadingItems.count + index)
         } finally {
             scrollingProgrammatically = false
         }
@@ -742,7 +751,8 @@ internal fun RemoteScreen(
             val hasTuiInfo =
                 state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
             val headerColor = floatingHeaderColor()
-            val actionLayout =
+            // History never competes for the pill's ranked places: it would push Settings into the menu.
+            fun actionLayout(withHistory: Boolean) =
                 chatActionLayout(
                     chatModel?.chatActions ?: DEFAULT_CHAT_ACTIONS,
                     buildSet {
@@ -756,27 +766,48 @@ internal fun RemoteScreen(
                         add(ChatAction.REFRESH)
                         add(ChatAction.SETTINGS)
                     },
-                )
+                ).let { if (withHistory) it.withHistory() else it }
             fun runAction(action: ChatAction) {
                 chatModel?.recordChatAction(action)
                 when (action) {
-                    ChatAction.CHANGES -> chatModel?.openChanges()
-                    ChatAction.FILES -> chatModel?.openFiles()
+                    ChatAction.CHANGES -> {
+                        historyOpen = false
+                        chatModel?.openChanges()
+                    }
+                    ChatAction.FILES -> {
+                        historyOpen = false
+                        chatModel?.openFiles()
+                    }
                     ChatAction.RENAME ->
                         state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
                     ChatAction.NEW_SESSION -> navigator.createSession(key.routeId, key.projectId)
                     ChatAction.REFRESH -> model.refresh()
                     ChatAction.SESSION_SETTINGS -> settingsSheetRequested = true
                     ChatAction.SETTINGS -> navigator.settings()
+                    ChatAction.HISTORY -> historyOpen = !historyOpen
                 }
             }
-            val actionsControl: @Composable () -> Unit = {
-                ChatActionPill(actionLayout, headerColor, ::runAction)
+            val actionsControl: @Composable (ChatActionLayout, Boolean) -> Unit = { actionLayout, standaloneHistory ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (standaloneHistory) FloatingSurface(shape = CircleShape, color = headerColor) {
+                        IconButton(
+                            onClick = { historyOpen = !historyOpen },
+                            modifier = Modifier.size(48.dp).testTag("chatHistoryButton"),
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.List, stringResource(R.string.remote_chat_history))
+                        }
+                    }
+                    ChatActionPill(actionLayout, headerColor, ::runAction)
+                }
             }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val narrow = maxWidth < 360.dp
+                // A phone's title keeps its room: History then joins the pill or its menu.
+                val standaloneHistory = maxWidth >= HISTORY_BUTTON_MIN_HEADER
+                val actionLayout = actionLayout(!standaloneHistory)
                 val actionsWidth =
-                    48.dp * (actionLayout.shown.size + if (actionLayout.menu.isEmpty()) 0 else 1)
+                    48.dp * (actionLayout.shown.size + if (actionLayout.menu.isEmpty()) 0 else 1) +
+                        if (standaloneHistory) 56.dp else 0.dp
                 val maxPillWidth =
                     maxWidth - 32.dp - if (narrow) 0.dp else actionsWidth + 8.dp
                 val maxTitleWidth =
@@ -852,7 +883,7 @@ internal fun RemoteScreen(
                                 }
                             }
                         }
-                        if (!narrow) actionsControl()
+                        if (!narrow) actionsControl(actionLayout, standaloneHistory)
                     }
                     if (narrow) {
                         Row(
@@ -860,7 +891,7 @@ internal fun RemoteScreen(
                             horizontalArrangement = Arrangement.End,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            actionsControl()
+                            actionsControl(actionLayout, standaloneHistory)
                         }
                     }
                     if (compactionVisible(state.compaction, compactionNow))
@@ -930,17 +961,35 @@ internal fun RemoteScreen(
         }
     // Wide windows show tool details, diffs and files beside the chat; the tool detail stays on top of
     // the diff there too, as in the overlay.
+    // The history opens at the entry for the top of the chat's viewport.
+    val historyStart =
+        remember(historyOpen) {
+            if (!historyOpen) 0
+            else
+                historyAnchor(
+                    history,
+                    visibleConversation.map { it.id },
+                    shownItems.getOrNull(listState.firstVisibleItemIndex - leadingItems.count)?.id,
+                )
+        }
+    // The chat history opens last, so it lies on top; opening anything else closes it.
+    val historyContent: (@Composable () -> Unit)? =
+        if (historyOpen && key is RemoteNavKey.Chat && sideInspector) {
+            { ChatHistoryPane(history, onOpen = ::jumpTo, onClose = { historyOpen = false }, initialIndex = historyStart) }
+        } else null
     val inspectorContent: (@Composable () -> Unit)? =
-        if (changesContent == null && filesContent == null && toolContent == null) null
+        if (changesContent == null && filesContent == null && toolContent == null && historyContent == null) null
         else {
             {
                 changesContent?.invoke()
                 filesContent?.invoke()
                 toolContent?.invoke()
+                historyContent?.invoke()
             }
         }
+    val inspectorShown = sideInspector && (paneLayout.inspector == InspectorMode.PERSISTENT || inspectorContent != null)
     InspectorRow(
-        shown = sideInspector && (paneLayout.inspector == InspectorMode.PERSISTENT || inspectorContent != null),
+        shown = inspectorShown,
         width = { twoPane?.inspectorWidth(paneLayout) ?: paneLayout.inspectorWidth },
         onResize = twoPane?.let { pane -> { width -> pane.resizeInspector(paneLayout, width) } },
         inspector = inspectorContent,
@@ -1037,10 +1086,11 @@ internal fun RemoteScreen(
         val readingInset =
             if (key is RemoteNavKey.Chat) ((maxWidth - 40.dp - MAX_READING_WIDTH) / 2).coerceAtLeast(0.dp)
             else 0.dp
-        val timelineControlsShown = key is RemoteNavKey.Chat && timelineRailVisible(markers) &&
-            listScrollable && timelineScrollActive
-        val timelineExpanded = chatKey?.let(timelineVisibility::expanded) ?: true
-        val railShown = timelineControlsShown && timelineExpanded
+        // The inspector's resize handle reaches into the chat's end: the scrollbar lane starts
+        // clear of it. Constant while the inspector is open, so scrolling never moves anything.
+        val laneInset =
+            if (key is RemoteNavKey.Chat && inspectorShown && twoPane != null) maxOf(readingInset, PANE_RESIZE_HANDLE_OVERHANG)
+            else readingInset
         LazyColumn(
             if (key is RemoteNavKey.Chat) Modifier.fillMaxSize().testTag("conversationList").then(underlay)
             else Modifier.fillMaxSize(),
@@ -1048,8 +1098,8 @@ internal fun RemoteScreen(
             contentPadding =
                 PaddingValues(
                     start = 20.dp + readingInset,
-                    // Room for the timeline rail, so it never covers a card's controls.
-                    end = maxOf(if (railShown) 76.dp else 20.dp, 20.dp + readingInset),
+                    // Constant, so nothing rewraps while scrolling; the scrollbar lives in this lane.
+                    end = CHAT_SCROLLBAR_LANE + laneInset,
                     top = headerHeight + if (key is RemoteNavKey.Chat) 16.dp else 48.dp,
                     bottom =
                         if (
@@ -1684,7 +1734,10 @@ internal fun RemoteScreen(
                                     thinkingDisplay,
                                     thinkingActive = thinkingActive,
                                     onQuote = model::quote,
-                                    onOpenTool = { openToolId = it.id },
+                                    onOpenTool = {
+                                        historyOpen = false
+                                        openToolId = it.id
+                                    },
                                     onOpenAgent = ::openAgent,
                                     onAskToFix = if (acceptsPrompts) ::askToFix else null,
                                     highlighted = highlighted,
@@ -1797,29 +1850,34 @@ internal fun RemoteScreen(
                 chatHeader()
             }
         }
-        if (railShown) {
+        if (key is RemoteNavKey.Chat && chatScrollbarVisible(listScrollable, markers.size, shownItems.size)) {
+            ChatScrollbar(
+                listState = listState,
+                markers = markers,
+                listIndex = { leadingItems.count + it.index },
+                onJump = ::jumpTo,
+                // The list's end padding lane, between the header and the composer.
+                modifier =
+                    Modifier.align(Alignment.TopEnd)
+                        .padding(end = laneInset, top = headerHeight + 8.dp, bottom = composerHeight + 8.dp)
+                        .then(underlay),
+                // A drag is the user's own scroll: follow new output only when it ends at the bottom.
+                onSeek = { atEnd ->
+                    viewportRestorePending = false
+                    autoFollow = atEnd
+                },
+            )
+        }
+        if (key is RemoteNavKey.Chat)
+            // Floats above the composer, left of the scrollbar lane, and only fades: neither the
+            // composer nor the list changes size when it comes and goes.
             Box(
-                Modifier.align(Alignment.TopCenter)
-                    .widthIn(max = MAX_READING_WIDTH + 32.dp)
-                    .fillMaxWidth()
-                    .fillMaxHeight()
-                    .padding(
-                        start = 16.dp,
-                        end = 16.dp,
-                        top = headerHeight + 8.dp,
-                        bottom = composerHeight + 8.dp,
-                    )
+                Modifier.align(Alignment.BottomEnd)
+                    .padding(end = laneInset + CHAT_SCROLLBAR_LANE + 4.dp, bottom = composerHeight + 8.dp)
                     .then(underlay),
             ) {
-                TimelineRail(
-                    markers = markers,
-                    onJump = ::jumpTo,
-                    scrollState = listState,
-                    // Share the composer's inset and the toggle button's center axis.
-                    modifier = Modifier.align(Alignment.TopEnd).width(48.dp).fillMaxHeight(),
-                )
+                ScrollToLatestSlot(!autoFollow, ::scrollToLatestItem)
             }
-        }
         if (key is RemoteNavKey.Chat) {
             Box(
                 Modifier.align(Alignment.BottomCenter)
@@ -1883,80 +1941,48 @@ internal fun RemoteScreen(
                             }
                         }
                     }
-                    if (touched.total > 0 || errorCount > 0 || onlyErrorsShown ||
-                        strip.entries.isNotEmpty() || statusJobs != null || !autoFollow || timelineControlsShown
+                    if (touched.total > 0 || errorCount > 0 || onlyErrorsShown || strip.entries.isNotEmpty() ||
+                        statusJobs != null
                     )
                         Row(
-                            Modifier.fillMaxWidth().testTag("chatInsights"),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.Bottom,
+                            Modifier.fillMaxWidth().testTag("chatInsights").horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Row(
-                                Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                TouchedFilesSummary(touched, touchedLines) {
-                                    when (touchedFilesTarget(canViewChanges(state) && state.connected)) {
-                                        TouchedFilesTarget.CHANGES -> chatModel?.openChanges()
-                                        TouchedFilesTarget.SHEET -> touchedSheet = true
+                            TouchedFilesSummary(touched, touchedLines) {
+                                when (touchedFilesTarget(canViewChanges(state) && state.connected)) {
+                                    TouchedFilesTarget.CHANGES -> {
+                                        historyOpen = false
+                                        chatModel?.openChanges()
                                     }
-                                }
-                                ErrorFilterChip(errorCount, onlyErrorsShown) {
-                                    onlyErrorsShown = !onlyErrorsShown
-                                    if (onlyErrorsShown) autoFollow = false
-                                    else if (chatKey != null && viewportPositions != null) {
-                                        savedViewport = viewportPositions[chatKey]
-                                        viewportRestorePending = savedViewport?.following == false
-                                        autoFollow = savedViewport?.following ?: false
-                                    }
-                                }
-                                statusJobs?.let { jobs ->
-                                    key(jobs.sessionId) {
-                                        val chat = checkNotNull(chatModel)
-                                        BackgroundJobsChip(jobs, remember(chat) {
-                                            JobsActions(chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs, chat::stopJob)
-                                        })
-                                    }
-                                }
-                                SubagentStrip(
-                                    strip,
-                                    canAbort = { entry ->
-                                        entry.sessionId?.let { canAbortSubagent(state, it) } == true
-                                    },
-                                    onOpen = { entry -> entry.sessionId?.takeIf { entry.openable }?.let(::openChildSession) },
-                                    onAbort = { entry -> if (entry.sessionId != null) abortChild = entry },
-                                )
-                            }
-                            if (timelineControlsShown || !autoFollow) {
-                                Spacer(Modifier.width(8.dp))
-                                Column(
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                ) {
-                                    if (timelineControlsShown)
-                                        SmallFloatingActionButton(
-                                            onClick = { chatKey?.let(timelineVisibility::toggle) },
-                                            modifier = Modifier.testTag("timelineToggle"),
-                                        ) {
-                                            Icon(
-                                                if (timelineExpanded) Icons.Default.ChevronRight
-                                                else Icons.Default.ChevronLeft,
-                                                stringResource(
-                                                    if (timelineExpanded) R.string.remote_panel_timeline_hide
-                                                    else R.string.remote_panel_timeline_show,
-                                                ),
-                                            )
-                                        }
-                                    if (!autoFollow)
-                                        SmallFloatingActionButton(onClick = ::scrollToLatestItem) {
-                                            Icon(
-                                                Icons.Default.ArrowDownward,
-                                                stringResource(R.string.remote_scroll_to_bottom),
-                                            )
-                                        }
+                                    TouchedFilesTarget.SHEET -> touchedSheet = true
                                 }
                             }
+                            ErrorFilterChip(errorCount, onlyErrorsShown) {
+                                onlyErrorsShown = !onlyErrorsShown
+                                if (onlyErrorsShown) autoFollow = false
+                                else if (chatKey != null && viewportPositions != null) {
+                                    savedViewport = viewportPositions[chatKey]
+                                    viewportRestorePending = savedViewport?.following == false
+                                    autoFollow = savedViewport?.following ?: false
+                                }
+                            }
+                            statusJobs?.let { jobs ->
+                                key(jobs.sessionId) {
+                                    val chat = checkNotNull(chatModel)
+                                    BackgroundJobsChip(jobs, remember(chat) {
+                                        JobsActions(chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs, chat::stopJob)
+                                    })
+                                }
+                            }
+                            SubagentStrip(
+                                strip,
+                                canAbort = { entry ->
+                                    entry.sessionId?.let { canAbortSubagent(state, it) } == true
+                                },
+                                onOpen = { entry -> entry.sessionId?.takeIf { entry.openable }?.let(::openChildSession) },
+                                onAbort = { entry -> if (entry.sessionId != null) abortChild = entry },
+                            )
                         }
                     val treeSessionId = state.selection.sessionId
                     val treeChat = model as? ChatViewModel
@@ -2134,6 +2160,8 @@ internal fun RemoteScreen(
         )
     if (touchedSheet && key is RemoteNavKey.Chat)
         TouchedFilesSheet(touched, onDismiss = { touchedSheet = false }, onOpen = ::jumpTo)
+    if (historyOpen && key is RemoteNavKey.Chat && !sideInspector)
+        ChatHistorySheet(history, onDismiss = { historyOpen = false }, onOpen = ::jumpTo, initialIndex = historyStart)
     childCandidates?.let { candidates ->
         ChildSessionPickerSheet(
             candidates,
@@ -2614,6 +2642,23 @@ private suspend fun LazyListState.scrollToLatest() {
     scroll {
         while (canScrollForward) {
             if (scrollBy(10_000f) == 0f) break
+        }
+    }
+}
+
+/** "Scroll to latest" in a slot of fixed size: it only fades, so the composer keeps its size. */
+@Composable
+private fun ScrollToLatestSlot(visible: Boolean, onClick: () -> Unit) {
+    Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+        val motion = ValueAnimator.areAnimatorsEnabled()
+        AnimatedVisibility(
+            visible,
+            enter = if (motion) fadeIn() else EnterTransition.None,
+            exit = if (motion) fadeOut() else ExitTransition.None,
+        ) {
+            SmallFloatingActionButton(onClick = onClick) {
+                Icon(Icons.Default.ArrowDownward, stringResource(R.string.remote_scroll_to_bottom))
+            }
         }
     }
 }
