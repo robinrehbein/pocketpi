@@ -250,6 +250,7 @@
     <string name="remote_scroll_to_bottom">Zur neuesten Nachricht</string>
     <string name="remote_subagent_title">Agenten</string>
     <string name="remote_subagent_unavailable">Agentenfortschritt nicht verfügbar</string>
+    <string name="remote_subagent_ended">Beendet</string>
     <string name="remote_subagent_queued">In Warteschlange</string>
     <string name="remote_subagent_running">Läuft</string>
     <string name="remote_subagent_succeeded">Abgeschlossen</string>

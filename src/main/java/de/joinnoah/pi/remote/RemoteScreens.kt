@@ -1982,6 +1982,7 @@ internal fun RemoteScreen(
                                 },
                                 onOpen = { entry -> entry.sessionId?.takeIf { entry.openable }?.let(::openChildSession) },
                                 onAbort = { entry -> if (entry.sessionId != null) abortChild = entry },
+                                sessionId = chatKey?.sessionId,
                             )
                         }
                     val treeSessionId = state.selection.sessionId

@@ -214,6 +214,8 @@ internal fun subagentStateLabel(state: String): Int =
         "running" -> R.string.remote_subagent_running
         "succeeded" -> R.string.remote_subagent_succeeded
         "failed" -> R.string.remote_subagent_failed
+        "ended" -> R.string.remote_subagent_ended
+        "offline" -> R.string.remote_status_offline
         else -> R.string.remote_subagent_cancelled
     }
 
@@ -223,13 +225,18 @@ internal fun SubagentStrip(
     canAbort: (SubagentStripEntry) -> Boolean,
     onOpen: (SubagentStripEntry) -> Unit,
     onAbort: (SubagentStripEntry) -> Unit,
+    sessionId: String? = null,
 ) {
     if (strip.entries.isEmpty()) return
-    var expanded by rememberSaveable { mutableStateOf(false) }
+    var expanded by rememberSaveable(sessionId) { mutableStateOf(false) }
+    val queued = strip.entries.count { it.state == "queued" }
     val summary =
-        if (strip.running > 0)
-            pluralStringResource(R.plurals.remote_panel_subagents_running, strip.running, strip.running)
-        else pluralStringResource(R.plurals.remote_panel_subagents_queued, strip.entries.size, strip.entries.size)
+        when {
+            strip.running > 0 ->
+                pluralStringResource(R.plurals.remote_panel_subagents_running, strip.running, strip.running)
+            queued > 0 -> pluralStringResource(R.plurals.remote_panel_subagents_queued, queued, queued)
+            else -> stringResource(R.string.remote_subagent_popover_title)
+        }
     StatusPopover(
         summary = summary,
         running = strip.running > 0,
@@ -350,7 +357,11 @@ private fun SubagentStripRow(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(entry.agent ?: entry.title, style = MaterialTheme.typography.titleSmall)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    StatusDot(sessionStatusColor(if (entry.state == "running") SessionAvailability.RUNNING else SessionAvailability.IDLE))
+                    StatusDot(sessionStatusColor(when (entry.state) {
+                        "running" -> SessionAvailability.RUNNING
+                        "offline" -> SessionAvailability.OFFLINE
+                        else -> SessionAvailability.IDLE
+                    }))
                     Text(stringResource(subagentStateLabel(entry.state)), style = MaterialTheme.typography.labelMedium)
                 }
                 entry.activity?.takeIf(String::isNotBlank)?.let {
