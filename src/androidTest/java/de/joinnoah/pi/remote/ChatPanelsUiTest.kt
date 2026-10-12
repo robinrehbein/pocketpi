@@ -1,7 +1,6 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
@@ -131,31 +130,12 @@ class ChatPanelsUiTest {
     }
 
     @Test
-    fun timelineRailJumpsToNearestMarker() {
+    fun chatScrollbarJumpsToANearbyTickIgnoresFarTapsAndScrollsOnDrag() {
         val markers =
             listOf(
-                TimelineMarker("first", TimelineMarkerKind.EDIT, 0f),
-                TimelineMarker("middle", TimelineMarkerKind.ERROR, 0.5f),
-                TimelineMarker("last", TimelineMarkerKind.QUESTION, 1f),
-            )
-        val jumps = mutableListOf<String>()
-        compose.setContent {
-            MaterialTheme { TimelineRail(markers, onJump = { jumps += it }, modifier = Modifier.height(400.dp)) }
-        }
-        val rail = compose.onNodeWithTag("timelineRail").assertIsDisplayed()
-        rail.performTouchInput { click(Offset(centerX, height * 0.55f)) }
-        rail.performTouchInput { click(Offset(centerX, height - 1f)) }
-        rail.performTouchInput { click(Offset(centerX, 1f)) }
-        compose.waitForIdle()
-        assertEquals(listOf("middle", "last", "first"), jumps)
-    }
-
-    @Test
-    fun timelineRailLetsDragsScrollTheListAndIgnoresFarTaps() {
-        val markers =
-            listOf(
-                TimelineMarker("first", TimelineMarkerKind.EDIT, 0f),
-                TimelineMarker("second", TimelineMarkerKind.PLAN, 0.1f),
+                TimelineMarker("first", TimelineMarkerKind.USER, 0),
+                TimelineMarker("middle", TimelineMarkerKind.ERROR, 100),
+                TimelineMarker("last", TimelineMarkerKind.QUESTION, 199),
             )
         val jumps = mutableListOf<String>()
         lateinit var list: LazyListState
@@ -166,28 +146,24 @@ class ChatPanelsUiTest {
                     LazyColumn(Modifier.fillMaxSize(), state = list) {
                         items(200) { Text("row $it", Modifier.height(40.dp)) }
                     }
-                    TimelineRail(
+                    ChatScrollbar(
+                        list,
                         markers,
+                        listIndex = { it.index },
                         onJump = { jumps += it },
-                        modifier = Modifier.align(Alignment.TopEnd).fillMaxHeight(),
-                        scrollState = list,
+                        modifier = Modifier.align(Alignment.TopEnd),
                     )
                 }
             }
         }
-        val rail = compose.onNodeWithTag("timelineRail").assertIsDisplayed()
-        rail.performTouchInput { swipeUp() }
+        val bar = compose.onNodeWithTag("chatScrollbar").assertIsDisplayed()
+        bar.performTouchInput { click(Offset(centerX, height * 100.5f / 200)) }
+        bar.performTouchInput { click(Offset(centerX, height * 0.8f)) }
+        compose.waitForIdle()
+        assertEquals(listOf("middle"), jumps)
+        bar.performTouchInput { swipeDown() }
         compose.waitForIdle()
         assertTrue(list.firstVisibleItemIndex > 0)
-        rail.performTouchInput { click(Offset(centerX, height * 0.8f)) }
-        compose.waitForIdle()
-        assertTrue(jumps.isEmpty())
-    }
-
-    @Test
-    fun timelineRailIsHiddenWithoutMarkers() {
-        compose.setContent { MaterialTheme { TimelineRail(emptyList(), onJump = {}) } }
-        compose.onNodeWithTag("timelineRail").assertDoesNotExist()
     }
 
     @Test

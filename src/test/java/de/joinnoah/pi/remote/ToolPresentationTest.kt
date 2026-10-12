@@ -265,22 +265,81 @@ class ToolPresentationTest {
         val markers = timelineMarkers(items)
         assertEquals(
             listOf(
-                TimelineMarker("q", TimelineMarkerKind.QUESTION, 1f / 8),
-                TimelineMarker("e", TimelineMarkerKind.EDIT, 2f / 8),
-                TimelineMarker("w", TimelineMarkerKind.ERROR, 3f / 8),
-                TimelineMarker("p", TimelineMarkerKind.PLAN, 4f / 8),
-                TimelineMarker("s", TimelineMarkerKind.ERROR, 5f / 8),
-                TimelineMarker("b", TimelineMarkerKind.ERROR, 6f / 8),
+                TimelineMarker("u", TimelineMarkerKind.USER, 0),
+                TimelineMarker("q", TimelineMarkerKind.QUESTION, 1),
+                TimelineMarker("e", TimelineMarkerKind.EDIT, 2),
+                TimelineMarker("w", TimelineMarkerKind.ERROR, 3),
+                TimelineMarker("p", TimelineMarkerKind.PLAN, 4),
+                TimelineMarker("s", TimelineMarkerKind.ERROR, 5),
+                TimelineMarker("b", TimelineMarkerKind.ERROR, 6),
             ),
             markers,
         )
         assertEquals(listOf("w", "s", "b"), onlyErrors(items).map { it.id })
-        assertEquals(0f, timelineMarkers(listOf(activity("x", "edit", "{}"))).single().position)
-        val many = (0 until 250).map { activity("m$it", "edit", "{}") }
-        val capped = timelineMarkers(many)
-        assertEquals(200, capped.size)
-        assertEquals("m50", capped.first().itemId)
-        assertEquals(1f, capped.last().position)
+        // A failed user message counts as an error, not as the user's message.
+        val failed = ConversationItem.Bubble("f", "f", "user", null, "hi", null, false, null, error = true)
+        assertEquals(TimelineMarkerKind.ERROR, timelineMarkers(listOf(failed)).single().kind)
+        // No cap: the scrollbar thins ticks along the whole track instead of dropping early ones.
+        val many = timelineMarkers((0 until 250).map { activity("m$it", "edit", "{}") })
+        assertEquals(250, many.size)
+        assertEquals(0, many.first().index)
+        assertEquals(249, many.last().index)
+    }
+
+    @Test
+    fun chatHistoryListsEveryMarkedItemWithOneLineOfText() {
+        val items =
+            listOf(
+                ConversationItem.Bubble("u", "u", "user", null, "  Build the\n  tablet column  ", null, false, 1_000L),
+                ConversationItem.Bubble("a", "a", "assistant", null, "Sure", null, false, 2_000L),
+                activity(
+                    "q",
+                    "questionnaire",
+                    """{"questions":[{"id":"x","prompt":"Inspector at 1100 or 1180 dp?"}]}""",
+                ),
+                activity("e", "edit", """{"path":"src/main/AdaptiveLayout.kt"}"""),
+                activity("p", "submit_plan", """{"plan":"\n## Plan: tablet scene\n\nDetails"}"""),
+                activity("w", "bash", """{"command":"./gradlew test"}""", state = "error"),
+                subagent("s", AgentProgress("explorer", "failed", null, null)),
+                ConversationItem.Bubble("i", "i", "user", null, "", null, false, null),
+                activity("r", "read", "{}"),
+            )
+        assertEquals(
+            listOf(
+                ChatHistoryEntry("u", TimelineMarkerKind.USER, "Build the tablet column", 1_000L),
+                ChatHistoryEntry("q", TimelineMarkerKind.QUESTION, "Inspector at 1100 or 1180 dp?"),
+                ChatHistoryEntry("e", TimelineMarkerKind.EDIT, "AdaptiveLayout.kt"),
+                ChatHistoryEntry("p", TimelineMarkerKind.PLAN, "Plan: tablet scene"),
+                ChatHistoryEntry("w", TimelineMarkerKind.ERROR, "bash: ./gradlew test"),
+                ChatHistoryEntry("s", TimelineMarkerKind.ERROR, "explorer"),
+                // A message with only an attachment has no text; the row shows its kind.
+                ChatHistoryEntry("i", TimelineMarkerKind.USER, null),
+            ),
+            chatHistory(items),
+        )
+        // Unlike the scrollbar's markers, the history keeps everything.
+        assertEquals(250, chatHistory((0 until 250).map { activity("m$it", "edit", "{}") }).size)
+        // Malformed arguments leave the text out instead of failing.
+        assertEquals(null, chatHistory(listOf(activity("x", "questionnaire", "not json"))).single().text)
+        assertEquals(160, historyLine("x".repeat(500))?.length)
+        assertEquals(null, historyLine(" \n\t "))
+        assertEquals("a b", historyLine("a" + " ".repeat(100) + "b"))
+    }
+
+    @Test
+    fun historyOpensAtTheEntryForTheTopOfTheViewport() {
+        val history =
+            listOf(
+                ChatHistoryEntry("u1", TimelineMarkerKind.USER, "one"),
+                ChatHistoryEntry("e", TimelineMarkerKind.EDIT, null),
+                ChatHistoryEntry("u2", TimelineMarkerKind.USER, "two"),
+            )
+        val order = listOf("u1", "a1", "e", "a2", "u2", "a3")
+        assertEquals(1, historyAnchor(history, order, "a2"))
+        assertEquals(2, historyAnchor(history, order, "u2"))
+        assertEquals(0, historyAnchor(history, order, "u1"))
+        assertEquals(0, historyAnchor(history, order, null))
+        assertEquals(0, historyAnchor(history, order, "gone"))
     }
 
     @Test

@@ -460,7 +460,7 @@ class GitChangesTest {
         // Three uses 28 days ago weigh 0.75, less than one use today.
         assertEquals(0.75, checkNotNull(settings).decayed(28 * day), 1e-9)
         val ranked = rankChatActions(mapOf(ChatAction.SETTINGS to settings!!, ChatAction.RENAME to rename), 28 * day)
-        assertEquals(listOf(ChatAction.RENAME, ChatAction.SETTINGS, ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.NEW_SESSION, ChatAction.SESSION_SETTINGS), ranked)
+        assertEquals(listOf(ChatAction.RENAME, ChatAction.SETTINGS, ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.NEW_SESSION, ChatAction.SESSION_SETTINGS, ChatAction.HISTORY), ranked)
         // One half-life halves a use.
         assertEquals(0.5, null.used(0).decayed(14 * day), 1e-9)
     }
@@ -475,6 +475,18 @@ class GitChangesTest {
         val offline = chatActionLayout(DEFAULT_CHAT_ACTIONS, setOf(ChatAction.REFRESH, ChatAction.SETTINGS, ChatAction.RENAME))
         assertEquals(listOf(ChatAction.RENAME, ChatAction.REFRESH, ChatAction.SETTINGS), offline.shown)
         assertTrue(offline.menu.isEmpty())
+    }
+
+    @Test
+    fun historyJoinsThePillWithoutDisplacingAnAction() {
+        val few = chatActionLayout(DEFAULT_CHAT_ACTIONS, setOf(ChatAction.REFRESH, ChatAction.SETTINGS, ChatAction.NEW_SESSION))
+        assertEquals(
+            ChatActionLayout(listOf(ChatAction.REFRESH, ChatAction.SETTINGS, ChatAction.NEW_SESSION, ChatAction.HISTORY), emptyList()),
+            few.withHistory(),
+        )
+        val many = chatActionLayout(DEFAULT_CHAT_ACTIONS, ChatAction.entries.toSet() - ChatAction.HISTORY)
+        assertEquals(many.shown, many.withHistory().shown)
+        assertEquals(many.menu + ChatAction.HISTORY, many.withHistory().menu)
     }
 
     // ---- Review round 1 -----------------------------------------------------------------

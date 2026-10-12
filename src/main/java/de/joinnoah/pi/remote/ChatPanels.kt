@@ -2,15 +2,8 @@ package de.joinnoah.pi.remote
 
 import android.text.format.DateFormat
 import android.text.format.DateUtils
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.ScrollableDefaults
-import androidx.compose.foundation.gestures.ScrollableState
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,7 +11,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Description
@@ -26,42 +18,26 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.QuestionMark
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.ChevronLeft
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
@@ -71,8 +47,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import java.util.Date
-import kotlin.math.abs
-import kotlin.math.roundToInt
 
 // Standalone chat panels. The chat screen decides where each one goes; every panel hides itself
 // when it has nothing to show.
@@ -401,239 +375,6 @@ private fun SubagentStripRow(
                     Spacer(Modifier.width(4.dp))
                     Text(stringResource(R.string.remote_subagent_stop_label), color = MaterialTheme.colorScheme.error)
                 }
-            }
-        }
-    }
-}
-
-// ---- Timeline rail ------------------------------------------------------------------------
-
-private val RAIL_INSET = 8.dp
-
-/** How far from a marker a tap on the rail still jumps to it. */
-private val RAIL_TAP_SLOP = 24.dp
-
-/** With fewer markers the rail says nothing a glance at the list would not. */
-internal const val MIN_TIMELINE_MARKERS = 2
-
-internal fun timelineRailVisible(markers: List<TimelineMarker>): Boolean = markers.size >= MIN_TIMELINE_MARKERS
-
-@Composable
-internal fun TimelineRailControl(
-    markers: List<TimelineMarker>,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    onJump: (itemId: String) -> Unit,
-    modifier: Modifier = Modifier,
-    scrollState: ScrollableState? = null,
-) {
-    if (!timelineRailVisible(markers)) return
-    Column(modifier.width(48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        FilledTonalIconButton(
-            onClick = onToggle,
-            modifier = Modifier.testTag("timelineToggle"),
-        ) {
-            Icon(
-                if (expanded) Icons.Default.ChevronRight else Icons.Default.ChevronLeft,
-                contentDescription =
-                    stringResource(
-                        if (expanded) R.string.remote_panel_timeline_hide else R.string.remote_panel_timeline_show
-                    ),
-            )
-        }
-        if (expanded) {
-            TimelineRail(
-                markers = markers,
-                onJump = onJump,
-                modifier = Modifier.weight(1f),
-                scrollState = scrollState,
-            )
-        }
-    }
-}
-
-/** The marker closest to [fraction] (0..1 along the rail). */
-internal fun nearestMarker(markers: List<TimelineMarker>, fraction: Float): TimelineMarker? =
-    markers.minByOrNull { abs(it.position - fraction) }
-
-internal fun timelineMarkerLabel(kind: TimelineMarkerKind): Int =
-    when (kind) {
-        TimelineMarkerKind.ERROR -> R.string.remote_panel_marker_error
-        TimelineMarkerKind.QUESTION -> R.string.remote_panel_marker_question
-        TimelineMarkerKind.EDIT -> R.string.remote_panel_marker_edit
-        TimelineMarkerKind.PLAN -> R.string.remote_panel_marker_plan
-    }
-
-private fun timelineMarkerIcon(kind: TimelineMarkerKind): ImageVector =
-    when (kind) {
-        TimelineMarkerKind.ERROR -> Icons.Default.Warning
-        TimelineMarkerKind.QUESTION -> Icons.Default.QuestionMark
-        TimelineMarkerKind.EDIT -> Icons.Default.Edit
-        TimelineMarkerKind.PLAN -> Icons.AutoMirrored.Filled.FormatListBulleted
-    }
-
-/** A marker's badge: the kind's icon on its colour, so the kinds differ by more than colour. */
-@Composable
-private fun TimelineMarkerBadge(kind: TimelineMarkerKind, modifier: Modifier = Modifier) {
-    val colors = MaterialTheme.colorScheme
-    val (container, content) =
-        when (kind) {
-            TimelineMarkerKind.ERROR -> colors.error to colors.onError
-            TimelineMarkerKind.QUESTION -> colors.tertiary to colors.onTertiary
-            TimelineMarkerKind.EDIT -> colors.primary to colors.onPrimary
-            TimelineMarkerKind.PLAN -> colors.secondary to colors.onSecondary
-        }
-    Box(
-        modifier.size(20.dp).clip(CircleShape).background(container)
-            .border(2.dp, colors.surface, CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(timelineMarkerIcon(kind), contentDescription = null, tint = content, modifier = Modifier.size(12.dp))
-    }
-}
-
-@Composable
-internal fun TimelineRail(
-    markers: List<TimelineMarker>,
-    onJump: (itemId: String) -> Unit,
-    modifier: Modifier = Modifier,
-    scrollState: ScrollableState? = null,
-    reverseLayout: Boolean = false,
-) {
-    if (!timelineRailVisible(markers)) return
-    val trackColor = MaterialTheme.colorScheme.outlineVariant
-    val jumpLabels =
-        mapOf(
-            TimelineMarkerKind.ERROR to stringResource(R.string.remote_panel_jump_error),
-            TimelineMarkerKind.QUESTION to stringResource(R.string.remote_panel_jump_question),
-            TimelineMarkerKind.EDIT to stringResource(R.string.remote_panel_jump_edit),
-            TimelineMarkerKind.PLAN to stringResource(R.string.remote_panel_jump_plan),
-        )
-    val markerLabels = TimelineMarkerKind.entries.associateWith { stringResource(timelineMarkerLabel(it)) }
-    val railDescription = stringResource(R.string.remote_panel_timeline)
-    val latest = TimelineMarkerKind.entries.mapNotNull { kind -> markers.lastOrNull { it.kind == kind } }
-    val currentMarkers by rememberUpdatedState(markers)
-    val currentJump by rememberUpdatedState(onJump)
-    val inset = with(LocalDensity.current) { RAIL_INSET.toPx() }
-    val tapSlop = with(LocalDensity.current) { RAIL_TAP_SLOP.toPx() }
-    val reverse = ScrollableDefaults.reverseDirection(LocalLayoutDirection.current, Orientation.Vertical, reverseLayout)
-    // Where a long press opened the legend, or null while it is closed.
-    var legendAt by remember { mutableStateOf<Float?>(null) }
-    Box(
-        modifier
-            .width(48.dp)
-            .testTag("timelineRail")
-            .semantics {
-                contentDescription = railDescription
-                customActions =
-                    latest.map { marker ->
-                        CustomAccessibilityAction(jumpLabels.getValue(marker.kind)) {
-                            currentJump(marker.itemId)
-                            true
-                        }
-                    }
-            }
-            // The rail lies over the list's right edge: a drag there scrolls the list, only a
-            // tap close to a marker jumps to it, and a long press explains the markers.
-            .then(
-                if (scrollState != null)
-                    Modifier.scrollable(scrollState, Orientation.Vertical, reverseDirection = reverse)
-                else Modifier
-            )
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onLongPress = { offset -> legendAt = offset.y },
-                    onTap = { offset ->
-                        val span = (size.height - 2 * inset).coerceAtLeast(0f)
-                        val fraction = if (span <= 0f) 0f else ((offset.y - inset) / span).coerceIn(0f, 1f)
-                        val marker = nearestMarker(currentMarkers, fraction) ?: return@detectTapGestures
-                        val y = inset + marker.position.coerceIn(0f, 1f) * span
-                        if (abs(offset.y - y) <= tapSlop) currentJump(marker.itemId)
-                    },
-                )
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Canvas(Modifier.width(24.dp).fillMaxHeight()) {
-            drawRoundRect(
-                color = trackColor.copy(alpha = 0.25f),
-                topLeft = Offset.Zero,
-                size = size,
-                cornerRadius = CornerRadius(size.width / 2),
-            )
-            val trackWidth = 2.dp.toPx()
-            drawRoundRect(
-                trackColor,
-                topLeft = Offset((size.width - trackWidth) / 2, inset),
-                size = Size(trackWidth, (size.height - 2 * inset).coerceAtLeast(0f)),
-                cornerRadius = CornerRadius(trackWidth / 2),
-            )
-        }
-        Layout(
-            content = {
-                for (marker in markers) {
-                    val label = markerLabels.getValue(marker.kind)
-                    TimelineMarkerBadge(
-                        marker.kind,
-                        Modifier.testTag("timelineMarker").semantics {
-                            contentDescription = label
-                            onClick(label = jumpLabels.getValue(marker.kind)) {
-                                currentJump(marker.itemId)
-                                true
-                            }
-                        },
-                    )
-                }
-            },
-            modifier = Modifier.matchParentSize(),
-        ) { measurables, constraints ->
-            val placeables = measurables.map { it.measure(Constraints()) }
-            layout(constraints.maxWidth, constraints.maxHeight) {
-                val span = (constraints.maxHeight - 2 * inset).coerceAtLeast(0f)
-                placeables.forEachIndexed { index, placeable ->
-                    val y = inset + markers[index].position.coerceIn(0f, 1f) * span
-                    placeable.place(
-                        (constraints.maxWidth - placeable.width) / 2,
-                        (y - placeable.height / 2f).roundToInt(),
-                    )
-                }
-            }
-        }
-        legendAt?.let { y ->
-            TimelineLegend(
-                offset = IntOffset(-with(LocalDensity.current) { 48.dp.roundToPx() }, y.roundToInt()),
-                labels = markerLabels,
-                onDismiss = { legendAt = null },
-            )
-        }
-    }
-}
-
-/** The four marker kinds, opened beside the rail by a long press. */
-@Composable
-private fun TimelineLegend(offset: IntOffset, labels: Map<TimelineMarkerKind, String>, onDismiss: () -> Unit) {
-    Popup(
-        alignment = Alignment.TopEnd,
-        offset = offset,
-        onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true),
-    ) {
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shadowElevation = 3.dp,
-            modifier = Modifier.testTag("timelineLegend").clickable(onClick = onDismiss),
-        ) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    stringResource(R.string.remote_panel_timeline_legend),
-                    style = MaterialTheme.typography.labelLarge,
-                )
-                for (kind in TimelineMarkerKind.entries)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        TimelineMarkerBadge(kind)
-                        Text(labels.getValue(kind), style = MaterialTheme.typography.bodyMedium)
-                    }
             }
         }
     }
