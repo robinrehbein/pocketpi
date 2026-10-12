@@ -198,6 +198,9 @@ internal val PANE_RESIZE_STEP = 40.dp
 internal val PANE_DIVIDER_WIDTH = 1.dp
 private val PANE_RESIZE_HANDLE_WIDTH = 24.dp
 
+/** How far the inspector's resize handle reaches into the pane before it. */
+internal val PANE_RESIZE_HANDLE_OVERHANG = PANE_RESIZE_HANDLE_WIDTH / 2 - PANE_DIVIDER_WIDTH / 2
+
 /** The projects column's width while a chat is open: a strip of project avatars. */
 internal val PROJECT_STRIP_WIDTH = 64.dp
 
