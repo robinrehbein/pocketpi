@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="remote_local_command_artifacts">Browse the artifacts of this session</string>
+    <string name="remote_local_command_artifacts_host_outdated">Needs an updated, restarted pi Remote on your Mac</string>
+    <string name="remote_artifacts_host_outdated">Your Mac\'s pi Remote does not offer artifacts yet. Update it and restart it with deno task pi-remote:host stop, then start.</string>
     <string name="remote_artifacts_title">Artifacts</string>
     <string name="remote_artifacts_loading">Loading artifacts…</string>
     <string name="remote_artifacts_empty">No artifacts yet. HTML pages, SVG images and Mermaid diagrams that pi saves as artifacts in this session appear here.</string>

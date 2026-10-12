@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="remote_local_command_artifacts">Artefakte dieser Sitzung ansehen</string>
+    <string name="remote_local_command_artifacts_host_outdated">Braucht ein aktualisiertes, neu gestartetes pi Remote auf deinem Mac</string>
+    <string name="remote_artifacts_host_outdated">pi Remote auf deinem Mac bietet noch keine Artefakte an. Aktualisiere es und starte es neu: deno task pi-remote:host stop, dann start.</string>
     <string name="remote_artifacts_title">Artefakte</string>
     <string name="remote_artifacts_loading">Artefakte werden geladen…</string>
     <string name="remote_artifacts_empty">Noch keine Artefakte. HTML-Seiten, SVG-Bilder und Mermaid-Diagramme, die pi in dieser Sitzung als Artefakte speichert, erscheinen hier.</string>

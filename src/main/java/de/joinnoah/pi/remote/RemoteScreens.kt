@@ -486,6 +486,21 @@ internal fun RemoteScreen(
     }
     val snackbar = remember { SnackbarHostState() }
     val childNotice = stringResource(R.string.remote_insights_child_not_found)
+    // An extension's notice (`session.notice`) shows once; the repository forgets it at once, so a
+    // recomposition or a return to this chat does not show it again.
+    val notice = state.notice?.takeIf { it.sessionId == state.selection.sessionId }
+    LaunchedEffect(notice?.id) {
+        val shown = notice ?: return@LaunchedEffect
+        model.dismissNotice(shown.id)
+        listScope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            snackbar.showSnackbar(
+                shown.message,
+                withDismissAction = true,
+                duration = if (shown.level == "info") SnackbarDuration.Short else SnackbarDuration.Long,
+            )
+        }
+    }
     val askFixPrompt = stringResource(R.string.remote_insights_ask_fix_prompt)
     val acceptsPrompts =
         state.connected && !state.loading && state.questions.isEmpty() && !state.sending &&
@@ -663,7 +678,9 @@ internal fun RemoteScreen(
                     showToast(R.string.remote_reload_terminal_hint)
                 else if (reloading) showToast(R.string.remote_reload_running)
                 else state.selection.sessionId?.let(::startReload)
-            LocalCommand.ARTIFACTS -> artifactsSheetRequested = true
+            LocalCommand.ARTIFACTS ->
+                if (artifactsAvailable) artifactsSheetRequested = true
+                else showToast(R.string.remote_artifacts_host_outdated)
             LocalCommand.NAME -> {
                 val session = state.session ?: return true
                 if (invocation.argument.isEmpty()) startRename(session.text("id"), session.text("title"))
@@ -2031,7 +2048,8 @@ internal fun RemoteScreen(
                                         // Like a sent command, a command draft does not stay in the composer.
                                         if (state.draft.trimStart().startsWith("/")) model.draft("")
                                         if (command == LocalCommand.TREE) treeSheetRequested = true
-                                        else artifactsSheetRequested = true
+                                        else if (artifactsAvailable) artifactsSheetRequested = true
+                                        else showToast(R.string.remote_artifacts_host_outdated)
                                     }
                                     // A terminal session only explains itself; nothing to send.
                                     else if (command == LocalCommand.RELOAD &&

@@ -57,6 +57,15 @@ internal fun canShowArtifacts(state: RemoteState): Boolean =
     state.connected && !state.loading && state.selection.sessionId != null &&
         ARTIFACTS_CAPABILITY in state.capabilities && ARTIFACTS_CAPABILITY !in state.unavailableCapabilities
 
+/**
+ * The host answered the capability request without [ARTIFACTS_CAPABILITY]: it predates artifacts
+ * or still runs the build from before an update. `/artifacts` stays listed with a hint then, because
+ * the host's own `/artifacts` would open the browser on the Mac, not on the phone.
+ */
+internal fun artifactsNeedNewerHost(state: RemoteState): Boolean =
+    state.connected && !state.loading && state.selection.sessionId != null && state.capabilitiesKnown &&
+        ARTIFACTS_CAPABILITY !in state.capabilities
+
 internal fun validArtifactId(value: String): Boolean = ARTIFACT_ID.matches(value)
 
 /** The fields of a `session.artifacts.open`; throws [IllegalArgumentException] when invalid. */

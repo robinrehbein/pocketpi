@@ -139,6 +139,8 @@ internal open class DestinationViewModel(
 
     fun dismissError() = repository.dismissError()
 
+    fun dismissNotice(id: Long) = repository.dismissNotice(id)
+
     override fun onCleared() {
         cleared = true
     }

@@ -116,6 +116,8 @@ data class RemoteState(
     val commandsLoading: Boolean = false,
     val commandsTruncated: Boolean = false,
     val commandNotice: Int? = null,
+    /** The latest extension notice of the selected session, until the chat has shown it. */
+    val notice: SessionNotice? = null,
     val compaction: SessionCompaction? = null,
     val toolOutput: ToolOutputDownload? = null,
     /** The changes view of the selected session; null while it is closed. */
@@ -456,6 +458,9 @@ interface RemoteRepository {
     fun dismissLogin() {}
 
     fun dismissProviderNotice() {}
+
+    /** Forgets the [SessionNotice] with [id] once the chat has shown it. */
+    fun dismissNotice(id: Long) {}
 
     fun dismissError()
 

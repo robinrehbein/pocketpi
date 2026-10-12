@@ -51,6 +51,41 @@ class SessionStateTest {
     }
 
     @Test
+    fun noticesAdvanceTheRevisionWithoutASnapshotAndParseStrictly() {
+        val timeline = Timeline("one")
+        timeline.snapshot(
+            Wire.objectOf(
+                "sessionId" to "one",
+                "revision" to 3,
+                "status" to "idle",
+                "messages" to kotlinx.serialization.json.JsonArray(emptyList()),
+                "pendingQuestions" to kotlinx.serialization.json.JsonArray(emptyList()),
+            )
+        )
+        fun notice(level: Any, message: Any) =
+            Wire.objectOf(
+                "sessionId" to "one",
+                "revision" to 4,
+                "kind" to "session.notice",
+                "level" to level,
+                "message" to message,
+            )
+        val event = notice("info", "No artifacts in this session yet.")
+        assertFalse(timeline.event(event))
+        assertEquals(4L, timeline.revision)
+        assertEquals(
+            SessionNotice(7, "one", "info", "No artifacts in this session yet."),
+            sessionNotice(event, 7),
+        )
+        assertEquals("error", sessionNotice(notice("error", "x"), 1)?.level)
+        assertNull(sessionNotice(notice("debug", "x"), 1))
+        assertNull(sessionNotice(notice("info", " "), 1))
+        assertNull(sessionNotice(notice("info", 3), 1))
+        assertNull(sessionNotice(notice("info", "é".repeat(MAX_SESSION_NOTICE_BYTES / 2 + 1)), 1))
+        assertNotNull(sessionNotice(notice("info", "a".repeat(MAX_SESSION_NOTICE_BYTES)), 1))
+    }
+
+    @Test
     fun pendingRequestCannotResolveAfterSelectionChanges() {
         val requests = RequestLedger()
         requests.add("r1", PendingRequest("session.prompt", "one", epoch = 2, draft = "hello"))
