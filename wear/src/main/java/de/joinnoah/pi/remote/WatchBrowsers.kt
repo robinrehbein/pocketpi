@@ -82,11 +82,12 @@ internal fun WatchListScope.watchChanges(state: RemoteState, model: WatchViewMod
     if (changes.sessionUnavailable != null) notice(R.string.remote_changes_session_fallback)
     if (changes.file == null) {
         GitBase.entries.forEach { base -> item {
-            WatchAction(stringResource(when (base) {
-                GitBase.SESSION -> R.string.remote_changes_base_session
-                GitBase.HEAD -> R.string.remote_changes_base_head
-                GitBase.DEV -> R.string.remote_changes_base_dev
-            }), { changePage(0); repository.selectChangesBase(base) }, ready && !changes.loading, selected = changes.base == base)
+            WatchAction(when (base) {
+                GitBase.SESSION -> stringResource(R.string.remote_changes_base_session)
+                GitBase.HEAD -> stringResource(R.string.remote_changes_base_head)
+                // Named after the host's dev branch, as on the phone.
+                GitBase.DEV -> devBaseName(changes.devBase)
+            }, { changePage(0); repository.selectChangesBase(base) }, ready && !changes.loading, selected = changes.base == base)
         } }
         changes.status?.unavailable?.let { reason -> notice(when (reason) {
             GitUnavailable.GIT_UNAVAILABLE -> R.string.remote_changes_unavailable_git
