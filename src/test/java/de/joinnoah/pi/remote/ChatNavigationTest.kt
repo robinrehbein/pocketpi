@@ -96,6 +96,25 @@ class ChatNavigationTest {
     }
 
     @Test
+    fun crowdedTicksKeepTheMostImportantKindPerBucket() {
+        fun tick(id: String, kind: TimelineMarkerKind, fraction: Float) = ScrollbarTick(TimelineMarker(id, kind, 0), fraction)
+        val ticks =
+            listOf(
+                tick("u1", TimelineMarkerKind.USER, 0.01f),
+                tick("e1", TimelineMarkerKind.EDIT, 0.02f),
+                tick("u2", TimelineMarkerKind.USER, 0.5f),
+                tick("u3", TimelineMarkerKind.USER, 0.51f),
+                tick("x", TimelineMarkerKind.ERROR, 0.98f),
+                tick("q", TimelineMarkerKind.QUESTION, 0.99f),
+            )
+        // Ten buckets: an edit beats a user message, the later of equals wins, an error beats a question.
+        assertEquals(listOf("e1", "u3", "x"), thinTicks(ticks, 10).map { it.marker.itemId })
+        // Enough room keeps every tick, early ones included.
+        assertEquals(6, thinTicks(ticks, 1000).size)
+        assertEquals(emptyList<ScrollbarTick>(), thinTicks(ticks, 0))
+    }
+
+    @Test
     fun aTapJumpsOnlyToATickWithinTheSlop() {
         val ticks = listOf(0.1f, 0.5f, 0.52f, 0.9f)
         assertEquals(2, nearestTick(ticks, 0.53f, 0.02f))

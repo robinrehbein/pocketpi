@@ -8,11 +8,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -25,6 +28,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -38,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import java.util.Date
 import kotlin.math.abs
 import kotlin.math.floor
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 // Finding a place in a long chat: a thin marker scrollbar beside the list, and the chat history,
@@ -136,12 +143,48 @@ internal fun timelineMarkerColor(kind: TimelineMarkerKind): Color {
     }
 }
 
+/** A tick on the track at [fraction], for [marker]. */
+internal data class ScrollbarTick(val marker: TimelineMarker, val fraction: Float)
+
+/** Which kind wins a crowded spot on the track: errors first, the user's messages last. */
+private val TICK_PRIORITY =
+    listOf(
+        TimelineMarkerKind.ERROR,
+        TimelineMarkerKind.QUESTION,
+        TimelineMarkerKind.PLAN,
+        TimelineMarkerKind.EDIT,
+        TimelineMarkerKind.USER,
+    )
+
+/**
+ * At most one tick per bucket of the track, so a long chat keeps ticks along its whole length
+ * instead of only its latest ones. The more important kind wins a bucket; among equals the later one.
+ */
+internal fun thinTicks(ticks: List<ScrollbarTick>, buckets: Int): List<ScrollbarTick> {
+    if (buckets <= 0) return emptyList()
+    val kept = HashMap<Int, ScrollbarTick>()
+    for (tick in ticks) {
+        val bucket = (tick.fraction * buckets).toInt().coerceIn(0, buckets - 1)
+        val current = kept[bucket]
+        if (current == null || TICK_PRIORITY.indexOf(tick.marker.kind) <= TICK_PRIORITY.indexOf(current.marker.kind))
+            kept[bucket] = tick
+    }
+    return kept.values.sortedBy { it.fraction }
+}
+
+/** How much taller than the thumb the area kept free of the system back gesture is, per side. */
+private val SCROLLBAR_GESTURE_MARGIN = 16.dp
+
+/** Android honours at most 200 dp of gesture exclusion per screen edge. */
+private val SCROLLBAR_GESTURE_MAX = 150.dp
+
 /**
  * A thin scrollbar with a coloured tick per marker. It is always there while it is [chatScrollbarVisible]
  * and never moves the list's content. A drag scrolls the list, a tap near a tick jumps to its item.
  * TalkBack skips it: the chat history is the accessible way to the same places.
  *
- * [listIndex] turns a marker's index in the shown items into its index in the lazy list.
+ * [listIndex] turns a marker's index in the shown items into its index in the lazy list. [onSeek]
+ * reports each drag position and the drag's end, with whether the list then stands at its end.
  */
 @Composable
 internal fun ChatScrollbar(
@@ -150,32 +193,48 @@ internal fun ChatScrollbar(
     listIndex: (TimelineMarker) -> Int,
     onJump: (itemId: String) -> Unit,
     modifier: Modifier = Modifier,
+    onSeek: (atEnd: Boolean) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var dragging by remember { mutableStateOf(false) }
     val currentMarkers by rememberUpdatedState(markers)
     val currentListIndex by rememberUpdatedState(listIndex)
     val currentJump by rememberUpdatedState(onJump)
+    val currentSeek by rememberUpdatedState(onSeek)
     val colors = TimelineMarkerKind.entries.associateWith { timelineMarkerColor(it) }
     val thumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = if (dragging) 0.6f else 0.35f)
+    val density = LocalDensity.current
+    val minThumb = with(density) { SCROLLBAR_THUMB_MIN.toPx() }
+    val tickHeight = with(density) { SCROLLBAR_TICK_HEIGHT.toPx() }
     fun metrics() = scrollMetrics(listState.layoutInfo, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
-    fun seek(y: Float, height: Int, minThumb: Float) {
+    fun ticks(height: Float): List<ScrollbarTick> {
+        val total = listState.layoutInfo.totalItemsCount
+        return thinTicks(
+            currentMarkers.map { ScrollbarTick(it, scrollbarTick(currentListIndex(it), total)) },
+            (height / tickHeight).toInt(),
+        )
+    }
+    fun seek(y: Float, height: Int) {
         if (height <= 0) return
         val now = metrics()
         val thumb = scrollbarThumb(now, minThumb / height) ?: return
         val target = scrollbarSeek(y / height, thumb.size, now)
         val atEnd = target >= now.total - now.visible - 0.001f
         val index = floor(target).toInt().coerceIn(0, (now.total - 1).coerceAtLeast(0))
-        val sizes = listState.layoutInfo.visibleItemsInfo
-        val itemSize = sizes.firstOrNull { it.index == index }?.size ?: sizes.map { it.size }.average().takeIf { !it.isNaN() }?.toInt() ?: 0
+        currentSeek(atEnd)
         scope.launch {
             if (atEnd) {
                 listState.scrollToItem((now.total - 1).coerceAtLeast(0))
                 listState.scroll { while (listState.canScrollForward) if (scrollBy(10_000f) == 0f) break }
-            } else listState.scrollToItem(index, ((target - index) * itemSize).toInt())
+            } else {
+                // Measure the target first, so the offset inside it is exact and the thumb holds still.
+                listState.scrollToItem(index)
+                val size = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }?.size ?: 0
+                if (size > 0) listState.scrollBy((target - index) * size)
+            }
         }
     }
-    Canvas(
+    Box(
         modifier
             .width(CHAT_SCROLLBAR_LANE)
             .fillMaxHeight()
@@ -183,50 +242,74 @@ internal fun ChatScrollbar(
             // TalkBack reaches the same places through the chat history.
             .clearAndSetSemantics {}
             .pointerInput(listState) {
-                val minThumb = SCROLLBAR_THUMB_MIN.toPx()
                 detectVerticalDragGestures(
                     onDragStart = { offset ->
                         dragging = true
-                        seek(offset.y, size.height, minThumb)
+                        seek(offset.y, size.height)
                     },
-                    onDragEnd = { dragging = false },
-                    onDragCancel = { dragging = false },
+                    onDragEnd = {
+                        dragging = false
+                        currentSeek(!listState.canScrollForward)
+                    },
+                    onDragCancel = {
+                        dragging = false
+                        currentSeek(!listState.canScrollForward)
+                    },
                 ) { change, _ ->
                     change.consume()
-                    seek(change.position.y, size.height, minThumb)
+                    seek(change.position.y, size.height)
                 }
             }
             .pointerInput(listState) {
                 val slop = SCROLLBAR_TAP_SLOP.toPx()
                 detectTapGestures { offset ->
                     if (size.height <= 0) return@detectTapGestures
-                    val total = listState.layoutInfo.totalItemsCount
-                    val marked = currentMarkers
-                    val ticks = marked.map { scrollbarTick(currentListIndex(it), total) }
-                    nearestTick(ticks, offset.y / size.height, slop / size.height)?.let { currentJump(marked[it].itemId) }
+                    val shown = ticks(size.height.toFloat())
+                    nearestTick(shown.map { it.fraction }, offset.y / size.height, slop / size.height)
+                        ?.let { currentJump(shown[it].marker.itemId) }
                 }
             }
     ) {
-        val now = metrics()
-        val tickWidth = SCROLLBAR_TICK_WIDTH.toPx()
-        val tickHeight = SCROLLBAR_TICK_HEIGHT.toPx()
-        for (marker in markers) {
-            val y = (scrollbarTick(listIndex(marker), now.total) * size.height - tickHeight / 2)
-                .coerceIn(0f, (size.height - tickHeight).coerceAtLeast(0f))
+        Canvas(Modifier.matchParentSize()) {
+            val now = metrics()
+            val tickWidth = SCROLLBAR_TICK_WIDTH.toPx()
+            for (tick in ticks(size.height)) {
+                val y = (tick.fraction * size.height - tickHeight / 2)
+                    .coerceIn(0f, (size.height - tickHeight).coerceAtLeast(0f))
+                drawRoundRect(
+                    colors.getValue(tick.marker.kind),
+                    topLeft = Offset((size.width - tickWidth) / 2, y),
+                    size = Size(tickWidth, tickHeight),
+                    cornerRadius = CornerRadius(tickHeight / 2),
+                )
+            }
+            val thumb = scrollbarThumb(now, minThumb / size.height.coerceAtLeast(1f)) ?: return@Canvas
+            val thumbWidth = SCROLLBAR_THUMB_WIDTH.toPx()
             drawRoundRect(
-                colors.getValue(marker.kind),
-                topLeft = Offset((size.width - tickWidth) / 2, y),
-                size = Size(tickWidth, tickHeight),
-                cornerRadius = CornerRadius(tickHeight / 2),
+                thumbColor,
+                topLeft = Offset((size.width - thumbWidth) / 2, thumb.top * size.height),
+                size = Size(thumbWidth, thumb.size * size.height),
+                cornerRadius = CornerRadius(thumbWidth / 2),
             )
         }
-        val thumb = scrollbarThumb(now, SCROLLBAR_THUMB_MIN.toPx() / size.height.coerceAtLeast(1f)) ?: return@Canvas
-        val thumbWidth = SCROLLBAR_THUMB_WIDTH.toPx()
-        drawRoundRect(
-            thumbColor,
-            topLeft = Offset((size.width - thumbWidth) / 2, thumb.top * size.height),
-            size = Size(thumbWidth, thumb.size * size.height),
-            cornerRadius = CornerRadius(thumbWidth / 2),
+        // On a phone the lane is the screen edge: keep the back gesture off the thumb, so dragging
+        // it scrolls. Only around the thumb, as Android limits how much of an edge an app may claim.
+        Box(
+            Modifier.fillMaxWidth()
+                .layout { measurable, constraints ->
+                    val height = constraints.maxHeight
+                    val thumb = if (height > 0) scrollbarThumb(metrics(), minThumb / height) else null
+                    val area =
+                        if (thumb == null) 0
+                        else (thumb.size * height + 2 * SCROLLBAR_GESTURE_MARGIN.toPx()).roundToInt()
+                            .coerceAtMost(SCROLLBAR_GESTURE_MAX.roundToPx())
+                    val centre = thumb?.let { (it.top + it.size / 2) * height } ?: 0f
+                    val placeable = measurable.measure(Constraints.fixed(constraints.maxWidth, area))
+                    layout(constraints.maxWidth, height) {
+                        placeable.place(0, (centre - area / 2f).roundToInt().coerceIn(0, (height - area).coerceAtLeast(0)))
+                    }
+                }
+                .systemGestureExclusion()
         )
     }
 }
@@ -244,8 +327,14 @@ internal fun timelineMarkerLabel(kind: TimelineMarkerKind): Int =
 
 /** The chat history as a bottom sheet; picking an entry jumps to it and closes the sheet. */
 @Composable
-internal fun ChatHistorySheet(entries: List<ChatHistoryEntry>, onDismiss: () -> Unit, onOpen: (itemId: String) -> Unit) {
+internal fun ChatHistorySheet(
+    entries: List<ChatHistoryEntry>,
+    onDismiss: () -> Unit,
+    onOpen: (itemId: String) -> Unit,
+    initialIndex: Int = 0,
+) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(Modifier.fillMaxWidth().testTag("chatHistorySheet").navigationBarsPadding()) {
             Text(
@@ -253,9 +342,9 @@ internal fun ChatHistorySheet(entries: List<ChatHistoryEntry>, onDismiss: () -> 
                 Modifier.padding(horizontal = 24.dp, vertical = 12.dp).semantics { heading() },
                 style = MaterialTheme.typography.titleLarge,
             )
-            ChatHistoryList(entries, Modifier.fillMaxWidth()) {
+            ChatHistoryList(entries, Modifier.fillMaxWidth(), initialIndex) {
                 onOpen(it)
-                onDismiss()
+                scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
             }
         }
     }
@@ -268,6 +357,7 @@ internal fun ChatHistoryPane(
     onOpen: (itemId: String) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    initialIndex: Int = 0,
 ) {
     BackHandler(onBack = onClose)
     Surface(modifier.fillMaxSize().testTag("chatHistoryPane")) {
@@ -288,13 +378,18 @@ internal fun ChatHistoryPane(
                     }
                 }
             }
-            ChatHistoryList(entries, Modifier.weight(1f).fillMaxWidth(), onOpen)
+            ChatHistoryList(entries, Modifier.weight(1f).fillMaxWidth(), initialIndex, onOpen)
         }
     }
 }
 
 @Composable
-private fun ChatHistoryList(entries: List<ChatHistoryEntry>, modifier: Modifier, onOpen: (itemId: String) -> Unit) {
+private fun ChatHistoryList(
+    entries: List<ChatHistoryEntry>,
+    modifier: Modifier,
+    initialIndex: Int,
+    onOpen: (itemId: String) -> Unit,
+) {
     if (entries.isEmpty()) {
         Text(
             stringResource(R.string.remote_chat_history_empty),
@@ -304,7 +399,9 @@ private fun ChatHistoryList(entries: List<ChatHistoryEntry>, modifier: Modifier,
         )
         return
     }
-    LazyColumn(modifier.testTag("chatHistoryList"), contentPadding = PaddingValues(bottom = 16.dp)) {
+    // Opens where the chat stands, so the nearby entries are at hand in a long chat.
+    val state = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex.coerceIn(0, entries.lastIndex))
+    LazyColumn(modifier.testTag("chatHistoryList"), state = state, contentPadding = PaddingValues(bottom = 16.dp)) {
         items(entries, key = { it.itemId }) { entry -> ChatHistoryRow(entry) { onOpen(entry.itemId) } }
     }
 }
@@ -322,8 +419,8 @@ private fun ChatHistoryRow(entry: ChatHistoryEntry, onClick: () -> Unit) {
         }
     val time =
         entry.timestamp?.let {
-            (if (DateUtils.isToday(it)) DateFormat.getTimeFormat(context) else DateFormat.getDateFormat(context))
-                .format(Date(it))
+            val time = DateFormat.getTimeFormat(context).format(Date(it))
+            if (DateUtils.isToday(it)) time else "${DateFormat.getDateFormat(context).format(Date(it))} $time"
         }
     Row(
         Modifier.fillMaxWidth()

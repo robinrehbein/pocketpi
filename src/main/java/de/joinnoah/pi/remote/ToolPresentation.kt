@@ -312,8 +312,6 @@ internal enum class TimelineMarkerKind {
 /** A marked item; [index] is its position in the item list the markers were built from. */
 internal data class TimelineMarker(val itemId: String, val kind: TimelineMarkerKind, val index: Int)
 
-private const val MAX_TIMELINE_MARKERS = 200
-
 internal fun isErrorItem(item: ConversationItem): Boolean =
     when (item) {
         is ConversationItem.Activity -> item.state == "error"
@@ -336,13 +334,11 @@ internal fun timelineMarkerKind(item: ConversationItem): TimelineMarkerKind? =
         else -> null
     }
 
-/** Markers over the visible list, by index; only the most recent 200 are kept. */
-internal fun timelineMarkers(items: List<ConversationItem>): List<TimelineMarker> {
-    val markers = items.mapIndexedNotNull { index, item ->
+/** Markers over the visible list, by index. The scrollbar thins them to what its track can show. */
+internal fun timelineMarkers(items: List<ConversationItem>): List<TimelineMarker> =
+    items.mapIndexedNotNull { index, item ->
         timelineMarkerKind(item)?.let { TimelineMarker(item.id, it, index) }
     }
-    return markers.takeLast(MAX_TIMELINE_MARKERS)
-}
 
 // ---- Chat history -------------------------------------------------------------------------
 
@@ -357,9 +353,13 @@ internal data class ChatHistoryEntry(
 /** Longer texts are cut; a history row shows one line anyway. */
 private const val HISTORY_TEXT_CHARS = 160
 
+private val WHITESPACE = Regex("\\s+")
+
 /** [text] on one line: whitespace runs collapse to one space, blank text is null. */
 internal fun historyLine(text: String?): String? =
-    text?.trim()?.replace(Regex("\\s+"), " ")?.take(HISTORY_TEXT_CHARS)?.takeIf(String::isNotEmpty)
+    // Cut first: a long message is not worth collapsing in full for one line.
+    text?.trim()?.take(HISTORY_TEXT_CHARS * 2)?.replace(WHITESPACE, " ")?.take(HISTORY_TEXT_CHARS)?.trim()
+        ?.takeIf(String::isNotEmpty)
 
 /**
  * Every marked item in conversation order, with no cap: the history is a lazy list. Unlike the
@@ -375,6 +375,16 @@ internal fun chatHistory(items: List<ConversationItem>): List<ChatHistoryEntry> 
             (item as? ConversationItem.Bubble)?.timestamp,
         )
     }
+
+/**
+ * The history entry to show first: the last one at or before [currentId] in [order], the item at
+ * the top of the chat's viewport; 0 when there is none.
+ */
+internal fun historyAnchor(history: List<ChatHistoryEntry>, order: List<String>, currentId: String?): Int {
+    val current = currentId?.let(order::indexOf)?.takeIf { it >= 0 } ?: return 0
+    val positions = order.withIndex().associate { it.value to it.index }
+    return history.indexOfLast { (positions[it.itemId] ?: Int.MAX_VALUE) <= current }.coerceAtLeast(0)
+}
 
 private fun historyText(item: ConversationItem, kind: TimelineMarkerKind): String? =
     when (item) {

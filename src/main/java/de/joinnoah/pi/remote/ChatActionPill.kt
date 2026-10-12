@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.Edit
@@ -44,6 +45,7 @@ private fun ChatAction.icon(): ImageVector =
         ChatAction.SETTINGS -> Icons.Default.Settings
         ChatAction.NEW_SESSION -> Icons.Default.Add
         ChatAction.SESSION_SETTINGS -> Icons.Outlined.Tune
+        ChatAction.HISTORY -> Icons.AutoMirrored.Filled.List
     }
 
 private fun ChatAction.label(): Int =
@@ -55,6 +57,7 @@ private fun ChatAction.label(): Int =
         ChatAction.SETTINGS -> R.string.remote_settings
         ChatAction.NEW_SESSION -> R.string.remote_new_session
         ChatAction.SESSION_SETTINGS -> R.string.remote_session_settings_title
+        ChatAction.HISTORY -> R.string.remote_chat_history
     }
 
 /** The chat header pill: the most used actions as buttons, the rest behind a chevron. */

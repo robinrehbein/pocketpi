@@ -277,12 +277,11 @@ class ToolPresentationTest {
         // A failed user message counts as an error, not as the user's message.
         val failed = ConversationItem.Bubble("f", "f", "user", null, "hi", null, false, null, error = true)
         assertEquals(TimelineMarkerKind.ERROR, timelineMarkers(listOf(failed)).single().kind)
-        val many = (0 until 250).map { activity("m$it", "edit", "{}") }
-        val capped = timelineMarkers(many)
-        assertEquals(200, capped.size)
-        assertEquals("m50", capped.first().itemId)
-        assertEquals(50, capped.first().index)
-        assertEquals(249, capped.last().index)
+        // No cap: the scrollbar thins ticks along the whole track instead of dropping early ones.
+        val many = timelineMarkers((0 until 250).map { activity("m$it", "edit", "{}") })
+        assertEquals(250, many.size)
+        assertEquals(0, many.first().index)
+        assertEquals(249, many.last().index)
     }
 
     @Test
@@ -322,6 +321,23 @@ class ToolPresentationTest {
         assertEquals(null, chatHistory(listOf(activity("x", "questionnaire", "not json"))).single().text)
         assertEquals(160, historyLine("x".repeat(500))?.length)
         assertEquals(null, historyLine(" \n\t "))
+        assertEquals("a b", historyLine("a" + " ".repeat(100) + "b"))
+    }
+
+    @Test
+    fun historyOpensAtTheEntryForTheTopOfTheViewport() {
+        val history =
+            listOf(
+                ChatHistoryEntry("u1", TimelineMarkerKind.USER, "one"),
+                ChatHistoryEntry("e", TimelineMarkerKind.EDIT, null),
+                ChatHistoryEntry("u2", TimelineMarkerKind.USER, "two"),
+            )
+        val order = listOf("u1", "a1", "e", "a2", "u2", "a3")
+        assertEquals(1, historyAnchor(history, order, "a2"))
+        assertEquals(2, historyAnchor(history, order, "u2"))
+        assertEquals(0, historyAnchor(history, order, "u1"))
+        assertEquals(0, historyAnchor(history, order, null))
+        assertEquals(0, historyAnchor(history, order, "gone"))
     }
 
     @Test

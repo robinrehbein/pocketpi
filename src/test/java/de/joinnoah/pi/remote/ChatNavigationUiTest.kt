@@ -11,13 +11,15 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.swipeDown
-import androidx.compose.ui.test.swipeUp
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -107,7 +109,12 @@ class ChatNavigationUiTest {
 
     private fun label(id: Int) = compose.activity.getString(id)
 
+    /** A wide header has its own History button; a phone's has it in the pill or its menu. */
     private fun openHistory() {
+        if (compose.onAllNodesWithContentDescription(label(R.string.remote_chat_history)).fetchSemanticsNodes().isEmpty()) {
+            compose.onNodeWithTag("chatActionsMore").performClick()
+            compose.waitForIdle()
+        }
         compose.onNodeWithContentDescription(label(R.string.remote_chat_history)).performClick()
         compose.waitForIdle()
     }
@@ -135,14 +142,40 @@ class ChatNavigationUiTest {
         // Scrolled up: "scroll to latest" fades in within its fixed slot.
         compose.onNodeWithContentDescription(label(R.string.remote_scroll_to_bottom)).assertIsDisplayed()
         assertEquals(composerBefore, composerHeight())
-        compose.onNodeWithTag("conversationList").performTouchInput { swipeUp() }
-        compose.waitForIdle()
         compose.onNodeWithContentDescription(label(R.string.remote_scroll_to_bottom)).performClick()
         compose.waitForIdle()
         assertEquals(before, width())
         assertEquals(before, during)
         assertEquals(composerBefore, composerHeight())
         compose.onNodeWithTag("timelineToggle").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun draggingTheScrollbarUpStopsFollowingNewOutput() {
+        repository.state.value = repository.state.value.copy(status = "running")
+        render()
+        compose.onNodeWithText("Reply 29", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("chatScrollbar").performTouchInput {
+            swipe(androidx.compose.ui.geometry.Offset(centerX, height - 2f), androidx.compose.ui.geometry.Offset(centerX, height * 0.2f))
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("Reply 29", substring = true).assertDoesNotExist()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(messages = repository.state.value.messages + message("late", "assistant", "Late output"))
+        }
+        compose.waitForIdle()
+        // Still where the drag left it, with the way back offered.
+        compose.onNodeWithText("Late output").assertDoesNotExist()
+        compose.onNodeWithContentDescription(label(R.string.remote_scroll_to_bottom)).assertIsDisplayed()
+        // Dragging to the end follows again.
+        compose.onNodeWithTag("chatScrollbar").performTouchInput {
+            swipe(androidx.compose.ui.geometry.Offset(centerX, height * 0.2f), androidx.compose.ui.geometry.Offset(centerX, height - 1f))
+        }
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription(label(R.string.remote_scroll_to_bottom)).assertDoesNotExist()
+        compose.onNodeWithText("Late output").assertIsDisplayed()
     }
 
     @Test
@@ -165,6 +198,10 @@ class ChatNavigationUiTest {
         openHistory()
         compose.onNodeWithTag("chatHistorySheet").assertIsDisplayed()
         compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        // It opens where the chat stands, at its end.
+        compose.onNode(hasText("Question number 29") and hasAnyAncestor(hasTestTag("chatHistorySheet"))).assertIsDisplayed()
+        compose.onNode(hasTestTag("chatHistoryList") and hasAnyAncestor(hasTestTag("chatHistorySheet")))
+            .performScrollToNode(hasText("Question number 2"))
         compose.onNode(hasText("Question number 2") and hasAnyAncestor(hasTestTag("chatHistorySheet"))).performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("chatHistorySheet").assertDoesNotExist()
@@ -178,6 +215,8 @@ class ChatNavigationUiTest {
         openHistory()
         compose.onNodeWithTag("chatHistorySheet").assertDoesNotExist()
         compose.onNode(hasTestTag("chatHistoryPane") and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
+        compose.onNode(hasTestTag("chatHistoryList") and hasAnyAncestor(hasTestTag("chatHistoryPane")))
+            .performScrollToNode(hasText("Question number 1"))
         compose.onNode(hasText("Question number 1") and hasAnyAncestor(hasTestTag("chatHistoryPane"))).performClick()
         compose.waitForIdle()
         compose.onNode(hasText("Question number 1") and hasAnyAncestor(hasTestTag("conversationList"))).assertIsDisplayed()
