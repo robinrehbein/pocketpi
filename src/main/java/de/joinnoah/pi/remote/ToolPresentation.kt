@@ -444,7 +444,7 @@ internal sealed interface ChildResolution {
 internal fun sessionListItems(sessions: List<JsonObject>, connected: Boolean, loading: Boolean): List<SessionListItem> =
     sessions.mapNotNull { runCatching { sessionListItem(it, connected, loading) }.getOrNull() }
 
-private fun SessionListItem.live(): Boolean =
+internal fun SessionListItem.live(): Boolean =
     availability == SessionAvailability.RUNNING || availability == SessionAvailability.WAITING
 
 private fun AgentProgress.active(): Boolean = state == "running" || state == "queued"

@@ -345,6 +345,9 @@ internal class ChatViewModel(
 
     fun openChangesFile(path: String?) = active { repository.openChangesFile(path) }
 
+    fun openChangesSubagentFile(sessionId: String, path: String) =
+        active { repository.openChangesSubagentFile(sessionId, path) }
+
     fun requestChangesPreview(path: String) = active { repository.requestChangesPreview(path) }
 
     fun openFiles() = active(repository::openFiles)

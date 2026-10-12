@@ -279,6 +279,9 @@ interface RemoteRepository {
     /** Shows the diff of [path], or the file list again for null. */
     fun openChangesFile(path: String?) {}
 
+    /** Shows the diff of [path] from the changes of the subagent session [sessionId]. */
+    fun openChangesSubagentFile(sessionId: String, path: String) {}
+
     fun requestChangesPreview(path: String) {}
 
     /** `session.files.list`; only with [FILES_CAPABILITY]. Throws [RemoteRequestException]. */
