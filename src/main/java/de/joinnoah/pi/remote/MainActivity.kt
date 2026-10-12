@@ -119,12 +119,7 @@ internal fun RemoteApp(
 ) {
     val preferences by settings.state.collectAsStateWithLifecycle()
     val theme = preferences.theme
-    val dark =
-        when (theme) {
-            "dark", "synthwave" -> true
-            "light" -> false
-            else -> isSystemInDarkTheme()
-        }
+    val dark = isSystemInDarkTheme()
     val activity = LocalActivity.current
     val view = LocalView.current
     SideEffect {

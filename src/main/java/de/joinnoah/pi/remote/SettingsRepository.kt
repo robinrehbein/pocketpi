@@ -61,7 +61,7 @@ class DefaultSettingsRepository(context: Context) : SettingsRepository {
     private val mutable =
         MutableStateFlow(
             RemoteSettings(
-                preferences.getString("theme", "system") ?: "system",
+                if (preferences.getString("theme", "system") == "synthwave") "synthwave" else "system",
                 preferences.getBoolean("push_enabled", false),
                 preferences.getString("thinking_display", "status")?.takeIf {
                     it in setOf("status", "text")
@@ -77,7 +77,7 @@ class DefaultSettingsRepository(context: Context) : SettingsRepository {
     override val state = mutable.asStateFlow()
 
     override fun setTheme(theme: String) {
-        require(theme in setOf("system", "light", "dark", "synthwave"))
+        require(theme in setOf("system", "synthwave"))
         preferences.edit().putString("theme", theme).apply()
         mutable.value = mutable.value.copy(theme = theme)
     }
