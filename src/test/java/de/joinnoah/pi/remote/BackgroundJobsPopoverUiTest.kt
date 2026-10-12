@@ -130,6 +130,46 @@ class BackgroundJobsPopoverUiTest {
     }
 
     @Test
+    fun refreshesJobsAfterSessionFinishesLoadingWithCapabilitiesAlreadyKnown() {
+        val repository = NavigationFakeRepository()
+        val selection = RemoteSelection("host", "project", "session")
+        repository.state.value = RemoteState(
+            selection = selection,
+            connected = true,
+            loading = true,
+            status = "idle",
+            session = Wire.objectOf("id" to "session", "title" to "Session", "origin" to "tui", "status" to "idle"),
+            capabilities = setOf(BACKGROUND_JOBS_CAPABILITY, BACKGROUND_JOBS_LIST_LEASE_CAPABILITY),
+        )
+        repository.notificationLookup = {
+            repository.state.value = repository.state.value.copy(selection = selection)
+            selection
+        }
+        compose.setContent {
+            MaterialTheme {
+                RemoteNavigation(repository, FakeSettingsRepository(), false, {}, RemoteNotification("host", "session", 1))
+            }
+        }
+        compose.waitForIdle()
+        assertEquals(0, repository.jobRefreshes)
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(loading = false) }
+        compose.waitForIdle()
+        assertEquals(1, repository.jobRefreshes)
+        // A list response establishes the lease and makes jobs discoverable without opening an overview.
+        compose.runOnIdle {
+            repository.state.value = repository.state.value.copy(jobs = JobsState("session", listOf(job("one"))))
+        }
+        compose.onNodeWithTag("jobsChip").assertIsDisplayed()
+        assertEquals(1, repository.jobRefreshes)
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(loading = true) }
+        compose.waitForIdle()
+        assertEquals(1, repository.jobRefreshes)
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(loading = false) }
+        compose.waitForIdle()
+        assertEquals(2, repository.jobRefreshes)
+    }
+
+    @Test
     fun longOverviewScrollsAndRetainsFailureMessage() {
         compose.setContent {
             MaterialTheme {
