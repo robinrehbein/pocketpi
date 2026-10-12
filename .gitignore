@@ -1,7 +1,6 @@
 /.gradle/
 /.kotlin/
-/build/
-/benchmarks/build/
+**/build/
 /local.properties
 /.idea/
 /.release/

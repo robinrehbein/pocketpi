@@ -12,6 +12,20 @@ From the repository root, with JDK 25 and the Android SDK configured:
 adb install build/outputs/apk/debug/pocketpi-debug.apk
 ```
 
+## Wear OS
+
+The `wear` module adds an independent Galaxy Watch Ultra / Wear OS client with its own Mac
+pairing and encrypted connection. It offers watch-native chat, questions, session/model/Advisor
+controls, file and diff readers, review comments, branches, background jobs and folder management.
+The phone can scan the watch's pairing QR code and open matching sessions for photos/documents;
+it never copies its device credentials to the watch.
+
+Build with `./gradlew :wear:assembleDebug :wear:testDebugUnitTest :wear:lintDebug` and install
+`wear/build/outputs/apk/debug/wear-debug.apk` on the watch. See
+[`docs/wear-os.md`](docs/wear-os.md) for setup, small-screen interaction, optional independent push,
+release boundaries and the required Galaxy Watch Ultra device checks. Use `:bundleRelease` for a
+phone-only release; watch release artifacts require their own unused Play version code.
+
 ## Continuous integration
 
 [`Android CI`](.github/workflows/ci.yml) checks the exact head commit of each pull request
