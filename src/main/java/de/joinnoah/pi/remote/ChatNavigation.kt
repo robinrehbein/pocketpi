@@ -1,11 +1,18 @@
 package de.joinnoah.pi.remote
 
+import android.animation.ValueAnimator
 import android.text.format.DateFormat
 import android.text.format.DateUtils
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.scrollBy
@@ -17,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
@@ -26,11 +34,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -41,6 +53,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import java.text.NumberFormat
 import java.util.Date
 import kotlin.math.abs
 import kotlin.math.floor
@@ -111,6 +124,17 @@ internal fun scrollbarSeek(fraction: Float, thumbSize: Float, metrics: ScrollMet
 internal fun nearestTick(ticks: List<Float>, fraction: Float, slop: Float): Int? =
     ticks.indices.minByOrNull { abs(ticks[it] - fraction) }?.takeIf { abs(ticks[it] - fraction) <= slop }
 
+/**
+ * What the bubble beside a held scrollbar names: the kind of the tick nearest the thumb's middle,
+ * when one lies within [slop] of it, or null for a plain position.
+ */
+internal fun scrollbarBubbleKind(ticks: List<ScrollbarTick>, thumb: ScrollbarThumb, slop: Float): TimelineMarkerKind? =
+    nearestTick(ticks.map { it.fraction }, thumb.top + thumb.size / 2, slop)?.let { ticks[it].marker.kind }
+
+/** How far through the list the thumb stands, from 0 at the top to 1 at the end. */
+internal fun scrollbarProgress(thumb: ScrollbarThumb): Float =
+    if (thumb.size >= 1f) 0f else (thumb.top / (1f - thumb.size)).coerceIn(0f, 1f)
+
 /** Long chats get the bar even with few markers: it still shows where the reader is. */
 private const val SCROLLBAR_MIN_ITEMS = 30
 
@@ -122,10 +146,22 @@ internal fun chatScrollbarVisible(scrollable: Boolean, markers: Int, items: Int)
 
 /** The lane the bar sits in: the list's end padding, so it never covers a message. */
 internal val CHAT_SCROLLBAR_LANE = 20.dp
-private val SCROLLBAR_THUMB_WIDTH = 4.dp
+
+/** The thumb and the ticks share this axis, measured from the lane's end. */
+private val SCROLLBAR_AXIS_END = 7.dp
+
+/** A hairline at rest, so the bar stays calm while reading; it grows while the user holds it. */
+internal val SCROLLBAR_THUMB_WIDTH = 2.dp
+internal val SCROLLBAR_THUMB_HELD_WIDTH = 8.dp
 private val SCROLLBAR_THUMB_MIN = 24.dp
-private val SCROLLBAR_TICK_WIDTH = 10.dp
+private val SCROLLBAR_TICK_WIDTH = 5.dp
 private val SCROLLBAR_TICK_HEIGHT = 3.dp
+
+/** How close to the thumb's middle, as a share of the track, a tick names the bubble. */
+private const val SCROLLBAR_BUBBLE_SLOP = 0.04f
+
+/** The gap between the bubble and the lane. */
+private val SCROLLBAR_BUBBLE_GAP = 4.dp
 
 /** How far from a tick a tap still jumps to it. */
 private val SCROLLBAR_TAP_SLOP = 16.dp
@@ -181,7 +217,9 @@ private val SCROLLBAR_GESTURE_MAX = 150.dp
 /**
  * A thin scrollbar with a coloured tick per marker. It is always there while it is [chatScrollbarVisible]
  * and never moves the list's content. A drag scrolls the list, a tap near a tick jumps to its item.
- * TalkBack skips it: the chat history is the accessible way to the same places.
+ * While the user holds it, the thumb widens and a bubble beside the lane names the nearest marker
+ * or the position; only that bubble reaches over the messages. TalkBack skips all of it: the chat
+ * history is the accessible way to the same places.
  *
  * [listIndex] turns a marker's index in the shown items into its index in the lazy list. [onSeek]
  * reports each drag position and the drag's end, with whether the list then stands at its end.
@@ -197,12 +235,22 @@ internal fun ChatScrollbar(
 ) {
     val scope = rememberCoroutineScope()
     var dragging by remember { mutableStateOf(false) }
+    var touching by remember { mutableStateOf(false) }
+    val held = dragging || touching
     val currentMarkers by rememberUpdatedState(markers)
     val currentListIndex by rememberUpdatedState(listIndex)
     val currentJump by rememberUpdatedState(onJump)
     val currentSeek by rememberUpdatedState(onSeek)
     val colors = TimelineMarkerKind.entries.associateWith { timelineMarkerColor(it) }
-    val thumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = if (dragging) 0.6f else 0.35f)
+    // Reduced motion switches between the two looks without the grow.
+    val motion = ValueAnimator.areAnimatorsEnabled()
+    val thumbWidth by animateDpAsState(
+        if (held) SCROLLBAR_THUMB_HELD_WIDTH else SCROLLBAR_THUMB_WIDTH,
+        if (motion) tween(150) else snap(),
+        label = "scrollbarThumbWidth",
+    )
+    val thumbAlpha by animateFloatAsState(if (held) 0.6f else 0.35f, if (motion) tween(150) else snap(), label = "scrollbarThumbAlpha")
+    val thumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = thumbAlpha)
     val density = LocalDensity.current
     val minThumb = with(density) { SCROLLBAR_THUMB_MIN.toPx() }
     val tickHeight = with(density) { SCROLLBAR_TICK_HEIGHT.toPx() }
@@ -234,83 +282,149 @@ internal fun ChatScrollbar(
             }
         }
     }
-    Box(
-        modifier
-            .width(CHAT_SCROLLBAR_LANE)
-            .fillMaxHeight()
-            .testTag("chatScrollbar")
-            // TalkBack reaches the same places through the chat history.
-            .clearAndSetSemantics {}
-            .pointerInput(listState) {
-                detectVerticalDragGestures(
-                    onDragStart = { offset ->
-                        dragging = true
-                        seek(offset.y, size.height)
-                    },
-                    onDragEnd = {
-                        dragging = false
-                        currentSeek(!listState.canScrollForward)
-                    },
-                    onDragCancel = {
-                        dragging = false
-                        currentSeek(!listState.canScrollForward)
-                    },
-                ) { change, _ ->
-                    change.consume()
-                    seek(change.position.y, size.height)
-                }
-            }
-            .pointerInput(listState) {
-                val slop = SCROLLBAR_TAP_SLOP.toPx()
-                detectTapGestures { offset ->
-                    if (size.height <= 0) return@detectTapGestures
-                    val shown = ticks(size.height.toFloat())
-                    nearestTick(shown.map { it.fraction }, offset.y / size.height, slop / size.height)
-                        ?.let { currentJump(shown[it].marker.itemId) }
-                }
-            }
-    ) {
-        Canvas(Modifier.matchParentSize()) {
-            val now = metrics()
-            val tickWidth = SCROLLBAR_TICK_WIDTH.toPx()
-            for (tick in ticks(size.height)) {
-                val y = (tick.fraction * size.height - tickHeight / 2)
-                    .coerceIn(0f, (size.height - tickHeight).coerceAtLeast(0f))
-                drawRoundRect(
-                    colors.getValue(tick.marker.kind),
-                    topLeft = Offset((size.width - tickWidth) / 2, y),
-                    size = Size(tickWidth, tickHeight),
-                    cornerRadius = CornerRadius(tickHeight / 2),
-                )
-            }
-            val thumb = scrollbarThumb(now, minThumb / size.height.coerceAtLeast(1f)) ?: return@Canvas
-            val thumbWidth = SCROLLBAR_THUMB_WIDTH.toPx()
-            drawRoundRect(
-                thumbColor,
-                topLeft = Offset((size.width - thumbWidth) / 2, thumb.top * size.height),
-                size = Size(thumbWidth, thumb.size * size.height),
-                cornerRadius = CornerRadius(thumbWidth / 2),
-            )
-        }
-        // On a phone the lane is the screen edge: keep the back gesture off the thumb, so dragging
-        // it scrolls. Only around the thumb, as Android limits how much of an edge an app may claim.
+    var laneHeight by remember { mutableIntStateOf(0) }
+    Box(modifier.width(CHAT_SCROLLBAR_LANE).fillMaxHeight().onSizeChanged { laneHeight = it.height }) {
         Box(
-            Modifier.fillMaxWidth()
-                .layout { measurable, constraints ->
-                    val height = constraints.maxHeight
-                    val thumb = if (height > 0) scrollbarThumb(metrics(), minThumb / height) else null
-                    val area =
-                        if (thumb == null) 0
-                        else (thumb.size * height + 2 * SCROLLBAR_GESTURE_MARGIN.toPx()).roundToInt()
-                            .coerceAtMost(SCROLLBAR_GESTURE_MAX.roundToPx())
-                    val centre = thumb?.let { (it.top + it.size / 2) * height } ?: 0f
-                    val placeable = measurable.measure(Constraints.fixed(constraints.maxWidth, area))
-                    layout(constraints.maxWidth, height) {
-                        placeable.place(0, (centre - area / 2f).roundToInt().coerceIn(0, (height - area).coerceAtLeast(0)))
+            Modifier.matchParentSize()
+                .testTag("chatScrollbar")
+                // TalkBack reaches the same places through the chat history.
+                .clearAndSetSemantics {}
+                // Watches without consuming, so the bar looks held from the first touch on.
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        touching = true
+                        try {
+                            do {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                            } while (event.changes.any { it.pressed })
+                        } finally {
+                            touching = false
+                        }
                     }
                 }
-                .systemGestureExclusion()
+                .pointerInput(listState) {
+                    detectVerticalDragGestures(
+                        onDragStart = { offset ->
+                            dragging = true
+                            seek(offset.y, size.height)
+                        },
+                        onDragEnd = {
+                            dragging = false
+                            currentSeek(!listState.canScrollForward)
+                        },
+                        onDragCancel = {
+                            dragging = false
+                            currentSeek(!listState.canScrollForward)
+                        },
+                    ) { change, _ ->
+                        change.consume()
+                        seek(change.position.y, size.height)
+                    }
+                }
+                .pointerInput(listState) {
+                    val slop = SCROLLBAR_TAP_SLOP.toPx()
+                    detectTapGestures { offset ->
+                        if (size.height <= 0) return@detectTapGestures
+                        val shown = ticks(size.height.toFloat())
+                        nearestTick(shown.map { it.fraction }, offset.y / size.height, slop / size.height)
+                            ?.let { currentJump(shown[it].marker.itemId) }
+                    }
+                }
+        ) {
+            Canvas(Modifier.matchParentSize()) {
+                val tickWidth = SCROLLBAR_TICK_WIDTH.toPx()
+                val axis = size.width - SCROLLBAR_AXIS_END.toPx()
+                for (tick in ticks(size.height)) {
+                    val y = (tick.fraction * size.height - tickHeight / 2)
+                        .coerceIn(0f, (size.height - tickHeight).coerceAtLeast(0f))
+                    drawRoundRect(
+                        colors.getValue(tick.marker.kind),
+                        topLeft = Offset(axis - tickWidth / 2, y),
+                        size = Size(tickWidth, tickHeight),
+                        cornerRadius = CornerRadius(tickHeight / 2),
+                    )
+                }
+            }
+            // On a phone the lane is the screen edge: keep the back gesture off the thumb, so dragging
+            // it scrolls. Only around the thumb, as Android limits how much of an edge an app may claim.
+            Box(
+                Modifier.fillMaxWidth()
+                    .layout { measurable, constraints ->
+                        val height = constraints.maxHeight
+                        val thumb = if (height > 0) scrollbarThumb(metrics(), minThumb / height) else null
+                        val area =
+                            if (thumb == null) 0
+                            else (thumb.size * height + 2 * SCROLLBAR_GESTURE_MARGIN.toPx()).roundToInt()
+                                .coerceAtMost(SCROLLBAR_GESTURE_MAX.roundToPx())
+                        val centre = thumb?.let { (it.top + it.size / 2) * height } ?: 0f
+                        val placeable = measurable.measure(Constraints.fixed(constraints.maxWidth, area))
+                        layout(constraints.maxWidth, height) {
+                            placeable.place(0, (centre - area / 2f).roundToInt().coerceIn(0, (height - area).coerceAtLeast(0)))
+                        }
+                    }
+                    .systemGestureExclusion()
+            )
+        }
+        // The thumb is a column of its own width on the ticks' axis; it takes no input.
+        Box(
+            Modifier.align(Alignment.TopEnd)
+                .padding(end = SCROLLBAR_AXIS_END - thumbWidth / 2)
+                .width(thumbWidth)
+                .fillMaxHeight()
+                .testTag("chatScrollbarThumb")
+                .drawBehind {
+                    val thumb = scrollbarThumb(metrics(), minThumb / size.height.coerceAtLeast(1f)) ?: return@drawBehind
+                    drawRoundRect(
+                        thumbColor,
+                        topLeft = Offset(0f, thumb.top * size.height),
+                        size = Size(size.width, thumb.size * size.height),
+                        cornerRadius = CornerRadius(size.width / 2),
+                    )
+                }
         )
+        if (held) ScrollbarBubble(laneHeight, minThumb, ::metrics, ::ticks)
+    }
+}
+
+/**
+ * The held bar's bubble, to the start of the lane and centred on the thumb. It names the nearest
+ * marker's kind or the position in percent, and stays out of the accessibility tree like the bar.
+ */
+@Composable
+private fun ScrollbarBubble(
+    laneHeight: Int,
+    minThumb: Float,
+    metrics: () -> ScrollMetrics,
+    ticks: (height: Float) -> List<ScrollbarTick>,
+) {
+    val thumb by remember(laneHeight) {
+        derivedStateOf { if (laneHeight > 0) scrollbarThumb(metrics(), minThumb / laneHeight) else null }
+    }
+    val current = thumb ?: return
+    val kind = remember(current, laneHeight) { scrollbarBubbleKind(ticks(laneHeight.toFloat()), current, SCROLLBAR_BUBBLE_SLOP) }
+    val locale = LocalConfiguration.current.locales[0]
+    val text =
+        if (kind != null) stringResource(timelineMarkerLabel(kind))
+        else NumberFormat.getPercentInstance(locale).format(scrollbarProgress(current).toDouble())
+    Box(
+        Modifier.layout { measurable, constraints ->
+            val placeable = measurable.measure(Constraints())
+            val centre = (current.top + current.size / 2) * constraints.maxHeight
+            layout(0, 0) {
+                placeable.place(
+                    -placeable.width - SCROLLBAR_BUBBLE_GAP.roundToPx(),
+                    (centre - placeable.height / 2f).roundToInt()
+                        .coerceIn(0, (constraints.maxHeight - placeable.height).coerceAtLeast(0)),
+                )
+            }
+        }
+            .testTag("chatScrollbarBubble")
+            .clearAndSetSemantics {}
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+    ) {
+        Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
     }
 }
 

@@ -180,6 +180,31 @@ class ChatNavigationUiTest {
 
     @Test
     @Config(qualifiers = "w411dp-h891dp")
+    fun holdingTheScrollbarWidensTheThumbAndShowsTheBubble() {
+        render()
+        fun thumbWidth() = compose.onNodeWithTag("chatScrollbarThumb").getUnclippedBoundsInRoot().let { it.right - it.left }
+        val lane = compose.onNodeWithTag("chatScrollbar").getUnclippedBoundsInRoot()
+        assertEquals(SCROLLBAR_THUMB_WIDTH.value, thumbWidth().value, 0.5f)
+        compose.onNodeWithTag("chatScrollbarBubble").assertDoesNotExist()
+        compose.onNodeWithTag("chatScrollbar").performTouchInput {
+            down(androidx.compose.ui.geometry.Offset(centerX, height - 2f))
+            moveTo(androidx.compose.ui.geometry.Offset(centerX, height * 0.5f))
+        }
+        compose.waitForIdle()
+        assertEquals(SCROLLBAR_THUMB_HELD_WIDTH.value, thumbWidth().value, 0.5f)
+        val thumb = compose.onNodeWithTag("chatScrollbarThumb").getUnclippedBoundsInRoot()
+        assertTrue("The thumb leaves the lane", thumb.left >= lane.left && thumb.right <= lane.right)
+        // The bubble sits to the start of the lane.
+        val bubble = compose.onNodeWithTag("chatScrollbarBubble").getUnclippedBoundsInRoot()
+        assertTrue("The bubble at ${bubble.right} reaches into the lane at ${lane.left}", bubble.right <= lane.left)
+        compose.onNodeWithTag("chatScrollbar").performTouchInput { up() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatScrollbarBubble").assertDoesNotExist()
+        assertEquals(SCROLLBAR_THUMB_WIDTH.value, thumbWidth().value, 0.5f)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
     fun scrollbarSitsInTheEndPaddingBesideTheMessages() {
         render()
         val bar = compose.onNodeWithTag("chatScrollbar").getUnclippedBoundsInRoot()

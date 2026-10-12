@@ -115,6 +115,18 @@ class ChatNavigationTest {
     }
 
     @Test
+    fun theBubbleNamesANearbyTickOrThePosition() {
+        fun tick(kind: TimelineMarkerKind, fraction: Float) = ScrollbarTick(TimelineMarker(kind.name, kind, 0), fraction)
+        val ticks = listOf(tick(TimelineMarkerKind.USER, 0.2f), tick(TimelineMarkerKind.ERROR, 0.6f))
+        // The thumb's middle at 0.62 lies beside the error; at 0.4 nothing is near.
+        assertEquals(TimelineMarkerKind.ERROR, scrollbarBubbleKind(ticks, ScrollbarThumb(0.57f, 0.1f), 0.04f))
+        assertNull(scrollbarBubbleKind(ticks, ScrollbarThumb(0.35f, 0.1f), 0.04f))
+        assertEquals(0f, scrollbarProgress(ScrollbarThumb(0f, 0.1f)), 1e-6f)
+        assertEquals(0.5f, scrollbarProgress(ScrollbarThumb(0.45f, 0.1f)), 1e-6f)
+        assertEquals(1f, scrollbarProgress(ScrollbarThumb(0.9f, 0.1f)), 1e-6f)
+    }
+
+    @Test
     fun aTapJumpsOnlyToATickWithinTheSlop() {
         val ticks = listOf(0.1f, 0.5f, 0.52f, 0.9f)
         assertEquals(2, nearestTick(ticks, 0.53f, 0.02f))
