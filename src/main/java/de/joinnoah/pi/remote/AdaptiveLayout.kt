@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.widthIn
@@ -584,11 +585,16 @@ private data class ProjectColumnsScene(
             // session list and the chat are measured once per change and never while the column
             // grows or shrinks. The column draws its changing width above them, and they follow
             // its edge by moving only.
+            // Each column applies only the side insets of the screen edge it touches; a cutout or
+            // navigation bar beside the projects column would otherwise indent the list next to it.
+            val startInset = WindowInsets.safeDrawing.only(WindowInsetsSides.Start)
+            val endInset = WindowInsets.safeDrawing.only(WindowInsetsSides.End)
             Row(Modifier.fillMaxSize().background(background)) {
                 if (projects != null) {
                     Box(
                         Modifier.width(projectsTarget)
                             .fillMaxHeight()
+                            .consumeWindowInsets(endInset)
                             .zIndex(1f)
                             .testTag(if (strip) "projectStrip" else "projectsPane")
                     ) {
@@ -619,6 +625,7 @@ private data class ProjectColumnsScene(
                 Row(
                     Modifier.weight(1f)
                         .fillMaxHeight()
+                        .then(if (projects != null) Modifier.consumeWindowInsets(startInset) else Modifier)
                         .graphicsLayer {
                             if (projects != null) translationX = (projectsShown() - projectsTarget).toPx() * direction
                         }
@@ -629,6 +636,7 @@ private data class ProjectColumnsScene(
                         Box(
                             Modifier.width(listWidth)
                                 .fillMaxHeight()
+                                .consumeWindowInsets(endInset)
                                 .testTag("sessionListPane")
                                 .column(listEnter, top = detail == null)
                         ) {
@@ -640,7 +648,12 @@ private data class ProjectColumnsScene(
                         }
                         VerticalDivider()
                     }
-                    Box(Modifier.weight(1f).fillMaxHeight().testTag("chatPane")) {
+                    Box(
+                        Modifier.weight(1f)
+                            .fillMaxHeight()
+                            .then(if (list != null && !collapsed) Modifier.consumeWindowInsets(startInset) else Modifier)
+                            .testTag("chatPane")
+                    ) {
                         when {
                             list == null -> DetailPlaceholder(R.string.remote_projects_column_empty, "projectsPlaceholder")
                             detail == null -> DetailPlaceholder(R.string.remote_two_pane_empty, "chatPlaceholder")

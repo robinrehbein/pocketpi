@@ -278,7 +278,7 @@ internal fun RemoteScreen(
     val messageFork =
         if (chatKey != null && canFork(state))
             MessageFork(
-                ready = state.connected && !state.loading && forkStopped(state),
+                ready = state.connected && !state.loading && !navigator.mutating && forkStopped(state),
                 stopFirst = forkRunning(state),
                 onFork = { messageId, mode -> navigator.forkSession(chatKey, messageId, mode) },
             )
@@ -674,6 +674,8 @@ internal fun RemoteScreen(
         val invocation =
             localInvocation(state, availableLocalCommands(state, true, System.currentTimeMillis(), reloading))
                 ?: return false
+        // Keeps the typed `/new` while another create is in flight; the navigator would drop it.
+        if (invocation.command == LocalCommand.NEW && navigator.mutating) return true
         model.draft("")
         when (invocation.command) {
             LocalCommand.NEW -> navigator.createSession(chat.routeId, chat.projectId)
@@ -776,7 +778,7 @@ internal fun RemoteScreen(
                         if (canViewChanges(state) && state.connected) add(ChatAction.CHANGES)
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
                         if (canRename) add(ChatAction.RENAME)
-                        if (state.connected && !state.loading) add(ChatAction.NEW_SESSION)
+                        if (state.connected && !state.loading && !navigator.mutating) add(ChatAction.NEW_SESSION)
                         // Offered while pi runs (the sheet then explains it is read-only); `/settings` is typed into an idle draft only.
                         if (state.connected && !state.loading && sessionSettingsAvailable(state))
                             add(ChatAction.SESSION_SETTINGS)
@@ -1032,7 +1034,7 @@ internal fun RemoteScreen(
                             else scan = true
                         },
                         enabled =
-                            if (key is RemoteNavKey.Sessions) state.connected && !state.loading
+                            if (key is RemoteNavKey.Sessions) state.connected && !state.loading && !navigator.mutating
                             else true,
                         modifier = Modifier.size(64.dp),
                     ) {
@@ -2019,6 +2021,7 @@ internal fun RemoteScreen(
                             },
                             onAbort = model::abort,
                             onDismiss = { treeSheetRequested = false },
+                            forkBlocked = navigator.mutating,
                         )
                     if (artifactsSheetRequested && chatKey != null && treeSessionId != null && treeChat != null &&
                         canShowArtifacts(state))

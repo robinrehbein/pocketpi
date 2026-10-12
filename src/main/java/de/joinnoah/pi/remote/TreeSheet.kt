@@ -79,6 +79,7 @@ private fun kindLabel(kind: TreeNodeKind): Int =
  * `/tree`: the session's tree, with "Continue from here" (moves the session in place) and "Fork
  * from here" (a new session) for the row the user taps. [load] reads the tree, [navigate] moves the
  * session ([scope] runs it); [onFork] starts the fork, and [onAbort] stops a running summary.
+ * [forkBlocked] greys out the fork while another create or fork is in flight.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -90,6 +91,7 @@ internal fun SessionTreeSheet(
     onFork: (nodeId: String) -> Unit,
     onAbort: () -> Unit,
     onDismiss: () -> Unit,
+    forkBlocked: Boolean = false,
 ) {
     var ui by remember { mutableStateOf<TreeUi>(TreeUi.Loading) }
     var reload by remember { mutableIntStateOf(0) }
@@ -187,6 +189,7 @@ internal fun SessionTreeSheet(
                             onContinue = { asking = true },
                             onFork = { onFork(selected.id) },
                             onCancel = onAbort,
+                            forkBlocked = forkBlocked,
                         )
                     else if (notice != null)
                         Text(
@@ -366,6 +369,7 @@ private fun TreeActions(
     onContinue: () -> Unit,
     onFork: () -> Unit,
     onCancel: () -> Unit,
+    forkBlocked: Boolean,
 ) {
     val availability = continueAvailability(state, tree, node)
     val canFork = canForkFromNode(state, node)
@@ -419,7 +423,7 @@ private fun TreeActions(
         }
         OutlinedButton(
             onClick = onFork,
-            enabled = idle && canFork,
+            enabled = idle && canFork && !forkBlocked,
             modifier = Modifier.fillMaxWidth().testTag("treeFork"),
         ) {
             Text(stringResource(R.string.remote_tree_fork))

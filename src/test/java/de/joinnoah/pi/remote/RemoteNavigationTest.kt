@@ -554,4 +554,21 @@ class RemoteNavigationTest {
         assertEquals(1, repository.forks.size)
         assertEquals(0, repository.createdSessions)
     }
+
+    @Test
+    fun `a create that ends without a session releases the guard`() = runTest {
+        val repository = NavigationFakeRepository()
+        repository.create = { _, _ -> throw CancellationException("connection dropped") }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.createSession("host", "project")
+        runCurrent()
+        assertFalse(navigation.mutating)
+        assertEquals(listOf<NavKey>(RemoteNavKey.Hosts), stack)
+        repository.create = { routeId, projectId -> RemoteSelection(routeId, projectId, "second") }
+        navigation.createSession("host", "project")
+        runCurrent()
+        assertEquals(2, repository.createdSessions)
+        assertEquals(RemoteNavKey.Chat("host", "project", "second"), stack.last())
+    }
 }
