@@ -529,4 +529,7 @@
     </plurals>
     <string name="remote_mermaid_too_large">Diagram too large to draw. Showing the code instead.</string>
     <string name="remote_mermaid_failed">This diagram could not be drawn. Open it to see the code.</string>
+    <string name="remote_jobs_expand">Expand background jobs</string>
+    <string name="remote_jobs_collapse">Collapse background jobs</string>
+    <string name="remote_jobs_close">Close background jobs</string>
 </resources>

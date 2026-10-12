@@ -56,8 +56,6 @@ internal fun SessionControls(
     setThinking: (String) -> Unit,
     refreshCommands: () -> Unit,
     selectCommand: (RemoteCommand) -> Unit,
-    refreshJobs: () -> Unit = {},
-    openJobs: (() -> Unit)? = null,
     /** The [LocalCommand]s that can run now; they lead the slash suggestions and shadow host commands. */
     localCommands: List<LocalCommand> = emptyList(),
     selectLocalCommand: (LocalCommand) -> Unit = {},
@@ -156,15 +154,6 @@ internal fun SessionControls(
     ) {
         if (state.connected && state.selection.sessionId != null) refreshContextUsage()
     }
-    val jobsAvailable = canUseBackgroundJobs(state)
-    val jobsLeasable = canLeaseJobsList(state)
-    // Job events need a watch lease, so the chip's list is read on open, after reconnecting, and
-    // again the moment the host advertises the list-lease capability mid-connection (capabilities
-    // are merged in additively as later projects.list replies arrive).
-    LaunchedEffect(state.selection.sessionId, state.connected, jobsAvailable, jobsLeasable) {
-        if (state.connected && jobsAvailable && openJobs != null) refreshJobs()
-    }
-    val visibleJobs = visibleJobs(state)
     val usage = state.contextUsage?.takeIf { context ->
         context.sessionId == state.selection.sessionId &&
             (confirmed?.model == null || context.modelProvider == null ||
@@ -246,8 +235,6 @@ internal fun SessionControls(
                     )
                 }
             }
-            if (visibleJobs != null && openJobs != null)
-                BackgroundJobsChip(visibleJobs, configurationChipColors, openJobs)
             if (loadingContext) LoadingControlPill(80.dp)
             else AssistChip(
                 onClick = {

@@ -217,6 +217,13 @@ internal fun RemoteScreen(
         }
     val chatKey = key as? RemoteNavKey.Chat
     val chatModel = model as? ChatViewModel
+    val jobsAvailable = canUseBackgroundJobs(state)
+    val jobsLeasable = canLeaseJobsList(state)
+    // Preserve list refreshes on selection, reconnect and a newly advertised list lease.
+    LaunchedEffect(state.selection.sessionId, state.connected, jobsAvailable, jobsLeasable) {
+        if (state.connected && jobsAvailable) chatModel?.refreshJobs()
+    }
+    val statusJobs = visibleJobs(state)?.takeIf { chatModel != null }
     val sentImages =
         state.selection.sessionId?.takeIf { chatModel != null }?.let { sessionId ->
             val supported = ATTACHMENT_READ_CAPABILITY in state.capabilities
@@ -1877,7 +1884,7 @@ internal fun RemoteScreen(
                         }
                     }
                     if (touched.total > 0 || errorCount > 0 || onlyErrorsShown ||
-                        strip.entries.isNotEmpty() || !autoFollow || timelineControlsShown
+                        strip.entries.isNotEmpty() || statusJobs != null || !autoFollow || timelineControlsShown
                     )
                         Row(
                             Modifier.fillMaxWidth().testTag("chatInsights"),
@@ -1902,6 +1909,14 @@ internal fun RemoteScreen(
                                         savedViewport = viewportPositions[chatKey]
                                         viewportRestorePending = savedViewport?.following == false
                                         autoFollow = savedViewport?.following ?: false
+                                    }
+                                }
+                                statusJobs?.let { jobs ->
+                                    key(jobs.sessionId) {
+                                        val chat = checkNotNull(chatModel)
+                                        BackgroundJobsChip(jobs, remember(chat) {
+                                            JobsActions(chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs, chat::stopJob)
+                                        })
                                     }
                                 }
                                 SubagentStrip(
@@ -2007,8 +2022,6 @@ internal fun RemoteScreen(
                                 model::setThinkingLevel,
                                 model::refreshCommands,
                                 model::selectCommand,
-                                refreshJobs = { chatModel?.refreshJobs() },
-                                openJobs = chatModel?.let { chat -> chat::openJobs },
                                 localCommands =
                                     availableLocalCommands(state, key is RemoteNavKey.Chat, System.currentTimeMillis(), reloading),
                                 selectLocalCommand = { command ->
@@ -2069,7 +2082,7 @@ internal fun RemoteScreen(
             state.jobs
                 ?.takeIf {
                     // Stays open through a reconnect, which clears the capabilities for a moment.
-                    it.listOpen && it.sessionId == state.selection.sessionId && chatModel != null
+                    (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId && chatModel != null
                 }
                 ?.let { jobs ->
                     val chat = checkNotNull(chatModel)
