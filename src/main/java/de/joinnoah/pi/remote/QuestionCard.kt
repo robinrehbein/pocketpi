@@ -22,8 +22,10 @@ internal fun QuestionCard(
 ) {
     val id = question.text("id")
     val kind = question.text("kind")
+    val controlsEnabled = enabled && !pending
+    val currentControlsEnabled by rememberUpdatedState(controlsEnabled)
     fun submit(answer: JsonObject) {
-        onAnswer(answer)
+        if (currentControlsEnabled) onAnswer(answer)
     }
     Section(if (kind == "plan") stringResource(R.string.remote_plan_title) else question.optionalText("title") ?: stringResource(R.string.remote_questions)) {
         when (kind) {
@@ -42,8 +44,8 @@ internal fun QuestionCard(
                 if (editing) {
                     OutlinedTextField(
                         value = feedback,
-                        onValueChange = { feedback = it.take(16384) },
-                        enabled = enabled && !pending,
+                        onValueChange = { if (controlsEnabled) feedback = it.take(16384) },
+                        enabled = controlsEnabled,
                         label = { Text(stringResource(R.string.remote_plan_feedback)) },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 2,
@@ -56,27 +58,27 @@ internal fun QuestionCard(
                                 "feedback" to feedback.trim(),
                             ))
                         },
-                        enabled = enabled && !pending && feedback.isNotBlank(),
+                        enabled = controlsEnabled && feedback.isNotBlank(),
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(stringResource(R.string.remote_plan_send_feedback)) }
                 } else {
                     Button(
                         onClick = { submit(Wire.objectOf("kind" to "plan", "action" to "approve")) },
-                        enabled = enabled && !pending,
+                        enabled = controlsEnabled,
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(stringResource(R.string.remote_plan_approve)) }
                     OutlinedButton(
                         onClick = { submit(Wire.objectOf("kind" to "plan", "action" to "keep")) },
-                        enabled = enabled && !pending,
+                        enabled = controlsEnabled,
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(stringResource(R.string.remote_plan_keep)) }
-                    TextButton(onClick = { editing = true }, enabled = enabled && !pending) {
+                    TextButton(onClick = { if (controlsEnabled) editing = true }, enabled = controlsEnabled) {
                         Text(stringResource(R.string.remote_plan_change))
                     }
                 }
                 TextButton(
                     onClick = { submit(Wire.objectOf("kind" to "plan", "action" to "cancel")) },
-                    enabled = enabled && !pending,
+                    enabled = controlsEnabled,
                 ) { Text(stringResource(R.string.remote_cancel)) }
             }
             "confirm" -> {
@@ -84,13 +86,13 @@ internal fun QuestionCard(
                 Row {
                     Button(
                         onClick = { submit(Wire.objectOf("kind" to "confirm", "value" to true)) },
-                        enabled = enabled,
+                        enabled = controlsEnabled,
                     ) {
                         Text(stringResource(R.string.remote_yes))
                     }
                     TextButton(
                         onClick = { submit(Wire.objectOf("kind" to "confirm", "value" to false)) },
-                        enabled = enabled,
+                        enabled = controlsEnabled,
                     ) {
                         Text(stringResource(R.string.remote_no))
                     }
@@ -104,13 +106,13 @@ internal fun QuestionCard(
                         Modifier.fillMaxWidth()
                             .selectable(
                                 selected = selected == value,
-                                enabled = enabled,
+                                enabled = controlsEnabled,
                                 role = Role.RadioButton,
-                            ) { selected = value }
+                            ) { if (controlsEnabled) selected = value }
                             .padding(vertical = 8.dp),
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                     ) {
-                        RadioButton(selected = selected == value, onClick = null, enabled = enabled)
+                        RadioButton(selected = selected == value, onClick = null, enabled = controlsEnabled)
                         Text(value, Modifier.padding(start = 12.dp))
                     }
                 }
@@ -118,15 +120,15 @@ internal fun QuestionCard(
                     onClick = {
                         submit(Wire.objectOf("kind" to "select", "value" to checkNotNull(selected)))
                     },
-                    enabled = enabled && selected != null,
+                    enabled = controlsEnabled && selected != null,
                 ) { Text(stringResource(R.string.remote_answer)) }
             }
             "input" -> {
                 var text by remember(id) { mutableStateOf("") }
                 OutlinedTextField(
                     value = text,
-                    onValueChange = { text = it.take(16384) },
-                    enabled = enabled,
+                    onValueChange = { if (controlsEnabled) text = it.take(16384) },
+                    enabled = controlsEnabled,
                     label = {
                         Text(
                             question.optionalText("placeholder")
@@ -137,7 +139,7 @@ internal fun QuestionCard(
                 )
                 Button(
                     onClick = { submit(Wire.objectOf("kind" to "input", "value" to text)) },
-                    enabled = enabled,
+                    enabled = controlsEnabled,
                 ) {
                     Text(stringResource(R.string.remote_answer))
                 }
@@ -145,14 +147,14 @@ internal fun QuestionCard(
             "questionnaire" ->
                 QuestionnaireForm(
                     question = question,
-                    enabled = enabled,
+                    enabled = controlsEnabled,
                     pending = pending,
                     onAnswer = ::submit,
                 )
-            "local_required" -> Text(stringResource(R.string.remote_local_required))
+            else -> Text(stringResource(R.string.remote_local_required))
         }
-        if (kind != "local_required" && kind != "questionnaire" && kind != "plan")
-            TextButton(onClick = { submit(Wire.objectOf("kind" to "cancel")) }, enabled = enabled) {
+        if (kind in setOf("confirm", "select", "input"))
+            TextButton(onClick = { submit(Wire.objectOf("kind" to "cancel")) }, enabled = controlsEnabled) {
                 Text(stringResource(R.string.remote_cancel))
             }
     }
@@ -167,6 +169,7 @@ internal fun QuestionnaireForm(
     onAnswer: (JsonObject) -> Unit,
 ) {
     val controlsEnabled = enabled && !pending
+    val currentControlsEnabled by rememberUpdatedState(controlsEnabled)
     val questions = question.array("questions")
     var selected by
         remember(question.text("id")) {
@@ -334,6 +337,7 @@ internal fun QuestionnaireForm(
     Button(
         enabled = controlsEnabled && valid,
         onClick = {
+            if (!currentControlsEnabled) return@Button
             val answers = questions.map { q ->
                 val selections =
                     q.array("options")
@@ -379,7 +383,7 @@ internal fun QuestionnaireForm(
         )
     }
     TextButton(
-        onClick = { onAnswer(Wire.objectOf("kind" to "cancel")) },
+        onClick = { if (currentControlsEnabled) onAnswer(Wire.objectOf("kind" to "cancel")) },
         enabled = controlsEnabled,
     ) {
         Text(stringResource(R.string.remote_cancel))
