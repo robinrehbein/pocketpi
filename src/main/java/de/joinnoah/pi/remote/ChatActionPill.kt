@@ -127,6 +127,7 @@ internal fun changesActions(model: ChatViewModel, focusComposer: () -> Unit) =
         onSelectBase = model::selectChangesBase,
         onReload = model::reloadChanges,
         onOpenFile = model::openChangesFile,
+        onOpenSubagentFile = model::openChangesSubagentFile,
         onRequestPreview = model::requestChangesPreview,
         onSetComment = model::setReviewComment,
         onRemoveComment = model::removeReviewComment,

@@ -9,6 +9,11 @@
     <string name="remote_changes_reload">Änderungen neu laden</string>
     <string name="remote_changes_loading">Änderungen werden geladen</string>
     <string name="remote_changes_base_session">Sitzungsstart</string>
+    <string name="remote_changes_this_session">Diese Sitzung</string>
+    <string name="remote_changes_subagent_untitled">Subagent</string>
+    <string name="remote_changes_subagent_running">Läuft · %1$s</string>
+    <string name="remote_changes_subagent_finished">Fertig, noch nicht übernommen · %1$s</string>
+    <string name="remote_changes_subagent_file">Geändert von Subagent %1$s</string>
     <string name="remote_changes_base_head">HEAD</string>
     <string name="remote_changes_since_session_start">Seit Sitzungsstart, %1$s</string>
     <string name="remote_changes_since_first_contact">Seit %1$s, nicht seit Sitzungsstart</string>

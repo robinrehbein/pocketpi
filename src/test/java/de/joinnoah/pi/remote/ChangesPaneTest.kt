@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onFirst
@@ -250,6 +251,54 @@ class ChangesPaneTest {
         // Still shown while it is the base the user asked for.
         state = loaded.copy(base = GitBase.DEV, devBase = GitDevBase(null))
         compose.onNodeWithTag("changesBase_dev").assertExists()
+    }
+
+    @Test
+    fun subagentGroupsListTheirFilesAndOpenAReadOnlyDiff() {
+        val opened = mutableListOf<Pair<String, String>>()
+        val own = GitStatus(GitBase.HEAD, snapshot, listOf(GitFile("own.kt", GitChange.MODIFIED, 1, 0)), branch = "feature")
+        val subagent =
+            SubagentChanges(
+                "child",
+                "Implementer",
+                running = false,
+                GitStatus(GitBase.HEAD, "child-snapshot", listOf(GitFile("lib/new.kt", GitChange.ADDED, 3, 0)), branch = "pi-agent-1"),
+            )
+        val sameFolder =
+            SubagentChanges("same", "Helper", running = true, GitStatus(GitBase.HEAD, "s", listOf(GitFile("own.kt", GitChange.MODIFIED, 1, 0)), branch = "feature"))
+        val loaded = ChangesState("s", base = GitBase.HEAD, loading = false, status = own, log = GitLog(), subagents = listOf(subagent, sameFolder))
+        var state by mutableStateOf(loaded)
+        compose.setContent {
+            MaterialTheme {
+                ChangesPane(
+                    state,
+                    ChangesActions(
+                        onClose = {},
+                        onSelectBase = {},
+                        onReload = {},
+                        onOpenFile = {},
+                        onSetComment = { true },
+                        onRemoveComment = {},
+                        onUseReview = { true },
+                        onPrefill = { true },
+                        onOpenSubagentFile = { id, path -> opened += id to path },
+                    ),
+                )
+            }
+        }
+        compose.onNodeWithText(context.getString(R.string.remote_changes_this_session)).assertExists()
+        // The subagent on the session's own branch gets no group.
+        compose.onAllNodesWithTag("changesSubagent").assertCountEquals(1)
+        compose.onNodeWithText("Implementer").assertExists()
+        compose.onNodeWithText(context.getString(R.string.remote_changes_subagent_finished, "pi-agent-1")).assertExists()
+        compose.onNodeWithTag("changesList").performScrollToNode(hasText("new.kt"))
+        compose.onNodeWithText("new.kt").performClick()
+        assertEquals(listOf("child" to "lib/new.kt"), opened)
+        // Its diff carries no quick actions and takes no comments.
+        state = loaded.copy(file = "lib/new.kt", fileSession = "child", diff = GitDiff("lib/new.kt", "child-snapshot", "@@ -0,0 +1 @@\n+x\n", false, false))
+        compose.onNodeWithTag("changesSubagentFile").assertExists()
+        compose.onNodeWithTag("changesActionRevert").assertDoesNotExist()
+        compose.onNodeWithTag("changesDiffLine").assertDoesNotExist()
     }
 
     @Test

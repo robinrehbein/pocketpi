@@ -74,6 +74,8 @@ internal class ChangesActions(
     /** Puts a quick action prompt into the composer. Nothing is sent. False when it did not fit. */
     val onPrefill: (String) -> Boolean,
     val onRequestPreview: (String) -> Unit = {},
+    /** Opens a file from a subagent's changes: its session ID and the path. */
+    val onOpenSubagentFile: (String, String) -> Unit = { _, _ -> },
 )
 
 /**
@@ -100,6 +102,7 @@ internal fun ChangesPane(state: ChangesState, actions: ChangesActions, modifier:
                 onUseReview = { prompt -> actions.onUseReview(prompt).also { prefillFailed = !it } },
                 onPrefill = { prompt -> actions.onPrefill(prompt).also { prefillFailed = !it } },
                 onRequestPreview = actions.onRequestPreview,
+                onOpenSubagentFile = actions.onOpenSubagentFile,
             )
         }
     val density = LocalDensity.current
@@ -222,6 +225,7 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
         remember(state.comments, shownBase) {
             state.comments.filter { it.base == shownBase }.groupingBy { it.path }.eachCount()
         }
+    val subagents = remember(state.subagents, state.status?.branch) { visibleSubagents(state) }
     val gridState = rememberLazyGridState()
     var peek by remember(state.status?.snapshotId) { mutableStateOf<Pair<String, IntRect>?>(null) }
     LaunchedEffect(state.loading, state.failure) { if (state.loading || state.failure != null) peek = null }
@@ -286,9 +290,14 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
                 else -> {
                     if (status.files.isEmpty())
                         item(key = "empty", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_empty)) }
-                    if (status.files.isNotEmpty())
+                    if (status.files.isNotEmpty() || subagents.isNotEmpty())
                         item(key = "filesHeader", span = { GridItemSpan(maxLineSpan) }) {
-                            Text(stringResource(R.string.remote_files_title), style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                stringResource(
+                                    if (subagents.isEmpty()) R.string.remote_files_title else R.string.remote_changes_this_session
+                                ),
+                                style = MaterialTheme.typography.titleSmall,
+                            )
                         }
                     items(status.files.size, key = { "file:" + status.files[it].path }) { index ->
                         val file = status.files[index]
@@ -302,11 +311,46 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
                     commits(state, context, actions.onReload)
                 }
             }
+            subagents.forEach { sub -> subagentGroup(sub, actions) }
         }
         peek?.let { (path, anchor) ->
             FilePeekPopup(FilesPeek(path, FileEntryType.FILE), state.previews[path], anchor) { peek = null }
         }
     }
+}
+
+/** One subagent's changed files, below the session's own; tiles open its diff, without a preview. */
+private fun LazyGridScope.subagentGroup(sub: SubagentChanges, actions: ChangesActions) {
+    item(key = "subagent:" + sub.sessionId, span = { GridItemSpan(maxLineSpan) }) {
+        Column(Modifier.fillMaxWidth().padding(top = 16.dp).testTag("changesSubagent")) {
+            Text(
+                sub.title.ifBlank { stringResource(R.string.remote_changes_subagent_untitled) },
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                stringResource(
+                    if (sub.running) R.string.remote_changes_subagent_running else R.string.remote_changes_subagent_finished,
+                    sub.status.branch.orEmpty(),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+    val files = sub.status.files
+    items(files.size, key = { "subagent:" + sub.sessionId + ":" + files[it].path }) { index ->
+        val file = files[index]
+        ChangesFileTile(file, 0, null, onRequestPreview = {}, onPeek = {},
+            onOpen = { actions.onOpenSubagentFile(sub.sessionId, file.path) })
+    }
+    if (sub.status.truncated)
+        item(key = "subagentTruncated:" + sub.sessionId, span = { GridItemSpan(maxLineSpan) }) {
+            Notice(stringResource(R.string.remote_changes_truncated))
+        }
 }
 
 private fun LazyGridScope.commits(state: ChangesState, context: Context, onRetry: () -> Unit) {
@@ -427,15 +471,29 @@ private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesA
     val base = state.status?.base ?: state.base
     // Line numbers belong to one base: a comment shows only on the diff it was written on.
     val comments =
-        remember(state.comments, path, base) {
-            state.comments.filter { it.path == path && it.base == base }.associateBy { it.oldLine to it.newLine }
+        remember(state.comments, path, base, state.fileSession) {
+            if (state.fileSession != null) emptyMap()
+            else state.comments.filter { it.path == path && it.base == base }.associateBy { it.oldLine to it.newLine }
         }
     val atLimit = state.comments.size >= MAX_REVIEW_COMMENTS
     var editing by remember { mutableStateOf<DiffLine?>(null) }
     val addLabel = stringResource(R.string.remote_changes_comment_add)
     val editLabel = stringResource(R.string.remote_changes_comment_edit)
+    // A subagent's file: its changes are not the session's to comment on or act on from here.
+    val subagent = state.fileSession?.let { id -> state.subagents.firstOrNull { it.sessionId == id } }
+    val readOnly = state.fileSession != null
     LazyColumn(Modifier.fillMaxSize().testTag("changesDiff"), contentPadding = PaddingValues(top = headerHeight)) {
-        item(key = "actions") {
+        if (readOnly)
+            item(key = "subagent") {
+                Notice(
+                    stringResource(
+                        R.string.remote_changes_subagent_file,
+                        subagent?.title?.ifBlank { null } ?: stringResource(R.string.remote_changes_subagent_untitled),
+                    ),
+                    Modifier.testTag("changesSubagentFile"),
+                )
+            }
+        if (!readOnly) item(key = "actions") {
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -459,7 +517,12 @@ private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesA
         }
         val failure = state.diffFailure
         when {
-            failure != null -> item(key = "failure") { FailureNotice(failure) { actions.onOpenFile(path) } }
+            failure != null -> item(key = "failure") {
+                FailureNotice(failure) {
+                    val owner = state.fileSession
+                    if (owner == null) actions.onOpenFile(path) else actions.onOpenSubagentFile(owner, path)
+                }
+            }
             state.diffLoading || diff == null -> item(key = "loading") { Loading() }
             diff.omitted == GitOmitted.TOO_LARGE ->
                 item(key = "tooLarge") { Notice(stringResource(R.string.remote_changes_diff_too_large)) }
@@ -471,7 +534,7 @@ private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesA
                 // Rows stay one text line high, below the 48dp touch target, to keep code readable;
                 // an accepted trade-off, as in the tool detail diff.
                 itemsIndexed(lines, contentType = { _, line -> line.kind }) { _, line ->
-                    val commentable = line.kind != DiffKind.HUNK
+                    val commentable = line.kind != DiffKind.HUNK && !readOnly
                     Column {
                         DiffRow(
                             line,

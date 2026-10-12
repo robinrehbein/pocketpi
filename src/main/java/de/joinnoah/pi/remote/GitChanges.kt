@@ -165,6 +165,32 @@ internal fun storedReviewComments(value: JsonElement?): List<ReviewComment> =
         ?.take(MAX_REVIEW_COMMENTS)
         .orEmpty()
 
+/**
+ * A subagent of the shown session with changes of its own: while it runs, its worktree against
+ * where it started; once finished, its branch until the session took the changes over.
+ */
+data class SubagentChanges(
+    val sessionId: String,
+    val title: String,
+    val running: Boolean,
+    val status: GitStatus,
+)
+
+/** At most this many subagents are asked for their changes, running ones and the newest first. */
+internal const val MAX_SUBAGENT_GROUPS = 4
+
+/**
+ * The subagents the changes view groups under the session. One that works in the session's own
+ * checkout reports the session's branch (git checks a branch out in one worktree at most): its
+ * changes already show under the session, so it gets no group. One without a branch cannot be told
+ * apart and gets none either.
+ */
+internal fun visibleSubagents(changes: ChangesState): List<SubagentChanges> =
+    changes.subagents.filter { sub ->
+        val branch = sub.status.branch
+        branch != null && branch != changes.status?.branch && sub.status.files.isNotEmpty()
+    }
+
 /** Why the changes view shows no data. */
 enum class ChangesFailure {
     UNSUPPORTED,
@@ -199,6 +225,10 @@ data class ChangesState(
     val previews: Map<String, FileTilePreview> = emptyMap(),
     /** The latest [GitStatus.devBase] of this session, kept while other bases are shown. */
     val devBase: GitDevBase? = null,
+    /** Subagents with changes; independent of [base]. */
+    val subagents: List<SubagentChanges> = emptyList(),
+    /** The subagent [file] belongs to, or null for the session's own changes. */
+    val fileSession: String? = null,
 )
 
 internal fun canViewChanges(state: RemoteState): Boolean =

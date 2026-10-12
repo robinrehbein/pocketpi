@@ -35,6 +35,8 @@ internal class GitChangesLoader(
     private var diffJob: Job? = null
     private var statusVersion = 0L
     private var diffVersion = 0L
+    private var subagentJob: Job? = null
+    private var subagentVersion = 0L
 
     private fun changes(): ChangesState? =
         current().changes?.takeIf { it.sessionId == current().selection.sessionId }
@@ -91,12 +93,22 @@ internal class GitChangesLoader(
                 )
             )
         }
-        if (failure == null) loadStatus(sessionId, GitBase.SESSION, fallback = true)
+        if (failure == null) {
+            loadStatus(sessionId, GitBase.SESSION, fallback = true)
+            loadSubagents(sessionId)
+        } else stopSubagents()
     }
 
     fun close() {
         stop()
+        stopSubagents()
         update { it.copy(changes = null) }
+    }
+
+    private fun stopSubagents() {
+        subagentVersion++
+        subagentJob?.cancel()
+        subagentJob = null
     }
 
     /** Shows [base]; an explicit choice of session start does not fall back to HEAD. */
@@ -142,6 +154,9 @@ internal class GitChangesLoader(
             fallback = changes.status == null && base == GitBase.SESSION,
             retry = retry,
         )
+        // A subagent file shown now reopens from that subagent's fresh snapshot.
+        val subagentFile = changes.file?.let { path -> changes.fileSession?.let { it to path } }
+        loadSubagents(changes.sessionId, reopen = subagentFile)
     }
 
     private fun loadStatus(
@@ -164,8 +179,12 @@ internal class GitChangesLoader(
                     if (!active()) return@launch
                     val shownLog = status.available && status.base != GitBase.HEAD
                     write(sessionId) { changes ->
+                        // A subagent's file reads that subagent's snapshot; this status leaves it alone.
+                        val own = changes.fileSession == null
                         // The file open now, not at the request: a back press meanwhile stays.
-                        val file = changes.file?.takeIf { path -> status.files.any { it.path == path } }
+                        val file =
+                            if (!own) changes.file
+                            else changes.file?.takeIf { path -> status.files.any { it.path == path } }
                         changes.copy(
                             loading = false,
                             status = status,
@@ -176,9 +195,9 @@ internal class GitChangesLoader(
                                 },
                             failure = null,
                             file = file,
-                            diff = null,
-                            diffLoading = file != null,
-                            diffFailure = null,
+                            diff = if (own) null else changes.diff,
+                            diffLoading = if (own) file != null else changes.diffLoading,
+                            diffFailure = if (own) null else changes.diffFailure,
                             log = if (status.available && !shownLog) GitLog() else null,
                             logLoading = shownLog,
                             logFailure = null,
@@ -198,7 +217,9 @@ internal class GitChangesLoader(
                     return@launch
                 }
             val snapshotId = status.snapshotId ?: return@launch
-            changes()?.file?.let { path -> loadDiff(sessionId, snapshotId, path, retry = false) }
+            changes()?.takeIf { it.fileSession == null }?.file?.let { path ->
+                loadDiff(sessionId, snapshotId, path, retry = false)
+            }
             if (!status.available || status.base == GitBase.HEAD) return@launch
             try {
                 val log = source.gitLog(sessionId, snapshotId)
@@ -286,7 +307,7 @@ internal class GitChangesLoader(
         diffJob?.cancel()
         if (path == null) {
             write(changes.sessionId) {
-                it.copy(file = null, diff = null, diffLoading = false, diffFailure = null)
+                it.copy(file = null, fileSession = null, diff = null, diffLoading = false, diffFailure = null)
             }
             return
         }
@@ -298,6 +319,7 @@ internal class GitChangesLoader(
             write(changes.sessionId) {
                 it.copy(
                     file = path,
+                    fileSession = null,
                     diff = GitDiff(path, snapshotId, "", file.binary, false, file.omitted),
                     diffLoading = false,
                     diffFailure = null,
@@ -307,23 +329,110 @@ internal class GitChangesLoader(
         }
         if (!current().connected) {
             write(changes.sessionId) {
-                it.copy(file = path, diff = null, diffLoading = false, diffFailure = ChangesFailure.OFFLINE)
+                it.copy(file = path, fileSession = null, diff = null, diffLoading = false, diffFailure = ChangesFailure.OFFLINE)
             }
             return
         }
         write(changes.sessionId) {
-            it.copy(file = path, diff = null, diffLoading = true, diffFailure = null)
+            it.copy(file = path, fileSession = null, diff = null, diffLoading = true, diffFailure = null)
         }
         loadDiff(changes.sessionId, snapshotId, path, retry = true)
     }
 
-    private fun loadDiff(sessionId: String, snapshotId: String, path: String, retry: Boolean) {
+    /** Opens [path] from the changes of the subagent [subagentId]; its diff reads that subagent's snapshot. */
+    fun openSubagentFile(subagentId: String, path: String, retry: Boolean = true) {
+        val changes = changes() ?: return
+        val status = changes.subagents.firstOrNull { it.sessionId == subagentId }?.status ?: return
+        val snapshotId = status.snapshotId ?: return
+        val file = status.files.firstOrNull { it.path == path } ?: return
+        diffVersion++
+        diffJob?.cancel()
+        if (file.binary || file.omitted != null) {
+            write(changes.sessionId) {
+                it.copy(
+                    file = path,
+                    fileSession = subagentId,
+                    diff = GitDiff(path, snapshotId, "", file.binary, false, file.omitted),
+                    diffLoading = false,
+                    diffFailure = null,
+                )
+            }
+            return
+        }
+        val offline = !current().connected
+        write(changes.sessionId) {
+            it.copy(
+                file = path,
+                fileSession = subagentId,
+                diff = null,
+                diffLoading = !offline,
+                diffFailure = if (offline) ChangesFailure.OFFLINE else null,
+            )
+        }
+        if (!offline) loadDiff(changes.sessionId, snapshotId, path, retry, reader = subagentId)
+    }
+
+    /**
+     * Asks the session's subagents (running first, then the newest, at most [MAX_SUBAGENT_GROUPS])
+     * for their changes against HEAD, one after another so the host's status limit is not hit.
+     * A subagent the host has no changes for, or that fails, gets no group. [reopen] opens that
+     * subagent file again once its fresh snapshot is in.
+     */
+    private fun loadSubagents(sessionId: String, reopen: Pair<String, String>? = null) {
+        val version = ++subagentVersion
+        subagentJob?.cancel()
+        val now = current()
+        val children =
+            now.sessions.mapNotNull { runCatching { sessionListItem(it, now.connected, now.loading) }.getOrNull() }
+                .filter { it.parentSessionId == sessionId && it.id != sessionId }
+                .sortedWith(compareByDescending<SessionListItem> { it.running() }.thenByDescending { it.updatedAt ?: 0L })
+                .take(MAX_SUBAGENT_GROUPS)
+        if (children.isEmpty()) {
+            write(sessionId) { it.copy(subagents = emptyList()) }
+            return
+        }
+        subagentJob = scope.launch {
+            val found = mutableListOf<SubagentChanges>()
+            for (child in children) {
+                val status =
+                    try {
+                        source.gitStatus(child.id, GitBase.HEAD)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        null
+                    }
+                if (version != subagentVersion) return@launch
+                if (status != null && status.available && status.files.isNotEmpty())
+                    found += SubagentChanges(child.id, child.title, child.running(), status)
+            }
+            write(sessionId) { it.copy(subagents = found) }
+            val (subagentId, path) = reopen ?: return@launch
+            if (changes()?.let { it.file == path && it.fileSession == subagentId } == true)
+                openSubagentFile(subagentId, path, retry = false)
+        }
+    }
+
+    private fun SessionListItem.running(): Boolean =
+        availability == SessionAvailability.RUNNING || availability == SessionAvailability.WAITING
+
+    /** [reader] is the session whose snapshot [snapshotId] is: the shown one, or one of its subagents. */
+    private fun loadDiff(
+        sessionId: String,
+        snapshotId: String,
+        path: String,
+        retry: Boolean,
+        reader: String = sessionId,
+    ) {
+        val subagent = reader.takeIf { it != sessionId }
         val version = ++diffVersion
         fun active() =
-            version == diffVersion && changes()?.let { it.sessionId == sessionId && it.file == path } == true
+            version == diffVersion && changes()?.let {
+                it.sessionId == sessionId && it.file == path && it.fileSession == subagent
+            } == true
         diffJob = scope.launch {
             try {
-                val diff = source.gitDiff(sessionId, snapshotId, path)
+                val diff = source.gitDiff(reader, snapshotId, path)
                 if (active()) write(sessionId) { it.copy(diff = diff, diffLoading = false, diffFailure = null) }
             } catch (e: CancellationException) {
                 throw e
@@ -332,7 +441,8 @@ internal class GitChangesLoader(
                 val reason = failure(e)
                 if (reason == ChangesFailure.NOT_FOUND && retry) {
                     // Snapshots expire after ten minutes: take a fresh one and reopen the file.
-                    reload(retry = false)
+                    if (subagent == null) reload(retry = false)
+                    else loadSubagents(sessionId, reopen = subagent to path)
                     return@launch
                 }
                 write(sessionId) { it.copy(diffLoading = false, diffFailure = reason) }

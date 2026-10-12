@@ -4279,6 +4279,9 @@ class DefaultRemoteRepository(
 
     override fun openChangesFile(path: String?) = changesLoader.openFile(path)
 
+    override fun openChangesSubagentFile(sessionId: String, path: String) =
+        changesLoader.openSubagentFile(sessionId, path)
+
     override fun requestChangesPreview(path: String) = changesLoader.requestPreview(path)
 
     // ---- Project files (session.files.v1) ------------------------------------------------
