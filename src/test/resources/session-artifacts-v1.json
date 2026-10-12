@@ -1,0 +1,2985 @@
+{
+  "version": 1,
+  "note": "session.artifacts.v1 wire examples. The app must see session.artifacts.v1 in the projects.list capabilities.v2 route before sending session.artifacts.list or session.artifacts.open. session.artifacts.open answers with the files.media result shape; its path is the logical name artifacts/<artifactId>/<version>.<ext>, never a host path, and the bytes are read with session.files.media.get. text/vnd.mermaid (5 MiB cap) appears only in answers to session.artifacts.open.",
+  "valid": [
+    {
+      "name": "list-command",
+      "payload": {
+        "type": "session.artifacts.list",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
+      }
+    },
+    {
+      "name": "open-command-latest",
+      "payload": {
+        "type": "session.artifacts.open",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "artifactId": "Zk3_xY9aB-0qWe7RtYuI1o"
+      }
+    },
+    {
+      "name": "open-command-version",
+      "payload": {
+        "type": "session.artifacts.open",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "artifactId": "Zk3_xY9aB-0qWe7RtYuI1o",
+        "version": 1
+      }
+    },
+    {
+      "name": "list-result-empty",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "list-result-entries",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "Aa1_Bb2-Cc3Dd4Ee5Ff6Gg",
+              "title": "Logo",
+              "type": "svg",
+              "version": 1,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "Hh1_Ii2-Jj3Kk4Ll5Mm6Nn",
+              "title": "Flow",
+              "type": "mermaid",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "list-result-truncated",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": true
+        }
+      }
+    },
+    {
+      "name": "open-result-html",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "artifacts/Zk3_xY9aB-0qWe7RtYuI1o/2.html",
+          "mediaId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "mimeType": "text/html",
+          "totalBytes": 1234,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "open-result-svg",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "artifacts/Zk3_xY9aB-0qWe7RtYuI1o/1.svg",
+          "mediaId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "mimeType": "image/svg+xml",
+          "totalBytes": 1234,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "open-result-mermaid",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "artifacts/Zk3_xY9aB-0qWe7RtYuI1o/1.mmd",
+          "mediaId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "mimeType": "text/vnd.mermaid",
+          "totalBytes": 1234,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "open-result-too-large",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "artifacts/Zk3_xY9aB-0qWe7RtYuI1o/1.svg",
+          "omitted": "too_large"
+        }
+      }
+    },
+    {
+      "name": "open-result-not-an-image",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "artifacts/Zk3_xY9aB-0qWe7RtYuI1o/1.mmd",
+          "omitted": "not_an_image"
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "list-command-extra-field",
+      "payload": {
+        "type": "session.artifacts.list",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "path": "x"
+      }
+    },
+    {
+      "name": "list-command-no-session",
+      "payload": {
+        "type": "session.artifacts.list",
+        "requestId": "req-1"
+      }
+    },
+    {
+      "name": "list-command-empty-session",
+      "payload": {
+        "type": "session.artifacts.list",
+        "requestId": "req-1",
+        "sessionId": ""
+      }
+    },
+    {
+      "name": "open-command-no-id",
+      "payload": {
+        "type": "session.artifacts.open",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
+      }
+    },
+    {
+      "name": "open-command-short-id",
+      "payload": {
+        "type": "session.artifacts.open",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "artifactId": "abc"
+      }
+    },
+    {
+      "name": "open-command-long-id",
+      "payload": {
+        "type": "session.artifacts.open",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "artifactId": "Zk3_xY9aB-0qWe7RtYuI1oA"
+      }
+    },
+    {
+      "name": "open-command-slash-id",
+      "payload": {
+        "type": "session.artifacts.open",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "artifactId": "../../etc/passwd......."
+      }
+    },
+    {
+      "name": "open-command-padded-id",
+      "payload": {
+        "type": "session.artifacts.open",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "artifactId": "Zk3_xY9aB-0qWe7RtYuI1="
+      }
+    },
+    {
+      "name": "open-command-path-field",
+      "payload": {
+        "type": "session.artifacts.open",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "artifactId": "Zk3_xY9aB-0qWe7RtYuI1o",
+        "path": "/etc/passwd"
+      }
+    },
+    {
+      "name": "open-command-version-zero",
+      "payload": {
+        "type": "session.artifacts.open",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "artifactId": "Zk3_xY9aB-0qWe7RtYuI1o",
+        "version": 0
+      }
+    },
+    {
+      "name": "open-command-version-negative",
+      "payload": {
+        "type": "session.artifacts.open",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "artifactId": "Zk3_xY9aB-0qWe7RtYuI1o",
+        "version": -1
+      }
+    },
+    {
+      "name": "open-command-version-fraction",
+      "payload": {
+        "type": "session.artifacts.open",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "artifactId": "Zk3_xY9aB-0qWe7RtYuI1o",
+        "version": 1.5
+      }
+    },
+    {
+      "name": "open-command-version-string",
+      "payload": {
+        "type": "session.artifacts.open",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "artifactId": "Zk3_xY9aB-0qWe7RtYuI1o",
+        "version": "1"
+      }
+    },
+    {
+      "name": "open-command-version-huge",
+      "payload": {
+        "type": "session.artifacts.open",
+        "requestId": "req-1",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "artifactId": "Zk3_xY9aB-0qWe7RtYuI1o",
+        "version": 1000001
+      }
+    },
+    {
+      "name": "list-result-no-truncated",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": []
+        }
+      }
+    },
+    {
+      "name": "list-result-truncated-string",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [],
+          "truncated": "no"
+        }
+      }
+    },
+    {
+      "name": "list-result-extra-field",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [],
+          "truncated": false,
+          "nextAfter": "x"
+        }
+      }
+    },
+    {
+      "name": "list-result-not-array",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": "x",
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "list-result-201-entries",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "A000000000000000000000",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000001",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000002",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000003",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000004",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000005",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000006",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000007",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000008",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000009",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000010",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000011",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000012",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000013",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000014",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000015",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000016",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000017",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000018",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000019",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000020",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000021",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000022",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000023",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000024",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000025",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000026",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000027",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000028",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000029",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000030",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000031",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000032",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000033",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000034",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000035",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000036",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000037",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000038",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000039",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000040",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000041",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000042",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000043",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000044",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000045",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000046",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000047",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000048",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000049",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000050",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000051",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000052",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000053",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000054",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000055",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000056",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000057",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000058",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000059",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000060",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000061",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000062",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000063",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000064",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000065",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000066",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000067",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000068",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000069",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000070",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000071",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000072",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000073",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000074",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000075",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000076",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000077",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000078",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000079",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000080",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000081",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000082",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000083",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000084",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000085",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000086",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000087",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000088",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000089",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000090",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000091",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000092",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000093",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000094",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000095",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000096",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000097",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000098",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000099",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000100",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000101",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000102",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000103",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000104",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000105",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000106",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000107",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000108",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000109",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000110",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000111",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000112",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000113",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000114",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000115",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000116",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000117",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000118",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000119",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000120",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000121",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000122",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000123",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000124",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000125",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000126",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000127",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000128",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000129",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000130",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000131",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000132",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000133",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000134",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000135",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000136",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000137",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000138",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000139",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000140",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000141",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000142",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000143",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000144",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000145",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000146",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000147",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000148",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000149",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000150",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000151",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000152",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000153",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000154",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000155",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000156",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000157",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000158",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000159",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000160",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000161",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000162",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000163",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000164",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000165",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000166",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000167",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000168",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000169",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000170",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000171",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000172",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000173",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000174",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000175",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000176",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000177",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000178",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000179",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000180",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000181",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000182",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000183",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000184",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000185",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000186",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000187",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000188",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000189",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000190",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000191",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000192",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000193",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000194",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000195",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000196",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000197",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000198",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000199",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "A000000000000000000200",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "list-result-duplicate-id",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            },
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-host-path",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z",
+              "path": "/Users/robin/.pi/artifacts/x/1.html"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-missing-sha",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-bad-sha",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-bad-type",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Report",
+              "type": "pdf",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-bad-id",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "short",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-empty-title",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-long-title",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-version-zero",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Report",
+              "type": "html",
+              "version": 0,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-bytes-over-5-mib",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 5242881,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-bytes-negative",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": -1,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-date-no-millis",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-date-offset",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:00:00.000+01:00"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-date-impossible",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Report",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-13-45T00:00:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-not-object",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            "x"
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "open-result-bad-mime",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "artifacts/Zk3_xY9aB-0qWe7RtYuI1o/2.html",
+          "mediaId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "mimeType": "text/plain",
+          "totalBytes": 1234,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "open-result-absolute-path",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "/artifacts/Zk3_xY9aB-0qWe7RtYuI1o/2.html",
+          "mediaId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "mimeType": "text/html",
+          "totalBytes": 1234,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "open-result-dotdot-path",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "artifacts/../x.html",
+          "mediaId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "mimeType": "text/html",
+          "totalBytes": 1234,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "open-result-zero-bytes",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "artifacts/Zk3_xY9aB-0qWe7RtYuI1o/2.html",
+          "mediaId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "mimeType": "text/html",
+          "totalBytes": 0,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "open-result-html-over-5-mib",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "artifacts/Zk3_xY9aB-0qWe7RtYuI1o/2.html",
+          "mediaId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "mimeType": "text/html",
+          "totalBytes": 5242881,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "open-result-mermaid-over-5-mib",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "files.media",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "path": "artifacts/Zk3_xY9aB-0qWe7RtYuI1o/2.html",
+          "mediaId": "AAAAAAAAAAAAAAAAAAAAAA",
+          "mimeType": "text/vnd.mermaid",
+          "totalBytes": 5242881,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "name": "entry-title-newline",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Re\nport",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-title-c1-control",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Re\u0085port",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-title-bidi-override",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Re\u202eport",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    },
+    {
+      "name": "entry-title-bidi-isolate",
+      "payload": {
+        "type": "result",
+        "requestId": "req-1",
+        "ok": true,
+        "data": {
+          "kind": "artifacts.list",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "artifacts": [
+            {
+              "id": "Zk3_xY9aB-0qWe7RtYuI1o",
+              "title": "Re\u2066port",
+              "type": "html",
+              "version": 2,
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "bytes": 1234,
+              "createdAt": "2026-01-01T00:00:00.000Z",
+              "updatedAt": "2026-01-01T00:05:00.000Z"
+            }
+          ],
+          "truncated": false
+        }
+      }
+    }
+  ]
+}

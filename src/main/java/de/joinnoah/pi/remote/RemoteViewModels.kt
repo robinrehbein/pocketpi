@@ -17,12 +17,14 @@ internal open class DestinationViewModel(
     internal var cleared = false
         private set
 
-    private fun matches(state: RemoteState): Boolean =
+    protected fun matches(state: RemoteState): Boolean =
         when (key) {
             RemoteNavKey.Hosts,
             RemoteNavKey.Settings -> true
             is RemoteNavKey.Projects -> state.selection.routeId == key.routeId
             is RemoteNavKey.FolderBrowser ->
+                state.selection.routeId == key.routeId && state.selection.projectId == null
+            is RemoteNavKey.Providers ->
                 state.selection.routeId == key.routeId && state.selection.projectId == null
             is RemoteNavKey.Sessions ->
                 state.selection.routeId == key.routeId && state.selection.projectId == key.projectId
@@ -47,6 +49,7 @@ internal open class DestinationViewModel(
                     toolOutput = null,
                     changes = null,
                     compaction = null,
+                    compactionRequesting = false,
                 )
         }
 
@@ -89,6 +92,8 @@ internal open class DestinationViewModel(
 
     fun refreshContextUsage() = active(repository::refreshContextUsage)
 
+    fun compactContext() = active(repository::compactContext)
+
     fun refreshAdvisor() = active(repository::refreshAdvisor)
 
     fun setAdvisor(provider: String?, id: String?, level: String?) =
@@ -98,6 +103,9 @@ internal open class DestinationViewModel(
     fun setModel(provider: String, id: String) = active { repository.setModel(provider, id) }
 
     fun setThinkingLevel(level: String) = active { repository.setThinkingLevel(level) }
+
+    fun changeSettings(autoCompaction: Boolean?, steeringMode: String?, followUpMode: String?) =
+        active { repository.changeSettings(autoCompaction, steeringMode, followUpMode) }
 
     fun refreshCommands() = active(repository::refreshCommands)
 
@@ -173,6 +181,36 @@ internal class FolderBrowserViewModel(
     fun cancelTrust() = repository.cancelFolderTrust()
 }
 
+internal class ProvidersViewModel(
+    repository: RemoteRepository,
+    key: RemoteNavKey.Providers,
+) : DestinationViewModel(repository, key) {
+    private val routeId = key.routeId
+
+    /** Loads the list again, for retry, after a reconnect and when the app comes back. */
+    fun reload() = active {
+        if (repository.state.value.providerAuth.routeId == routeId) repository.refreshProviders()
+        else repository.browseProviders(routeId)
+    }
+
+    fun startLogin(providerId: String, method: ProviderAuthMethod, replace: Boolean) =
+        active { repository.startLogin(providerId, method, replace) }
+
+    fun answerLogin(promptId: String, value: String): Boolean {
+        var sent = false
+        active { sent = repository.answerLogin(promptId, value) }
+        return sent
+    }
+
+    fun cancelLogin() = active(repository::cancelLogin)
+
+    fun logout(providerId: String) = active { repository.logoutProvider(providerId) }
+
+    fun dismissLogin() = repository.dismissLogin()
+
+    fun dismissNotice() = repository.dismissProviderNotice()
+}
+
 internal class SessionsViewModel(
     repository: RemoteRepository,
     key: RemoteNavKey.Sessions,
@@ -225,6 +263,57 @@ internal class ChatViewModel(
 
     fun cancelToolOutput() = active(repository::cancelToolOutput)
 
+    /** Reads an image this chat sent; a destination that is no longer the shown chat gets nothing. */
+    suspend fun readAttachment(sessionId: String, attachment: RemoteAttachment): AttachmentReadResult =
+        if (cleared || !matches(repository.state.value)) AttachmentReadResult.Unavailable
+        else repository.readAttachment(sessionId, attachment)
+
+    /** Reads an image the agent mentioned; a destination that is no longer the shown chat gets nothing. */
+    suspend fun readProjectImage(sessionId: String, path: String, fresh: Boolean = false): ProjectImageResult =
+        if (cleared || !matches(repository.state.value)) ProjectImageResult.Unavailable
+        else repository.readProjectImage(sessionId, path, fresh)
+
+    /** Reads an HTML file the agent mentioned; a destination that is no longer the shown chat gets nothing. */
+    suspend fun readProjectArtifact(sessionId: String, path: String, fresh: Boolean = false): ProjectArtifactResult =
+        if (cleared || !matches(repository.state.value)) ProjectArtifactResult.Unavailable
+        else repository.readProjectArtifact(sessionId, path, fresh)
+
+    /** Lists this chat's artifacts; a destination that is no longer the shown chat gets a failure. */
+    suspend fun listSessionArtifacts(sessionId: String): SessionArtifactListResult =
+        if (cleared || !matches(repository.state.value)) SessionArtifactListResult.Failed
+        else repository.listSessionArtifacts(sessionId)
+
+    /** Opens one of this chat's artifacts; a destination that is no longer the shown chat gets nothing. */
+    suspend fun openSessionArtifact(
+        sessionId: String,
+        artifactId: String,
+        version: Int? = null,
+        type: ArtifactType? = null,
+        sha256: String? = null,
+    ): SessionArtifactOpenResult =
+        if (cleared || !matches(repository.state.value)) SessionArtifactOpenResult.Unavailable
+        else repository.openSessionArtifact(sessionId, artifactId, version, type, sha256)
+
+    /** Exports this chat's session; a destination that is no longer the shown chat gets a failure. */
+    suspend fun exportSession(sessionId: String): ExportResult =
+        if (cleared || !matches(repository.state.value)) ExportResult.Failed(ExportFailure.FAILED)
+        else repository.exportSession(sessionId)
+
+    /** Reloads this chat's session; a destination that is no longer the shown chat gets a failure. */
+    suspend fun reloadSession(sessionId: String): ReloadResult =
+        if (cleared || !matches(repository.state.value)) ReloadResult.Failed(ReloadFailure.Failed(null))
+        else repository.reloadSession(sessionId)
+
+    /** Reads the tree of this chat's session; a destination that is no longer the shown chat gets a failure. */
+    suspend fun loadSessionTree(sessionId: String): TreeLoadResult =
+        if (cleared || !matches(repository.state.value)) TreeLoadResult.Failed(TreeFailure.FAILED)
+        else repository.loadSessionTree(sessionId)
+
+    /** Moves this chat's session to a tree node; see [RemoteRepository.navigateSessionTree]. */
+    suspend fun navigateSessionTree(sessionId: String, nodeId: String, summarize: Boolean): TreeNavigateResult =
+        if (cleared || !matches(repository.state.value)) TreeNavigateResult.Failed(TreeFailure.FAILED)
+        else repository.navigateSessionTree(sessionId, nodeId, summarize)
+
     /** Quotes the message and offers [prompt] as the draft unless the user already typed one. */
     fun askToFix(messageId: String, prompt: String) = active {
         repository.quote(messageId)
@@ -253,6 +342,8 @@ internal class ChatViewModel(
 
     fun openChangesFile(path: String?) = active { repository.openChangesFile(path) }
 
+    fun requestChangesPreview(path: String) = active { repository.requestChangesPreview(path) }
+
     fun openFiles() = active(repository::openFiles)
 
     fun closeFiles() = repository.closeFiles()
@@ -264,6 +355,12 @@ internal class ChatViewModel(
     fun loadMoreFiles() = active(repository::loadMoreFiles)
 
     fun reloadFiles() = active(repository::reloadFiles)
+
+    fun requestFilesPreview(path: String) = active { repository.requestFilesPreview(path) }
+
+    fun showFilesPeek(path: String, type: FileEntryType) = active { repository.showFilesPeek(path, type) }
+
+    fun dismissFilesPeek() = repository.dismissFilesPeek()
 
     fun selectFileLines(selection: LineSelection?) = active { repository.selectFileLines(selection) }
 

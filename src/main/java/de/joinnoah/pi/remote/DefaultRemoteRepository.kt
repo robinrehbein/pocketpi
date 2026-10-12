@@ -10,6 +10,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
+import kotlin.random.Random
 
 internal fun canAbortRemoteRun(state: RemoteState, activeRouteId: String?): Boolean =
     state.connected &&
@@ -42,8 +43,22 @@ private const val MAX_TOOL_OUTPUT_BYTES = 1_048_576L
 private const val TOOL_OUTPUT_CHUNK_BYTES = 49_152
 private const val MAX_TOOL_OUTPUT_DATA_CHARS = 65_536
 private const val SESSION_REFRESH_INTERVAL_MILLIS = 5_000L
+private const val ATTACHMENT_READ_SPACING_MILLIS = 200L
+private const val CAPABILITIES_V1_ROUTE = "capabilities.v1:"
+private const val CAPABILITIES_V2_ROUTE = "capabilities.v2:"
+/** The v2 list holds the v1 entries plus newer ones; installed apps accept 16, this one 32. */
+private const val MAX_ROUTE_CAPABILITIES = 32
+private val DENIED_DEVICE_ERRORS =
+    setOf(R.string.remote_device_revoked, R.string.remote_device_paused)
+private val CONNECTION_ERRORS =
+    setOf(R.string.remote_connection_error, R.string.remote_unreachable) + DENIED_DEVICE_ERRORS
+private const val RECONNECT_BASE_MILLIS = 1_000L
+private const val RECONNECT_MAX_MILLIS = 30_000L
+private const val RECONNECT_JITTER = 0.2
+private const val UNREACHABLE_AFTER_FAILURES = 3
+private const val SERVICE_RESTART_CLOSE_CODE = 1012
 
-private fun opaqueId(value: String): Boolean =
+internal fun opaqueId(value: String): Boolean =
     value.isNotEmpty() &&
         value.encodeToByteArray().size <= 256 &&
         value.none { it.isWhitespace() || it.code < 0x20 || it.code == 0x7f }
@@ -91,6 +106,8 @@ class DefaultRemoteRepository(
     private val navigationStorage: NavigationSnapshotStorage? = null,
     /** Called once a pairing is removed, so stores outside the repository can forget the host. */
     private val onUnpaired: (String) -> Unit = {},
+    /** Uniform value in [0, 1) that spreads reconnect delays; injectable for tests. */
+    private val jitter: () -> Double = { Random.nextDouble() },
 ) : RemoteRepository {
     private val routeCapabilities =
         setOf(
@@ -105,7 +122,18 @@ class DefaultRemoteRepository(
             SESSION_FORK_CAPABILITY,
             GIT_CAPABILITY,
             FILES_CAPABILITY,
+            PROVIDER_AUTH_CAPABILITY,
+            ATTACHMENT_READ_CAPABILITY,
+            EXPORT_CAPABILITY,
+            SESSION_TREE_CAPABILITY,
+            // Advertised only on the capabilities.v2 route, which the first projects.list uses.
+            FILES_MEDIA_CAPABILITY,
+            FILES_ARTIFACT_CAPABILITY,
+            RELOAD_CAPABILITY,
+            ARTIFACTS_CAPABILITY,
         )
+    /** The request ID prefix of `projects.list`; falls back to v1 once for a host without v2. */
+    private var capabilityRoute = CAPABILITIES_V2_ROUTE
     private val mutable = MutableStateFlow(RemoteState())
     override val state = mutable.asStateFlow()
     private val attachmentMutex = Mutex()
@@ -135,6 +163,10 @@ class DefaultRemoteRepository(
     /** Folder and clone requests; a selection change does not cancel them, a lost connection does. */
     private val folderCompletions = mutableMapOf<String, CompletableDeferred<JsonObject>>()
     private var openCounter = 0L
+    private var providerVersion = 0L
+    private var providerStatusJob: Job? = null
+    /** Login events that arrived before the start result created the flow they belong to. */
+    private val earlyProviderUpdates = mutableListOf<ProviderAuthUpdate>()
 
     /** An open begun by beginOpenFolder, with the flags of the prompt the user confirmed. */
     private data class PendingOpen(
@@ -152,7 +184,7 @@ class DefaultRemoteRepository(
     private data class CommandDispatch(val key: DraftKey, val epoch: Long, var revision: Long = -1)
 
     private val commandDispatches = linkedMapOf<String, CommandDispatch>()
-    private val earlyFollowUpReceipts = linkedMapOf<Pair<String, String>, String>()
+    private val earlyFollowUpReceipts = linkedMapOf<Triple<DraftKey, String, String>, String>()
     private var selectionEpoch = 0L
     private var generation = 0L
     private val requests = RequestLedger()
@@ -164,7 +196,12 @@ class DefaultRemoteRepository(
     private var recoveryJob: Job? = null
     private var deferredRecovery: RemoteRecovery.Signal? = null
     private var reconnectAttempts = 0
+    private var failureStreak = 0
+    private var serviceRestart = false
+    private var restartRetryUsed = false
     private var reconnectEnabled = true
+    /** The selection the latest activation was opening, whether or not it got selected. */
+    private var requestedSelection: RemoteSelection? = null
     private val recovery = RemoteRecovery()
     private var timeline: Timeline? = null
     private data class CachedSessions(
@@ -188,8 +225,20 @@ class DefaultRemoteRepository(
     private var projectChatsJob: Job? = null
     private var attentionRefreshJob: Job? = null
     private var lastProjectChatsRefreshAt: Long? = null
+    private val sessionCache = NavigationMemoryCache<Pair<String, String>, CachedSessions>(8)
+    private val chatCache = NavigationMemoryCache<RemoteSelection, CachedChat>(8)
     private var cachedSessions: CachedSessions? = null
+        set(value) {
+            field = value
+            if (value == null) sessionCache.clear()
+            else sessionCache[value.routeId to value.projectId] = value
+        }
     private var cachedChat: CachedChat? = null
+        set(value) {
+            field = value
+            if (value == null) chatCache.clear()
+            else chatCache[value.selection] = value
+        }
     private val savedNavigation = linkedMapOf<String, NavigationSnapshot>()
     private data class NavigationWrite(
         val version: Long,
@@ -229,6 +278,12 @@ class DefaultRemoteRepository(
 
     init {
         scope.launch {
+            // Independent disk reads overlap. Capture failures so one corrupt store does not
+            // cancel initialization or prevent another store from being recovered.
+            val loadedNavigation = async(io) {
+                runCatching { navigationStorage?.load().orEmpty() }
+            }
+            val loadedDrafts = async(io) { runCatching { draftStorage.load() } }
             val hosts =
                 try {
                     withContext(io) { pairings.load() }.also { pairingsLoaded = true }
@@ -238,11 +293,11 @@ class DefaultRemoteRepository(
                 }
             if (hosts != null) {
                 update { it.copy(hosts = hosts.filterNot { host -> host.routeId in removedRoutes }) }
-                navigationStorage?.let { storage ->
+                navigationStorage?.let {
                     try {
                         val allowed = hosts.mapTo(mutableSetOf()) { it.routeId }
                         savedNavigation.putAll(
-                            withContext(io) { storage.load() }
+                            loadedNavigation.await().getOrThrow()
                                 .filterKeys { it in allowed && it !in removedRoutes }
                         )
                         navigationLoaded = true
@@ -252,7 +307,7 @@ class DefaultRemoteRepository(
                 }
             }
             try {
-                drafts.putAll(withContext(io) { draftStorage.load() }.mapValues { (_, value) ->
+                drafts.putAll(loadedDrafts.await().getOrThrow().mapValues { (_, value) ->
                     value.copy(followUps = value.followUps.map { entry ->
                         if (entry.status in setOf("pending", "accepted")) entry.copy(status = "uncertain") else entry
                     })
@@ -303,14 +358,21 @@ class DefaultRemoteRepository(
         }
         transport.listener =
             object : RemoteTransport.Listener {
+                override fun closed(code: Int) {
+                    serviceRestart = code == SERVICE_RESTART_CLOSE_CODE
+                }
+
                 override fun ready(capabilities: Set<String>) {
-                    reconnectAttempts = 0
+                    resetReconnect()
+                    capabilityRoute = CAPABILITIES_V2_ROUTE
                     update {
                         it.copy(
                             connected = true,
                             capabilities = capabilities,
+                            capabilitiesKnown = false,
                             connection = R.string.remote_connected,
                             error = null,
+                            reconnectAt = null,
                         )
                     }
                     ready?.complete(Unit)
@@ -589,7 +651,7 @@ class DefaultRemoteRepository(
             return
         }
         val sessions =
-            cachedSessions?.takeIf { it.routeId == host.routeId && it.projectId == projectId }
+            sessionCache[host.routeId to projectId]
                 ?: run {
                     val project = projects.find { it.text("id") == projectId } ?: return
                     val summaries = cachedProjectChats?.takeIf { it.first == host.routeId }
@@ -601,7 +663,7 @@ class DefaultRemoteRepository(
             select(RemoteSelection(host.routeId, projectId), host, projects, sessions.project, sessions.sessions)
             return
         }
-        val chat = cachedChat?.takeIf { it.selection == selection }
+        val chat = chatCache[selection]
         val session = chat?.session ?: sessions.sessions.find { it.text("id") == selection.sessionId }
             ?: return
         select(selection, host, projects, sessions.project, sessions.sessions, session, chat)
@@ -736,6 +798,7 @@ class DefaultRemoteRepository(
         sessionRefreshJob?.cancel()
         selectionEpoch++
         configurationVersion++
+        configurationNeedsRefresh = false
         contextVersion++
         commandsVersion++
         if (pairing?.isActive == true) {
@@ -752,6 +815,7 @@ class DefaultRemoteRepository(
                 configurationLoading = false,
                 configurationChanging = false,
                 contextLoading = false,
+                compactionRequesting = false,
                 commandsLoading = false,
                 toolOutput = null,
             )
@@ -785,7 +849,16 @@ class DefaultRemoteRepository(
             if (previousRoute != host.routeId && markPendingFollowUpsUncertain(previousRoute)) {
                 persist().await()
             }
-            if (previousRoute != host.routeId) clearNavigationCache()
+            if (previousRoute != host.routeId) {
+                resetReconnect()
+                clearNavigationCache()
+                attachmentBytes.clear()
+                SentImageThumbnails.clear()
+                projectImageBytes.clear()
+                projectArtifacts.clear()
+                ProjectImageBitmaps.clear()
+                ArtifactThumbnails.clear()
+            }
             cachedProjectChats = cachedProjectChats?.takeIf { it.first == host.routeId }
                 ?.let { it.first to it.second.map { chat -> chat.copy(verified = false) } }
             projectChatCandidates.replaceAll { _, chats ->
@@ -794,6 +867,9 @@ class DefaultRemoteRepository(
             generation++
             failFolderRequests()
             cloneStatusJob?.cancel()
+            providerStatusJob?.cancel()
+            providerVersion++
+            earlyProviderUpdates.clear()
             folderVersion++
             folderSession++
             activeOpen = null
@@ -810,9 +886,11 @@ class DefaultRemoteRepository(
                     connected = false,
                     connection = R.string.remote_connecting,
                     compaction = null,
+                    compactionRequesting = false,
                     toolOutput = null,
                     questions = emptyList(),
                     capabilities = emptySet(),
+                    capabilitiesKnown = false,
                     unavailableCapabilities = emptySet(),
                     childControlUnsupported = emptySet(),
                     configuration = null,
@@ -821,6 +899,10 @@ class DefaultRemoteRepository(
                     advisorChanging = false,
                     commands = emptyList(),
                     status = "offline",
+                    // A login goes on on the Mac; the same host recovers it once it is reachable.
+                    providerAuth =
+                        if (previousRoute != host.routeId) ProviderAuthState()
+                        else it.providerAuth.offline(),
                     folders = it.folders.copy(
                         loaded = it.folders.loaded && !it.folders.loading,
                         loading = false,
@@ -835,12 +917,11 @@ class DefaultRemoteRepository(
         }
         if (withTimeoutOrNull(30000) { checkNotNull(ready).await() } == null) {
             if (epoch == selectionEpoch) {
-                generation++
-                transport.close()
+                // Goes offline and schedules the next attempt like any transport failure.
+                failed(true, R.string.remote_connection_error)
                 ready?.cancel()
                 ready = null
                 activeHost = null
-                update { it.copy(connected = false, connection = R.string.remote_offline) }
             }
             throw IllegalStateException("Connection timed out")
         }
@@ -854,11 +935,12 @@ class DefaultRemoteRepository(
         draft: String? = null,
         requestId: String = Wire.random(),
         onSent: (() -> Unit)? = null,
+        timeoutMillis: Long = 30000,
     ): JsonObject {
         checkEpoch(epoch)
         check(state.value.connected)
         // Older hosts accept this as an opaque request ID and return ordinary projects.
-        val id = if (type == "projects.list") "capabilities.v1:$requestId" else requestId
+        val id = if (type == "projects.list") "$capabilityRoute$requestId" else requestId
         val payload = Wire.objectOf("type" to type, "requestId" to id, *fields)
         val completion = CompletableDeferred<JsonObject>()
         requests.add(
@@ -878,12 +960,17 @@ class DefaultRemoteRepository(
             onSent?.invoke()
             transport.send(payload)
             val result =
-                withTimeoutOrNull(30000) { completion.await() }
+                withTimeoutOrNull(timeoutMillis) { completion.await() }
                     ?: throw IllegalStateException("Request timed out")
             checkEpoch(epoch)
             if (type == "projects.list" && result.text("kind") == "projects") {
+                if (id.startsWith(CAPABILITIES_V2_ROUTE) && result["capabilities"] !is JsonArray) {
+                    // A host that predates the v2 route treats the ID as opaque and sends no list.
+                    capabilityRoute = CAPABILITIES_V1_ROUTE
+                    return request(type, epoch, *fields, draft = draft, timeoutMillis = timeoutMillis)
+                }
                 val advertised = (result["capabilities"] as? JsonArray)
-                    ?.takeIf { it.size <= 16 }
+                    ?.takeIf { it.size <= MAX_ROUTE_CAPABILITIES }
                     ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                     .orEmpty()
                 val merged = routeCapabilities.filter { it in advertised }
@@ -895,7 +982,9 @@ class DefaultRemoteRepository(
                     update { it.copy(capabilities = it.capabilities + merged) }
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
+                update { it.copy(capabilitiesKnown = true) }
                 if (PROJECT_OPEN_CAPABILITY in merged) resumeClone()
+                if (PROVIDER_AUTH_CAPABILITY in merged) resumeProviderAuth()
             }
             return result
         } finally {
@@ -903,6 +992,10 @@ class DefaultRemoteRepository(
             completions.remove(id)
         }
     }
+
+    /** The error's `message`, shortened; only some callers read it. */
+    private fun hostMessage(error: JsonObject): String? =
+        (error["message"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.take(256)
 
     private fun receive(payload: JsonObject) {
         try {
@@ -914,7 +1007,7 @@ class DefaultRemoteRepository(
                         else
                             payload.obj("error").let { error ->
                                 completion.completeExceptionally(
-                                    RemoteRequestException(error.text("code"), error["details"] as? JsonObject)
+                                    RemoteRequestException(error.text("code"), error["details"] as? JsonObject, hostMessage(error))
                                 )
                             }
                         return
@@ -925,7 +1018,7 @@ class DefaultRemoteRepository(
                     else
                         payload.obj("error").let { error ->
                             completion.completeExceptionally(
-                                RemoteRequestException(error.text("code"), error["details"] as? JsonObject)
+                                RemoteRequestException(error.text("code"), error["details"] as? JsonObject, hostMessage(error))
                             )
                         }
                 }
@@ -986,16 +1079,29 @@ class DefaultRemoteRepository(
                             updateSessionTitle(id, title)
                         }
                     }
+                    if (payload.text("kind") == "message.upsert") {
+                        messageDeliveryReceipt(payload.text("sessionId"), payload.obj("message"))
+                    }
                     if (payload.text("kind") == "command.status") commandReceipt(payload)
                     if (payload.text("kind") in setOf("follow_up.status", "steer.status")) followUpReceipt(payload)
                     val timelineEvent = if (payload.text("kind") in setOf("follow_up.status", "steer.status"))
                         JsonObject(payload + ("kind" to JsonPrimitive("command.status"))) else payload
                     if (timeline?.event(timelineEvent) == true && !resynchronizing) snapshotAsync()
                     publishTimeline()
+                    if (payload.text("kind") == "session.compaction" &&
+                        payload.text("sessionId") == state.value.selection.sessionId &&
+                        payload.text("state") == "done") {
+                        update { it.copy(contextUsage = null) }
+                        refreshContextUsage()
+                    }
                 }
                 "host.event" ->
-                    cloneEvent(payload)?.let(::applyCloneUpdate)
-                        ?: jobEvent(payload)?.let(jobsController::onEvent)
+                    if (payload.optionalText("kind")?.startsWith("provider.auth.") == true) {
+                        receiveProviderAuthEvent(payload)
+                    } else {
+                        cloneEvent(payload)?.let(::applyCloneUpdate)
+                            ?: jobEvent(payload)?.let(jobsController::onEvent)
+                    }
                 else -> error("Unknown payload")
             }
         } catch (_: Exception) {
@@ -1004,21 +1110,69 @@ class DefaultRemoteRepository(
     }
 
     private fun followUpReceipt(event: JsonObject) {
-        val key = DraftKey(activeHost?.routeId ?: return, event.text("sessionId"))
-        val latest = drafts[key] ?: return
-        val id = event.text("requestId")
-        val status = event.text("status")
-        require(status in setOf("accepted", "delivered", "cancelled", "uncertain"))
         val delivery = if (event.text("kind") == "steer.status") "steer" else "follow_up"
-        if (latest.followUps.none { it.requestId == id }) {
-            earlyFollowUpReceipts[id to delivery] = status
+        applyFollowUpReceipt(event.text("sessionId"), event.text("requestId"), delivery, event.text("status"))
+    }
+
+    private fun messageDeliveryReceipt(sessionId: String, message: JsonObject) {
+        if (message.optionalText("role") != "user") return
+        val metadata = message["remoteDelivery"] as? JsonObject ?: return
+        val id = (metadata["requestId"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return
+        val delivery = (metadata["delivery"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return
+        if (id.isEmpty() || id.toByteArray().size > 256 || id.any { it.code <= 32 || it.code == 127 } ||
+            delivery !in setOf("steer", "follow_up")) return
+        applyFollowUpReceipt(sessionId, id, delivery, "delivered")
+    }
+
+    private fun mergedFollowUpStatus(previous: String, incoming: String): String = when {
+        previous == "delivered" -> previous
+        incoming == "delivered" -> incoming
+        previous in setOf("cancelled", "uncertain") -> previous
+        else -> incoming
+    }
+
+    private fun applyFollowUpReceipt(sessionId: String, id: String, delivery: String, status: String) {
+        require(status in setOf("accepted", "delivered", "cancelled", "uncertain"))
+        val key = DraftKey(activeHost?.routeId ?: return, sessionId)
+        val latest = drafts[key] ?: return
+        if (latest.followUps.none { it.requestId == id && it.delivery == delivery }) {
+            // Only the in-flight mutation can receive a receipt before its acknowledgement.
+            if (latest.mutationId != id) return
+            if (status == "delivered" && latest.submittedText != null) {
+                // Consumption proves delivery even if the prompt acknowledgement was lost.
+                val unchanged = latest.text == latest.submittedText && latest.quote == latest.submittedQuote
+                val attachments = if (latest.attachments == latest.submittedAttachments) emptyList()
+                    else latest.attachments
+                val confirmed = latest.copy(
+                    text = if (unchanged) "" else latest.text,
+                    quote = if (unchanged) null else latest.quote,
+                    attachments = attachments,
+                    uploads = latest.uploads.filter { upload -> attachments.any { it.id == upload.localId } },
+                    mutationId = null,
+                    submittedText = null,
+                    submittedQuote = null,
+                    submittedAttachments = emptyList(),
+                    followUps = latest.followUps + PendingFollowUp(id, latest.submittedText, "delivered", delivery),
+                )
+                drafts[key] = confirmed
+                persist()
+                if (currentDraftKey() == key) update { it.copy(
+                    draft = confirmed.text, quote = confirmed.quote, attachments = confirmed.attachments,
+                    uncertain = false, followUps = confirmed.followUps,
+                ) }
+                return
+            }
+            val receiptKey = Triple(key, id, delivery)
+            earlyFollowUpReceipts[receiptKey] = mergedFollowUpStatus(
+                earlyFollowUpReceipts[receiptKey] ?: "pending", status)
             while (earlyFollowUpReceipts.size > 128) earlyFollowUpReceipts.remove(earlyFollowUpReceipts.keys.first())
             return
         }
         val entries = latest.followUps.map {
-            if (it.requestId == id && it.delivery == delivery && it.status !in setOf("delivered", "cancelled", "uncertain"))
-                it.copy(status = status) else it
+            if (it.requestId == id && it.delivery == delivery)
+                it.copy(status = mergedFollowUpStatus(it.status, status)) else it
         }
+        if (entries == latest.followUps) return
         drafts[key] = latest.copy(followUps = entries)
         persist()
         if (currentDraftKey() == key) update { it.copy(followUps = entries) }
@@ -1054,6 +1208,14 @@ class DefaultRemoteRepository(
                     chats.map { it.copy(session = renamed(it.session)) }
                 }
                 publishProjectChats(routeId)
+            }
+            sessionCache.transformValues { cached ->
+                if (cached.routeId == routeId) cached.copy(sessions = cached.sessions.map(::renamed))
+                else cached
+            }
+            chatCache.transformValues { cached ->
+                if (cached.selection.routeId == routeId) cached.copy(session = renamed(cached.session))
+                else cached
             }
             cachedSessions?.takeIf { it.routeId == routeId }?.let { cached ->
                 cachedSessions = cached.copy(sessions = cached.sessions.map(::renamed))
@@ -1098,6 +1260,16 @@ class DefaultRemoteRepository(
                     }
                 }
                 publishProjectChats(routeId)
+            }
+            sessionCache.transformValues { cached ->
+                if (cached.routeId == routeId)
+                    cached.copy(sessions = cached.sessions.map(::withSessionStatus))
+                else cached
+            }
+            chatCache.transformValues { cached ->
+                if (cached.selection.routeId == routeId && cached.selection.sessionId == id)
+                    cached.copy(session = withSessionStatus(cached.session), status = status)
+                else cached
             }
             cachedSessions?.takeIf { it.routeId == routeId }?.let { cached ->
                 cachedSessions = cached.copy(sessions = cached.sessions.map(::withSessionStatus))
@@ -1154,6 +1326,7 @@ class DefaultRemoteRepository(
             checkEpoch(epoch)
             if (current !== timeline) return
             current.snapshot(data, older)
+            current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
             publishTimeline()
         } finally {
             if (epoch == selectionEpoch) resynchronizing = false
@@ -1200,6 +1373,7 @@ class DefaultRemoteRepository(
             it.copy(
                 selection = selection,
                 compaction = null,
+                compactionRequesting = false,
                 toolOutput = null,
                 changes = null,
                 files = null,
@@ -1255,6 +1429,12 @@ class DefaultRemoteRepository(
     ): RemoteSelection {
         cancelRecovery()
         if (mode == ActivationMode.USER_OPEN) reconnectEnabled = true
+        if (mode == ActivationMode.RESTORE && state.value.deniedRouteId != null) {
+            // A restore on navigation must not retry the paused or revoked device behind the
+            // user's back; any other route, the Hosts list included, is unaffected by it.
+            if (selection.routeId == state.value.deniedRouteId) return state.value.selection
+            reconnectEnabled = true
+        }
         return activate(selection, mode, force = false)
     }
 
@@ -1274,11 +1454,13 @@ class DefaultRemoteRepository(
                     (state.value.connected && activeHost?.routeId == selection.routeId))
         )
             return selection
+        cacheCurrentScreen()
         if (!force) cancelSelection()
         if (!useCache) clearNavigationCache()
         val epoch = selectionEpoch
-        retry?.cancel()
-        update { it.copy(loading = true) }
+        stopReconnectTimer()
+        requestedSelection = selection
+        update { it.copy(loading = true, deniedRouteId = null) }
         try {
             val host = state.value.hosts.find { it.routeId == selection.routeId }
             if (host == null) {
@@ -1293,9 +1475,11 @@ class DefaultRemoteRepository(
                         connected = false,
                         connection = R.string.remote_connecting,
                         compaction = null,
+                        compactionRequesting = false,
                         toolOutput = null,
                         questions = emptyList(),
                         capabilities = emptySet(),
+                        capabilitiesKnown = false,
                         unavailableCapabilities = emptySet(),
                         childControlUnsupported = emptySet(),
                         configuration = null,
@@ -1309,6 +1493,8 @@ class DefaultRemoteRepository(
                     )
                 }
             }
+            // Explicit opens can fork historical sessions: wait for canonical IDs before
+            // changing selection, but retain cached content while the snapshot refreshes.
             if (useCache && mode == ActivationMode.RESTORE) showCachedSelection(selection, host)
             connect(host, epoch)
             if (useCache && mode == ActivationMode.RESTORE) showCachedSelection(selection, host)
@@ -1327,14 +1513,8 @@ class DefaultRemoteRepository(
                 return parent
             }
             val cached =
-                cachedSessions
-                    ?.takeIf {
-                        useCache &&
-                            !force &&
-                            alreadyConnected &&
-                            it.routeId == host.routeId &&
-                            it.projectId == project.text("id")
-                    }
+                sessionCache[host.routeId to project.text("id")]
+                    ?.takeIf { useCache && !force && alreadyConnected }
                     ?.sessions
             // A session opened by hand may have registered after the cached list was fetched
             // (a subagent child, for example), so a miss there asks the host again.
@@ -1377,7 +1557,7 @@ class DefaultRemoteRepository(
                 canonicalProject,
                 sessions,
                 chosen,
-                cachedChat?.takeIf { useCache && it.selection == canonical },
+                chatCache[canonical]?.takeIf { useCache },
                 sessionsFresh = sessionsFetchedNow,
             )
             try {
@@ -1386,7 +1566,7 @@ class DefaultRemoteRepository(
                 throw e
             } catch (_: Exception) {
                 checkEpoch(epoch)
-                if (cachedChat?.selection == canonical) {
+                if (chatCache[canonical] != null) {
                     reportError(R.string.remote_request_error)
                     return canonical
                 }
@@ -1403,7 +1583,9 @@ class DefaultRemoteRepository(
             throw e
         } catch (_: Exception) {
             checkEpoch(epoch)
-            reportError(R.string.remote_request_error)
+            // A lost connection already set its own, more specific error.
+            if (state.value.error !in CONNECTION_ERRORS || state.value.connected)
+                reportError(R.string.remote_request_error)
             return if (mode == ActivationMode.USER_OPEN) previousSelection else state.value.selection
         } finally {
             if (epoch == selectionEpoch) {
@@ -1454,6 +1636,45 @@ class DefaultRemoteRepository(
         source: RemoteSelection,
         messageId: String,
         mode: ForkMode,
+    ): RemoteSelection =
+        forkFrom(
+            source,
+            SESSION_FORK_CAPABILITY,
+            "session.fork",
+            { sourceId -> arrayOf("sessionId" to sourceId, "messageId" to messageId, "mode" to mode.wire) },
+            setOf(mode.wire),
+            ::forkError,
+        )
+
+    override suspend fun forkSessionAtNode(source: RemoteSelection, nodeId: String): RemoteSelection =
+        if (
+            SESSION_TREE_CAPABILITY !in state.value.capabilities ||
+                SESSION_TREE_CAPABILITY in state.value.unavailableCapabilities ||
+                !opaqueId(nodeId)
+        )
+            source
+        else
+            forkFrom(
+                source,
+                SESSION_FORK_CAPABILITY,
+                "session.tree.fork",
+                { sourceId -> treeForkFields(sourceId, nodeId) },
+                setOf("edit", "at"),
+                ::treeForkError,
+            )
+
+    /**
+     * Forks [source] with the request [type] and switches to the fork. [modes] are the result modes
+     * the request may produce: `edit` puts the host's text into the new chat's composer, `retry`
+     * reports its resend, `at` opens the fork as it is.
+     */
+    private suspend fun forkFrom(
+        source: RemoteSelection,
+        capability: String,
+        type: String,
+        fields: (sourceId: String) -> Array<Pair<String, Any?>>,
+        modes: Set<String>,
+        errorText: (code: String?) -> Int,
     ): RemoteSelection {
         val routeId = source.routeId ?: return source
         val projectId = source.projectId ?: return source
@@ -1461,7 +1682,7 @@ class DefaultRemoteRepository(
         val current = state.value
         // Older hosts close the connection on unknown commands.
         if (
-            SESSION_FORK_CAPABILITY !in current.capabilities ||
+            capability !in current.capabilities ||
                 current.selection != source ||
                 current.session?.optionalText("id") != sourceId
         )
@@ -1472,20 +1693,8 @@ class DefaultRemoteRepository(
         update { it.copy(loading = true) }
         var failure = R.string.remote_request_error
         try {
-            val result =
-                request(
-                    "session.fork",
-                    epoch,
-                    "sessionId" to sourceId,
-                    "messageId" to messageId,
-                    "mode" to mode.wire,
-                )
-            val session = result.obj("session")
-            check(
-                result.text("kind") == "fork" &&
-                    result.text("sourceSessionId") == sourceId &&
-                    session.text("projectId") == projectId
-            )
+            val result = validatedFork(request(type, epoch, *fields(sourceId)), sourceId, projectId, modes)
+            val session = result.session
             val project =
                 state.value.project?.takeIf { it.optionalText("id") == projectId }
                     ?: state.value.projects.find { it.optionalText("id") == projectId }
@@ -1494,14 +1703,15 @@ class DefaultRemoteRepository(
             cachedChat = null
             val canonical = RemoteSelection(routeId, projectId, session.text("id"))
             var notice: Int? = null
-            if (mode == ForkMode.EDIT) {
-                val draft = forkDraft(result.text("text"))
-                drafts[DraftKey(routeId, session.text("id"))] =
-                    StoredDraft(text = draft.text, quote = draft.quote)
-                persist()
-                if (draft.droppedAttachments) notice = R.string.remote_fork_attachments_dropped
-            } else {
-                notice = forkResendNotice(result.optionalText("resend"))
+            when (result.mode) {
+                "edit" -> {
+                    val draft = forkDraft(checkNotNull(result.text))
+                    drafts[DraftKey(routeId, session.text("id"))] =
+                        StoredDraft(text = draft.text, quote = draft.quote)
+                    persist()
+                    if (draft.droppedAttachments) notice = R.string.remote_fork_attachments_dropped
+                }
+                "retry" -> notice = forkResendNotice(result.resend)
             }
             select(
                 canonical,
@@ -1520,7 +1730,7 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            failure = forkError((e as? RemoteRequestException)?.code)
+            failure = errorText((e as? RemoteRequestException)?.code)
         } finally {
             if (epoch == selectionEpoch) update { it.copy(loading = false) }
         }
@@ -1647,6 +1857,10 @@ class DefaultRemoteRepository(
         reconnectEnabled = false
         cancelSelection()
         clearNavigationCache()
+        projectImageBytes.clear()
+        projectArtifacts.clear()
+        ProjectImageBitmaps.clear()
+        ArtifactThumbnails.clear()
         retry?.cancel()
         generation++
         transport.close()
@@ -1667,6 +1881,12 @@ class DefaultRemoteRepository(
         ) clearNavigationCache()
         if (activeHost?.routeId == routeId) reconnectEnabled = false
         if (activeHost?.routeId == routeId) disconnect()
+        attachmentBytes.clear()
+        SentImageThumbnails.clear()
+        projectImageBytes.clear()
+        projectArtifacts.clear()
+        ProjectImageBitmaps.clear()
+        ArtifactThumbnails.clear()
         removedRoutes += routeId
         savedNavigation.remove(routeId)
         queueNavigationWrite(immediate = true)
@@ -1712,6 +1932,9 @@ class DefaultRemoteRepository(
         folderSession++
         activeOpen = null
         cloneStatusJob?.cancel()
+        providerStatusJob?.cancel()
+        providerVersion++
+        earlyProviderUpdates.clear()
         failFolderRequests()
         transport.close()
         ready?.completeExceptionally(IllegalStateException("Disconnected"))
@@ -1735,6 +1958,7 @@ class DefaultRemoteRepository(
             it.copy(
                 connected = false,
                 compaction = null,
+                compactionRequesting = false,
                 toolOutput = null,
                 projectChats = it.projectChats.map { chat -> chat.copy(verified = false) },
                 followUps = currentDraftKey()?.let { key -> drafts[key]?.followUps }.orEmpty(),
@@ -1745,6 +1969,7 @@ class DefaultRemoteRepository(
                 answering = emptySet(),
                 questions = emptyList(),
                 capabilities = emptySet(),
+                capabilitiesKnown = false,
                 unavailableCapabilities = emptySet(),
                 childControlUnsupported = emptySet(),
                 configuration = null,
@@ -1753,6 +1978,7 @@ class DefaultRemoteRepository(
                 advisorChanging = false,
                 commands = emptyList(),
                 status = "offline",
+                providerAuth = it.providerAuth.offline(),
                 // A listing lost with the connection loads again after the reconnect.
                 folders = it.folders.copy(
                     loaded = it.folders.loaded && !it.folders.loading,
@@ -1765,30 +1991,73 @@ class DefaultRemoteRepository(
             )
         }
         val host = activeHost
-        if (error == R.string.remote_denied) reconnectEnabled = false
+        if (error == R.string.remote_denied || error in DENIED_DEVICE_ERRORS) reconnectEnabled = false
+        // The host this denial belongs to, for the error card's actions.
+        update { it.copy(deniedRouteId = if (error in DENIED_DEVICE_ERRORS) host?.routeId else null) }
+        val restart = serviceRestart
+        serviceRestart = false
+        if (reconnect && error == R.string.remote_connection_error) {
+            failureStreak++
+            if (failureStreak >= UNREACHABLE_AFTER_FAILURES)
+                update { it.copy(error = R.string.remote_unreachable) }
+        }
         if (
             reconnect &&
                 reconnectEnabled &&
                 recovery.canRecover &&
-                host != null &&
-                reconnectAttempts < 5
+                host != null
         ) {
             val generationAtFailure = generation
+            // The relay announced a restart, so one retry per failure streak does not wait.
+            val immediate = restart && !restartRetryUsed
+            if (immediate) {
+                restartRetryUsed = true
+                reconnectAttempts = 0
+            }
+            val wait = reconnectDelay(reconnectAttempts++, immediate)
             retry?.cancel()
+            update { it.copy(reconnectAt = now() + wait) }
             retry = scope.launch {
-                delay((1000L shl reconnectAttempts++).coerceAtMost(30000))
+                delay(wait)
                 if (generationAtFailure == generation && recovery.canRecover && reconnectEnabled) {
                     val selection = state.value.selection
                     retry = null
+                    update { it.copy(reconnectAt = null) }
                     activate(selection, ActivationMode.RESTORE)
                 }
             }
-        }
+        } else update { it.copy(reconnectAt = null) }
+    }
+
+    private fun reconnectDelay(attempt: Int, immediate: Boolean): Long {
+        if (immediate) return 0
+        val base = RECONNECT_BASE_MILLIS shl attempt.coerceAtMost(6)
+        val unit = jitter().coerceIn(0.0, 1.0)
+        // At the cap the delay only spreads downward, so it never exceeds the cap.
+        val spread =
+            if (base >= RECONNECT_MAX_MILLIS) 1.0 - RECONNECT_JITTER * unit
+            else 1.0 + RECONNECT_JITTER * (2 * unit - 1)
+        return (base.coerceAtMost(RECONNECT_MAX_MILLIS) * spread).toLong()
+    }
+
+    private fun resetReconnect() {
+        reconnectAttempts = 0
+        failureStreak = 0
+        restartRetryUsed = false
+    }
+
+    private fun stopReconnectTimer() {
+        retry?.cancel()
+        retry = null
+        if (state.value.reconnectAt != null) update { it.copy(reconnectAt = null) }
     }
 
     override fun refresh() {
         reconnectEnabled = true
-        val selection = state.value.selection
+        // Retrying a denied device reopens what was being opened, which may not be selected yet.
+        val selection =
+            if (state.value.deniedRouteId != null) requestedSelection ?: state.value.selection
+            else state.value.selection
         clearNavigationCache()
         if (selection.sessionId != null && state.value.connected) {
             snapshotAsync()
@@ -1797,7 +2066,8 @@ class DefaultRemoteRepository(
             refreshCommands()
             return
         }
-        reconnectAttempts = 0
+        resetReconnect()
+        stopReconnectTimer()
         scope.launch {
             update { it.copy(loading = true) }
             activate(selection, ActivationMode.RESTORE, force = false, useCache = false)
@@ -1842,28 +2112,26 @@ class DefaultRemoteRepository(
         val signal = recovery.foreground(foreground)
         if (!foreground) {
             queueNavigationWrite(immediate = true)
-            retry?.cancel()
-            retry = null
+            stopReconnectTimer()
             cancelRecovery()
             return
         }
         signal ?: return
         onRecoverySignal(signal)
-        reconnectAttempts = 0
+        resetReconnect()
         recover(signal)
     }
 
     override fun setValidatedNetwork(identity: String?) {
         val signal = recovery.network(identity)
         if (identity == null) {
-            retry?.cancel()
-            retry = null
+            stopReconnectTimer()
             cancelRecovery()
             return
         }
         signal ?: return
         onRecoverySignal(signal)
-        reconnectAttempts = 0
+        resetReconnect()
         recover(signal)
     }
 
@@ -1878,8 +2146,7 @@ class DefaultRemoteRepository(
             deferredRecovery = signal
             return
         }
-        retry?.cancel()
-        retry = null
+        stopReconnectTimer()
         if (recoveryJob?.isActive == true) return
         val selection = state.value.selection
         val epoch = selectionEpoch
@@ -1975,6 +2242,34 @@ class DefaultRemoteRepository(
         }
     }
 
+    override fun compactContext() {
+        val current = state.value
+        val sessionId = current.selection.sessionId ?: return
+        if (!current.connected || current.loading || current.status != "idle" ||
+            current.sending || current.answering.isNotEmpty() || current.configurationChanging ||
+            current.compactionRequesting || compactionVisible(current.compaction, now()) ||
+            COMPACT_CAPABILITY !in current.capabilities ||
+            COMPACT_CAPABILITY in current.unavailableCapabilities ||
+            activeHost?.routeId != current.selection.routeId
+        ) return
+        val epoch = selectionEpoch
+        update { it.copy(compactionRequesting = true) }
+        scope.launch {
+            try {
+                val result = request("session.compact", epoch, "sessionId" to sessionId)
+                require(result.text("kind") == "accepted" && result.text("sessionId") == sessionId)
+            } catch (_: CancellationException) {} catch (e: Exception) {
+                if (epoch == selectionEpoch) {
+                    if (e.message == "unsupported")
+                        update { it.copy(unavailableCapabilities = it.unavailableCapabilities + COMPACT_CAPABILITY) }
+                    reportError(R.string.remote_compact_error)
+                }
+            } finally {
+                if (epoch == selectionEpoch) update { it.copy(compactionRequesting = false) }
+            }
+        }
+    }
+
     private fun canChangeConfiguration(): Boolean =
         state.value.let {
             it.connected &&
@@ -2010,7 +2305,28 @@ class DefaultRemoteRepository(
         )
     }
 
-    private fun changeConfiguration(change: JsonObject) {
+    override fun changeSettings(autoCompaction: Boolean?, steeringMode: String?, followUpMode: String?) {
+        val current = state.value
+        if (SETTINGS_CAPABILITY !in current.capabilities ||
+            SETTINGS_CAPABILITY in current.unavailableCapabilities ||
+            current.configuration?.settings == null ||
+            (autoCompaction == null && steeringMode == null && followUpMode == null) ||
+            listOfNotNull(steeringMode, followUpMode).any { it != QUEUE_MODE_ONE_AT_A_TIME && it != QUEUE_MODE_ALL }
+        ) return
+        changeConfiguration(
+            JsonObject(
+                buildMap {
+                    put("kind", JsonPrimitive("settings"))
+                    autoCompaction?.let { put("autoCompaction", JsonPrimitive(it)) }
+                    steeringMode?.let { put("steeringMode", JsonPrimitive(it)) }
+                    followUpMode?.let { put("followUpMode", JsonPrimitive(it)) }
+                }
+            ),
+            rereadOnError = true,
+        )
+    }
+
+    private fun changeConfiguration(change: JsonObject, rereadOnError: Boolean = false) {
         if (!canChangeConfiguration()) return
         if (configurationNeedsRefresh) {
             refreshConfiguration()
@@ -2022,6 +2338,7 @@ class DefaultRemoteRepository(
         contextVersion++
         update { it.copy(configurationChanging = true, contextUsage = null, contextLoading = false) }
         scope.launch {
+            var failed = false
             try {
                 val confirmed =
                     configuration(
@@ -2036,9 +2353,14 @@ class DefaultRemoteRepository(
                 if (epoch == selectionEpoch && version == configurationVersion)
                     update { it.copy(configuration = confirmed, contextUsage = null) }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                failed = true
                 if (epoch == selectionEpoch && version == configurationVersion) {
                     configurationNeedsRefresh = true
-                    if (e.message == "unsupported")
+                    if (e.message == "unsupported" && rereadOnError) {
+                        // Only the settings change is unsupported; model and thinking still work.
+                        update { it.copy(unavailableCapabilities = it.unavailableCapabilities + SETTINGS_CAPABILITY) }
+                        reportError(R.string.remote_configuration_error)
+                    } else if (e.message == "unsupported")
                         update {
                             it.copy(
                                 configuration = null,
@@ -2051,6 +2373,9 @@ class DefaultRemoteRepository(
             } finally {
                 if (epoch == selectionEpoch && version == configurationVersion)
                     update { it.copy(configurationChanging = false) }
+                // A failed settings change may be partly applied: show what the host holds now.
+                if (failed && rereadOnError && epoch == selectionEpoch && version == configurationVersion)
+                    refreshConfiguration()
                 resumeDeferredRecovery()
             }
         }
@@ -2059,8 +2384,9 @@ class DefaultRemoteRepository(
     override fun refreshAdvisor() {
         val current = state.value
         val sessionId = current.selection.sessionId ?: return
-        if (!current.connected || ADVISOR_CAPABILITY !in current.capabilities ||
-            ADVISOR_CAPABILITY in current.unavailableCapabilities || current.advisorLoading) return
+        // A session can gain support after its advisor extension is loaded. A previous
+        // unsupported response must not prevent a fresh read from the visible advisor entry.
+        if (!current.connected || ADVISOR_CAPABILITY !in current.capabilities || current.advisorLoading) return
         val epoch = selectionEpoch
         val version = ++advisorVersion
         update { it.copy(advisorLoading = true) }
@@ -2069,7 +2395,8 @@ class DefaultRemoteRepository(
                 val confirmed = advisor(request("session.advisor.get", epoch, "sessionId" to sessionId), sessionId)
                 if (epoch == selectionEpoch && version == advisorVersion &&
                     state.value.selection.sessionId == sessionId)
-                    update { it.copy(advisor = confirmed, advisorChanging = false) }
+                    update { it.copy(advisor = confirmed, advisorChanging = false,
+                        unavailableCapabilities = it.unavailableCapabilities - ADVISOR_CAPABILITY) }
             } catch (_: CancellationException) {} catch (e: Exception) {
                 if (epoch == selectionEpoch && version == advisorVersion) {
                     if (e.message == "unsupported")
@@ -2410,7 +2737,7 @@ class DefaultRemoteRepository(
             }
             val previous = drafts[key]?.uploads?.find { it.localId == local.id }
             val confirmed = previous?.attachment
-            if (
+            val remote = if (
                 previous?.projectId == projectId &&
                     confirmed != null &&
                     confirmed.expiresAt > now() &&
@@ -2510,6 +2837,13 @@ class DefaultRemoteRepository(
                 uploaded += local.size
                 attachment
             }
+            // The upload already read and verified these exact bytes. Keep them under the
+            // server ID before the prompt can appear in the conversation; draft cleanup may
+            // delete the local file as soon as sending succeeds.
+            if (remote.kind == "image") {
+                attachmentBytes[AttachmentByteCache.Key(key.sessionId, remote.id, remote.sha256)] = bytes
+            }
+            remote
         }
     }
 
@@ -2647,7 +2981,7 @@ class DefaultRemoteRepository(
                 val latest = drafts[key]
                 if (latest?.mutationId == id) {
                     val pending = if (queued) {
-                        val receipt = earlyFollowUpReceipts.remove(id to delivery)
+                        val receipt = earlyFollowUpReceipts.remove(Triple(key, id, delivery))
                         check(latest.followUps.size < 64)
                         latest.followUps + PendingFollowUp(id, current.draft, receipt ?: "accepted", delivery)
                     } else latest.followUps
@@ -3389,6 +3723,281 @@ class DefaultRemoteRepository(
 
     override fun dismissFolderNotice() = updateFolders { it.copy(notice = null) }
 
+    private fun ProviderAuthState.offline() =
+        copy(
+            loading = false,
+            working = false,
+            error = null,
+            notice = null,
+            flow = flow?.copy(answering = false, cancelling = false, notice = null),
+        )
+
+    private fun updateProviders(block: (ProviderAuthState) -> ProviderAuthState) =
+        update { it.copy(providerAuth = block(it.providerAuth)) }
+
+    /** Applies [block] unless the connection or the shown host changed since [session]. */
+    private fun providerWrite(routeId: String, session: Long, block: (ProviderAuthState) -> ProviderAuthState) {
+        if (session == folderSession && state.value.providerAuth.routeId == routeId) updateProviders(block)
+    }
+
+    private fun updateFlow(loginId: String, block: (LoginFlow) -> LoginFlow) =
+        updateProviders { auth ->
+            auth.flow?.takeIf { it.loginId == loginId }?.let { auth.copy(flow = block(it)) } ?: auth
+        }
+
+    /** The route whose providers this device may manage right now, or null. */
+    private fun providerRoute(routeId: String? = state.value.providerAuth.routeId): String? =
+        routeId?.takeIf { canManageProviders(state.value) && activeHost?.routeId == it }
+
+    private fun providerName(auth: ProviderAuthState, providerId: String) =
+        auth.providers.firstOrNull { it.id == providerId }?.name ?: providerId
+
+    override fun browseProviders(routeId: String) {
+        updateProviders {
+            if (it.routeId != routeId) ProviderAuthState(routeId = routeId)
+            else it.copy(notice = null, error = null)
+        }
+        refreshProviders()
+    }
+
+    override fun refreshProviders() {
+        val routeId = providerRoute() ?: return
+        val session = folderSession
+        val version = ++providerVersion
+        updateProviders { it.copy(loading = true, error = null) }
+        scope.launch {
+            try {
+                val list = parseProviderList(folderRequest("provider.auth.list"))
+                if (version != providerVersion) return@launch
+                providerWrite(routeId, session) { it.withList(list) }
+                // A login this device knows, or the host reports as ours, may have moved on.
+                if (state.value.providerAuth.flow?.finished == false) recoverLogin()
+            } catch (e: CancellationException) {
+                if (version == providerVersion) updateProviders { it.copy(loading = false) }
+                throw e
+            } catch (e: Exception) {
+                if (version == providerVersion)
+                    providerWrite(routeId, session) {
+                        it.copy(loading = false, error = providerErrorMessage(e))
+                    }
+            }
+        }
+    }
+
+    /** After a reconnect the host's events are lost, so the list and a running login are re-read. */
+    private fun resumeProviderAuth() {
+        val auth = state.value.providerAuth
+        if (auth.routeId != activeHost?.routeId) return
+        if (auth.loaded || auth.flow?.finished == false) refreshProviders()
+    }
+
+    /**
+     * Re-reads the running login with `provider.auth.login.status`: its prompt, latest event or
+     * outcome. Failures other than `not_found` retry with backoff while the connection lasts.
+     */
+    private fun recoverLogin() {
+        val routeId = activeHost?.routeId ?: return
+        val auth = state.value.providerAuth
+        val flow = auth.flow?.takeIf { !it.finished && auth.routeId == routeId } ?: return
+        if (providerStatusJob?.isActive == true || providerRoute(routeId) == null) return
+        val session = folderSession
+        providerStatusJob = scope.launch {
+            var attempt = 0
+            while (true) {
+                val current = state.value.providerAuth.flow
+                if (session != folderSession || current?.loginId != flow.loginId) return@launch
+                val live = current.live
+                try {
+                    val status =
+                        parseLoginStatus(folderRequest("provider.auth.login.status", "loginId" to flow.loginId))
+                    require(status.loginId == flow.loginId)
+                    providerWrite(routeId, session) { auth ->
+                        auth.copy(flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.updatedBy(status, live) ?: auth.flow)
+                    }
+                    if (status.state.finished) refreshProviders()
+                    return@launch
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (e.message == "not_found") {
+                        providerWrite(routeId, session) { auth ->
+                            if (auth.flow?.loginId != flow.loginId) auth
+                            else auth.copy(flow = null, notice = ProviderNotice(R.string.providers_login_lost))
+                        }
+                        return@launch
+                    }
+                    if (++attempt >= 5) return@launch
+                    delay(1000L shl attempt)
+                }
+            }
+        }
+    }
+
+    /**
+     * A provider login event that fails validation is dropped instead of closing the channel; the
+     * flow then reads its state from the host, which may have moved on.
+     */
+    private fun receiveProviderAuthEvent(payload: JsonObject) {
+        val update =
+            try {
+                providerAuthEvent(payload)
+            } catch (_: Exception) {
+                if (state.value.providerAuth.flow?.finished == false) recoverLogin()
+                return
+            }
+        update?.let(::applyProviderAuthUpdate)
+    }
+
+    /** Applies a validated login `host.event` to the flow it names. */
+    private fun applyProviderAuthUpdate(update: ProviderAuthUpdate) {
+        val auth = state.value.providerAuth
+        val flow = auth.flow
+        if (flow == null || flow.loginId != update.loginId) {
+            // The start result may still be on its way; keep a few events for it.
+            if (auth.working) {
+                earlyProviderUpdates += update
+                while (earlyProviderUpdates.size > 16) earlyProviderUpdates.removeAt(0)
+            }
+            return
+        }
+        updateFlow(flow.loginId) { it.updatedBy(update, now()) }
+        if (update is ProviderAuthUpdate.Finished) refreshProviders()
+    }
+
+    override fun startLogin(providerId: String, method: ProviderAuthMethod, replace: Boolean) {
+        val routeId = providerRoute() ?: return
+        val auth = state.value.providerAuth
+        if (auth.working || auth.busy) return
+        val provider = auth.providers.firstOrNull { it.id == providerId } ?: return
+        if (method !in provider.methods) return
+        val session = folderSession
+        earlyProviderUpdates.clear()
+        updateProviders { it.copy(working = true, notice = null, flow = null) }
+        scope.launch {
+            try {
+                val fields = mutableListOf<Pair<String, Any?>>("providerId" to providerId, "method" to method.wire)
+                if (replace) fields += "replace" to true
+                val started = parseLoginStarted(folderRequest("provider.auth.login.start", *fields.toTypedArray()))
+                require(started.providerId == providerId && started.method == method)
+                if (session != folderSession) return@launch
+                providerWrite(routeId, session) {
+                    it.copy(working = false, flow = LoginFlow(started.loginId, providerId, method))
+                }
+                val early = earlyProviderUpdates.filter { it.loginId == started.loginId }
+                earlyProviderUpdates.clear()
+                early.forEach(::applyProviderAuthUpdate)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                earlyProviderUpdates.clear()
+                providerWrite(routeId, session) {
+                    it.copy(working = false, notice = ProviderNotice(providerErrorMessage(e)))
+                }
+                // Another login or a credential we did not know: show what the host has now.
+                if (e.message == "login_in_progress" || e.message == "exists") refreshProviders()
+            }
+        }
+    }
+
+    override fun answerLogin(promptId: String, value: String): Boolean {
+        val routeId = providerRoute() ?: return false
+        val flow = state.value.providerAuth.flow ?: return false
+        val prompt = flow.prompt?.takeIf { it.promptId == promptId } ?: return false
+        if (flow.finished || flow.answering) return false
+        if (value.toByteArray().size > MAX_PROVIDER_AUTH_ANSWER_BYTES) return false
+        if (prompt.prompt.type == PromptType.SELECT && prompt.prompt.options.none { it.id == value }) return false
+        val session = folderSession
+        updateFlow(flow.loginId) { it.copy(answering = true, notice = null) }
+        scope.launch {
+            try {
+                requireAccepted(
+                    folderRequest(
+                        "provider.auth.login.answer",
+                        "loginId" to flow.loginId,
+                        "promptId" to promptId,
+                        "value" to value,
+                    )
+                )
+                providerWrite(routeId, session) { auth ->
+                    auth.copy(flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.answered(promptId) ?: auth.flow)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                providerWrite(routeId, session) { auth ->
+                    auth.copy(
+                        flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.let { current ->
+                            when (e.message) {
+                                // The prompt is gone; the status says what happened to the login.
+                                "already_resolved" -> current.answered(promptId)
+                                else ->
+                                    current.copy(answering = false, notice = ProviderNotice(providerErrorMessage(e)))
+                            }
+                        } ?: auth.flow
+                    )
+                }
+                if (e.message == "already_resolved" || e.message == "not_found") recoverLogin()
+            }
+        }
+        return true
+    }
+
+    override fun cancelLogin() {
+        val routeId = providerRoute() ?: return
+        val flow = state.value.providerAuth.flow ?: return
+        if (flow.finished || flow.cancelling) return
+        val session = folderSession
+        updateFlow(flow.loginId) { it.copy(cancelling = true, notice = null) }
+        scope.launch {
+            try {
+                requireAccepted(folderRequest("provider.auth.login.cancel", "loginId" to flow.loginId))
+                // The outcome arrives as the finished event, and it may still be a success.
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                providerWrite(routeId, session) { auth ->
+                    auth.copy(
+                        flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.copy(
+                            cancelling = false,
+                            notice = ProviderNotice(providerErrorMessage(e)),
+                        ) ?: auth.flow
+                    )
+                }
+                if (e.message == "already_resolved" || e.message == "not_found") recoverLogin()
+            }
+        }
+    }
+
+    override fun logoutProvider(providerId: String) {
+        val routeId = providerRoute() ?: return
+        val auth = state.value.providerAuth
+        if (auth.working || auth.providers.none { it.id == providerId }) return
+        val session = folderSession
+        updateProviders { it.copy(working = true, notice = null) }
+        scope.launch {
+            try {
+                parseLogout(folderRequest("provider.auth.logout", "providerId" to providerId), providerId)
+                providerWrite(routeId, session) {
+                    it.copy(working = false, notice = ProviderNotice(R.string.providers_logout_done, providerName(it, providerId)))
+                }
+                refreshProviders()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                providerWrite(routeId, session) {
+                    it.copy(working = false, notice = ProviderNotice(providerErrorMessage(e)))
+                }
+                if (e.message == "login_in_progress") refreshProviders()
+            }
+        }
+    }
+
+    override fun dismissLogin() = updateProviders {
+        if (it.flow?.finished == true) it.copy(flow = null) else it
+    }
+
+    override fun dismissProviderNotice() = updateProviders { it.copy(notice = null) }
+
     override fun cancelFolderTrust() = updateFolders { it.copy(trust = null) }
 
     /** Whether [path] came from [routeId]'s browser: the shown folder, a listed one or its clone. */
@@ -3652,6 +4261,8 @@ class DefaultRemoteRepository(
 
     override fun openChangesFile(path: String?) = changesLoader.openFile(path)
 
+    override fun requestChangesPreview(path: String) = changesLoader.requestPreview(path)
+
     // ---- Project files (session.files.v1) ------------------------------------------------
 
     private fun requireFiles(sessionId: String) {
@@ -3684,6 +4295,674 @@ class DefaultRemoteRepository(
         return parseFilesRead(data, sessionId, path, offset, version)
     }
 
+    // ---- Sent attachment content (session.attachments.read.v1) ---------------------------
+
+    private class AttachmentRead {
+        lateinit var job: Deferred<AttachmentReadResult>
+        var waiters = 0
+    }
+
+    private val attachmentBytes = AttachmentByteCache()
+    private val attachmentReads = mutableMapOf<AttachmentByteCache.Key, AttachmentRead>()
+    private val attachmentReadMutex = Mutex()
+    private var lastAttachmentReadStart: Long? = null
+
+    override suspend fun readAttachment(
+        sessionId: String,
+        attachment: RemoteAttachment,
+    ): AttachmentReadResult {
+        if (
+            attachment.kind != "image" ||
+                attachment.size !in 0..MAX_ATTACHMENT_IMAGE_BYTES ||
+                !canonicalAttachmentId(attachment.id) ||
+                !opaqueId(sessionId) ||
+                sessionId != state.value.selection.sessionId
+        ) return AttachmentReadResult.Unavailable
+        val key = AttachmentByteCache.Key(sessionId, attachment.id, attachment.sha256)
+        attachmentBytes[key]?.let { return AttachmentReadResult.Loaded(it) }
+        val current = state.value
+        if (!current.connected) return AttachmentReadResult.Failed
+        if (ATTACHMENT_READ_CAPABILITY !in current.capabilities)
+            // Until projects.list has been answered the host's capabilities are not known yet.
+            return if (current.capabilitiesKnown) AttachmentReadResult.Unsupported
+            else AttachmentReadResult.Failed
+        val epoch = selectionEpoch
+        // Concurrent callers for one image share a single read; it stops when the last one leaves.
+        val read =
+            synchronized(attachmentReads) {
+                attachmentReads
+                    .getOrPut(key) {
+                        val entry = AttachmentRead()
+                        entry.job =
+                            scope.async(start = CoroutineStart.LAZY) {
+                                try {
+                                    fetchAttachment(epoch, sessionId, attachment, key)
+                                } finally {
+                                    // Only this read's own entry: a newer one may have replaced it.
+                                    synchronized(attachmentReads) { attachmentReads.remove(key, entry) }
+                                }
+                            }
+                        entry
+                    }
+                    .also { it.waiters++ }
+            }
+        read.job.start()
+        try {
+            return read.job.await()
+        } catch (e: CancellationException) {
+            // The shared read was cancelled; a caller that is still active should see a failure
+            // it can retry rather than wait forever.
+            currentCoroutineContext().ensureActive()
+            return AttachmentReadResult.Failed
+        } finally {
+            synchronized(attachmentReads) {
+                if (--read.waiters == 0 && read.job.isActive) {
+                    read.job.cancel()
+                    attachmentReads.remove(key, read)
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchAttachment(
+        epoch: Long,
+        sessionId: String,
+        attachment: RemoteAttachment,
+        key: AttachmentByteCache.Key,
+    ): AttachmentReadResult {
+        val reassembler = AttachmentReassembler(sessionId, attachment)
+        try {
+            while (true) {
+                val data =
+                    // One read at a time, each start at least 200 ms after the last, retries included.
+                    attachmentReadMutex.withLock {
+                        lastAttachmentReadStart?.let {
+                            val wait = ATTACHMENT_READ_SPACING_MILLIS - (now() - it)
+                            if (wait > 0) delay(wait.coerceAtMost(ATTACHMENT_READ_SPACING_MILLIS))
+                        }
+                        lastAttachmentReadStart = now()
+                        // Once sent, the request is awaited even if the caller leaves, so the next
+                        // read never starts while the host may still be answering this one.
+                        withContext(NonCancellable) {
+                            request(
+                                "session.attachments.get",
+                                epoch,
+                                *attachmentGetFields(sessionId, attachment.id, reassembler.offset),
+                            )
+                        }
+                    }
+                if (reassembler.accept(data)) break
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: RemoteRequestException) {
+            return when (e.code) {
+                "not_found", "forbidden", "invalid_request" -> AttachmentReadResult.Unavailable
+                else -> AttachmentReadResult.Failed
+            }
+        } catch (e: AttachmentProtocolException) {
+            return AttachmentReadResult.Unavailable
+        } catch (e: Exception) {
+            return AttachmentReadResult.Failed
+        }
+        return AttachmentReadResult.Loaded(reassembler.bytes().also { attachmentBytes[key] = it })
+    }
+
+    // ---- Agent images (session.files.media.v1) --------------------------------------------
+
+    private class ProjectImageRead {
+        lateinit var job: Deferred<ProjectImageResult>
+        var waiters = 0
+    }
+
+    private val projectImageBytes = ProjectImageByteCache()
+    private val projectImageReads = mutableMapOf<Triple<String, String, Boolean>, ProjectImageRead>()
+    private val projectImageReadMutex = Mutex()
+    /** The host keeps four copies per device; two downloads leave room for a share or a save. */
+    private val projectImageDownloads = Semaphore(2)
+    /**
+     * Artifacts get their own permit so a slow page never starves images. Together with the two image
+     * permits that is at most three downloads, under the host's four-per-device cap.
+     */
+    private val projectArtifactDownloads = Semaphore(1)
+    private var lastProjectImageRead: Long? = null
+
+    override suspend fun readProjectImage(sessionId: String, path: String, fresh: Boolean): ProjectImageResult {
+        if (!opaqueId(sessionId) || !validMediaPath(path) || sessionId != state.value.selection.sessionId)
+            return ProjectImageResult.Unavailable
+        val cacheKey = ProjectImageByteCache.Key(sessionId, path)
+        if (!fresh) projectImageBytes[cacheKey]?.let { return it }
+        val current = state.value
+        if (!current.connected) return ProjectImageResult.Failed
+        if (FILES_MEDIA_CAPABILITY !in current.capabilities || FILES_MEDIA_CAPABILITY in current.unavailableCapabilities)
+            // Until projects.list has been answered the host's capabilities are not known yet.
+            return if (current.capabilitiesKnown) ProjectImageResult.Unsupported else ProjectImageResult.Failed
+        val epoch = selectionEpoch
+        val key = Triple(sessionId, path, fresh)
+        // Concurrent callers for one image share a single read; it stops when the last one leaves.
+        val read =
+            synchronized(projectImageReads) {
+                projectImageReads
+                    .getOrPut(key) {
+                        val entry = ProjectImageRead()
+                        entry.job =
+                            scope.async(start = CoroutineStart.LAZY) {
+                                try {
+                                    projectImageDownloads.withPermit {
+                                        fetchProjectImage(epoch, sessionId, path, cacheKey, fresh)
+                                    }
+                                } finally {
+                                    synchronized(projectImageReads) { projectImageReads.remove(key, entry) }
+                                }
+                            }
+                        entry
+                    }
+                    .also { it.waiters++ }
+            }
+        read.job.start()
+        try {
+            return read.job.await()
+        } catch (e: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            return ProjectImageResult.Failed
+        } finally {
+            synchronized(projectImageReads) {
+                if (--read.waiters == 0 && read.job.isActive) {
+                    read.job.cancel()
+                    projectImageReads.remove(key, read)
+                }
+            }
+        }
+    }
+
+    /** One request at a time, each start at least 200 ms after the last, retries included. */
+    private suspend fun spacedMediaRequest(epoch: Long, type: String, vararg fields: Pair<String, Any?>): JsonObject =
+        projectImageReadMutex.withLock {
+            lastProjectImageRead?.let {
+                val wait = ATTACHMENT_READ_SPACING_MILLIS - (now() - it)
+                if (wait > 0) delay(wait.coerceAtMost(ATTACHMENT_READ_SPACING_MILLIS))
+            }
+            lastProjectImageRead = now()
+            // Once sent, the request is awaited even if the caller leaves, so the next one
+            // never starts while the host may still be answering this one.
+            withContext(NonCancellable) { request(type, epoch, *fields) }
+        }
+
+    private suspend fun fetchProjectImage(
+        epoch: Long,
+        sessionId: String,
+        path: String,
+        cacheKey: ProjectImageByteCache.Key,
+        fresh: Boolean,
+    ): ProjectImageResult {
+        suspend fun spaced(type: String, vararg fields: Pair<String, Any?>): JsonObject =
+            spacedMediaRequest(epoch, type, *fields)
+        return try {
+            when (
+                val download =
+                    downloadMedia(
+                        sessionId,
+                        path,
+                        start = { spaced("session.files.media", *mediaFields(sessionId, path)) },
+                        read = { mediaId, offset ->
+                            spaced("session.files.media.get", *mediaGetFields(sessionId, mediaId, offset))
+                        },
+                        accept = { !it.isHtml },
+                    )
+            ) {
+                is MediaDownload.Omitted ->
+                    when (download.reason) {
+                        MediaOmitted.TOO_LARGE -> ProjectImageResult.TooLarge
+                        MediaOmitted.NOT_AN_IMAGE -> ProjectImageResult.NotAnImage
+                    }
+                is MediaDownload.Ready ->
+                    ProjectImageResult.Loaded(
+                        download.meta.path,
+                        download.meta.mime.wire,
+                        download.meta.sha256,
+                        download.bytes,
+                    ).also {
+                        // A fresh read replaces the copy, so Share, Save and the next view agree.
+                        projectImageBytes[cacheKey] = it
+                        if (fresh) ProjectImageBitmaps.dropStale(sessionId, path, it.sha256)
+                    }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: MediaException) {
+            when (e.failure) {
+                MediaFailure.UNAVAILABLE -> ProjectImageResult.Unavailable
+                MediaFailure.BUSY -> ProjectImageResult.Busy
+                MediaFailure.FAILED -> ProjectImageResult.Failed
+            }
+        } catch (e: Exception) {
+            ProjectImageResult.Failed
+        }
+    }
+
+    // ---- HTML artifacts (session.files.artifact.v1) ---------------------------------------
+
+    private class ProjectArtifactRead {
+        lateinit var job: Deferred<ProjectArtifactResult>
+        var waiters = 0
+    }
+
+    private val projectArtifacts = ProjectArtifactCache()
+    private val projectArtifactReads = mutableMapOf<Triple<String, String, Boolean>, ProjectArtifactRead>()
+
+    override suspend fun readProjectArtifact(sessionId: String, path: String, fresh: Boolean): ProjectArtifactResult {
+        if (!opaqueId(sessionId) || !validMediaPath(path) || sessionId != state.value.selection.sessionId)
+            return ProjectArtifactResult.Unavailable
+        val cacheKey = ProjectArtifactCache.Key(sessionId, path)
+        if (!fresh) projectArtifacts[cacheKey]?.let { return it }
+        val current = state.value
+        if (!current.connected) return ProjectArtifactResult.ConnectionFailure
+        if (FILES_ARTIFACT_CAPABILITY !in current.capabilities || FILES_ARTIFACT_CAPABILITY in current.unavailableCapabilities)
+            // Until projects.list has been answered the host's capabilities are not known yet.
+            return if (current.capabilitiesKnown) ProjectArtifactResult.UnsupportedHost
+            else ProjectArtifactResult.ConnectionFailure
+        val epoch = selectionEpoch
+        val key = Triple(sessionId, path, fresh)
+        val read =
+            synchronized(projectArtifactReads) {
+                projectArtifactReads
+                    .getOrPut(key) {
+                        val entry = ProjectArtifactRead()
+                        entry.job =
+                            scope.async(start = CoroutineStart.LAZY) {
+                                try {
+                                    projectArtifactDownloads.withPermit {
+                                        fetchProjectArtifact(epoch, sessionId, path, cacheKey)
+                                    }
+                                } finally {
+                                    synchronized(projectArtifactReads) { projectArtifactReads.remove(key, entry) }
+                                }
+                            }
+                        entry
+                    }
+                    .also { it.waiters++ }
+            }
+        read.job.start()
+        try {
+            return read.job.await()
+        } catch (e: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            return ProjectArtifactResult.ConnectionFailure
+        } finally {
+            synchronized(projectArtifactReads) {
+                if (--read.waiters == 0 && read.job.isActive) {
+                    read.job.cancel()
+                    projectArtifactReads.remove(key, read)
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchProjectArtifact(
+        epoch: Long,
+        sessionId: String,
+        path: String,
+        cacheKey: ProjectArtifactCache.Key,
+    ): ProjectArtifactResult =
+        try {
+            when (
+                val download =
+                    downloadMedia(
+                        sessionId,
+                        path,
+                        start = { spacedMediaRequest(epoch, "session.files.media", *mediaFields(sessionId, path)) },
+                        read = { mediaId, offset ->
+                            spacedMediaRequest(epoch, "session.files.media.get", *mediaGetFields(sessionId, mediaId, offset))
+                        },
+                        accept = { it.isHtml },
+                    )
+            ) {
+                is MediaDownload.Omitted ->
+                    when (download.reason) {
+                        MediaOmitted.TOO_LARGE -> ProjectArtifactResult.TooLarge
+                        MediaOmitted.NOT_AN_IMAGE -> ProjectArtifactResult.NotAnArtifact
+                    }
+                is MediaDownload.Ready -> {
+                    // The host's sniff is not trusted: the bytes must be text on this side as well.
+                    val html = if (download.meta.mime.isHtml) decodeArtifactHtml(download.bytes) else null
+                    if (html == null) ProjectArtifactResult.NotAnArtifact
+                    else
+                        ProjectArtifactResult.Loaded(download.meta.path, download.meta.sha256, html, download.bytes.size)
+                            .also { projectArtifacts[cacheKey] = it }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: MediaException) {
+            when (e.failure) {
+                MediaFailure.UNAVAILABLE -> ProjectArtifactResult.Unavailable
+                MediaFailure.BUSY -> ProjectArtifactResult.Busy
+                MediaFailure.FAILED -> ProjectArtifactResult.ConnectionFailure
+            }
+        } catch (e: Exception) {
+            ProjectArtifactResult.ConnectionFailure
+        }
+
+    // ---- Session artifacts (session.artifacts.v1) -----------------------------------------
+
+    private enum class ArtifactAccess { OK, UNSUPPORTED, OFFLINE, INVALID }
+
+    private fun artifactAccess(sessionId: String): ArtifactAccess {
+        val current = state.value
+        return when {
+            !opaqueId(sessionId) || sessionId != current.selection.sessionId -> ArtifactAccess.INVALID
+            !current.connected -> ArtifactAccess.OFFLINE
+            ARTIFACTS_CAPABILITY !in current.capabilities || ARTIFACTS_CAPABILITY in current.unavailableCapabilities ->
+                // Until projects.list has been answered the host's capabilities are not known yet.
+                if (current.capabilitiesKnown) ArtifactAccess.UNSUPPORTED else ArtifactAccess.OFFLINE
+            else -> ArtifactAccess.OK
+        }
+    }
+
+    override suspend fun listSessionArtifacts(sessionId: String): SessionArtifactListResult {
+        when (artifactAccess(sessionId)) {
+            ArtifactAccess.INVALID -> return SessionArtifactListResult.Unavailable
+            ArtifactAccess.UNSUPPORTED -> return SessionArtifactListResult.Unsupported
+            ArtifactAccess.OFFLINE -> return SessionArtifactListResult.Failed
+            ArtifactAccess.OK -> {}
+        }
+        val epoch = selectionEpoch
+        return try {
+            val data = request("session.artifacts.list", epoch, "sessionId" to sessionId)
+            SessionArtifactListResult.Loaded(
+                try {
+                    parseArtifactsList(data, sessionId)
+                } catch (e: Exception) {
+                    return SessionArtifactListResult.Unavailable
+                }
+            )
+        } catch (e: CancellationException) {
+            // The request was cancelled by a disconnect or selection change, not this caller.
+            currentCoroutineContext().ensureActive()
+            SessionArtifactListResult.Failed
+        } catch (e: RemoteRequestException) {
+            when (e.code) {
+                "not_found", "forbidden", "invalid_request", "unsupported" -> SessionArtifactListResult.Unavailable
+                else -> SessionArtifactListResult.Failed
+            }
+        } catch (e: Exception) {
+            SessionArtifactListResult.Failed
+        }
+    }
+
+    override suspend fun openSessionArtifact(
+        sessionId: String,
+        artifactId: String,
+        version: Int?,
+        type: ArtifactType?,
+        sha256: String?,
+    ): SessionArtifactOpenResult {
+        if (!validArtifactId(artifactId) ||
+            (version != null && (version < 1 || version.toLong() > MAX_ARTIFACT_VERSION)))
+            return SessionArtifactOpenResult.Unavailable
+        when (artifactAccess(sessionId)) {
+            ArtifactAccess.INVALID -> return SessionArtifactOpenResult.Unavailable
+            ArtifactAccess.UNSUPPORTED -> return SessionArtifactOpenResult.Unsupported
+            ArtifactAccess.OFFLINE -> return SessionArtifactOpenResult.ConnectionFailure
+            ArtifactAccess.OK -> {}
+        }
+        // A version is an immutable snapshot, so its copy is safe to keep; the latest is read again.
+        // A kept copy whose digest differs from the listed one is stale and never wins.
+        if (version != null) {
+            val logical = "artifacts/$artifactId/$version"
+            for (kind in listOf(ArtifactType.HTML, ArtifactType.MERMAID))
+                if (type == null || type == kind)
+                    projectArtifacts[artifactCacheKey(sessionId, "$logical.${kind.mime.extension}")]
+                        ?.takeIf { sha256 == null || it.sha256 == sha256 }
+                        ?.let { return SessionArtifactOpenResult.Text(kind, it) }
+            if (type == null || type == ArtifactType.SVG)
+                projectImageBytes[artifactImageCacheKey(sessionId, "$logical.svg")]
+                    ?.takeIf { sha256 == null || it.sha256 == sha256 }
+                    ?.let { return SessionArtifactOpenResult.Svg(it) }
+        }
+        val epoch = selectionEpoch
+        return try {
+            projectArtifactDownloads.withPermit { fetchSessionArtifact(epoch, sessionId, artifactId, version, type) }
+        } catch (e: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            SessionArtifactOpenResult.ConnectionFailure
+        }
+    }
+
+    private fun artifactCacheKey(sessionId: String, logicalPath: String) =
+        ProjectArtifactCache.Key(sessionId, artifactCachePath(logicalPath))
+
+    private fun artifactImageCacheKey(sessionId: String, logicalPath: String) =
+        ProjectImageByteCache.Key(sessionId, artifactCachePath(logicalPath))
+
+    private suspend fun fetchSessionArtifact(
+        epoch: Long,
+        sessionId: String,
+        artifactId: String,
+        version: Int?,
+        type: ArtifactType?,
+    ): SessionArtifactOpenResult =
+        try {
+            when (
+                val download =
+                    downloadMedia(
+                        sessionId,
+                        "artifacts/$artifactId",
+                        start = {
+                            spacedMediaRequest(epoch, "session.artifacts.open", *artifactOpenFields(sessionId, artifactId, version))
+                        },
+                        read = { mediaId, offset ->
+                            spacedMediaRequest(epoch, "session.files.media.get", *mediaGetFields(sessionId, mediaId, offset))
+                        },
+                        // An answer of another type than the listed one ends before any byte is read.
+                        accept = { (it.isHtml || it.isSvg || it.isMermaid) && (type == null || it == type.mime) },
+                        artifactPath = { artifactPathMatches(it, artifactId, version) },
+                    )
+            ) {
+                is MediaDownload.Omitted ->
+                    when (download.reason) {
+                        MediaOmitted.TOO_LARGE -> SessionArtifactOpenResult.TooLarge
+                        MediaOmitted.NOT_AN_IMAGE -> SessionArtifactOpenResult.NotAnArtifact
+                    }
+                is MediaDownload.Ready -> {
+                    val meta = download.meta
+                    // The extension must agree with the type, so a path never names another kind.
+                    if (!meta.path.endsWith(".${meta.mime.extension}")) SessionArtifactOpenResult.Unavailable
+                    else if (meta.mime.isSvg) {
+                        SessionArtifactOpenResult.Svg(
+                            ProjectImageResult.Loaded(meta.path, meta.mime.wire, meta.sha256, download.bytes)
+                                .also { if (version != null) projectImageBytes[artifactImageCacheKey(sessionId, meta.path)] = it }
+                        )
+                    } else {
+                        // The host's sniff is not trusted: the bytes must be text on this side as well.
+                        val text = decodeArtifactHtml(download.bytes)
+                        if (text == null) SessionArtifactOpenResult.NotAnArtifact
+                        else {
+                            val loaded = ProjectArtifactResult.Loaded(meta.path, meta.sha256, text, download.bytes.size)
+                            if (version != null) projectArtifacts[artifactCacheKey(sessionId, meta.path)] = loaded
+                            SessionArtifactOpenResult.Text(
+                                if (meta.mime.isMermaid) ArtifactType.MERMAID else ArtifactType.HTML,
+                                loaded,
+                            )
+                        }
+                    }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: MediaException) {
+            when (e.failure) {
+                MediaFailure.UNAVAILABLE -> SessionArtifactOpenResult.Unavailable
+                MediaFailure.BUSY -> SessionArtifactOpenResult.Busy
+                MediaFailure.FAILED -> SessionArtifactOpenResult.ConnectionFailure
+            }
+        } catch (e: Exception) {
+            SessionArtifactOpenResult.ConnectionFailure
+        }
+
+    // ---- Session export (session.export.v1) -----------------------------------------------
+
+    override suspend fun exportSession(sessionId: String): ExportResult {
+        val current = state.value
+        if (!opaqueId(sessionId) || sessionId != current.selection.sessionId)
+            return ExportResult.Failed(ExportFailure.FAILED)
+        if (!current.connected) return ExportResult.Failed(ExportFailure.OFFLINE)
+        if (current.session?.optionalText("origin") != "rpc" || EXPORT_CAPABILITY !in current.capabilities ||
+            EXPORT_CAPABILITY in current.unavailableCapabilities)
+            return ExportResult.Failed(ExportFailure.UNSUPPORTED)
+        val epoch = selectionEpoch
+        return try {
+            downloadExport(
+                sessionId,
+                start = { request("session.export", epoch, "sessionId" to sessionId) },
+                read = { exportId, offset ->
+                    request("session.export.get", epoch, *exportGetFields(sessionId, exportId, offset))
+                },
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ExportException) {
+            ExportResult.Failed(e.failure)
+        } catch (e: Exception) {
+            ExportResult.Failed(ExportFailure.FAILED)
+        }
+    }
+
+    // ---- Session reload (session.reload.v1) -----------------------------------------------
+
+    private var reloadingSession: String? = null
+
+    override suspend fun reloadSession(sessionId: String): ReloadResult {
+        val current = state.value
+        if (!opaqueId(sessionId) || sessionId != current.selection.sessionId)
+            return ReloadResult.Failed(ReloadFailure.Failed(null))
+        if (!current.connected) return ReloadResult.Failed(ReloadFailure.ConnectionFailure)
+        if (current.session?.optionalText("origin") != "rpc" || RELOAD_CAPABILITY !in current.capabilities ||
+            RELOAD_CAPABILITY in current.unavailableCapabilities)
+            return ReloadResult.Failed(ReloadFailure.Unsupported)
+        if (reloadingSession != null) return ReloadResult.Failed(ReloadFailure.Busy)
+        reloadingSession = sessionId
+        val epoch = selectionEpoch
+        return try {
+            // The host waits 30 s for pi's report, then resyncs, before it answers.
+            val data = request("session.reload", epoch, "sessionId" to sessionId, timeoutMillis = 60_000)
+            val valid = runCatching { validatedReloaded(data, sessionId) }.isSuccess
+            // Whatever the reply looks like, pi was asked to reload.
+            refreshAfterReload(epoch)
+            if (valid) ReloadResult.Done else ReloadResult.Failed(ReloadFailure.Failed(null))
+        } catch (e: CancellationException) {
+            // A disconnect or selection change cancels the request, not this caller.
+            currentCoroutineContext().ensureActive()
+            ReloadResult.Failed(ReloadFailure.Unknown)
+        } catch (e: Exception) {
+            val failure = reloadFailure(e)
+            if (reloadResultUnknown(failure)) refreshAfterReload(epoch)
+            ReloadResult.Failed(failure)
+        } finally {
+            reloadingSession = null
+        }
+    }
+
+    /** New prompts, skills and extension commands may exist, and the host rewrote the message list. */
+    private fun refreshAfterReload(epoch: Long) {
+        if (epoch != selectionEpoch || !state.value.connected) return
+        snapshotAsync()
+        // A catalog request already in flight predates the reload: drop it and ask again.
+        commandsVersion++
+        update { it.copy(commandsLoading = false) }
+        refreshCommands()
+    }
+
+    // ---- Session tree (session.tree.v1) ---------------------------------------------------
+
+    private fun treeRefused(sessionId: String): TreeFailure? {
+        val current = state.value
+        return when {
+            !opaqueId(sessionId) || sessionId != current.selection.sessionId -> TreeFailure.FAILED
+            !current.connected -> TreeFailure.OFFLINE
+            SESSION_TREE_CAPABILITY !in current.capabilities ||
+                SESSION_TREE_CAPABILITY in current.unavailableCapabilities -> TreeFailure.UNSUPPORTED
+            else -> null
+        }
+    }
+
+    override suspend fun loadSessionTree(sessionId: String): TreeLoadResult {
+        treeRefused(sessionId)?.let { return TreeLoadResult.Failed(it) }
+        val epoch = selectionEpoch
+        return try {
+            val data = request("session.tree", epoch, *treeFields(sessionId))
+            TreeLoadResult.Loaded(
+                try {
+                    validatedTree(data, sessionId)
+                } catch (e: Exception) {
+                    throw TreeException(TreeFailure.PROTOCOL)
+                }
+            )
+        } catch (e: CancellationException) {
+            // The request was cancelled by a disconnect or selection change, not this caller.
+            currentCoroutineContext().ensureActive()
+            TreeLoadResult.Failed(TreeFailure.FAILED)
+        } catch (e: Exception) {
+            // A read has no result that could be unknown.
+            val failure = treeFailure(e)
+            TreeLoadResult.Failed(if (treeResultUnknown(failure)) TreeFailure.FAILED else failure)
+        }
+    }
+
+    override suspend fun navigateSessionTree(
+        sessionId: String,
+        nodeId: String,
+        summarize: Boolean,
+    ): TreeNavigateResult {
+        treeRefused(sessionId)?.let { return TreeNavigateResult.Failed(it) }
+        if (!validTreeNodeId(nodeId)) return TreeNavigateResult.Failed(TreeFailure.INVALID)
+        val epoch = selectionEpoch
+        return try {
+            // The host waits 30 s for the move, 180 s with a summary, before it answers.
+            val data =
+                request(
+                    "session.tree.navigate",
+                    epoch,
+                    *treeNavigateFields(sessionId, nodeId, summarize),
+                    timeoutMillis = if (summarize) 195_000 else 45_000,
+                )
+            val navigation =
+                try {
+                    validatedNavigation(data, sessionId)
+                } catch (e: Exception) {
+                    throw TreeException(TreeFailure.PROTOCOL)
+                }
+            if (epoch == selectionEpoch && state.value.selection.sessionId == sessionId) {
+                treeDraft(navigation.text)?.let { draft ->
+                    val key = currentDraftKey()
+                    val now = state.value
+                    if (key != null) {
+                        // Never replace what the user has typed or quoted since.
+                        if (now.draft.isBlank() && now.quote == null) {
+                            drafts[key] = (drafts[key] ?: StoredDraft()).copy(text = draft.text, quote = draft.quote)
+                            update { it.copy(draft = draft.text, quote = draft.quote) }
+                            persist()
+                            if (draft.droppedAttachments) reportError(R.string.remote_fork_attachments_dropped)
+                        } else reportError(R.string.remote_tree_text_not_inserted)
+                    }
+                }
+                // The host's snapshot.required event does the same; do not depend on its order.
+                snapshotAsync()
+            }
+            TreeNavigateResult.Done(navigation)
+        } catch (e: CancellationException) {
+            // A disconnect or selection change cancels the request, not this caller; the move may
+            // still have happened, and the sheet must not wait for an answer that never comes.
+            currentCoroutineContext().ensureActive()
+            TreeNavigateResult.Failed(TreeFailure.UNKNOWN_RESULT)
+        } catch (e: Exception) {
+            val failure = treeFailure(e, navigating = true)
+            // The move may have happened; show what the host has now.
+            if (treeResultUnknown(failure) && epoch == selectionEpoch && state.value.connected) snapshotAsync()
+            TreeNavigateResult.Failed(failure)
+        }
+    }
+
     private val filesLoader =
         ProjectFilesLoader(
             scope,
@@ -3712,6 +4991,12 @@ class DefaultRemoteRepository(
     override fun loadMoreFiles() = filesLoader.loadMore()
 
     override fun reloadFiles() = filesLoader.reload()
+
+    override fun requestFilesPreview(path: String) = filesLoader.requestPreview(path)
+
+    override fun showFilesPeek(path: String, type: FileEntryType) = filesLoader.showPeek(path, type)
+
+    override fun dismissFilesPeek() = filesLoader.dismissPeek()
 
     override fun selectFileLines(selection: LineSelection?) = filesLoader.selectLines(selection)
 

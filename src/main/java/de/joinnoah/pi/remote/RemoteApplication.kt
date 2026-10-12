@@ -42,6 +42,12 @@ class RemoteApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Exports hold chat content; none outlives the process that shared it.
+        Thread { runCatching { ExportStorage.clear(cacheDir) } }.start()
+        // Shared agent images are copies of project files; none outlives the process either.
+        Thread { runCatching { ImageStorage.clear(cacheDir) } }.start()
+        // Opened or shared artifacts are copies of project files too.
+        Thread { runCatching { ArtifactStorage.clear(cacheDir) } }.start()
         settings = DefaultSettingsRepository(this)
         val attachments = AttachmentStore(this)
         val importer = AttachmentImporter(this, attachments)
@@ -87,11 +93,13 @@ class RemoteApplication : Application() {
                             .addOnFailureListener { failure() }
                     },
                     register = repository::setPushToken,
+                    unregister = { repository.setPushToken(null) },
+                    optedOut = { settings.state.value.pushOptedOut },
                 )
             if (settings.state.value.pushEnabled) {
                 FirebaseMessaging.getInstance().isAutoInitEnabled = true
-                pushRegistration.onStartup()
             }
+            pushRegistration.onStartup()
         }
     }
 
@@ -102,11 +110,23 @@ class RemoteApplication : Application() {
         pushRegistration.onEnabled()
     }
 
+    /**
+     * Switches push off: no more pushes are posted, and the Mac is told to forget this phone's
+     * token (now if connected, otherwise on the next connection, including after a restart).
+     */
+    fun disablePush() {
+        if (!pushConfigured) return
+        settings.setPushEnabled(false)
+        FirebaseMessaging.getInstance().isAutoInitEnabled = false
+        pushRegistration.onDisabled()
+    }
+
     /** Forgets everything the home surfaces, suggestions and notifications knew about a host. */
     private fun onUnpaired(routeId: String) {
         home.forgetRoute(routeId)
         predictions.forgetRoute(routeId)
         QuestionUpgrades.forgetRoute(this, routeId)
+        CompletionUpgrades.names.forgetRoute(routeId)
         RemoteNotifications.cancelRoute(this, routeId)
     }
 

@@ -82,7 +82,19 @@ internal fun rememberCodeContentWidth(texts: List<String>, style: TextStyle): Dp
     }
 }
 
-private fun digits(value: Int): Int = value.coerceAtLeast(1).toString().length
+/** Measure the complete monospace number in whole pixels before converting to dp. Keep gutter
+ * padding outside this width so independently rounded padding cannot consume a text pixel. */
+@Composable
+internal fun rememberLineNumberWidth(maxNumber: Int, style: TextStyle): Dp {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    return remember(maxNumber, style, measurer, density) {
+        with(density) {
+            measurer.measure(maxNumber.coerceAtLeast(1).toString(), style, softWrap = false, maxLines = 1)
+                .size.width.toDp()
+        }
+    }
+}
 
 /** Measurements and colors every row of one diff shares, so rows line up in a plain or lazy list. */
 @Immutable
@@ -106,10 +118,8 @@ internal fun rememberDiffRowStyle(lines: List<DiffLine>, showLineNumbers: Boolea
     val contentWidth = rememberCodeContentWidth(texts, style)
     val charWidth = rememberMonoCharWidth(style)
     val numbered = showLineNumbers && lines.any { it.oldLine != null || it.newLine != null }
-    val numberWidth =
-        remember(lines, charWidth) {
-            charWidth * digits(lines.maxOfOrNull { maxOf(it.oldLine ?: 0, it.newLine ?: 0) } ?: 0)
-        }
+    val maxNumber = remember(lines) { lines.maxOfOrNull { maxOf(it.oldLine ?: 0, it.newLine ?: 0) } ?: 1 }
+    val numberWidth = rememberLineNumberWidth(maxNumber, style)
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val addedContainer = diffAddedContainer()
     val addedContent = diffAddedContent()
@@ -222,10 +232,11 @@ internal fun DiffView(
 private fun GutterNumber(number: Int?, width: Dp, style: TextStyle, color: Color) {
     Text(
         number?.toString().orEmpty(),
-        Modifier.width(width + 8.dp).padding(start = 4.dp, end = 4.dp),
+        Modifier.padding(start = 4.dp, end = 4.dp).width(width),
         color = color,
         style = style,
         textAlign = TextAlign.End,
+        softWrap = false,
         maxLines = 1,
     )
 }

@@ -64,6 +64,10 @@ data class RemoteState(
     val connection: Int = R.string.remote_offline,
     val connected: Boolean = false,
     val error: Int? = null,
+    /** Epoch millis of the next automatic reconnect attempt, or null when none is scheduled. */
+    val reconnectAt: Long? = null,
+    /** The host whose device was denied (paused or revoked) by the current [error], if any. */
+    val deniedRouteId: String? = null,
     val projects: List<JsonObject> = emptyList(),
     val projectChats: List<ProjectChatSummary> = emptyList(),
     val project: JsonObject? = null,
@@ -96,12 +100,15 @@ data class RemoteState(
     val childControlUnsupported: Set<String> = emptySet(),
     val answering: Set<String> = emptySet(),
     val capabilities: Set<String> = emptySet(),
+    /** True once the connection's `projects.list` reply has added its route capabilities. */
+    val capabilitiesKnown: Boolean = false,
     val unavailableCapabilities: Set<String> = emptySet(),
     val configuration: SessionConfiguration? = null,
     val configurationLoading: Boolean = false,
     val configurationChanging: Boolean = false,
     val contextUsage: SessionContextUsage? = null,
     val contextLoading: Boolean = false,
+    val compactionRequesting: Boolean = false,
     val advisor: SessionAdvisor? = null,
     val advisorLoading: Boolean = false,
     val advisorChanging: Boolean = false,
@@ -118,6 +125,8 @@ data class RemoteState(
     /** Background jobs of the selected session (`session.background_jobs.v1`); null until listed. */
     val jobs: JobsState? = null,
     val folders: FolderBrowserState = FolderBrowserState(),
+    /** The provider list and login flow of the host shown on the Providers screen. */
+    val providerAuth: ProviderAuthState = ProviderAuthState(),
 )
 
 interface RemoteRepository {
@@ -140,6 +149,14 @@ interface RemoteRepository {
      */
     suspend fun forkSession(source: RemoteSelection, messageId: String, mode: ForkMode): RemoteSelection =
         source
+
+    /**
+     * Starts a new session that continues from the tree node [nodeId] of the selected chat
+     * [source], through `session.tree.fork` (only with `session.tree.v1`). Returns the fork's
+     * selection, or [source] again when the host refused. A fork from a user message puts the
+     * message into the new chat's composer; any other node opens the fork as it is.
+     */
+    suspend fun forkSessionAtNode(source: RemoteSelection, nodeId: String): RemoteSelection = source
 
     fun cancelSelection()
 
@@ -177,6 +194,8 @@ interface RemoteRepository {
 
     fun refreshContextUsage() {}
 
+    fun compactContext() {}
+
     fun refreshAdvisor() {}
 
     fun setAdvisor(provider: String?, id: String? = null, level: String? = null) {}
@@ -185,6 +204,9 @@ interface RemoteRepository {
     fun setModel(provider: String, id: String) {}
 
     fun setThinkingLevel(level: String) {}
+
+    /** Changes the given session settings; null leaves a setting as it is. */
+    fun changeSettings(autoCompaction: Boolean? = null, steeringMode: String? = null, followUpMode: String? = null) {}
 
     fun refreshCommands() {}
 
@@ -255,6 +277,8 @@ interface RemoteRepository {
     /** Shows the diff of [path], or the file list again for null. */
     fun openChangesFile(path: String?) {}
 
+    fun requestChangesPreview(path: String) {}
+
     /** `session.files.list`; only with [FILES_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing =
         throw RemoteRequestException("unsupported")
@@ -262,6 +286,80 @@ interface RemoteRepository {
     /** `session.files.read` of one page; a later page carries the first page's version. */
     suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?): FileChunk =
         throw RemoteRequestException("unsupported")
+
+    /**
+     * The bytes of an image this device sent in [sessionId]'s chat, from memory or read from the
+     * host in chunks (`session.attachments.get`, only with [ATTACHMENT_READ_CAPABILITY]).
+     */
+    suspend fun readAttachment(sessionId: String, attachment: RemoteAttachment): AttachmentReadResult =
+        AttachmentReadResult.Unsupported
+
+    /**
+     * An image the agent mentioned, by [path] (relative to the session folder or POSIX absolute),
+     * read from the host in chunks (`session.files.media`, only with [FILES_MEDIA_CAPABILITY]). The
+     * first-loaded bytes stay in memory; [fresh] reads the file again and replaces them, so a share or save and the next view agree.
+     */
+    suspend fun readProjectImage(sessionId: String, path: String, fresh: Boolean = false): ProjectImageResult =
+        ProjectImageResult.Unsupported
+
+    /**
+     * An HTML file the agent mentioned, by [path] (relative to the session folder or POSIX absolute),
+     * read like [readProjectImage] but only with [FILES_ARTIFACT_CAPABILITY]. The document stays in
+     * memory only; [fresh] reads the file again.
+     */
+    suspend fun readProjectArtifact(sessionId: String, path: String, fresh: Boolean = false): ProjectArtifactResult =
+        ProjectArtifactResult.UnsupportedHost
+
+    /**
+     * The HTML, SVG and Mermaid artifacts recorded for [sessionId] (`session.artifacts.list`, only
+     * with [ARTIFACTS_CAPABILITY]), newest first.
+     */
+    suspend fun listSessionArtifacts(sessionId: String): SessionArtifactListResult =
+        SessionArtifactListResult.Unsupported
+
+    /**
+     * One artifact of [sessionId] (`session.artifacts.open`, then `session.files.media.get`, only
+     * with [ARTIFACTS_CAPABILITY]). [version] defaults to the latest; a version asked for is an
+     * immutable snapshot and stays in memory, the latest is read each time. [type] is the listed
+     * type: an answer of another type is [SessionArtifactOpenResult.NotAnArtifact] before any byte is
+     * read. [sha256] is the listed digest of that version: a kept copy with another digest is not used
+     * and is replaced.
+     */
+    suspend fun openSessionArtifact(
+        sessionId: String,
+        artifactId: String,
+        version: Int? = null,
+        type: ArtifactType? = null,
+        sha256: String? = null,
+    ): SessionArtifactOpenResult =
+        SessionArtifactOpenResult.Unsupported
+
+    /**
+     * Renders [sessionId] as one HTML file and reads it from the host in chunks (`session.export`,
+     * `session.export.get`, only with [EXPORT_CAPABILITY] and for host-owned sessions).
+     */
+    suspend fun exportSession(sessionId: String): ExportResult =
+        ExportResult.Failed(ExportFailure.UNSUPPORTED)
+
+    /**
+     * Reloads pi's extensions, skills, prompt templates, themes and context files in [sessionId]
+     * (`session.reload`, only with [RELOAD_CAPABILITY] and for host-owned sessions), then refreshes
+     * the chat and the command catalog.
+     */
+    suspend fun reloadSession(sessionId: String): ReloadResult =
+        ReloadResult.Failed(ReloadFailure.Unsupported)
+
+    /** Reads the tree of [sessionId] (`session.tree`, only with [SESSION_TREE_CAPABILITY]). */
+    suspend fun loadSessionTree(sessionId: String): TreeLoadResult =
+        TreeLoadResult.Failed(TreeFailure.UNSUPPORTED)
+
+    /**
+     * Moves the leaf of [sessionId] to [nodeId] in place (`session.tree.navigate`). On success a
+     * returned text is already in the composer and the chat has been refreshed; on an unknown
+     * result the chat is refreshed too.
+     */
+    suspend fun navigateSessionTree(sessionId: String, nodeId: String, summarize: Boolean): TreeNavigateResult =
+        TreeNavigateResult.Failed(TreeFailure.UNSUPPORTED)
 
     /** Opens [RemoteState.files] for the selected session at its folder. */
     fun openFiles() {}
@@ -278,6 +376,12 @@ interface RemoteRepository {
     fun loadMoreFiles() {}
 
     fun reloadFiles() {}
+
+    fun requestFilesPreview(path: String) {}
+
+    fun showFilesPeek(path: String, type: FileEntryType) {}
+
+    fun dismissFilesPeek() {}
 
     fun selectFileLines(selection: LineSelection?) {}
 
@@ -323,6 +427,35 @@ interface RemoteRepository {
      * selection, or null when it asked or failed.
      */
     suspend fun openFolder(routeId: String, path: String, openId: Long): RemoteSelection? = null
+
+    /** Shows [routeId]'s providers; sends `provider.auth.list` only with [PROVIDER_AUTH_CAPABILITY]. */
+    fun browseProviders(routeId: String) {}
+
+    /** Re-reads the provider list, which also recovers the login flow after a reconnect. */
+    fun refreshProviders() {}
+
+    /**
+     * Starts a login for [providerId]. [replace] is set only after the user confirmed replacing a
+     * stored credential.
+     */
+    fun startLogin(providerId: String, method: ProviderAuthMethod, replace: Boolean) {}
+
+    /**
+     * Answers the pending prompt [promptId] with [value]. The value may be a secret: it is sent and
+     * dropped, never stored or logged. Returns whether the answer was sent; on false the caller
+     * keeps what the user typed.
+     */
+    fun answerLogin(promptId: String, value: String): Boolean = false
+
+    fun cancelLogin() {}
+
+    /** Removes the stored credential of [providerId]; the caller confirmed it with the user. */
+    fun logoutProvider(providerId: String) {}
+
+    /** Hides the finished login's result. */
+    fun dismissLogin() {}
+
+    fun dismissProviderNotice() {}
 
     fun dismissError()
 

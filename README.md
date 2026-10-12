@@ -165,6 +165,16 @@ and slash commands remain idle-only. Interactive Mac TUI sessions do not accept 
 while busy; the information icon next to the chat title explains their local controls. Refresh
 reconnects an offline saved host. The Mac must remain awake with the host service running.
 
+With a host that advertises `provider.auth.v1`, the Projects screen has a Providers screen. It lists
+the Mac's pi providers and signs them in (OAuth device code, OAuth link plus a pasted address, API
+key or select prompts) or out; the Mac stores the credential in pi's `auth.json`. One login runs at
+a time and can be left and resumed, and PocketPi rebuilds its state from the host after a restart or
+reconnect. While a key, a pasted address or a device code is on screen, the window is marked secure
+(no screenshots or recents thumbnail) and autofill is off. Typed secrets stay in memory, are cleared
+after sending and never enter drafts, saved state or logs. Sign-out removes only the Mac's stored
+credential; it does not revoke anything at the provider. The channel has no forward secrecy, so a
+key typed on the phone is as exposed as a prompt or a file sent the same way.
+
 The interface follows the system language with English fallback and German resources. Appearance can
 follow the system or use the illustrated light or dark choices. QR recognition runs locally with
 CameraX and ZXing.
@@ -181,20 +191,42 @@ Keystore and encrypted file recreation. With an attached emulator, run
 `./gradlew connectedDebugAndroidTest`. For the managed API 36 device used by CI, run
 `./gradlew pixel2Api36DebugAndroidTest`.
 
-Unit tests consume the six JSON fixtures in `src/test/resources/`. These are byte-for-byte copies
+Unit tests consume the twelve JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
 of `packages/pi-remote/protocol/fixtures/` from noah-monorepo commit
-`1550dcc200459913b9b1dc9b16fc3439db341c68`. When the upstream protocol fixtures change,
-copy the changed files into `src/test/resources/`, compare their bytes with the upstream source,
-and run `./gradlew testDebugUnitTest`. The fixtures cover byte-identical
-HKDF, AES-GCM and QR encoding, replay and tampering rejection, session request correlation, history
-pagination, early events, questionnaire defaults and the project file browser's list and read
-results. A built APK does not establish Samsung device, TalkBack, mobile-network or real Firebase
+`1550dcc200459913b9b1dc9b16fc3439db341c68`. `provider-auth-v1.json` (provider login) is a
+byte-for-byte copy from noah-monorepo commit `daca1ee562ca661fb76ce2d61a75ca2fc8c8059f`, the
+merge of pull request #633, and `attachments-v1.json` (sent attachments and reading them back) from
+commit `4783a9fb2a54ed0e22c72ffa029d9cf8b9aac85e`. `device-access-v1.json` (a paused or revoked
+device is denied) comes from commit `3eee84dec207e987b6ab439e0dd6acc2e1c1a6be`, the merge of pull
+request #642. `session-export-v1.json` (exporting a session as an HTML file) is a byte-for-byte
+copy from noah-monorepo commit `748465c46c866a4d9d3c78754bff6e860955fdf8`, the merge of pull
+request #647. `session-tree-v1.json` (browsing, navigating and forking the session tree) comes
+from commit `1b6b8d3871d52b66b876e95f080f69bf00bb4309`, the merge of pull request #650.
+`files-media-v1.json` (agent images read by path from the session folder, plus `text/html`
+artifacts behind `session.files.artifact.v1`) is a byte-for-byte copy from noah-monorepo commit
+`a07ba16e92e6613ac81a0032e2000c592fb2ed6f`, the merge of pull request #653.
+`session-reload-v1.json` (reloading extensions, skills, prompts and context files) is a
+byte-for-byte copy from noah-monorepo commit `a6120a90b9ab580dc7684bad01fb494a6c2b2137`, the merge
+of pull request #663. `session-artifacts-v1.json` (the per-session artifact list and
+`session.artifacts.open`, including `text/vnd.mermaid`) is a byte-for-byte copy from noah-monorepo
+commit `de58394641ea248b9acee8b924a4605af6275490`, the merge of pull request #667. When the
+upstream protocol fixtures change, copy the changed files into
+`src/test/resources/`, compare their bytes with the upstream source, and run
+`./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and
+QR encoding, replay and tampering rejection, session request correlation, history pagination, early
+events, questionnaire defaults and the project file browser's list and read results, the provider
+login commands, results and events, the attachment manifest and content reads, the session export
+and its chunked download, the session tree with its navigate and fork commands, the agent image commands and their chunked
+download, the session reload command and its result, the session artifact list and open commands,
+and the denied-device message.
+A built APK does not establish Samsung device, TalkBack, mobile-network or real Firebase
 delivery acceptance; those require the configured host, relay and device.
 
 ## Appearance
 
 PocketPi uses the official pi mark for its adaptive launcher icon and a monochrome silhouette for
-notifications. The logo attribution is included in `NOTICE` and in the APK assets.
+notifications. The logo attribution is included in `NOTICE` and in the APK assets. Mermaid (MIT) is bundled
+unmodified in `src/main/assets/mermaid/` with its license and notice.
 
 UI typography requests Samsung's installed `sec` font family, then the older
 `sec-roboto-light` family, through Compose's optional local font resolver. It retains the weights
@@ -213,19 +245,21 @@ transfer between the two applications. A previous debug installation under
 ## Play testing releases
 
 Follow the [Play testing runbook](docs/runbooks/play-testing-release.md) for first-release setup,
-verification, and recovery. The new Play app has not yet had a verified dual-track release; complete
-the Play, Firebase, signing, and GitHub environment setup before enabling automatic publishing.
+verification, and recovery. The first Console upload is available on Internal Testing; a dual-track
+release has not yet been verified. Complete the Firebase, signing, and GitHub environment setup
+before the first release dispatch.
 
-When enabled, `.github/workflows/release.yml` runs only after a successful `Android CI` push run on the current
-`main` commit. It builds one signed AAB, then submits it to Play Internal Testing (`qa`) and the
-configured Closed Alpha track in one Play edit. It stops if either track cannot accept the release.
+When enabled, `.github/workflows/release.yml` runs only when started by hand on `main`, and only
+after a successful `Android CI` push run on that commit. It builds one signed AAB, then submits it to Play Internal Testing (`internal`). When
+`POCKETPI_CLOSED_TRACK` is configured, the same edit also updates that Closed Alpha track. It stops
+if a configured track cannot accept the release.
 It never targets production. Play may still hold an accepted edit for app review; check the Play
 Console before telling testers that the update is available.
 
 Protect the `play-testing` GitHub environment so only `main` can use it. Set its variables
-`GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_PLAY_SERVICE_ACCOUNT`, and `POCKETPI_CLOSED_TRACK`. The last
-value must be the exact custom track identifier returned by the Play Developer API, not a display
-name. Set the Google Cloud workload identity provider's subject mapping to
+`GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_PLAY_SERVICE_ACCOUNT`. To add Closed Alpha, set
+`POCKETPI_CLOSED_TRACK` to `alpha` for the default track, or to the exact custom track identifier
+returned by the Play Developer API. Set the Google Cloud workload identity provider's subject mapping to
 `google.subject=assertion.sub`, then restrict it with GitHub's OIDC claims:
 
 ```text

@@ -7,6 +7,7 @@ import android.text.format.Formatter
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -16,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -202,6 +204,12 @@ internal fun ConversationMessage(
     highlighted: Boolean = false,
     /** Set only for the first bubble of a user message when the chat can be rewound. */
     fork: MessageFork? = null,
+    /** Without a source, sent images show as plain text like any other attachment. */
+    images: SentImageSource? = null,
+    /** Without a source, an image the agent mentions shows as its description. */
+    projectImages: ProjectImageSource? = null,
+    /** Set only for the newest assistant bubble, like pi's `/copy`; others copy through accessibility. */
+    copyButton: Boolean = false,
 ) {
     Box(Modifier.jumpHighlight(highlighted)) {
         ConversationMessageContent(
@@ -213,10 +221,14 @@ internal fun ConversationMessage(
             onOpenAgent,
             onAskToFix,
             fork,
+            images,
+            projectImages,
+            copyButton,
         )
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun ConversationMessageContent(
     item: ConversationItem,
@@ -227,14 +239,21 @@ private fun ConversationMessageContent(
     onOpenAgent: ((ConversationItem.Subagent, Int) -> Unit)?,
     onAskToFix: ((messageId: String) -> Unit)?,
     fork: MessageFork?,
+    images: SentImageSource?,
+    projectImages: ProjectImageSource?,
+    copyButton: Boolean,
 ) {
     val quoteLabel = stringResource(R.string.remote_quote)
     val forkLabel = stringResource(R.string.remote_fork_action)
+    val copyLabel = stringResource(R.string.remote_copy_message)
     when (item) {
         is ConversationItem.Bubble -> {
             val outgoing = item.role == "user"
             val canQuote = item.text.isNotBlank()
             val forkShown = fork != null && outgoing
+            // Only a finished assistant text can be copied; a streaming one is still changing.
+            val canCopy = item.role == "assistant" && !item.streaming && !item.error && item.text.isNotBlank()
+            val copyToClipboard = rememberCopyToClipboard(copyLabel)
             var forkMenu by remember(item.id) { mutableStateOf(false) }
             var forkConfirming by remember(item.id) { mutableStateOf<ForkMode?>(null) }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -278,6 +297,13 @@ private fun ConversationMessageContent(
                                                     true
                                                 }
                                             )
+                                        if (canCopy)
+                                            add(
+                                                CustomAccessibilityAction(copyLabel) {
+                                                    copyToClipboard(item.text)
+                                                    true
+                                                }
+                                            )
                                         if (forkShown)
                                             add(
                                                 CustomAccessibilityAction(forkLabel) {
@@ -297,45 +323,68 @@ private fun ConversationMessageContent(
                                 verticalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                                     item.quote?.let { QuotePreview(it) }
-                                    for (attachment in item.attachments) {
-                                        Column(Modifier.padding(vertical = 4.dp)) {
-                                            Text(
-                                                attachment.name,
-                                                style = MaterialTheme.typography.labelLarge,
-                                            )
-                                            Text(
-                                                Formatter.formatShortFileSize(
-                                                    LocalContext.current,
-                                                    attachment.size,
-                                                ),
-                                                style = MaterialTheme.typography.labelSmall,
-                                            )
-                                            Text(
-                                                stringResource(
-                                                    if (
-                                                        attachment.expiresAt <=
-                                                            System.currentTimeMillis()
-                                                    )
-                                                        R.string.remote_attachment_expired
-                                                    else R.string.remote_attachment_expires,
-                                                    java.text.DateFormat.getDateTimeInstance(
-                                                            java.text.DateFormat.SHORT,
-                                                            java.text.DateFormat.SHORT,
+                                    // Runs of images go through the preview, other attachments stay in place.
+                                    for (run in attachmentRuns(item.attachments, images != null)) {
+                                        if (images != null && run.first().kind == "image")
+                                            SentImageAttachments(run, images)
+                                        else for (attachment in run) {
+                                            Column(Modifier.padding(vertical = 4.dp)) {
+                                                Text(
+                                                    attachment.name,
+                                                    style = MaterialTheme.typography.labelLarge,
+                                                )
+                                                Text(
+                                                    Formatter.formatShortFileSize(
+                                                        LocalContext.current,
+                                                        attachment.size,
+                                                    ),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                )
+                                                Text(
+                                                    stringResource(
+                                                        if (
+                                                            attachment.expiresAt <=
+                                                                System.currentTimeMillis()
                                                         )
-                                                        .format(java.util.Date(attachment.expiresAt)),
-                                                ),
-                                                style = MaterialTheme.typography.labelSmall,
-                                            )
+                                                            R.string.remote_attachment_expired
+                                                        else R.string.remote_attachment_expires,
+                                                        java.text.DateFormat.getDateTimeInstance(
+                                                                java.text.DateFormat.SHORT,
+                                                                java.text.DateFormat.SHORT,
+                                                            )
+                                                            .format(java.util.Date(attachment.expiresAt)),
+                                                    ),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                )
+                                            }
                                         }
                                     }
                                     if (item.text.isNotEmpty())
-                                        SelectionContainer { MarkdownText(item.text) }
+                                        // Only the assistant's text may name files to load; a user's text never does.
+                                        CompositionLocalProvider(
+                                            LocalProjectImageSource provides projectImages.takeIf { !outgoing }
+                                        ) { SelectionContainer { MarkdownText(item.text) } }
                                     if (item.truncated)
                                         Text(
                                             stringResource(R.string.remote_truncated),
                                             style = MaterialTheme.typography.labelSmall,
                                         )
-                                    item.timestamp?.let { MessageTimestamp(it) }
+                                    if (canCopy && copyButton)
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            IconButton(
+                                                onClick = { copyToClipboard(item.text) },
+                                                modifier = Modifier.size(32.dp).testTag("copyMessage-${item.id}"),
+                                            ) {
+                                                Icon(
+                                                    Icons.Outlined.ContentCopy,
+                                                    copyLabel,
+                                                    Modifier.size(16.dp),
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                            item.timestamp?.let { MessageTimestamp(it, Modifier.weight(1f)) }
+                                        }
+                                    else item.timestamp?.let { MessageTimestamp(it) }
                             }
                         }
                     }
@@ -448,6 +497,10 @@ private fun ConversationMessageContent(
                 else null
             }
             var expanded by remember(item.id) { mutableStateOf(planMarkdown != null) }
+            var outputPeek by remember(item.id) { mutableStateOf(false) }
+            if (outputPeek) item.output?.let { output ->
+                ToolOutputPeek(output, item.name, item.arguments) { outputPeek = false }
+            }
             // Plan cards keep their inline toggle; other tools open the detail screen when the host
             // screen offers one, and the expand icon toggles the inline preview on its own.
             val openTool = onOpenTool.takeIf { planMarkdown == null }
@@ -499,10 +552,14 @@ private fun ConversationMessageContent(
                     Row(
                         Modifier.fillMaxWidth()
                             .testTag("toolCardHeader")
-                            .then(
-                                if (openTool != null)
-                                    Modifier.clickable(onClickLabel = openToolLabel) { openTool(item) }
-                                else Modifier.clickable { expanded = !expanded }
+                            .combinedClickable(
+                                onClickLabel = if (openTool != null) openToolLabel else null,
+                                onClick = {
+                                    if (openTool != null) openTool(item)
+                                    else expanded = !expanded
+                                },
+                                onLongClickLabel = stringResource(R.string.remote_output_peek),
+                                onLongClick = if (item.output != null) ({ outputPeek = true }) else null,
                             )
                             .heightIn(min = 40.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -602,7 +659,7 @@ private fun ConversationMessageContent(
                                 stringResource(R.string.remote_tool_output),
                                 style = MaterialTheme.typography.labelMedium,
                             )
-                            SelectionContainer { MarkdownText(it) }
+                            ToolOutputView(it, item.name, item.arguments)
                             TextButton(onClick = { onQuote(item.sourceId) }) { Text(quoteLabel) }
                         }
                         if (item.truncated)
@@ -703,7 +760,7 @@ internal fun subagentPreviewText(preview: String): String =
     preview.replace(Regex("\\[([^]\\n]+)]\\(https?://[^)\\s]*$"), "$1…")
 
 @Composable
-private fun MessageTimestamp(timestamp: Long) {
+private fun MessageTimestamp(timestamp: Long, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val date = Date(timestamp)
     val time = DateFormat.getTimeFormat(context).format(date)
@@ -712,7 +769,7 @@ private fun MessageTimestamp(timestamp: Long) {
         else "${DateFormat.getDateFormat(context).format(date)} $time"
     Text(
         label,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = androidx.compose.ui.text.style.TextAlign.End,

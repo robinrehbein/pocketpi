@@ -20,8 +20,53 @@ class RemoteNotificationsChannelOnAndroid13Test {
     fun createChannelNeverCreatesTheUnusedSyncChannel() {
         RemoteNotifications.createChannel(context)
         val manager = context.getSystemService(NotificationManager::class.java)
-        assertEquals(1, manager.notificationChannels.size)
+        assertEquals(
+            setOf(RemoteNotifications.QUESTIONS_CHANNEL, RemoteNotifications.UPDATES_CHANNEL),
+            manager.notificationChannels.map { it.id }.toSet(),
+        )
         assertNull(manager.getNotificationChannel(RemoteNotifications.SYNC_CHANNEL))
+    }
+
+    @Test
+    fun questionsAlertLoudlyAndUpdatesUseTheDefaultImportance() {
+        RemoteNotifications.createChannel(context)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        assertEquals(
+            NotificationManager.IMPORTANCE_HIGH,
+            manager.getNotificationChannel(RemoteNotifications.QUESTIONS_CHANNEL)?.importance,
+        )
+        assertEquals(
+            NotificationManager.IMPORTANCE_DEFAULT,
+            manager.getNotificationChannel(RemoteNotifications.UPDATES_CHANNEL)?.importance,
+        )
+    }
+
+    @Test
+    fun createChannelRemovesTheLegacySingleChannel() {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                RemoteNotifications.LEGACY_CHANNEL,
+                "Sessions",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            )
+        )
+        RemoteNotifications.createChannel(context)
+        assertNull(manager.getNotificationChannel(RemoteNotifications.LEGACY_CHANNEL))
+        // Running it again on the next start changes nothing.
+        RemoteNotifications.createChannel(context)
+        assertEquals(2, manager.notificationChannels.size)
+    }
+
+    @Test
+    fun onlyQuestionsUseTheQuestionsChannel() {
+        PushEvent.entries.forEach { event ->
+            assertEquals(
+                if (event == PushEvent.QUESTION) RemoteNotifications.QUESTIONS_CHANNEL
+                else RemoteNotifications.UPDATES_CHANNEL,
+                RemoteNotifications.channelFor(event),
+            )
+        }
     }
 
     @Test

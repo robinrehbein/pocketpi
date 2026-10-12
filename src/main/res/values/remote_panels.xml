@@ -35,6 +35,8 @@
     <string name="remote_panel_subagents_collapse">Hide subagents</string>
     <string name="remote_panel_subagent_abort">Stop subagent</string>
     <string name="remote_panel_timeline">Chat timeline</string>
+    <string name="remote_panel_timeline_show">Show chat timeline</string>
+    <string name="remote_panel_timeline_hide">Hide chat timeline</string>
     <string name="remote_panel_jump_error">Jump to last error</string>
     <string name="remote_panel_jump_question">Jump to last question</string>
     <string name="remote_panel_jump_edit">Jump to last edit</string>

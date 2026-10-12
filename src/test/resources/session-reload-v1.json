@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "wireValid": [
+    {
+      "name": "reload",
+      "payload": {
+        "type": "session.reload",
+        "requestId": "reload:1",
+        "sessionId": "live-session"
+      }
+    },
+    {
+      "name": "reloaded",
+      "payload": {
+        "type": "result",
+        "requestId": "reload:1",
+        "ok": true,
+        "data": {
+          "kind": "reloaded",
+          "sessionId": "live-session"
+        }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "reload-extra-key",
+      "payload": {
+        "type": "session.reload",
+        "requestId": "reload:1",
+        "sessionId": "live-session",
+        "force": true
+      }
+    },
+    {
+      "name": "reload-missing-session",
+      "payload": {
+        "type": "session.reload",
+        "requestId": "reload:1"
+      }
+    },
+    {
+      "name": "reloaded-extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "reload:1",
+        "ok": true,
+        "data": {
+          "kind": "reloaded",
+          "sessionId": "live-session",
+          "counts": 3
+        }
+      }
+    },
+    {
+      "name": "reloaded-missing-session",
+      "payload": {
+        "type": "result",
+        "requestId": "reload:1",
+        "ok": true,
+        "data": {
+          "kind": "reloaded"
+        }
+      }
+    }
+  ]
+}

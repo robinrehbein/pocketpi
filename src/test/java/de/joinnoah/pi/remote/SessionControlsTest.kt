@@ -1,6 +1,8 @@
 package de.joinnoah.pi.remote
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.*
 import org.junit.Test
@@ -177,5 +179,246 @@ class SessionControlsTest {
             SessionContextUsage(data.text("sessionId"), "anthropic", "model-a", 50000, 200000, 25.0),
             usage,
         )
+    }
+
+    private val chatState = RemoteState(
+        connected = true,
+        status = "idle",
+        capabilities = setOf(CONFIGURATION_CAPABILITY, COMPACT_CAPABILITY, RENAME_CAPABILITY),
+        session = Wire.objectOf("id" to "s1", "title" to "T", "origin" to "rpc"),
+    )
+
+    private fun settingsJson(vararg overrides: Pair<String, Any?>) =
+        Wire.objectOf("autoCompaction" to true, "steeringMode" to "one-at-a-time", "followUpMode" to "all", *overrides)
+
+    private fun configurationWith(settings: JsonElement?) =
+        configuration(
+            Wire.objectOf(
+                "kind" to "configuration",
+                "sessionId" to "session",
+                "thinkingLevel" to "high",
+                "thinkingLevels" to JsonArray(listOf(JsonPrimitive("high"))),
+                "models" to JsonArray(emptyList()),
+                "modelsTruncated" to false,
+                *(if (settings == null) emptyArray() else arrayOf("settings" to settings)),
+            ),
+            "session",
+        )
+
+    @Test
+    fun configurationReadsOptionalSessionSettings() {
+        assertEquals(SessionSettings(true, "one-at-a-time", "all"), configurationWith(settingsJson()).settings)
+        assertNull(configurationWith(null).settings)
+        assertNull(configurationWith(JsonNull).settings)
+        assertNull(configurationWith(JsonPrimitive("on")).settings)
+        assertNull(configurationWith(settingsJson("steeringMode" to "sometimes")).settings)
+        assertNull(configurationWith(settingsJson("followUpMode" to 1)).settings)
+        assertNull(configurationWith(settingsJson("autoCompaction" to "true")).settings)
+        assertNull(configurationWith(settingsJson("autoCompaction" to null)).settings)
+        assertNull(configurationWith(Wire.objectOf("autoCompaction" to true)).settings)
+        // Invalid settings do not invalidate the rest of the configuration.
+        assertEquals("high", configurationWith(settingsJson("steeringMode" to "x")).thinkingLevel)
+    }
+
+    @Test
+    fun sessionSettingsNeedTheCapabilityAndReportedSettings() {
+        val withSettings = chatState.copy(
+            capabilities = chatState.capabilities + SETTINGS_CAPABILITY,
+            configuration = configurationWith(settingsJson()),
+        )
+        assertTrue(sessionSettingsAvailable(withSettings))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(configuration = configurationWith(null))))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(configuration = null)))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(capabilities = chatState.capabilities)))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(unavailableCapabilities = setOf(SETTINGS_CAPABILITY))))
+        assertFalse(sessionSettingsAvailable(withSettings.copy(unavailableCapabilities = setOf(CONFIGURATION_CAPABILITY))))
+        assertEquals(
+            listOf(LocalCommand.NEW, LocalCommand.COMPACT, LocalCommand.MODEL, LocalCommand.SETTINGS, LocalCommand.NAME),
+            availableLocalCommands(withSettings, true, 0),
+        )
+        assertFalse(LocalCommand.SETTINGS in availableLocalCommands(withSettings.copy(status = "running"), true, 0))
+        assertFalse(LocalCommand.SETTINGS in availableLocalCommands(chatState, true, 0))
+    }
+
+    @Test
+    fun exportNeedsTheCapabilityAndAHostOwnedSession() {
+        val exportable = chatState.copy(
+            capabilities = chatState.capabilities + EXPORT_CAPABILITY,
+            selection = RemoteSelection(sessionId = "s1"),
+        )
+        assertTrue(canExportSession(exportable))
+        assertEquals(LocalCommand.EXPORT, availableLocalCommands(exportable, true, 0).last())
+        assertFalse(LocalCommand.EXPORT in availableLocalCommands(chatState, true, 0))
+        assertFalse(canExportSession(exportable.copy(capabilities = chatState.capabilities)))
+        assertFalse(canExportSession(exportable.copy(unavailableCapabilities = setOf(EXPORT_CAPABILITY))))
+        val terminal = exportable.copy(session = Wire.objectOf("id" to "s1", "title" to "T", "origin" to "tui"))
+        assertFalse(canExportSession(terminal))
+        assertFalse(canExportSession(exportable.copy(status = "offline")))
+        assertFalse(canExportSession(exportable.copy(selection = RemoteSelection())))
+        assertFalse(LocalCommand.EXPORT in availableLocalCommands(exportable.copy(status = "running"), true, 0))
+    }
+
+    @Test
+    fun reloadRunsOnlyForHostOwnedIdleSessionsAndExplainsItselfInTheTerminal() {
+        val reloadable = chatState.copy(
+            capabilities = chatState.capabilities + RELOAD_CAPABILITY,
+            selection = RemoteSelection(sessionId = "s1"),
+        )
+        assertEquals(ReloadAvailability.RUNS, reloadAvailability(reloadable))
+        assertEquals(LocalCommand.RELOAD, availableLocalCommands(reloadable, true, 0).last())
+        assertEquals(R.string.remote_local_command_reload, localCommandDescription(LocalCommand.RELOAD, reloadable))
+        // Capability absent or unavailable: nothing is listed.
+        assertFalse(LocalCommand.RELOAD in availableLocalCommands(chatState, true, 0))
+        assertEquals(ReloadAvailability.NONE, reloadAvailability(reloadable.copy(capabilities = chatState.capabilities)))
+        val unavailable = reloadable.copy(unavailableCapabilities = setOf(RELOAD_CAPABILITY))
+        assertFalse(LocalCommand.RELOAD in availableLocalCommands(unavailable, true, 0))
+        // Only an idle session reloads, and not while a reload already runs.
+        for (busy in listOf(reloadable.copy(status = "running"), reloadable.copy(sending = true)))
+            assertFalse(LocalCommand.RELOAD in availableLocalCommands(busy, true, 0))
+        // While a reload runs the row stays, describing the progress, even though the session is busy.
+        val running = reloadable.copy(status = "running")
+        assertTrue(LocalCommand.RELOAD in availableLocalCommands(running, true, 0, reloading = true))
+        assertEquals(
+            R.string.remote_local_command_reload_running,
+            localCommandDescription(LocalCommand.RELOAD, running, reloading = true),
+        )
+        assertEquals(
+            LocalInvocation(LocalCommand.RELOAD, ""),
+            localInvocation(
+                running.copy(draft = "/reload"),
+                availableLocalCommands(running, true, 0, reloading = true),
+            ),
+        )
+        for (unreachable in
+            listOf(
+                reloadable.copy(status = "offline"),
+                reloadable.copy(connected = false),
+                reloadable.copy(loading = true),
+                reloadable.copy(selection = RemoteSelection()),
+            ))
+            assertEquals(ReloadAvailability.NONE, reloadAvailability(unreachable))
+        // A terminal session is listed, also while it runs, with the reason instead of the usual text.
+        val terminal = reloadable.copy(session = Wire.objectOf("id" to "s1", "title" to "T", "origin" to "tui"))
+        assertEquals(ReloadAvailability.TERMINAL_ONLY, reloadAvailability(terminal))
+        assertTrue(LocalCommand.RELOAD in availableLocalCommands(terminal, true, 0))
+        assertTrue(LocalCommand.RELOAD in availableLocalCommands(terminal.copy(status = "running"), true, 0))
+        assertEquals(
+            R.string.remote_local_command_reload_terminal,
+            localCommandDescription(LocalCommand.RELOAD, terminal),
+        )
+        assertEquals(ReloadAvailability.NONE, reloadAvailability(terminal.copy(status = "offline")))
+        assertEquals(
+            ReloadAvailability.NONE,
+            reloadAvailability(reloadable.copy(session = Wire.objectOf("id" to "s1", "origin" to "other"))),
+        )
+        // A typed /reload is recognised, with no argument.
+        val invocation = localInvocation(reloadable.copy(draft = "/reload"), availableLocalCommands(reloadable, true, 0))
+        assertEquals(LocalInvocation(LocalCommand.RELOAD, ""), invocation)
+        assertNull(localInvocation(reloadable.copy(draft = "/reload now"), availableLocalCommands(reloadable, true, 0)))
+    }
+
+    @Test
+    fun treeIsOfferedWhileRunningAndEveryOtherCommandKeepsItsRule() {
+        val tree = chatState.copy(
+            capabilities = chatState.capabilities + EXPORT_CAPABILITY + SESSION_TREE_CAPABILITY,
+            selection = RemoteSelection(sessionId = "s1"),
+        )
+        val idle = availableLocalCommands(tree, true, 0)
+        assertEquals(
+            listOf(LocalCommand.NEW, LocalCommand.COMPACT, LocalCommand.MODEL, LocalCommand.NAME, LocalCommand.EXPORT, LocalCommand.TREE),
+            idle,
+        )
+        // Not idle: only the read-only tree stays; the rest need an idle session as before.
+        for (status in listOf("running", "waiting", "offline"))
+            assertEquals(status, listOf(LocalCommand.TREE), availableLocalCommands(tree.copy(status = status), true, 0))
+        assertEquals(listOf(LocalCommand.TREE), availableLocalCommands(tree.copy(sending = true), true, 0))
+        assertEquals(listOf(LocalCommand.TREE), availableLocalCommands(tree.copy(configurationChanging = true), true, 0))
+        assertEquals(listOf(LocalCommand.TREE), availableLocalCommands(tree.copy(importingAttachments = true), true, 0))
+        assertEquals(idle - LocalCommand.NEW, availableLocalCommands(tree, false, 0))
+        // Without the capability, a selected session, a connection or a finished load there is no tree.
+        assertEquals(idle - LocalCommand.TREE, availableLocalCommands(tree.copy(capabilities = tree.capabilities - SESSION_TREE_CAPABILITY), true, 0))
+        assertEquals(idle - LocalCommand.TREE, availableLocalCommands(tree.copy(unavailableCapabilities = setOf(SESSION_TREE_CAPABILITY)), true, 0))
+        assertTrue(availableLocalCommands(tree.copy(status = "running", connected = false), true, 0).isEmpty())
+        assertTrue(availableLocalCommands(tree.copy(status = "running", loading = true), true, 0).isEmpty())
+        assertTrue(availableLocalCommands(tree.copy(status = "running", selection = RemoteSelection()), true, 0).isEmpty())
+        val invocation = localInvocation(tree.copy(status = "running", draft = "/tree"), availableLocalCommands(tree.copy(status = "running"), true, 0))
+        assertEquals(LocalInvocation(LocalCommand.TREE, ""), invocation)
+        assertNull(localInvocation(tree.copy(draft = "/tree now"), idle))
+    }
+
+    @Test
+    fun artifactsAreOfferedOnlyWithTheCapabilityAndEvenWhileRunning() {
+        val base = chatState.copy(selection = RemoteSelection(sessionId = "s1"))
+        assertFalse(LocalCommand.ARTIFACTS in availableLocalCommands(base, true, 0))
+        val artifacts = base.copy(capabilities = base.capabilities + ARTIFACTS_CAPABILITY)
+        assertTrue(LocalCommand.ARTIFACTS in availableLocalCommands(artifacts, true, 0))
+        // Read-only, like the tree: offered while the session runs, sends or changes settings.
+        for (status in listOf("running", "waiting", "offline"))
+            assertEquals(status, listOf(LocalCommand.ARTIFACTS), availableLocalCommands(artifacts.copy(status = status), true, 0))
+        assertEquals(listOf(LocalCommand.ARTIFACTS), availableLocalCommands(artifacts.copy(sending = true), true, 0))
+        assertFalse(LocalCommand.ARTIFACTS in availableLocalCommands(artifacts.copy(unavailableCapabilities = setOf(ARTIFACTS_CAPABILITY)), true, 0))
+        assertFalse(canShowArtifacts(artifacts.copy(connected = false)))
+        assertFalse(canShowArtifacts(artifacts.copy(loading = true)))
+        assertFalse(canShowArtifacts(artifacts.copy(selection = RemoteSelection())))
+        val running = artifacts.copy(status = "running", draft = "/artifacts")
+        assertEquals(
+            LocalInvocation(LocalCommand.ARTIFACTS, ""),
+            localInvocation(running, availableLocalCommands(running, true, 0)),
+        )
+    }
+
+    @Test
+    fun localCommandsFollowTheControlsTheyStandFor() {
+        val all = listOf(LocalCommand.NEW, LocalCommand.COMPACT, LocalCommand.MODEL, LocalCommand.NAME)
+        assertEquals(all, availableLocalCommands(chatState, true, 0))
+        assertFalse(LocalCommand.NEW in availableLocalCommands(chatState, false, 0))
+        assertTrue(availableLocalCommands(chatState.copy(status = "running"), true, 0).isEmpty())
+        assertTrue(availableLocalCommands(chatState.copy(sending = true), true, 0).isEmpty())
+        val bare = chatState.copy(capabilities = emptySet())
+        assertEquals(listOf(LocalCommand.NEW), availableLocalCommands(bare, true, 0))
+        assertTrue(availableLocalCommands(chatState.copy(loading = true), true, 0).isEmpty())
+        assertEquals(
+            listOf(LocalCommand.NEW, LocalCommand.MODEL, LocalCommand.NAME),
+            availableLocalCommands(chatState.copy(unavailableCapabilities = setOf(COMPACT_CAPABILITY)), true, 0),
+        )
+        val tuiOffline = chatState.copy(session = Wire.objectOf("id" to "s1", "title" to "T", "origin" to "web"))
+        assertFalse(LocalCommand.NAME in availableLocalCommands(tuiOffline, true, 0))
+    }
+
+    @Test
+    fun localInvocationParsesTheNameAndArgument() {
+        val all = availableLocalCommands(chatState, true, 0)
+        assertEquals(
+            LocalInvocation(LocalCommand.NAME, "My new title"),
+            localInvocation(chatState.copy(draft = "/name   My  new title \n"), all),
+        )
+        assertEquals(LocalInvocation(LocalCommand.NAME, ""), localInvocation(chatState.copy(draft = "/name"), all))
+        assertEquals(LocalInvocation(LocalCommand.NEW, ""), localInvocation(chatState.copy(draft = "/new"), all))
+        assertEquals(LocalInvocation(LocalCommand.NEW, ""), localInvocation(chatState.copy(draft = "/New "), all))
+        assertNull(localInvocation(chatState.copy(draft = "/compact keep the plan"), all))
+        assertNull(localInvocation(chatState.copy(draft = "/name " + "x".repeat(4097)), all))
+        assertNull(localInvocation(chatState.copy(draft = "/newer"), all))
+        assertNull(localInvocation(chatState.copy(draft = "/review"), all))
+        assertNull(localInvocation(chatState.copy(draft = "hello /new"), all))
+        assertNull(localInvocation(chatState.copy(draft = "/compact"), availableLocalCommands(chatState.copy(status = "running"), true, 0)))
+        assertNull(localInvocation(chatState.copy(draft = "/new", quote = MessageQuote("m", "user", "x")), all))
+    }
+
+    @Test
+    fun localCommandsShadowHostCommandsOfTheSameName() {
+        val host = listOf(
+            RemoteCommand("compact", "host compact", "extension"),
+            RemoteCommand("review", null, "prompt"),
+            RemoteCommand("news", null, "skill"),
+        )
+        val (local, remote) =
+            mergeCommandSuggestions(listOf(LocalCommand.NEW, LocalCommand.COMPACT), host, "")
+        assertEquals(listOf(LocalCommand.NEW, LocalCommand.COMPACT), local)
+        assertEquals(listOf("review", "news"), remote.map { it.name })
+        val (filteredLocal, filteredRemote) =
+            mergeCommandSuggestions(listOf(LocalCommand.NEW, LocalCommand.COMPACT), host, "NE")
+        assertEquals(listOf(LocalCommand.NEW), filteredLocal)
+        assertEquals(listOf("news"), filteredRemote.map { it.name })
+        assertEquals("/name  x", selectCommandName("/na  x", "name"))
     }
 }

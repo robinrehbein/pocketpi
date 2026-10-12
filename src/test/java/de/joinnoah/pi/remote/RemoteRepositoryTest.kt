@@ -48,6 +48,7 @@ class RemoteRepositoryTest {
         var failureOnConnect: Int? = null
         var response: (JsonObject) -> JsonObject? = { null }
         var failure: (JsonObject) -> String? = { null }
+        var failureMessage: (JsonObject) -> String? = { null }
 
         override fun connect(host: PairedHost) {
             connects++
@@ -72,7 +73,7 @@ class RemoteRepositoryTest {
                         "type" to "result",
                         "requestId" to payload.text("requestId"),
                         "ok" to false,
-                        "error" to Wire.objectOf("code" to code, "message" to code),
+                        "error" to Wire.objectOf("code" to code, "message" to (failureMessage(payload) ?: code)),
                     )
                 )
                 return
@@ -124,10 +125,11 @@ class RemoteRepositoryTest {
         transport: Transport,
         drafts: Drafts = Drafts(),
         attachmentStorage: AttachmentStorage? = null,
+        hosts: List<PairedHost> = listOf(host),
         attachmentImporter: (suspend (String, Boolean) -> LocalAttachment)? = null,
     ) =
         DefaultRemoteRepository(
-            Pairings(listOf(host)),
+            Pairings(hosts),
             drafts,
             transport,
             backgroundScope,
@@ -135,6 +137,7 @@ class RemoteRepositoryTest {
             attachmentStorage,
             attachmentImporter,
             now = { testScheduler.currentTime },
+            jitter = { 0.5 },
         )
 
     private fun modelData(id: String = "model") =
@@ -145,7 +148,14 @@ class RemoteRepositoryTest {
             "input" to JsonArray(listOf(JsonPrimitive("text"), JsonPrimitive("image"))),
         )
 
-    private fun configurationData(sessionId: String = "session", model: String = "model") =
+    private fun settingsData(auto: Boolean = true, steering: String = "one-at-a-time", followUp: String = "one-at-a-time") =
+        Wire.objectOf("autoCompaction" to auto, "steeringMode" to steering, "followUpMode" to followUp)
+
+    private fun configurationData(
+        sessionId: String = "session",
+        model: String = "model",
+        settings: JsonObject? = null,
+    ) =
         Wire.objectOf(
             "kind" to "configuration",
             "sessionId" to sessionId,
@@ -154,6 +164,7 @@ class RemoteRepositoryTest {
             "thinkingLevels" to JsonArray(listOf(JsonPrimitive("high"), JsonPrimitive("max"))),
             "models" to JsonArray(listOf(modelData(), modelData("other"))),
             "modelsTruncated" to false,
+            *(if (settings == null) emptyArray() else arrayOf("settings" to settings)),
         )
 
     private fun commandData(sessionId: String = "session") =
@@ -163,6 +174,77 @@ class RemoteRepositoryTest {
             "items" to JsonArray(listOf(Wire.objectOf("name" to "review", "source" to "skill"))),
             "truncated" to false,
         )
+
+    private fun advisorData(enabled: Boolean = false) = Wire.objectOf(
+        "kind" to "advisor", "sessionId" to "session", "enabled" to enabled,
+        "model" to if (enabled) JsonPrimitive("provider/model") else JsonNull,
+        "reasoning" to "high", "pending" to false, "contextShared" to enabled,
+        "attempts" to 0, "maxAttempts" to 3, "remainingAttempts" to 3, "error" to JsonNull,
+        "choices" to JsonArray(listOf(Wire.objectOf(
+            "provider" to "provider", "id" to "model", "name" to "Advisor model",
+            "levels" to JsonArray(listOf(JsonPrimitive("high"))),
+        ))),
+    )
+
+    @Test
+    fun advisorCanRecoverFromUnsupportedAndBeEnabledFromTheApp() = runTest {
+        val transport = Transport().apply { capabilities = setOf(ADVISOR_CAPABILITY) }
+        configure(transport)
+        val original = transport.response
+        var supported = false
+        var enabled = false
+        transport.failure = { request ->
+            if (request.text("type") == "session.advisor.get" && !supported) "unsupported" else null
+        }
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.advisor.get" -> advisorData(enabled)
+                "session.command" -> {
+                    enabled = request.text("text") != "/advisor off"
+                    Wire.objectOf("kind" to "accepted")
+                }
+                else -> original(request)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(ADVISOR_CAPABILITY in repository.state.value.unavailableCapabilities)
+        repository.setAdvisor("provider", "model", "high")
+        runCurrent()
+        assertFalse(transport.sent.any { it.text("type") == "session.command" })
+
+        supported = true
+        repository.refreshAdvisor()
+        runCurrent()
+        assertTrue(advisorControlAvailable(repository.state.value))
+        assertEquals(false, repository.state.value.advisor?.enabled)
+        repository.setAdvisor("provider", "model", "high")
+        runCurrent()
+        assertEquals("/advisor provider/model --thinking high",
+            transport.sent.last { it.text("type") == "session.command" }.text("text"))
+        advanceTimeBy(1200)
+        runCurrent()
+        assertEquals(true, repository.state.value.advisor?.enabled)
+
+        repository.setAdvisor(null, null, null)
+        runCurrent()
+        advanceTimeBy(1200)
+        runCurrent()
+        assertEquals(false, repository.state.value.advisor?.enabled)
+        assertTrue(advisorControlAvailable(repository.state.value))
+    }
+
+    @Test
+    fun advisorRefreshDoesNotSendToAnUnadvertisedHost() = runTest {
+        val transport = Transport()
+        configure(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.refreshAdvisor()
+        runCurrent()
+        assertFalse(transport.sent.any { it.text("type") == "session.advisor.get" })
+    }
 
     @Test
     fun projectsDiscoveryOptsInWithoutBreakingAnOlderHost() = runTest {
@@ -180,7 +262,7 @@ class RemoteRepositoryTest {
             val repository = repository(transport)
             repository.activate(RemoteSelection("host", "project", "session"))
             val discovery = transport.sent.first { it.text("type") == "projects.list" }
-            assertTrue(discovery.text("requestId").startsWith("capabilities.v1:"))
+            assertTrue(discovery.text("requestId").startsWith("capabilities.v2:"))
             assertEquals(supportsSteer, canSteer(repository.state.value))
             assertTrue(canFollowUp(repository.state.value))
             assertTrue(repository.state.value.connected)
@@ -731,11 +813,11 @@ class RemoteRepositoryTest {
         transport: Transport,
         local: LocalAttachment,
         prompt: Boolean = true,
+        remoteId: String = "BBBBBBBBBBBBBBBBBBBBBB",
     ) {
         capable(transport)
         transport.capabilities += ATTACHMENTS_CAPABILITY
         val original = transport.response
-        val remoteId = "BBBBBBBBBBBBBBBBBBBBBB"
         transport.response = { request ->
             when (request.text("type")) {
                 "session.attachments.begin" ->
@@ -993,6 +1075,38 @@ class RemoteRepositoryTest {
         assertNotNull(repository.state.value.configuration)
         assertTrue(repository.state.value.commands.isNotEmpty())
         assertTrue(repository.state.value.unavailableCapabilities.isEmpty())
+    }
+
+    @Test
+    fun sentImageUsesUploadedBytesAfterLocalDraftCleanupWithoutDownload() = runTest {
+        val bytes = byteArrayOf(1, 2, 3)
+        val local = localFile(bytes).copy(kind = "image", name = "photo.jpg", mimeType = "image/jpeg")
+        val remoteId = Wire.encode(ByteArray(16) { 1 })
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, local, remoteId = remoteId) }
+        val repository = repository(transport, attachmentStorage = storage) { _, _ ->
+            storage.write(local, bytes)
+            local
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.importAttachments(repository.state.value.selection, listOf("content:photo"), true)
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        advanceTimeBy(201)
+        runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "session.prompt" })
+        assertFalse(storage.bytes.containsKey(local.id))
+        val remote = RemoteAttachment(
+            remoteId, local.name, local.kind, local.mimeType,
+            local.size, local.sha256, 3_600_000,
+        )
+        val result = repository.readAttachment("session", remote)
+        assertTrue(result is AttachmentReadResult.Loaded)
+        assertArrayEquals(bytes, (result as AttachmentReadResult.Loaded).bytes)
+        assertFalse(transport.sent.any { it.text("type") == "session.attachments.get" })
+        assertTrue(repository.readAttachment("session", remote.copy(sha256 = "0".repeat(64))) !is AttachmentReadResult.Loaded)
     }
 
     @Test
@@ -1471,6 +1585,106 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun settingsChangeSendsOnlyTheGivenFieldsAndTakesTheRefreshedConfiguration() = runTest {
+        val transport = Transport().also(::capable)
+        transport.capabilities += SETTINGS_CAPABILITY
+        val original = transport.response
+        transport.response = {
+            when (it.text("type")) {
+                "session.configuration.get" -> configurationData(it.text("sessionId"), settings = settingsData())
+                "session.configuration.set" ->
+                    configurationData(it.text("sessionId"), settings = settingsData(auto = false, steering = "all"))
+                else -> original(it)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals(true, repository.state.value.configuration?.settings?.autoCompaction)
+        repository.changeSettings()
+        repository.changeSettings(steeringMode = "sometimes")
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.configuration.set" })
+        repository.changeSettings(autoCompaction = false, steeringMode = "all")
+        runCurrent()
+        val change = transport.sent.last { it.text("type") == "session.configuration.set" }.obj("change")
+        assertEquals(setOf("kind", "autoCompaction", "steeringMode"), change.keys)
+        assertEquals("settings", change.text("kind"))
+        assertEquals(SessionSettings(false, "all", "one-at-a-time"), repository.state.value.configuration?.settings)
+        assertFalse(repository.state.value.configurationChanging)
+    }
+
+    @Test
+    fun settingsChangeIsIgnoredWithoutTheCapabilityOrReportedSettings() = runTest {
+        val transport = Transport().also(::capable)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.changeSettings(autoCompaction = true)
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "session.configuration.set" })
+    }
+
+    @Test
+    fun unsupportedSettingsChangeOnlyWithdrawsTheSettingsCapability() = runTest {
+        val transport = Transport().also(::capable)
+        transport.capabilities += SETTINGS_CAPABILITY
+        val original = transport.response
+        transport.response = {
+            when (it.text("type")) {
+                "session.configuration.get" -> configurationData(it.text("sessionId"), settings = settingsData())
+                "session.configuration.set" -> {
+                    transport.listener.message(
+                        Wire.objectOf(
+                            "type" to "result",
+                            "requestId" to it.text("requestId"),
+                            "ok" to false,
+                            "error" to Wire.objectOf("code" to "unsupported"),
+                        )
+                    )
+                    null
+                }
+                else -> original(it)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.changeSettings(autoCompaction = false)
+        runCurrent()
+        val state = repository.state.value
+        assertEquals(setOf(SETTINGS_CAPABILITY), state.unavailableCapabilities)
+        assertNotNull(state.configuration)
+    }
+
+    @Test
+    fun failedSettingsChangeReadsTheConfigurationAgain() = runTest {
+        val transport = Transport().also(::capable)
+        transport.capabilities += SETTINGS_CAPABILITY
+        val original = transport.response
+        var held = settingsData()
+        transport.response = {
+            when (it.text("type")) {
+                "session.configuration.get" -> configurationData(it.text("sessionId"), settings = held)
+                "session.configuration.set" -> null
+                else -> original(it)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        held = settingsData(auto = false)
+        repository.changeSettings(autoCompaction = false)
+        runCurrent()
+        advanceTimeBy(30_001)
+        runCurrent()
+        assertEquals(R.string.remote_configuration_error, repository.state.value.error)
+        assertEquals("session.configuration.get", transport.sent.last().text("type"))
+        assertEquals(false, repository.state.value.configuration?.settings?.autoCompaction)
+        assertFalse(repository.state.value.configurationChanging)
+    }
+
+    @Test
     fun uncertainCommandSurvivesRecreationWithoutReplay() = runTest {
         val transport = Transport().also(::capable)
         val drafts = Drafts()
@@ -1620,7 +1834,7 @@ class RemoteRepositoryTest {
         repository.activate(target)
         val original = transport.response
         transport.response = { request ->
-            if (request.text("type") == "projects.list") data("projects", emptyList())
+            if (request.text("type") == "projects.list") JsonObject(data("projects", emptyList()) + ("capabilities" to JsonArray(emptyList())))
             else original(request)
         }
 
@@ -1629,7 +1843,8 @@ class RemoteRepositoryTest {
         runCurrent()
 
         assertEquals(RemoteSelection("host"), repository.state.value.selection)
-        assertEquals(2, transport.sent.count { it.text("type") == "projects.list" })
+        // The first discovery went v2 and, without a list, once more v1; the refresh added one.
+        assertEquals(3, transport.sent.count { it.text("type") == "projects.list" })
         assertFalse(transport.sent.any { it.text("type") == "sessions.open" })
     }
 
@@ -1649,6 +1864,373 @@ class RemoteRepositoryTest {
         runCurrent()
 
         assertEquals(connects, transport.connects)
+    }
+
+    private suspend fun TestScope.offlineRepository(transport: Transport): DefaultRemoteRepository {
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        transport.failureOnConnect = R.string.remote_connection_error
+        return repository
+    }
+
+    @Test
+    fun reconnectKeepsRetryingWithCappedBackoffWhileRecoverable() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        val start = transport.connects
+        transport.listener.failed(true, R.string.remote_connection_error)
+
+        var elapsed = 0L
+        for ((index, delay) in listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 27_000L, 27_000L, 27_000L).withIndex()) {
+            advanceTimeBy(delay - 1)
+            runCurrent()
+            assertEquals(start + index, transport.connects)
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(start + index + 1, transport.connects)
+            elapsed += delay
+        }
+        assertFalse(repository.state.value.connected)
+    }
+
+    @Test
+    fun reconnectDelayIsJitteredWithinTwentyPercentAndNeverAboveTheCap() = runTest {
+        val transport = Transport().also { configure(it) }
+        val low = DefaultRemoteRepository(
+            Pairings(listOf(host)), Drafts(), transport, backgroundScope,
+            StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
+            jitter = { 0.0 },
+        )
+        low.activate(RemoteSelection("host", "project", "session"))
+        low.setForeground(true)
+        low.setValidatedNetwork("wifi")
+        runCurrent()
+        val start = transport.connects
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(testScheduler.currentTime + 800, low.state.value.reconnectAt)
+        advanceTimeBy(800)
+        runCurrent()
+        assertEquals(start + 1, transport.connects)
+    }
+
+    @Test
+    fun reconnectPausesInTheBackgroundAndResumesOnForeground() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        repository.setForeground(false)
+        assertNull(repository.state.value.reconnectAt)
+        val connects = transport.connects
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        transport.failureOnConnect = null
+        repository.setForeground(true)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun deniedPairingStopsReconnectAndClearsTheSchedule() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+        transport.listener.failed(true, R.string.remote_denied)
+        assertNull(repository.state.value.reconnectAt)
+        val connects = transport.connects
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(connects, transport.connects)
+    }
+
+    @Test
+    fun deniedDeviceStopsReconnectEvenWhenTheTransportAsksForOne() = runTest {
+        for (error in listOf(R.string.remote_device_revoked, R.string.remote_device_paused)) {
+            val transport = Transport().also { configure(it) }
+            val repository = offlineRepository(transport)
+            transport.listener.failed(true, R.string.remote_connection_error)
+            assertNotNull(repository.state.value.reconnectAt)
+            transport.listener.failed(true, error)
+            assertNull(repository.state.value.reconnectAt)
+            assertEquals(error, repository.state.value.error)
+            val connects = transport.connects
+            advanceTimeBy(120_000)
+            runCurrent()
+            repository.setValidatedNetwork("cellular")
+            runCurrent()
+            assertEquals(connects, transport.connects)
+            assertEquals(error, repository.state.value.error)
+        }
+    }
+
+    @Test
+    fun deniedDeviceKeepsItsErrorThroughActivationAndRetriesOnlyOnRefresh() = runTest {
+        val full = RemoteSelection("host", "project", "session")
+        for (error in listOf(R.string.remote_device_revoked, R.string.remote_device_paused)) {
+            val transport = Transport().also { configure(it) }
+            val repository = repository(transport)
+            transport.failureOnConnect = error
+            repository.activate(full)
+            runCurrent()
+            assertEquals(error, repository.state.value.error)
+            assertEquals("host", repository.state.value.deniedRouteId)
+            assertNull(repository.state.value.reconnectAt)
+            val connects = transport.connects
+            advanceTimeBy(120_000)
+            runCurrent()
+            assertEquals(connects, transport.connects)
+            assertEquals(error, repository.state.value.error)
+
+            // Navigation restores must not retry it either, even after the card is dismissed.
+            repository.dismissError()
+            repository.activate(full, ActivationMode.RESTORE)
+            runCurrent()
+            assertEquals(connects, transport.connects)
+
+            repository.refresh()
+            runCurrent()
+            assertEquals(connects + 1, transport.connects)
+            assertEquals(error, repository.state.value.error)
+
+            transport.failureOnConnect = null
+            repository.refresh()
+            runCurrent()
+            assertTrue(repository.state.value.connected)
+            assertNull(repository.state.value.deniedRouteId)
+            assertEquals(full, repository.state.value.selection)
+        }
+    }
+
+    @Test
+    fun deniedHostOpenedFromTheListIsTargetedByRouteAndRetried() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        transport.failureOnConnect = R.string.remote_device_revoked
+        repository.activate(RemoteSelection("host"))
+        runCurrent()
+        // Nothing was selected yet, so the error card cannot rely on the selection.
+        assertNull(repository.state.value.selection.routeId)
+        assertEquals("host", repository.state.value.deniedRouteId)
+
+        transport.failureOnConnect = null
+        repository.refresh()
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals("host", repository.state.value.selection.routeId)
+        assertNull(repository.state.value.deniedRouteId)
+    }
+
+    @Test
+    fun restoringTheHostsListLeavesADeniedHostAndReenablesReconnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        transport.failureOnConnect = R.string.remote_device_paused
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.dismissError()
+
+        repository.activate(RemoteSelection(), ActivationMode.RESTORE)
+        runCurrent()
+        assertNull(repository.state.value.selection.routeId)
+
+        // Reconnect is enabled again, so a failure on another host schedules a retry.
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun restoringAHealthyHostIgnoresAnotherHostsDenial() = runTest {
+        val other = PairedHost("other", "https://relay.test", "device2", "secret2", "Other")
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, hosts = listOf(host, other))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        transport.failureOnConnect = R.string.remote_device_revoked
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.dismissError()
+
+        transport.failureOnConnect = null
+        repository.activate(RemoteSelection("other", "project"), ActivationMode.RESTORE)
+        runCurrent()
+        assertEquals("other", transport.route)
+        assertTrue(repository.state.value.connected)
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun pausedDeviceReconnectsOnlyWhenTheUserRetries() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(false, R.string.remote_device_paused)
+        val connects = transport.connects
+        advanceTimeBy(120_000)
+        runCurrent()
+        repository.setValidatedNetwork("cellular")
+        repository.setForeground(false)
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        transport.failureOnConnect = null
+        repository.refresh()
+        runCurrent()
+        assertTrue(transport.connects > connects)
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun reconnectAtIsSetOnFailureAndClearedOnSuccess() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        val failedAt = testScheduler.currentTime
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(failedAt + 1_000, repository.state.value.reconnectAt)
+
+        transport.failureOnConnect = null
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun manualRefreshResetsTheBackoff() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_000 + 2_000 + 4_000 + 8_000)
+        runCurrent()
+        assertEquals(16_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+
+        repository.refresh()
+        runCurrent()
+        // The refresh attempt failed again; the schedule starts over at one second.
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+    }
+
+    @Test
+    fun clearerUnreachableMessageAppearsAfterThreeFailuresAndRevertsOnConnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(R.string.remote_unreachable, repository.state.value.error)
+
+        transport.failureOnConnect = null
+        advanceTimeBy(4_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun serviceRestartCloseRetriesImmediately() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_000 + 2_000)
+        runCurrent()
+        val connects = transport.connects
+        transport.listener.closed(1012)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        assertNotNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun repeatedServiceRestartClosesRetryImmediatelyOnlyOncePerStreak() = runTest {
+        val transport = Transport().also { configure(it) }
+        offlineRepository(transport)
+        val start = transport.connects
+        repeat(3) {
+            transport.listener.closed(1012)
+            transport.listener.failed(true, R.string.remote_connection_error)
+            runCurrent()
+        }
+        // The first close retried at once (and its retry failed the same way, without the flag).
+        assertEquals(start + 1, transport.connects)
+    }
+
+    @Test
+    fun reconnectCapSpreadsDownwardOnly() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = DefaultRemoteRepository(
+            Pairings(listOf(host)), Drafts(), transport, backgroundScope,
+            StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
+            jitter = { 1.0 },
+        )
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        // 1.2 s, 2.4 s, 4.8 s, 9.6 s, 19.2 s, then the capped 24 s.
+        for (wait in listOf(1_200L, 2_400L, 4_800L, 9_600L, 19_200L)) {
+            advanceTimeBy(wait)
+            runCurrent()
+        }
+        assertEquals(24_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+    }
+
+    @Test
+    fun connectTimeoutGoesOfflineAndSchedulesAReconnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        transport.readyOnConnect = false
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        val activation = async { repository.activate(RemoteSelection("host", "project", "session")) }
+        advanceTimeBy(30_001)
+        runCurrent()
+        activation.await()
+        assertFalse(repository.state.value.connected)
+        assertNotNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun activateCatchKeepsTheConnectionError() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+    }
+
+    @Test
+    fun networkLossAndRefreshClearReconnectAt() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+        repository.setValidatedNetwork(null)
+        assertNull(repository.state.value.reconnectAt)
+
+        repository.setValidatedNetwork("cell")
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNotNull(repository.state.value.reconnectAt)
+        transport.failureOnConnect = null
+        repository.refresh()
+        assertNull(repository.state.value.reconnectAt)
     }
 
     @Test
@@ -2056,6 +2638,55 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun statusEventsUpdatePreviouslyVisitedProjectCache() = runTest {
+        val transport = Transport().also { configure(it) }
+        val normal = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "projects.list" -> data("projects", listOf(project, Wire.objectOf("id" to "other-project")))
+                "sessions.list" -> if (request.text("projectId") == "project")
+                    data("sessions", listOf(session(status = "offline")))
+                else data("sessions", listOf(session("other", projectId = "other-project")))
+                else -> normal(request)
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        repository.activate(RemoteSelection("host", "other-project"))
+        transport.listener.message(Wire.objectOf(
+            "type" to "event", "kind" to "session.status", "sessionId" to "session",
+            "revision" to 1, "status" to "idle",
+        ))
+        val target = RemoteSelection("host", "project", "session")
+        assertEquals(target, repository.activate(target, ActivationMode.RESTORE))
+        assertEquals("idle", repository.state.value.session?.text("status"))
+    }
+
+    @Test
+    fun returningToEarlierChatShowsCachedMessagesBeforeSnapshotCompletes() = runTest {
+        val transport = Transport().also {
+            configure(it, sessions = listOf(session(), session("other")))
+            quoteMessages(it)
+        }
+        val repository = repository(transport)
+        val first = RemoteSelection("host", "project", "session")
+        repository.activate(first)
+        val messages = repository.state.value.messages
+        assertTrue(messages.isNotEmpty())
+        repository.activate(RemoteSelection("host", "project", "other"))
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") null else normal(request)
+        }
+        val returning = async { repository.activate(first) }
+        runCurrent()
+        assertEquals(first, repository.state.value.selection)
+        assertEquals(messages, repository.state.value.messages)
+        assertTrue(repository.state.value.loading)
+        returning.cancel()
+    }
+
+    @Test
     fun unchangedQuoteAndBodyClearTogetherAfterAcknowledgment() = runTest {
         val drafts = Drafts()
         val transport =
@@ -2359,6 +2990,120 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun confirmedDeliveryUpgradesUncertaintyAndCannotBeDowngraded() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        transport.capabilities = setOf(STEER_CAPABILITY)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.prompt")
+                Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else normal(request)
+        }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        repository.draft("same text")
+        repository.steer()
+        runCurrent()
+        val id = transport.sent.last { it.text("type") == "session.prompt" }.text("requestId")
+        listOf("uncertain", "delivered", "accepted", "cancelled").forEachIndexed { index, status ->
+            transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+                "revision" to index + 2, "kind" to "steer.status", "requestId" to id, "status" to status))
+        }
+        repository.flush()
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+        assertEquals("delivered", drafts.values.getValue(DraftKey("host", "session")).followUps.single().status)
+    }
+
+    @Test
+    fun messageIdentityBeforeAcknowledgementSurvivesLaterAcceptedReceipt() = runTest {
+        val transport = Transport().also(::configure)
+        transport.capabilities = setOf(FOLLOW_UP_CAPABILITY)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.prompt") {
+                transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+                    "revision" to 2, "kind" to "message.upsert", "message" to Wire.objectOf(
+                        "id" to "consumed", "role" to "user", "text" to "same text",
+                        "remoteDelivery" to Wire.objectOf("requestId" to request.text("requestId"),
+                            "delivery" to "follow_up"))))
+                transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+                    "revision" to 3, "kind" to "follow_up.status", "requestId" to request.text("requestId"),
+                    "status" to "accepted"))
+                Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            } else normal(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        repository.draft("same text")
+        repository.followUp()
+        runCurrent()
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+    }
+
+    @Test
+    fun snapshotRecoversOnlyMatchingUserDeliveryIdentity() = runTest {
+        val drafts = Drafts().apply {
+            values = mapOf(DraftKey("host", "session") to StoredDraft(followUps = listOf(
+                PendingFollowUp("first", "same text", "uncertain", "steer"),
+                PendingFollowUp("second", "same text", "uncertain", "follow_up"),
+                PendingFollowUp("third", "same text", "uncertain", "steer"))))
+        }
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        fun message(id: String, requestId: String?, delivery: String = "steer", role: String = "user") =
+            Wire.objectOf("id" to id, "role" to role, "text" to "same text",
+                "remoteDelivery" to requestId?.let {
+                    Wire.objectOf("requestId" to it, "delivery" to delivery)
+                })
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "idle",
+                "pendingQuestions" to JsonArray(emptyList()), "messages" to JsonArray(listOf(
+                    message("one", "first"), message("two", "second", "steer"),
+                    message("three", "third", role = "assistant"), message("four", null))))
+            else normal(request)
+        }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        assertEquals(listOf("delivered", "uncertain", "uncertain"), repository.state.value.followUps.map { it.status })
+        assertEquals(listOf("delivered", "uncertain", "uncertain"),
+            drafts.values.getValue(DraftKey("host", "session")).followUps.map { it.status })
+    }
+
+    @Test
+    fun snapshotAfterRestartResolvesLostAcknowledgementAndPreservesEditedDraft() = runTest {
+        val drafts = Drafts().apply {
+            values = mapOf(DraftKey("host", "session") to StoredDraft(
+                text = "new draft", mutationId = "lost-ack", submittedText = "sent text"))
+        }
+        val transport = Transport().also(::configure)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "idle",
+                "pendingQuestions" to JsonArray(emptyList()), "messages" to JsonArray(listOf(Wire.objectOf(
+                    "id" to "consumed", "role" to "user", "text" to "sent text",
+                    "remoteDelivery" to Wire.objectOf("requestId" to "lost-ack", "delivery" to "follow_up")))))
+            else normal(request)
+        }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        assertFalse(repository.state.value.uncertain)
+        assertEquals("new draft", repository.state.value.draft)
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+        assertEquals("sent text", repository.state.value.followUps.single().text)
+        assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
     fun lostFollowUpAcknowledgementLeavesDraftUncertainWithoutReplay() = runTest {
         val drafts = Drafts()
         val transport = Transport().also(::configure)
@@ -2610,6 +3355,24 @@ class RemoteRepositoryTest {
 
         val registration = transport.sent.last { it.text("type") == "push.register" }
         assertEquals(JsonNull, registration["token"])
+    }
+
+    @Test
+    fun aClearedPushTokenIsRegisteredAsNullAgainAfterReconnecting() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        val selection = RemoteSelection("host", "project", "session")
+        repository.activate(selection)
+        repository.setPushToken(null)
+        runCurrent()
+
+        transport.listener.failed(false, R.string.remote_connection_error)
+        repository.activate(selection)
+        runCurrent()
+
+        val registrations = transport.sent.filter { it.text("type") == "push.register" }
+        assertEquals(2, registrations.size)
+        assertTrue(registrations.all { it["token"] == JsonNull })
     }
 
     @Test
@@ -3057,6 +3820,32 @@ class RemoteRepositoryTest {
         assertNull(repository.state.value.compaction)
     }
 
+    @Test
+    fun manualCompactionDispatchesWithoutChangingTheDraft() = runTest {
+        val transport = Transport()
+        configure(transport)
+        transport.capabilities = setOf(COMPACT_CAPABILITY)
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.compact") null else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.draft("Keep this draft")
+        repository.compactContext()
+        runCurrent()
+        assertEquals("Keep this draft", repository.state.value.draft)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.compact" })
+        assertTrue(repository.state.value.compactionRequesting)
+        repository.compactContext()
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.compact" })
+        val compact = transport.sent.last { it.text("type") == "session.compact" }
+        transport.result(compact, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertFalse(repository.state.value.compactionRequesting)
+    }
+
     private fun forking(
         transport: Transport,
         result: (JsonObject) -> JsonObject? = { request ->
@@ -3161,6 +3950,514 @@ class RemoteRepositoryTest {
         assertEquals("session", repository.state.value.session?.text("id"))
         assertEquals(R.string.remote_fork_busy, repository.state.value.error)
         assertFalse(repository.state.value.loading)
+    }
+
+    private fun treeNode(id: String, parentId: String?, kind: String = "user", forkable: Boolean = true) =
+        Wire.objectOf(
+            "id" to id,
+            "parentId" to parentId,
+            "kind" to kind,
+            "preview" to "preview $id",
+            "timestamp" to "2026-01-01T12:00:00.000Z",
+            "children" to 1,
+            "forkable" to forkable,
+        )
+
+    private fun treeResult(sessionId: String) =
+        Wire.objectOf(
+            "kind" to "tree",
+            "sessionId" to sessionId,
+            "leafId" to "a1",
+            "truncated" to false,
+            "canNavigate" to true,
+            "nodes" to JsonArray(listOf(treeNode("u1", null), treeNode("a1", "u1", "assistant"))),
+        )
+
+    private fun treeing(transport: Transport, result: (JsonObject) -> JsonObject? = { null }) {
+        configure(transport, sessions = listOf(session(), session("fork")))
+        advertising(
+            transport,
+            JsonArray(listOf(JsonPrimitive(SESSION_FORK_CAPABILITY), JsonPrimitive(SESSION_TREE_CAPABILITY))),
+        )
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type").startsWith("session.tree")) result(request) else original(request)
+        }
+    }
+
+    @Test
+    fun treeSendsNothingWithoutTheRouteCapability() = runTest {
+        val transport = Transport().also(::configure)
+        val repository = repository(transport)
+        val source = RemoteSelection("host", "project", "session")
+        repository.activate(source)
+        assertEquals(TreeLoadResult.Failed(TreeFailure.UNSUPPORTED), repository.loadSessionTree("session"))
+        assertEquals(
+            TreeNavigateResult.Failed(TreeFailure.UNSUPPORTED),
+            repository.navigateSessionTree("session", "u1", false),
+        )
+        assertEquals(source, repository.forkSessionAtNode(source, "u1"))
+        assertTrue(transport.sent.none { it.text("type").startsWith("session.tree") })
+    }
+
+    @Test
+    fun treeLoadsTheSelectedSessionsTreeAndRejectsABrokenReply() = runTest {
+        val transport = Transport()
+        var broken = false
+        treeing(transport) { request ->
+            treeResult(request.text("sessionId")).let { if (broken) JsonObject(it + ("canNavigate" to JsonPrimitive("yes"))) else it }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val loaded = repository.loadSessionTree("session") as TreeLoadResult.Loaded
+        assertEquals(listOf("u1", "a1"), loaded.tree.nodes.map { it.id })
+        val request = transport.sent.single { it.text("type") == "session.tree" }
+        assertEquals(setOf("type", "requestId", "sessionId"), request.keys)
+        assertEquals(TreeLoadResult.Failed(TreeFailure.FAILED), repository.loadSessionTree("other"))
+        broken = true
+        assertEquals(TreeLoadResult.Failed(TreeFailure.PROTOCOL), repository.loadSessionTree("session"))
+        transport.failure = { if (it.text("type") == "session.tree") "internal" else null }
+        // A read has no unknown result.
+        assertEquals(TreeLoadResult.Failed(TreeFailure.FAILED), repository.loadSessionTree("session"))
+        transport.failure = { if (it.text("type") == "session.tree") "not_found" else null }
+        assertEquals(TreeLoadResult.Failed(TreeFailure.NOT_FOUND), repository.loadSessionTree("session"))
+    }
+
+    private fun reloading(
+        transport: Transport,
+        origin: String = "rpc",
+        result: (JsonObject) -> JsonObject? = { null },
+    ) {
+        configure(transport, sessions = listOf(session(origin = origin)))
+        // The command catalog is advertised at authentication, reload on the route.
+        transport.capabilities = setOf(COMMANDS_CAPABILITY)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(RELOAD_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.reload" -> result(request)
+                "session.commands.get" -> commandData(request.text("sessionId"))
+                else -> original(request)
+            }
+        }
+    }
+
+    private fun reloaded(request: JsonObject) =
+        Wire.objectOf("kind" to "reloaded", "sessionId" to request.text("sessionId"))
+
+    @Test
+    fun reloadSendsNothingWithoutTheRouteCapabilityOrForATerminalSession() = runTest {
+        val transport = Transport().also(::configure)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unsupported), repository.reloadSession("session"))
+        // The terminal session has the capability, so only its origin refuses the reload.
+        val terminal = Transport()
+        reloading(terminal, origin = "tui", result = ::reloaded)
+        val other = repository(terminal)
+        other.activate(RemoteSelection("host", "project", "session"))
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unsupported), other.reloadSession("session"))
+        assertEquals(ReloadResult.Failed(ReloadFailure.Failed(null)), other.reloadSession("elsewhere"))
+        assertTrue(transport.sent.none { it.text("type") == "session.reload" })
+        assertTrue(terminal.sent.none { it.text("type") == "session.reload" })
+        // Positive control: the same setup with a host-owned session does send it.
+        val owned = Transport()
+        reloading(owned, origin = "rpc", result = ::reloaded)
+        val rpc = repository(owned)
+        rpc.activate(RemoteSelection("host", "project", "session"))
+        assertEquals(ReloadResult.Done, rpc.reloadSession("session"))
+        assertEquals(1, owned.sent.count { it.text("type") == "session.reload" })
+    }
+
+    @Test
+    fun reloadRefreshesTheCatalogEvenWhenARequestIsAlreadyInFlight() = runTest {
+        val transport = Transport()
+        reloading(transport, result = ::reloaded)
+        var hold = true
+        val answering = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.commands.get" && hold) null else answering(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repository.state.value.commandsLoading)
+        assertTrue(repository.state.value.commands.isEmpty())
+        hold = false
+        val catalogs = transport.sent.count { it.text("type") == "session.commands.get" }
+        assertEquals(ReloadResult.Done, repository.reloadSession("session"))
+        runCurrent()
+        assertEquals(catalogs + 1, transport.sent.count { it.text("type") == "session.commands.get" })
+        assertFalse(repository.state.value.commandsLoading)
+        assertEquals(listOf("review"), repository.state.value.commands.map { it.name })
+    }
+
+    @Test
+    fun reloadAsksTheHostAndRefreshesTheChatAndTheCommandCatalog() = runTest {
+        val transport = Transport()
+        reloading(transport, result = ::reloaded)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        val catalogs = transport.sent.count { it.text("type") == "session.commands.get" }
+        assertEquals(ReloadResult.Done, repository.reloadSession("session"))
+        runCurrent()
+        val request = transport.sent.single { it.text("type") == "session.reload" }
+        assertEquals(setOf("type", "requestId", "sessionId"), request.keys)
+        assertEquals("session", request.text("sessionId"))
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertEquals(catalogs + 1, transport.sent.count { it.text("type") == "session.commands.get" })
+    }
+
+    @Test
+    fun reloadMapsErrorsAndRefreshesOnlyWhenTheResultIsUnknown() = runTest {
+        val transport = Transport()
+        reloading(transport, result = ::reloaded)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        for ((code, failure) in
+            listOf(
+                "busy" to ReloadFailure.Busy,
+                "unsupported" to ReloadFailure.Unsupported,
+                "offline" to ReloadFailure.ConnectionFailure,
+                "forbidden" to ReloadFailure.Failed(null),
+            )) {
+            transport.failure = { if (it.text("type") == "session.reload") code else null }
+            val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+            assertEquals(code, ReloadResult.Failed(failure), repository.reloadSession("session"))
+            runCurrent()
+            assertEquals(code, snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        }
+        transport.failure = { if (it.text("type") == "session.reload") "internal" else null }
+        transport.failureMessage = { "Extension failed to load" }
+        assertEquals(
+            ReloadResult.Failed(ReloadFailure.Failed("Extension failed to load")),
+            repository.reloadSession("session"),
+        )
+        // The host's generic text is no detail worth repeating.
+        transport.failureMessage = { "Reload failed" }
+        assertEquals(ReloadResult.Failed(ReloadFailure.Failed(null)), repository.reloadSession("session"))
+        transport.failureMessage = { "Reload result unknown; refresh" }
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unknown), repository.reloadSession("session"))
+        runCurrent()
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        transport.failure = { null }
+        transport.failureMessage = { null }
+        // A reply that breaks the protocol is no success.
+        transport.response = { request ->
+            if (request.text("type") == "session.reload")
+                Wire.objectOf("kind" to "reloaded", "sessionId" to "other")
+            else null
+        }
+        assertEquals(ReloadResult.Failed(ReloadFailure.Failed(null)), repository.reloadSession("session"))
+    }
+
+    @Test
+    fun navigatingPutsTheTextInTheComposerAndRefreshesTheChat() = runTest {
+        val quote = MessageQuote("assistant-2", "assistant", "earlier answer")
+        val transport = Transport()
+        treeing(transport) { request ->
+            Wire.objectOf(
+                "kind" to "tree.navigated",
+                "sessionId" to request.text("sessionId"),
+                "leafId" to "u1",
+                "text" to QuoteCodec.encode("second question", quote),
+            )
+        }
+        val drafts = Drafts()
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        val result = repository.navigateSessionTree("session", "u2", true)
+        runCurrent()
+        assertEquals(TreeNavigateResult.Done(TreeNavigation("u1", QuoteCodec.encode("second question", quote))), result)
+        val request = transport.sent.single { it.text("type") == "session.tree.navigate" }
+        assertEquals(setOf("type", "requestId", "sessionId", "nodeId", "summarize"), request.keys)
+        assertEquals("u2", request.text("nodeId"))
+        assertTrue(request.flag("summarize"))
+        val state = repository.state.value
+        assertEquals("second question", state.draft)
+        assertEquals(quote, state.quote)
+        assertEquals("session", state.selection.sessionId)
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        repository.flush()
+        assertEquals("second question", drafts.values[DraftKey("host", "session")]?.text)
+    }
+
+    @Test
+    fun navigatingWithoutTextKeepsTheDraft() = runTest {
+        val transport = Transport()
+        treeing(transport) { request ->
+            Wire.objectOf("kind" to "tree.navigated", "sessionId" to request.text("sessionId"), "leafId" to "a1")
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.draft("keep me")
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        assertEquals(TreeNavigateResult.Done(TreeNavigation("a1", null)), repository.navigateSessionTree("session", "a1", false))
+        runCurrent()
+        assertEquals("keep me", repository.state.value.draft)
+        assertFalse(transport.sent.single { it.text("type") == "session.tree.navigate" }.flag("summarize"))
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertEquals(
+            TreeNavigateResult.Failed(TreeFailure.INVALID),
+            repository.navigateSessionTree("session", "bad id", false),
+        )
+    }
+
+    @Test
+    fun failedNavigationsMapTheirErrorsAndRefreshWhenTheResultIsUnknown() = runTest {
+        val transport = Transport()
+        treeing(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        for ((code, failure) in
+            listOf(
+                "busy" to TreeFailure.BUSY,
+                "cancelled" to TreeFailure.CANCELLED,
+                "unsupported" to TreeFailure.UNSUPPORTED,
+                "not_found" to TreeFailure.NOT_FOUND,
+                "invalid_request" to TreeFailure.INVALID,
+                "forbidden" to TreeFailure.FAILED,
+            )) {
+            transport.failure = { if (it.text("type") == "session.tree.navigate") code else null }
+            val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+            assertEquals(code, TreeNavigateResult.Failed(failure), repository.navigateSessionTree("session", "u1", false))
+            runCurrent()
+            assertEquals(code, snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        }
+        // Only an `internal` that says the result is unknown, and a timeout, may have moved the leaf.
+        for ((code, message) in
+            listOf(
+                "internal" to "Navigation result unknown; refresh",
+                "timeout" to "timeout",
+            )) {
+            transport.failure = { if (it.text("type") == "session.tree.navigate") code else null }
+            transport.failureMessage = { message }
+            val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+            assertEquals(
+                code,
+                TreeNavigateResult.Failed(TreeFailure.UNKNOWN_RESULT),
+                repository.navigateSessionTree("session", "u1", false),
+            )
+            runCurrent()
+            assertEquals(code, snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        }
+        transport.failure = { if (it.text("type") == "session.tree.navigate") "internal" else null }
+        transport.failureMessage = { "No model available for summarization" }
+        val before = transport.sent.count { it.text("type") == "session.snapshot" }
+        assertEquals(TreeNavigateResult.Failed(TreeFailure.FAILED), repository.navigateSessionTree("session", "u1", true))
+        runCurrent()
+        assertEquals(before, transport.sent.count { it.text("type") == "session.snapshot" })
+        transport.failureMessage = { null }
+        transport.failure = { null }
+        // A reply that breaks the protocol is no success, and leaves the draft alone.
+        transport.response = { request ->
+            if (request.text("type") == "session.tree.navigate")
+                Wire.objectOf("kind" to "tree.navigated", "sessionId" to "other", "leafId" to null)
+            else null
+        }
+        assertEquals(
+            TreeNavigateResult.Failed(TreeFailure.PROTOCOL),
+            repository.navigateSessionTree("session", "u1", false),
+        )
+    }
+
+    private fun navigated(request: JsonObject, text: String? = null) =
+        Wire.objectOf(
+            "kind" to "tree.navigated",
+            "sessionId" to request.text("sessionId"),
+            "leafId" to "u1",
+            *(if (text != null) arrayOf("text" to text) else emptyArray()),
+        )
+
+    @Test
+    fun navigatedTextNeverReplacesATypedDraftOrQuote() = runTest {
+        val transport = Transport()
+        treeing(transport) { navigated(it, "step text") }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.draft("typed meanwhile")
+        runCurrent()
+        assertTrue(repository.navigateSessionTree("session", "u2", false) is TreeNavigateResult.Done)
+        runCurrent()
+        assertEquals("typed meanwhile", repository.state.value.draft)
+        assertEquals(R.string.remote_tree_text_not_inserted, repository.state.value.error)
+    }
+
+    @Test
+    fun navigatedTextNeverReplacesAQuote() = runTest {
+        val transport = Transport()
+        treeing(transport) { navigated(it, "step text") }
+        quoteMessages(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.quote("a")
+        runCurrent()
+        assertNotNull(repository.state.value.quote)
+        assertTrue(repository.navigateSessionTree("session", "u2", false) is TreeNavigateResult.Done)
+        assertEquals("", repository.state.value.draft)
+        assertNotNull(repository.state.value.quote)
+        assertEquals(R.string.remote_tree_text_not_inserted, repository.state.value.error)
+    }
+
+    @Test
+    fun navigatedTextFillsABlankComposerWithoutANotice() = runTest {
+        val transport = Transport()
+        treeing(transport) { navigated(it, "step text") }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.draft("   ")
+        runCurrent()
+        assertTrue(repository.navigateSessionTree("session", "u2", false) is TreeNavigateResult.Done)
+        assertEquals("step text", repository.state.value.draft)
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun aLostConnectionDuringANavigationIsAnUnknownResultButNotDuringARead() = runTest {
+        val transport = Transport()
+        treeing(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val move = async { repository.navigateSessionTree("session", "u1", false) }
+        runCurrent()
+        repository.disconnect()
+        runCurrent()
+        assertEquals(TreeNavigateResult.Failed(TreeFailure.UNKNOWN_RESULT), move.await())
+        val reconnected = Transport()
+        treeing(reconnected)
+        val again = repository(reconnected)
+        again.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val read = async { again.loadSessionTree("session") }
+        runCurrent()
+        again.disconnect()
+        runCurrent()
+        assertEquals(TreeLoadResult.Failed(TreeFailure.FAILED), read.await())
+    }
+
+    @Test
+    fun aNavigationWithoutAnAnswerEndsAfterTheTimeoutAndRefreshes() = runTest {
+        for ((summarize, millis) in listOf(false to 45_000L, true to 195_000L)) {
+            val transport = Transport()
+            treeing(transport)
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", "session"))
+            runCurrent()
+            val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+            val move = async { repository.navigateSessionTree("session", "u1", summarize) }
+            runCurrent()
+            advanceTimeBy(millis - 1)
+            assertFalse(summarize.toString(), move.isCompleted)
+            advanceTimeBy(2)
+            runCurrent()
+            assertEquals(TreeNavigateResult.Failed(TreeFailure.UNKNOWN_RESULT), move.await())
+            assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        }
+    }
+
+    @Test
+    fun aSelectionChangeDuringANavigationLeavesEveryDraftUntouched() = runTest {
+        val transport = Transport()
+        treeing(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val move = async { repository.navigateSessionTree("session", "u2", false) }
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.tree.navigate" }
+        repository.activate(RemoteSelection("host", "project", "fork"))
+        runCurrent()
+        transport.result(request, navigated(request, "step text"))
+        runCurrent()
+        val outcome = try { move.await() } catch (e: CancellationException) { null }
+        assertFalse(outcome is TreeNavigateResult.Done)
+        assertEquals("", repository.state.value.draft)
+        assertEquals("fork", repository.state.value.selection.sessionId)
+        repository.flush()
+    }
+
+    @Test
+    fun forkAtANodeOpensTheForkWithoutADraft() = runTest {
+        val transport = Transport()
+        treeing(transport) { request ->
+            Wire.objectOf(
+                "kind" to "fork",
+                "session" to session("fork"),
+                "sourceSessionId" to request.text("sessionId"),
+                "mode" to "at",
+            )
+        }
+        val repository = repository(transport)
+        val source = RemoteSelection("host", "project", "session")
+        repository.activate(source)
+        val fork = repository.forkSessionAtNode(source, "a1")
+        runCurrent()
+        assertEquals(RemoteSelection("host", "project", "fork"), fork)
+        val request = transport.sent.single { it.text("type") == "session.tree.fork" }
+        assertEquals(setOf("type", "requestId", "sessionId", "nodeId"), request.keys)
+        assertEquals("a1", request.text("nodeId"))
+        val state = repository.state.value
+        assertEquals(fork, state.selection)
+        assertEquals("", state.draft)
+        assertNull(state.quote)
+        assertNull(state.error)
+    }
+
+    @Test
+    fun forkAtAUserNodePrefillsTheForksComposer() = runTest {
+        val transport = Transport()
+        treeing(transport) { request ->
+            Wire.objectOf(
+                "kind" to "fork",
+                "session" to session("fork"),
+                "sourceSessionId" to request.text("sessionId"),
+                "mode" to "edit",
+                "text" to "second question",
+            )
+        }
+        val repository = repository(transport)
+        val source = RemoteSelection("host", "project", "session")
+        repository.activate(source)
+        val fork = repository.forkSessionAtNode(source, "u2")
+        runCurrent()
+        assertEquals(RemoteSelection("host", "project", "fork"), fork)
+        assertEquals("second question", repository.state.value.draft)
+    }
+
+    @Test
+    fun refusedOrBrokenForkAtANodeStaysInTheSourceChat() = runTest {
+        val transport = Transport()
+        treeing(transport) { request ->
+            // `retry` is not a result of a tree fork.
+            Wire.objectOf(
+                "kind" to "fork",
+                "session" to session("fork"),
+                "sourceSessionId" to request.text("sessionId"),
+                "mode" to "retry",
+                "resend" to "accepted",
+            )
+        }
+        val repository = repository(transport)
+        val source = RemoteSelection("host", "project", "session")
+        repository.activate(source)
+        assertEquals(source, repository.forkSessionAtNode(source, "a1"))
+        assertEquals(source, repository.state.value.selection)
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertFalse(repository.state.value.loading)
+        transport.failure = { if (it.text("type") == "session.tree.fork") "invalid_request" else null }
+        assertEquals(source, repository.forkSessionAtNode(source, "t1"))
+        assertEquals(R.string.remote_tree_fork_invalid, repository.state.value.error)
+        transport.failure = { if (it.text("type") == "session.tree.fork") "busy" else null }
+        assertEquals(source, repository.forkSessionAtNode(source, "a1"))
+        assertEquals(R.string.remote_fork_busy, repository.state.value.error)
     }
 
     @Test

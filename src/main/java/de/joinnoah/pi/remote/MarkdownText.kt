@@ -13,36 +13,42 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 
 @Composable
 fun MarkdownText(text: String) {
+    val linkColor = MaterialTheme.colorScheme.primary
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        text.split("```").forEachIndexed { index, part ->
-            if (index % 2 == 1) {
-                val code = if (part.contains('\n')) part.substringAfter('\n').trimEnd() else part
-                val clipboard = LocalClipboardManager.current
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                        Text(
-                            code,
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.bodySmall,
+        remember(text) { markdownSegments(text) }.forEach { segment ->
+            val part = segment.text
+            if (segment.code) {
+                val code = part.trimEnd()
+                // Only assistant text has a source; a diagram elsewhere stays the code it is.
+                if (segment.isMermaid && LocalProjectImageSource.current != null) MermaidCard(code) { CodeBlock(it) }
+                else CodeBlock(code)
+            } else
+                remember(part) { markdownBlocks(part) }.forEach { block ->
+                    if (block is MarkdownBlock.Table) {
+                        MarkdownTable(block)
+                        return@forEach
+                    }
+                    if (block is MarkdownBlock.Image) {
+                        val source = LocalProjectImageSource.current
+                        if (source != null) ProjectImageCard(block.alt, block.path, source)
+                        else Text(
+                            remember(block, linkColor) { inlineMarkdown(markdownImageAltText(block), linkColor) },
+                            style = MaterialTheme.typography.bodyLarge,
                         )
-                        TextButton(onClick = { clipboard.setText(AnnotatedString(code)) }) {
-                            Text(stringResource(R.string.remote_copy_code))
+                        return@forEach
+                    }
+                    if (block is MarkdownBlock.Artifact) {
+                        val source = LocalProjectImageSource.current
+                        if (source != null) {
+                            ProjectArtifactCard(block.path, source)
+                            return@forEach
                         }
                     }
-                }
-            } else
-                part.lines().forEach { line ->
+                    val line = (block as? MarkdownBlock.Artifact)?.line ?: (block as MarkdownBlock.Line).text
                     val level =
                         line
                             .takeWhile { it == '#' }
@@ -50,11 +56,13 @@ fun MarkdownText(text: String) {
                             .takeIf { it in 1..6 && line.getOrNull(it) == ' ' }
                     val content =
                         if (level != null) line.drop(level + 1)
-                        else line.replace(Regex("^[-*] "), "• ")
+                        else line.replace(markdownBulletRegex, "• ")
                     if (line.trim() == "---") HorizontalDivider()
                     else if (content.isNotEmpty())
                         Text(
-                            inlineMarkdown(content, MaterialTheme.colorScheme.primary),
+                            remember(content, linkColor) {
+                                inlineMarkdown(content, linkColor)
+                            },
                             style =
                                 when (level) {
                                     1 -> MaterialTheme.typography.headlineSmall
@@ -70,37 +78,29 @@ fun MarkdownText(text: String) {
     }
 }
 
-internal fun inlineMarkdown(text: String, linkColor: androidx.compose.ui.graphics.Color): AnnotatedString = buildAnnotatedString {
-    val regex =
-        Regex("`([^`]+)`|\\*\\*([^*]+)\\*\\*|\\*([^*]+)\\*|\\[([^]]+)]\\((https?://[^)]+)\\)|https?://[^\\s<>()]+")
-    var offset = 0
-    regex.findAll(text).forEach { match ->
-        append(text.substring(offset, match.range.first))
-        when {
-            match.groups[1] != null ->
-                withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) {
-                    append(match.groupValues[1])
-                }
-            match.groups[2] != null ->
-                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(match.groupValues[2]) }
-            match.groups[3] != null ->
-                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(match.groupValues[3]) }
-            else -> {
-                val bare = match.groups[4] == null
-                val rawUrl = if (bare) match.value else match.groupValues[5]
-                val url = if (bare) rawUrl.trimEnd('.', ',', '!', '?', ';', ':') else rawUrl
-                if (url.isEmpty()) append(match.value)
-                else {
-                    withLink(LinkAnnotation.Url(url)) {
-                        withStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)) {
-                            append(if (bare) url else match.groupValues[4])
-                        }
-                    }
-                    if (bare) append(rawUrl.substring(url.length))
-                }
+@Composable
+private fun CodeBlock(code: String) {
+    val clipboard = LocalClipboardManager.current
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            Text(
+                code,
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            TextButton(onClick = { clipboard.setText(AnnotatedString(code)) }) {
+                Text(stringResource(R.string.remote_copy_code))
             }
         }
-        offset = match.range.last + 1
     }
-    append(text.substring(offset))
 }
+
+private val markdownBulletRegex = Regex("^[-*] ")
+
+/** What an image block shows where no image loader exists: its description, else the file name. */
+internal fun markdownImageAltText(image: MarkdownBlock.Image): String =
+    image.alt.ifBlank { image.path.substringAfterLast('/') }

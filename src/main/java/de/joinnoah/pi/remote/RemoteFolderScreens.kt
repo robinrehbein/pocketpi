@@ -17,7 +17,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -46,22 +45,15 @@ internal fun OpenFolderButton(enabled: Boolean, onClick: () -> Unit) {
         shape = CircleShape,
         color = MaterialTheme.colorScheme.primary,
     ) {
-        Row(
-            Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-                .heightIn(min = 56.dp)
-                .padding(horizontal = 24.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        IconButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = Modifier.size(56.dp),
         ) {
             Icon(
-                Icons.Outlined.FolderOpen,
-                contentDescription = null,
+                Icons.Default.CreateNewFolder,
+                contentDescription = stringResource(R.string.remote_folders_open_folder),
                 tint = MaterialTheme.colorScheme.onPrimary,
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                stringResource(R.string.remote_folders_open_folder),
-                color = MaterialTheme.colorScheme.onPrimary,
-                style = MaterialTheme.typography.labelLarge,
             )
         }
     }

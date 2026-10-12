@@ -8,11 +8,24 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -60,6 +73,13 @@ sealed interface RemoteNavKey : NavKey {
      * Projects selection; the browsed path lives in [RemoteState.folders].
      */
     @Serializable data class FolderBrowser(val routeId: String) : RemoteNavKey
+
+    /**
+     * The providers of one host (`provider.auth.v1`), on top of that host's Projects like
+     * [FolderBrowser]. Only the route is saved; the login flow lives in [RemoteState.providerAuth]
+     * and is recovered from the host.
+     */
+    @Serializable data class Providers(val routeId: String) : RemoteNavKey
 }
 
 internal fun RemoteNavKey.selection(): RemoteSelection =
@@ -68,6 +88,7 @@ internal fun RemoteNavKey.selection(): RemoteSelection =
         RemoteNavKey.Settings -> RemoteSelection()
         is RemoteNavKey.Projects -> RemoteSelection(routeId)
         is RemoteNavKey.FolderBrowser -> RemoteSelection(routeId)
+        is RemoteNavKey.Providers -> RemoteSelection(routeId)
         is RemoteNavKey.Sessions -> RemoteSelection(routeId, projectId)
         is RemoteNavKey.Chat -> RemoteSelection(routeId, projectId, sessionId)
     }
@@ -81,10 +102,34 @@ internal fun RemoteSelection.keys(): List<RemoteNavKey> = buildList {
     sessionId?.let { add(RemoteNavKey.Chat(route, project, it)) }
 }
 
+/** Keeps each chat's timeline choice when its navigation entry is replaced by another chat. */
+internal class TimelineVisibility(initialCollapsed: Set<String> = emptySet()) {
+    private var collapsed by mutableStateOf(initialCollapsed)
+
+    private fun id(key: RemoteNavKey.Chat): String =
+        listOf(key.routeId, key.projectId, key.sessionId).joinToString("") { "${it.length}:$it" }
+
+    fun expanded(key: RemoteNavKey.Chat): Boolean = id(key) !in collapsed
+
+    fun toggle(key: RemoteNavKey.Chat) {
+        val id = id(key)
+        collapsed = if (id in collapsed) collapsed - id else collapsed + id
+    }
+
+    companion object {
+        val Saver = Saver<TimelineVisibility, ArrayList<String>>(
+            save = { ArrayList(it.collapsed) },
+            restore = { TimelineVisibility(it.toSet()) },
+        )
+    }
+}
+
 internal class RemoteNavigator(
     private val repository: RemoteRepository,
     private val stack: MutableList<NavKey>,
     private val scope: CoroutineScope,
+    /** Called after a pairing succeeded and its selection was opened. */
+    private val onPaired: () -> Unit = {},
 ) {
     private var request = 0L
     private var activation: Job? = null
@@ -138,7 +183,7 @@ internal class RemoteNavigator(
     ) {
         val keys = selection.keys()
         // The folder browser shares the Projects selection, so it survives a restore on top of it.
-        val folders = topKey() as? RemoteNavKey.FolderBrowser
+        val folders = topKey()?.takeIf { it is RemoteNavKey.FolderBrowser || it is RemoteNavKey.Providers }
         if (folders != null && selection == folders.selection()) {
             setStack(keys + folders, keepSettings)
             return
@@ -291,13 +336,51 @@ internal class RemoteNavigator(
         }
     }
 
+    /**
+     * Forks the chat [source] at the tree node [nodeId]. Like [forkSession], the fork replaces
+     * [source] on the stack.
+     */
+    fun forkSessionAtNode(source: RemoteNavKey.Chat, nodeId: String) {
+        if (topKey() != source) return
+        val current = invalidate()
+        activation = scope.launch {
+            val selection = repository.forkSessionAtNode(source.selection(), nodeId)
+            if (current == request) replace(selection, keepSettings = false)
+        }
+    }
+
+    /**
+     * Makes the host's Projects the top destination for a page that opens on top of it. Beside
+     * the projects column the user may be in a project's sessions or chat: those close first,
+     * so Back from the page lands on the projects. False when [routeId] is not the open host.
+     */
+    private fun projectsOnTop(routeId: String): Boolean {
+        val top = topKey()
+        if (top == RemoteNavKey.Projects(routeId)) return true
+        val routeOpen =
+            (top is RemoteNavKey.Sessions && top.routeId == routeId) ||
+                (top is RemoteNavKey.Chat && top.routeId == routeId)
+        if (!routeOpen) return false
+        setStack(RemoteSelection(routeId).keys(), keepSettings = false)
+        activate(RemoteNavKey.Projects(routeId), ActivationMode.RESTORE)
+        return true
+    }
+
     /** Opens the folder browser at the browse root, on top of the host's Projects. */
     fun openFolders(routeId: String) {
-        if (topKey() != RemoteNavKey.Projects(routeId)) return
+        if (!projectsOnTop(routeId)) return
         repository.cancelFolderTrust()
         repository.dismissFolderNotice()
         repository.browseFolder(routeId, "")
         stack.add(RemoteNavKey.FolderBrowser(routeId))
+    }
+
+    /** Opens the providers of [routeId] on top of the host's Projects. */
+    fun openProviders(routeId: String) {
+        if (!projectsOnTop(routeId)) return
+        repository.dismissProviderNotice()
+        repository.browseProviders(routeId)
+        stack.add(RemoteNavKey.Providers(routeId))
     }
 
     /** Shows [path] in the open folder browser; the breadcrumb jumps here. */
@@ -328,6 +411,7 @@ internal class RemoteNavigator(
         activation = scope.launch {
             val selection = repository.pair(text)
             if (current == request && selection != null) replace(selection, keepSettings = false)
+            if (selection != null) onPaired()
         }
     }
 
@@ -383,29 +467,62 @@ internal class RemoteNavigator(
     }
 
     /**
-     * Runs a two-pane keyboard shortcut. Only the session list and its chat react; hosts,
-     * projects, folders and settings leave the keys alone.
+     * Runs a two-pane keyboard shortcut and reports whether it was handled. Only the columns
+     * react: the project shortcuts wherever the projects column shows, the session ones beside a
+     * session list; hosts, folders and settings leave the keys alone. A [repeat] of a key that
+     * toggles, creates or switches the project is swallowed only where its first press would apply.
      */
-    fun shortcut(shortcut: KeyboardShortcut, twoPane: TwoPaneState): Boolean {
+    fun shortcut(shortcut: KeyboardShortcut, twoPane: TwoPaneState, repeat: Boolean = false): Boolean {
         val top = stack.lastOrNull()
-        val sessions =
-            when (top) {
-                is RemoteNavKey.Chat -> RemoteNavKey.Sessions(top.routeId, top.projectId)
-                is RemoteNavKey.Sessions -> top
-                else -> return false
+        val panes = columnPanes(stack.toList()) ?: return false
+        if (shortcut == KeyboardShortcut.PREVIOUS_PROJECT || shortcut == KeyboardShortcut.NEXT_PROJECT) {
+            val projects = panes.projects?.let { stack[it] as? RemoteNavKey.Projects } ?: return false
+            // Holding the key must not run through every project.
+            if (repeat) return true
+            val state = repository.state.value
+            if (state.selection.routeId != projects.routeId) return true
+            val current = panes.list?.let { (stack[it] as? RemoteNavKey.Sessions)?.projectId }
+            val step = if (shortcut == KeyboardShortcut.NEXT_PROJECT) 1 else -1
+            adjacentId(state.projects.map { it.text("id") }, current, step)
+                ?.takeIf { it != current }
+                ?.let {
+                    twoPane.listCollapsed = false
+                    open(RemoteNavKey.Sessions(projects.routeId, it))
+                }
+            return true
+        }
+        val sessions = panes.list?.let { stack[it] as? RemoteNavKey.Sessions } ?: return false
+        return when (shortcut) {
+            KeyboardShortcut.SEARCH -> {
+                twoPane.requestSearch()
+                true
             }
-        when (shortcut) {
-            KeyboardShortcut.SEARCH -> twoPane.requestSearch()
             KeyboardShortcut.PREVIOUS_SESSION,
             KeyboardShortcut.NEXT_SESSION -> {
                 val step = if (shortcut == KeyboardShortcut.NEXT_SESSION) 1 else -1
                 val current = (top as? RemoteNavKey.Chat)?.sessionId
-                adjacentSession(twoPane.visibleSessionIds, current, step)
+                adjacentId(twoPane.visibleSessionIds, current, step)
                     ?.takeIf { it != current }
                     ?.let { open(RemoteNavKey.Chat(sessions.routeId, sessions.projectId, it)) }
+                true
             }
+            KeyboardShortcut.NEW_SESSION -> {
+                if (!canCreateSession(repository.state.value, sessions)) return false
+                // Holding the key must not create a session per repeat.
+                if (repeat) return true
+                createSession(sessions.routeId, sessions.projectId)
+                true
+            }
+            KeyboardShortcut.TOGGLE_LIST -> {
+                if (top !is RemoteNavKey.Chat) return false
+                // Holding the key must not flicker the list.
+                if (repeat) return true
+                twoPane.listCollapsed = !twoPane.listCollapsed
+                true
+            }
+            KeyboardShortcut.PREVIOUS_PROJECT,
+            KeyboardShortcut.NEXT_PROJECT -> false
         }
-        return true
     }
 
     fun disconnect() {
@@ -454,11 +571,65 @@ internal fun RemoteNavigation(
     enablePush: () -> Unit,
     notification: RemoteNotification? = null,
     consumeNotification: (RemoteNotification) -> Unit = {},
+    disablePush: () -> Unit = {},
 ) {
     val pushSettings by settings.state.collectAsStateWithLifecycle()
     val stack = rememberNavBackStack(RemoteNavKey.Hosts)
     val scope = rememberCoroutineScope()
-    val navigator = remember(repository, stack) { RemoteNavigator(repository, stack, scope) }
+    val context = LocalContext.current
+    val currentEnablePush by rememberUpdatedState(enablePush)
+    var askForNotifications by rememberSaveable { mutableStateOf(false) }
+    val navigator =
+        remember(repository, stack) {
+            RemoteNavigator(repository, stack, scope) {
+                val granted =
+                    Build.VERSION.SDK_INT < 33 ||
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.POST_NOTIFICATIONS,
+                        ) == PackageManager.PERMISSION_GRANTED
+                when (
+                    offerNotificationPermission(
+                        Build.VERSION.SDK_INT,
+                        granted,
+                        pushConfigured,
+                        settings,
+                    )
+                ) {
+                    PairingNotificationStep.ASK -> askForNotifications = true
+                    PairingNotificationStep.ENABLE -> currentEnablePush()
+                    PairingNotificationStep.NOTHING -> {}
+                }
+            }
+        }
+    val notificationPermission =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) enablePush()
+        }
+    if (askForNotifications) {
+        AlertDialog(
+            onDismissRequest = { askForNotifications = false },
+            title = { Text(stringResource(R.string.remote_notification_prompt_title)) },
+            text = { Text(stringResource(R.string.remote_notification_prompt_text)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        askForNotifications = false
+                        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                ) {
+                    Text(stringResource(R.string.remote_notification_prompt_allow))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { askForNotifications = false }) {
+                    Text(stringResource(R.string.remote_notification_prompt_later))
+                }
+            },
+        )
+    }
+    val timelineVisibility = rememberSaveable(saver = TimelineVisibility.Saver) { TimelineVisibility() }
+    val chatViewports = rememberSaveable(saver = ChatViewportPositions.Saver) { ChatViewportPositions() }
     LaunchedEffect(navigator) {
         navigator.restore()
         repository.state.collect { navigator.reconcile(it) }
@@ -472,8 +643,10 @@ internal fun RemoteNavigation(
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // Recomputed on every size change: rotation, split-screen resizes and DeX windows.
-        val layout = paneLayout(maxWidth)
+        val layout = paneLayout(maxWidth, maxHeight)
         val twoPane = rememberSaveable(saver = TwoPaneState.Saver) { TwoPaneState() }
+        // Keyed on the bucket, so resize ticks never get here; dragged widths reset per bucket.
+        LaunchedEffect(twoPane, layout) { twoPane.adopt(layout) }
         val hardwareKeyboard = hardwareKeyboardAttached()
         val shortcuts = layout.twoPane && hardwareKeyboard
         val collapsed = twoPane.listCollapsed
@@ -481,7 +654,7 @@ internal fun RemoteNavigation(
             remember(layout, twoPane, collapsed) {
                 if (layout.twoPane)
                     listOf<SceneStrategy<NavKey>>(
-                        ListDetailSceneStrategy(layout, twoPane, collapsed),
+                        ProjectColumnsSceneStrategy(layout, twoPane, collapsed),
                         SinglePaneSceneStrategy(),
                     )
                 else listOf<SceneStrategy<NavKey>>(SinglePaneSceneStrategy())
@@ -510,6 +683,7 @@ internal fun RemoteNavigation(
                 onDispose { ViewCompat.removeOnUnhandledKeyEventListener(view, listener) }
             }
         CompositionLocalProvider(
+            LocalChatViewportPositions provides chatViewports,
             LocalPaneLayout provides layout,
             LocalTwoPane provides twoPane.takeIf { layout.twoPane },
             LocalHardwareKeyboard provides hardwareKeyboard,
@@ -530,6 +704,8 @@ internal fun RemoteNavigation(
                     pushConfigured,
                     pushSettings.pushEnabled,
                     enablePush,
+                    timelineVisibility,
+                    disablePush,
                 )
             }
         }
@@ -542,7 +718,7 @@ private fun RemoteNavigator.shortcut(event: KeyEvent, twoPane: TwoPaneState): Bo
     val shortcut =
         keyboardShortcut(event.key, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed)
             ?: return false
-    return shortcut(shortcut, twoPane)
+    return shortcut(shortcut, twoPane, repeat = event.nativeKeyEvent.repeatCount > 0)
 }
 
 @Composable
@@ -556,6 +732,8 @@ private fun RemoteNavDisplay(
     pushConfigured: Boolean,
     pushEnabled: Boolean,
     enablePush: () -> Unit,
+    timelineVisibility: TimelineVisibility,
+    disablePush: () -> Unit,
 ) {
     NavDisplay(
         backStack = stack,
@@ -570,23 +748,45 @@ private fun RemoteNavDisplay(
             entryProvider {
                 entry<RemoteNavKey.Hosts> { key ->
                     val model = viewModel { HostsViewModel(repository) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                    CenteredPage {
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                    }
                 }
-                entry<RemoteNavKey.Projects> { key ->
+                entry<RemoteNavKey.Projects>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ProjectsViewModel(repository, key) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                    val column = LocalProjectsColumn.current
+                    if (column == null)
+                        CenteredPage {
+                            RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                        }
+                    else {
+                        // Keeps the full column's scroll position while the strip stands in for it.
+                        val holder = rememberSaveableStateHolder()
+                        if (column.strip)
+                            holder.SaveableStateProvider("strip") {
+                                ProjectStrip(key, model, navigator, column.selectedProjectId)
+                            }
+                        else
+                            holder.SaveableStateProvider("column") {
+                                RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                            }
+                    }
                 }
                 entry<RemoteNavKey.Sessions>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { SessionsViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
                 }
                 entry<RemoteNavKey.FolderBrowser> { key ->
                     val model = viewModel { FolderBrowserViewModel(repository, key) }
-                    FolderBrowserScreen(key, model, navigator)
+                    CenteredPage { FolderBrowserScreen(key, model, navigator) }
+                }
+                entry<RemoteNavKey.Providers> { key ->
+                    val model = viewModel { ProvidersViewModel(repository, key) }
+                    CenteredPage { ProvidersScreen(key, model, navigator) }
                 }
                 entry<RemoteNavKey.Chat>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ChatViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
                 }
                 entry<RemoteNavKey.Settings>(
                     metadata = metadata {
@@ -596,7 +796,9 @@ private fun RemoteNavDisplay(
                     },
                 ) { key ->
                     val model = viewModel { SettingsViewModel(repository, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush)
+                    CenteredPage {
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, timelineVisibility, disablePush)
+                    }
                 }
             },
         transitionSpec = { depthTransition(forward = true) },

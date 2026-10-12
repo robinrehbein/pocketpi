@@ -24,7 +24,10 @@ import kotlinx.serialization.json.JsonObject
  * `*.stuck`, so a done notice never replaces an unrelated stuck one (or a question).
  */
 internal object RemoteNotifications {
-    const val CHANNEL = "pi_remote"
+    const val QUESTIONS_CHANNEL = "pi_remote_questions"
+    const val UPDATES_CHANNEL = "pi_remote_updates"
+    /** The one channel of earlier versions; deleted on startup. */
+    const val LEGACY_CHANNEL = "pi_remote"
     const val SYNC_CHANNEL = "pi_remote_sync"
     const val REPLY_KEY = "reply"
     const val ACTION_ANSWER = "de.joinnoah.pi.remote.action.ANSWER"
@@ -39,20 +42,43 @@ internal object RemoteNotifications {
     private const val DONE_ID = 2
     private const val STUCK_ID = 3
 
+    /**
+     * Creates the two channels and removes [LEGACY_CHANNEL], the single channel earlier versions
+     * used for everything. A channel's importance and sound are the user's settings and can't be
+     * migrated, so the old one is deleted instead of being split. Idempotent, so it runs on every
+     * startup.
+     */
     fun createChannel(context: Context) {
         val localized = localized(context)
-        context.getSystemService(NotificationManager::class.java)
-            .createNotificationChannel(
-                NotificationChannel(
-                        CHANNEL,
-                        localized.getString(R.string.remote_notification_channel),
-                        NotificationManager.IMPORTANCE_DEFAULT,
-                    )
-                    .apply {
-                        description = localized.getString(R.string.remote_notification_channel_help)
-                    }
-            )
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                    QUESTIONS_CHANNEL,
+                    localized.getString(R.string.remote_notification_channel_questions),
+                    NotificationManager.IMPORTANCE_HIGH,
+                )
+                .apply {
+                    description =
+                        localized.getString(R.string.remote_notification_channel_questions_help)
+                }
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(
+                    UPDATES_CHANNEL,
+                    localized.getString(R.string.remote_notification_channel_updates),
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                )
+                .apply {
+                    description =
+                        localized.getString(R.string.remote_notification_channel_updates_help)
+                }
+        )
+        manager.deleteNotificationChannel(LEGACY_CHANNEL)
     }
+
+    /** Questions need an answer and alert loudly; everything else is an update. */
+    fun channelFor(event: PushEvent): String =
+        if (event == PushEvent.QUESTION) QUESTIONS_CHANNEL else UPDATES_CHANNEL
 
     /**
      * The app ships under a fresh application ID, so a plain install never had the sync channel;
@@ -104,24 +130,48 @@ internal object RemoteNotifications {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-    fun postComplete(context: Context, payload: PushPayload) {
+    /**
+     * The generic completion notice. With a [label] (read from the Mac afterwards) it names the
+     * session instead, replacing the notice in place without alerting again. The lock screen
+     * version stays generic either way.
+     */
+    fun postComplete(context: Context, payload: PushPayload, label: SessionLabel? = null) {
         val localized = localized(context)
-        post(
-            context,
-            payload.routeId,
-            payload.sessionId,
-            base(context, payload.routeId, payload.sessionId)
-                .setContentTitle(localized.getString(R.string.remote_notification_complete))
-                .setContentText(localized.getString(R.string.remote_notification_open))
-                .setPublicVersion(
-                    publicVersion(context, localized.getString(R.string.remote_notification_complete))
+        val generic = localized.getString(R.string.remote_notification_complete)
+        val builder =
+            base(
+                    context,
+                    payload.routeId,
+                    payload.sessionId,
+                    alert = label == null,
+                    channel = UPDATES_CHANNEL,
                 )
-                .build(),
-        )
+                .setContentTitle(generic)
+                .setContentText(localized.getString(R.string.remote_notification_open))
+                .setPublicVersion(publicVersion(context, generic, UPDATES_CHANNEL))
+        if (label != null) {
+            label.title?.let {
+                builder.setContentTitle(
+                    localized.getString(R.string.remote_notification_complete_named, it)
+                )
+            }
+            val text = label.project ?: label.preview
+            if (text != null) builder.setContentText(text)
+            if (label.preview != null) {
+                builder.setStyle(
+                    NotificationCompat.BigTextStyle()
+                        .bigText(listOfNotNull(label.project, label.preview).joinToString("\n"))
+                )
+            }
+        }
+        post(context, payload.routeId, payload.sessionId, builder.build())
     }
 
-    /** A background subagent or job finished or stalled; the payload carries no text. */
-    fun postAttention(context: Context, payload: PushPayload) {
+    /**
+     * A background subagent or job finished or stalled; the payload carries no text. A [label]
+     * adds the session's name below the title and keeps the notice quiet.
+     */
+    fun postAttention(context: Context, payload: PushPayload, label: SessionLabel? = null) {
         val localized = localized(context)
         val title =
             when (val value = attentionTitle(payload)) {
@@ -130,17 +180,31 @@ internal object RemoteNotifications {
                     localized.resources.getQuantityString(value.plural, value.count, value.count)
             }
         val target = notificationTarget(payload)
+        val named = label?.let { listOfNotNull(it.title, it.project).joinToString(" \u00b7 ") }
         val notification =
-            base(context, payload.routeId, payload.sessionId)
+            base(
+                    context,
+                    payload.routeId,
+                    payload.sessionId,
+                    alert = label == null,
+                    channel = UPDATES_CHANNEL,
+                )
                 .setContentIntent(openIntent(context, target))
                 .setContentTitle(title)
-                .setContentText(localized.getString(R.string.remote_notification_open))
+                .setContentText(
+                    named?.takeIf { it.isNotEmpty() }
+                        ?: localized.getString(R.string.remote_notification_open)
+                )
                 // A status update about background work, not a chat message.
                 .setCategory(NotificationCompat.CATEGORY_STATUS)
-                .setPublicVersion(publicVersion(context, title))
+                .setPublicVersion(publicVersion(context, title, UPDATES_CHANNEL))
                 .build()
         post(context, payload.routeId, payload.sessionId, notification, attentionId(payload.event))
     }
+
+    /** The id the notice of [event] is posted under for its session. */
+    fun idFor(event: PushEvent): Int =
+        if (event.attention) attentionId(event) else NOTIFICATION_ID
 
     /** `*.done` and `*.stuck` post under separate ids, so one never replaces the other. */
     private fun attentionId(event: PushEvent): Int =
@@ -290,10 +354,10 @@ internal object RemoteNotifications {
     }
 
     /** True while the session's notification is still showing (not dismissed or opened). */
-    fun isActive(context: Context, tag: String): Boolean =
+    fun isActive(context: Context, tag: String, id: Int = NOTIFICATION_ID): Boolean =
         try {
             context.getSystemService(NotificationManager::class.java).activeNotifications.any {
-                it.tag == tag && it.id == NOTIFICATION_ID
+                it.tag == tag && it.id == id
             }
         } catch (_: Exception) {
             false
@@ -348,8 +412,9 @@ internal object RemoteNotifications {
         routeId: String,
         sessionId: String,
         alert: Boolean = true,
+        channel: String = QUESTIONS_CHANNEL,
     ): NotificationCompat.Builder =
-        NotificationCompat.Builder(context, CHANNEL)
+        NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_remote)
             .setContentIntent(openIntent(context, routeId, sessionId))
             .setAutoCancel(true)
@@ -359,8 +424,12 @@ internal object RemoteNotifications {
             .setSilent(!alert)
 
     /** What a locked screen shows: never the question itself, and no actions. */
-    private fun publicVersion(context: Context, title: CharSequence) =
-        NotificationCompat.Builder(context, CHANNEL)
+    private fun publicVersion(
+        context: Context,
+        title: CharSequence,
+        channel: String = QUESTIONS_CHANNEL,
+    ) =
+        NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_remote)
             .setContentTitle(title)
             .setContentText(localized(context).getString(R.string.remote_notification_open))

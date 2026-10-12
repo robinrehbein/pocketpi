@@ -27,6 +27,11 @@ internal class NavigationFakeRepository : RemoteRepository {
         childResumes += message
     }
     val jobOpens = mutableListOf<String?>()
+    var jobRefreshes = 0
+
+    override fun refreshJobs() {
+        jobRefreshes++
+    }
 
     override fun openJobs() {
         jobOpens += null
@@ -38,6 +43,11 @@ internal class NavigationFakeRepository : RemoteRepository {
     val toolOutputRequests = mutableListOf<String>()
     var sessionRefreshes = 0
     val browsed = mutableListOf<Pair<String, String>>()
+    val providersBrowsed = mutableListOf<String>()
+
+    override fun browseProviders(routeId: String) {
+        providersBrowsed += routeId
+    }
     val folderOpens = mutableListOf<Triple<String, String, Boolean>>()
     var folderOpen: suspend (String, String, Boolean) -> RemoteSelection? = { routeId, _, _ ->
         RemoteSelection(routeId, "opened", "fresh")
@@ -138,12 +148,18 @@ internal class NavigationFakeRepository : RemoteRepository {
         return result
     }
 
-    override suspend fun createSession(routeId: String, projectId: String) =
-        RemoteSelection(routeId, projectId, "created")
+    var createdSessions = 0
+
+    override suspend fun createSession(routeId: String, projectId: String): RemoteSelection {
+        createdSessions++
+        return RemoteSelection(routeId, projectId, "created")
+    }
 
     override suspend fun openNotification(routeId: String, sessionId: String) = notificationLookup()
 
-    override suspend fun pair(text: String): RemoteSelection? = null
+    var pairResult: RemoteSelection? = null
+
+    override suspend fun pair(text: String): RemoteSelection? = pairResult
 
     override fun cancelSelection() {}
 
@@ -204,7 +220,11 @@ internal class FakeSettingsRepository : SettingsRepository {
     }
 
     override fun setPushEnabled(enabled: Boolean) {
-        state.value = state.value.copy(pushEnabled = enabled)
+        state.value = state.value.copy(pushEnabled = enabled, pushOptedOut = !enabled)
+    }
+
+    override fun markNotificationPromptShown() {
+        state.value = state.value.copy(notificationPromptShown = true)
     }
 
     override fun setThinkingDisplay(display: String) {

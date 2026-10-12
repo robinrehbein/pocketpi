@@ -16,6 +16,10 @@ class PushRegistration(
     private val enabled: () -> Boolean,
     private val requester: PushTokenRequester,
     private val register: (String) -> Unit,
+    /** Tells the host to forget this phone's token. */
+    private val unregister: () -> Unit = {},
+    /** Push was switched off in the app and the host may not have been told yet. */
+    private val optedOut: () -> Boolean = { false },
     private val timeoutMillis: Long = 10_000,
 ) {
     private var nextGeneration = 0L
@@ -26,13 +30,24 @@ class PushRegistration(
         require(timeoutMillis >= 0)
     }
 
-    fun onStartup() = fetch()
+    /**
+     * Registers the token when push is on. When push was switched off, the host is told to forget
+     * the token again on every start: the switch may have been flipped while it was unreachable,
+     * and the repository sends the pending value on each connection.
+     */
+    fun onStartup() {
+        if (configured() && !enabled() && optedOut()) unregister() else fetch()
+    }
 
     fun onEnabled() = fetch()
 
     fun onRecovery() = fetch()
 
-    fun onDisabled() = invalidate()
+    /** Drops any token fetch in flight, so a late result is never registered, and unregisters. */
+    fun onDisabled() {
+        invalidate()
+        if (configured()) unregister()
+    }
 
     fun onTokenRotated(token: String) {
         invalidate()

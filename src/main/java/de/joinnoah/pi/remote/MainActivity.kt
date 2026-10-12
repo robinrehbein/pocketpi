@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
                     app::enablePush,
                     notification,
                     { if (notification == it) notification = null },
+                    app::disablePush,
                 )
             }
         }
@@ -115,15 +116,11 @@ internal fun RemoteApp(
     enablePush: () -> Unit,
     notification: RemoteNotification? = null,
     consumeNotification: (RemoteNotification) -> Unit = {},
+    disablePush: () -> Unit = {},
 ) {
     val preferences by settings.state.collectAsStateWithLifecycle()
     val theme = preferences.theme
-    val dark =
-        when (theme) {
-            "dark" -> true
-            "light" -> false
-            else -> isSystemInDarkTheme()
-        }
+    val dark = isSystemInDarkTheme()
     val activity = LocalActivity.current
     val view = LocalView.current
     SideEffect {
@@ -139,7 +136,7 @@ internal fun RemoteApp(
             }
         }
     }
-    val colors = remoteColorScheme(dark)
+    val colors = remoteColorScheme(dark, synthwave = theme == "synthwave")
     MaterialTheme(
         colorScheme = colors,
         typography = RemoteTypography,
@@ -157,6 +154,7 @@ internal fun RemoteApp(
             enablePush,
             notification,
             consumeNotification,
+            disablePush,
         )
     }
 }

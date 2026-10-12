@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application>
+    <application android:networkSecurityConfig="@xml/network_security_config">
         <activity android:name="de.joinnoah.pi.remote.NavigationTestActivity"
             android:exported="false" android:enableOnBackInvokedCallback="true" />
     </application>

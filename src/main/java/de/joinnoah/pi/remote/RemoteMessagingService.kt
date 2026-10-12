@@ -25,13 +25,14 @@ class RemoteMessagingService : FirebaseMessagingService() {
             }
         if (!paired) return
         val app = application as RemoteApplication
-        if (!app.settings.state.value.pushEnabled) return
+        if (!postsPushes(app.settings.state.value)) return
         if (!firstDelivery(payload.eventId)) return
         if (payload.event.attention) {
             // A child or shell says nothing about its session's state or questions.
             if (!RemoteNotifications.canPost(this)) return
             if (app.isShowing(payload.routeId, payload.sessionId)) return
             RemoteNotifications.postAttention(this, payload)
+            CompletionUpgrades.schedule(applicationContext, payload)
             return
         }
         app.onPushEvent(payload)
@@ -41,6 +42,7 @@ class RemoteMessagingService : FirebaseMessagingService() {
         if (app.isShowing(payload.routeId, payload.sessionId)) return
         if (payload.event == PushEvent.COMPLETE) {
             RemoteNotifications.postComplete(this, payload)
+            CompletionUpgrades.schedule(applicationContext, payload)
             return
         }
         // Shown at once, then replaced in place by the question itself, which is read over the
@@ -65,6 +67,9 @@ class RemoteMessagingService : FirebaseMessagingService() {
         val lock = Any()
     }
 }
+
+/** With push switched off in the app, an incoming push posts nothing and starts no lookup. */
+internal fun postsPushes(settings: RemoteSettings): Boolean = settings.pushEnabled
 
 internal fun notificationTitle(event: String?): Int =
     if (event == "question") R.string.remote_notification_question

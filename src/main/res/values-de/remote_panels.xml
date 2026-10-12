@@ -34,6 +34,8 @@
     <string name="remote_panel_subagents_collapse">Unteragenten ausblenden</string>
     <string name="remote_panel_subagent_abort">Unteragent stoppen</string>
     <string name="remote_panel_timeline">Chat-Zeitleiste</string>
+    <string name="remote_panel_timeline_show">Chat-Zeitleiste einblenden</string>
+    <string name="remote_panel_timeline_hide">Chat-Zeitleiste ausblenden</string>
     <string name="remote_panel_jump_error">Zum letzten Fehler springen</string>
     <string name="remote_panel_jump_question">Zur letzten Frage springen</string>
     <string name="remote_panel_jump_edit">Zur letzten Änderung springen</string>

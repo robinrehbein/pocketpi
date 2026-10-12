@@ -95,10 +95,15 @@ class ChatPanelsUiTest {
         compose.onAllNodesWithContentDescription(abort).assertCountEquals(1)
         compose.onNodeWithContentDescription(abort).performClick()
         assertEquals(listOf(live), aborted)
-        compose.onNodeWithText("scout").performClick()
-        assertEquals(listOf(live), openedEntries)
+        // Entries without a child session cannot be opened.
         compose.onNodeWithText("planner").performClick()
+        assertTrue(openedEntries.isEmpty())
+        // The redesigned popover has a labeled action and closes when navigating.
+        val details = resources.getString(R.string.remote_subagent_open_details)
+        compose.onAllNodesWithText(details).assertCountEquals(1)
+        compose.onNodeWithText(details).performClick()
         assertEquals(listOf(live), openedEntries)
+        compose.onNodeWithTag("subagentPopover").assertDoesNotExist()
     }
 
     @Test

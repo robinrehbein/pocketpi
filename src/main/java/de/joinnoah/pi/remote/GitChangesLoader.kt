@@ -2,8 +2,11 @@ package de.joinnoah.pi.remote
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /** The three `session.git.*` reads. Implementations throw [RemoteRequestException] on errors. */
 internal interface GitSource {
@@ -25,6 +28,9 @@ internal class GitChangesLoader(
     private val current: () -> RemoteState,
     private val update: ((RemoteState) -> RemoteState) -> Unit,
 ) {
+    private val previewSlots = Semaphore(2)
+    private val previewJobs = mutableMapOf<String, Job>()
+    private var previewVersion = 0L
     private var statusJob: Job? = null
     private var diffJob: Job? = null
     private var statusVersion = 0L
@@ -53,6 +59,9 @@ internal class GitChangesLoader(
         }
 
     private fun stop() {
+        previewVersion++
+        previewJobs.values.forEach { it.cancel() }
+        previewJobs.clear()
         statusVersion++
         diffVersion++
         statusJob?.cancel()
@@ -98,6 +107,7 @@ internal class GitChangesLoader(
         write(changes.sessionId) {
             it.copy(
                 base = base,
+                previews = emptyMap(),
                 loading = !offline,
                 status = null,
                 sessionUnavailable = null,
@@ -125,7 +135,7 @@ internal class GitChangesLoader(
         }
         stop()
         val base = changes.status?.base ?: changes.base
-        write(changes.sessionId) { it.copy(loading = true, failure = null) }
+        write(changes.sessionId) { it.copy(loading = true, failure = null, previews = emptyMap()) }
         loadStatus(
             changes.sessionId,
             base,
@@ -199,6 +209,68 @@ internal class GitChangesLoader(
                 write(sessionId) { it.copy(logLoading = false, logFailure = failure(e)) }
             }
         }
+    }
+
+    /** Read the same snapshot as the full diff; deleted files can still be previewed. */
+    fun requestPreview(path: String) {
+        val changes = changes() ?: return
+        val status = changes.status?.takeIf { !changes.loading && changes.failure == null } ?: return
+        val snapshot = status.snapshotId ?: return
+        val file = status.files.firstOrNull { it.path == path } ?: return
+        if (path in changes.previews || path in previewJobs) return
+        if (file.binary || file.omitted != null) {
+            write(changes.sessionId) {
+                it.copy(previews = it.previews + (path to FileTilePreview(
+                    loading = false, binary = file.binary,
+                    tooLarge = file.omitted == GitOmitted.TOO_LARGE,
+                    failure = if (file.omitted == GitOmitted.BASE_UNAVAILABLE) FilesFailure.NOT_FOUND else null,
+                )))
+            }
+            return
+        }
+        write(changes.sessionId) { it.copy(previews = it.previews + (path to FileTilePreview())) }
+        val version = previewVersion
+        fun active() = version == previewVersion && changes()?.let {
+            it.sessionId == changes.sessionId && it.status?.snapshotId == snapshot
+        } == true
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            try {
+                previewSlots.withPermit {
+                    if (!active()) return@withPermit
+                    val diff = source.gitDiff(changes.sessionId, snapshot, path)
+                    // Skip diff metadata, retain the +/- prefixes and hunk headers in Peek.
+                    val excerpt = diff.patch.lineSequence().dropWhile { !it.startsWith("@@") }
+                        .take(40).joinToString("\n").take(FILE_TILE_PREVIEW_CHARS)
+                    if (active()) write(changes.sessionId) {
+                        it.copy(previews = it.previews + (path to FileTilePreview(
+                            loading = false, content = excerpt, binary = diff.binary,
+                            tooLarge = diff.omitted == GitOmitted.TOO_LARGE,
+                            failure = if (diff.omitted == GitOmitted.BASE_UNAVAILABLE) FilesFailure.NOT_FOUND else null,
+                        )))
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (active()) write(changes.sessionId) {
+                    it.copy(previews = it.previews + (path to FileTilePreview(
+                        loading = false,
+                        failure = when (failure(e)) {
+                            ChangesFailure.OFFLINE -> FilesFailure.OFFLINE
+                            ChangesFailure.UNSUPPORTED -> FilesFailure.UNSUPPORTED
+                            ChangesFailure.NOT_FOUND -> FilesFailure.NOT_FOUND
+                            ChangesFailure.FORBIDDEN -> FilesFailure.FORBIDDEN
+                            ChangesFailure.BUSY -> FilesFailure.BUSY
+                            ChangesFailure.FAILED -> FilesFailure.FAILED
+                        },
+                    )))
+                }
+            } finally {
+                if (version == previewVersion) previewJobs.remove(path)
+            }
+        }
+        previewJobs[path] = job
+        job.start()
     }
 
     /** Opens [path] from the shown status, or goes back to the file list for null. */

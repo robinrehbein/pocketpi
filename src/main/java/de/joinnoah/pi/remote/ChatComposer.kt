@@ -26,6 +26,7 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -35,7 +36,9 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.offset
 
 @Composable
 internal fun QuotePreview(
@@ -164,6 +167,7 @@ internal fun ChatComposer(
     }
     val hasDraft = state.draft.isNotBlank() || state.attachments.isNotEmpty()
     val childResume = offersChildResume(state)
+    val childStatus = if (childControls) childControlStatus(state) else null
     val canQueue = state.connected && !state.loading && !state.sending &&
         !state.importingAttachments && !state.configurationChanging &&
         state.questions.isEmpty() && hasDraft &&
@@ -243,6 +247,17 @@ internal fun ChatComposer(
                 }
             Column(
                 Modifier.fillMaxWidth()
+                    // Let horizontally scrolling controls reach the surface edge, rather than
+                    // clipping them at the composer's inner padding.
+                    .layout { measurable, constraints ->
+                        val inset = 8.dp.roundToPx()
+                        val placeable = measurable.measure(
+                            constraints.offset(horizontal = inset * 2)
+                        )
+                        layout(constraints.constrainWidth(placeable.width - inset * 2), placeable.height) {
+                            placeable.placeRelative(-inset, 0)
+                        }
+                    }
                     .heightIn(
                         max = if (state.questions.any { it.text("kind") == "questionnaire" }) 360.dp
                         else 180.dp
@@ -253,16 +268,13 @@ internal fun ChatComposer(
                 content = suggestions,
             )
             VoiceInputStatus(voiceInput, state)
-            if (childControls)
+            if (childControls && (childResume || childStatus != null))
                 ChildControlRow(
-                    status = childControlStatus(state),
+                    status = childStatus,
                     reason = control?.reason,
                     resume = childResume,
                     resumeEnabled = canResumeChild,
-                    stopEnabled = !childResume && !childBusy && state.connected && !state.loading &&
-                        state.status in setOf("running", "waiting"),
                     onResume = onResumeChild,
-                    onStop = stop,
                 )
             if (state.followUps.isNotEmpty()) {
                 Column(
@@ -504,9 +516,7 @@ private fun ChildControlRow(
     reason: String?,
     resume: Boolean,
     resumeEnabled: Boolean,
-    stopEnabled: Boolean,
     onResume: () -> Unit,
-    onStop: () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().testTag("childControls"),
@@ -532,12 +542,6 @@ private fun ChildControlRow(
                 enabled = resumeEnabled,
                 modifier = Modifier.testTag("resumeChild"),
             ) { Text(stringResource(R.string.remote_child_resume)) }
-        else
-            TextButton(
-                onClick = onStop,
-                enabled = stopEnabled,
-                modifier = Modifier.testTag("stopChild"),
-            ) { Text(stringResource(R.string.remote_child_stop)) }
     }
 }
 

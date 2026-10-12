@@ -148,9 +148,10 @@ API 36 instrumentation tests remain in CI; no real-watch acceptance is implied.
 
 ## Release boundaries
 
-The phone-only release workflow explicitly builds `:bundleRelease`. It does not
-publish a watch artifact and remains disabled under the existing release runbook.
-There is no production-track upload in this change.
+The phone-only release workflow explicitly builds `:bundleRelease`. It is started
+manually on `main`, requires successful CI for that commit, and publishes only the
+phone artifact to testing tracks under the existing release runbook. This change
+does not publish a watch artifact or target the production track.
 
 The watch copies the validated phone upload signing configuration and version name.
 A watch release additionally requires `-PPOCKETPI_WEAR_VERSION_CODE=<unused-code>`:

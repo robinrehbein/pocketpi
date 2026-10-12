@@ -2,6 +2,10 @@ package de.joinnoah.pi.remote
 
 import android.content.Context
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
@@ -9,9 +13,6 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
-import androidx.compose.ui.test.hasAnyAncestor
-import androidx.compose.ui.test.hasClickAction
-import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -58,6 +59,30 @@ class ChatPanelsTest {
         assertFalse(timelineRailVisible(emptyList()))
         assertFalse(timelineRailVisible(allKinds.take(1)))
         assertTrue(timelineRailVisible(allKinds.take(2)))
+    }
+
+    @Test
+    fun timelineHandleHidesAndRestoresMarkers() {
+        var expanded by mutableStateOf(true)
+        compose.setContent {
+            MaterialTheme {
+                Box(Modifier.height(400.dp)) {
+                    TimelineRailControl(
+                        markers = allKinds,
+                        expanded = expanded,
+                        onToggle = { expanded = !expanded },
+                        onJump = {},
+                    )
+                }
+            }
+        }
+        compose.onNodeWithTag("timelineRail").assertExists()
+        compose.onAllNodesWithTag("timelineMarker").assertCountEquals(4)
+        compose.onNodeWithTag("timelineToggle").performClick()
+        compose.onNodeWithTag("timelineRail").assertDoesNotExist()
+        compose.onAllNodesWithTag("timelineMarker").assertCountEquals(0)
+        compose.onNodeWithTag("timelineToggle").performClick()
+        compose.onAllNodesWithTag("timelineMarker").assertCountEquals(4)
     }
 
     @Test
@@ -172,7 +197,7 @@ class ChatPanelsTest {
         }
         // Rows are collapsed until the header is expanded.
         compose.onNodeWithText("explorer task").assertDoesNotExist()
-        compose.onNode(hasClickAction() and hasAnyAncestor(hasTestTag("subagentStrip"))).performClick()
+        compose.onNodeWithTag("subagentStrip").performClick()
         val rows = compose.onAllNodesWithTag("subagentStripEntry")
         rows.assertCountEquals(2)
         rows[0].assertHeightIsAtLeast(48.dp)

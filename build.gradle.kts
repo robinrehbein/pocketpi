@@ -56,6 +56,7 @@ abstract class ValidateUploadKey : DefaultTask() {
 
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.android.test) apply false
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
@@ -152,6 +153,17 @@ android {
         }
     }
     buildTypes {
+        create("benchmark") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".benchmark"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+            isDebuggable = false
+            // Isolated app data and no production push registration during measurements.
+            for (key in listOf("API_KEY", "APP_ID", "PROJECT_ID", "GCM_SENDER_ID")) {
+                buildConfigField("String", "PI_REMOTE_FIREBASE_$key", "\"\"")
+            }
+        }
         release {
             isMinifyEnabled = false
             if (uploadStorePath.isNotBlank() && uploadStorePassword.isNotBlank() &&
@@ -188,6 +200,12 @@ android {
                 }
             }
         }
+    }
+}
+
+androidComponents {
+    beforeVariants(selector().withBuildType("benchmark")) { variant ->
+        variant.hostTests[com.android.build.api.variant.HostTestBuilder.UNIT_TEST_TYPE]?.enable = true
     }
 }
 
@@ -228,6 +246,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.browser)
+    implementation(libs.androidx.webkit)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)
@@ -237,6 +257,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation(libs.junit)
+    testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.robolectric)
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.androidx.ui.test.junit4)
@@ -250,6 +271,7 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.zxing.core)
+    implementation(libs.androidsvg)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     implementation(libs.androidx.glance.appwidget)

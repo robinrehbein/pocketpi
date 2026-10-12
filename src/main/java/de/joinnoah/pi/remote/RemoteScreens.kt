@@ -1,14 +1,20 @@
 package de.joinnoah.pi.remote
 
 import android.Manifest
+import android.animation.ValueAnimator
 import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
 import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -25,6 +31,8 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FilterAlt
@@ -39,10 +47,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.clipPath
-import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -54,12 +59,15 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -68,6 +76,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -93,13 +103,42 @@ private const val COMPACTION_TICK_MILLIS = 30_000L
 private const val PRIVACY_POLICY_URL = "https://robinrehbein.de/privacy"
 private val LIST_TO_HEADER_END_SHIFT = 4.dp
 
+/** "Try again", or "Reconnect now" while an automatic reconnect is scheduled. */
+@Composable
+private fun retryLabel(reconnectAt: Long?): String =
+    stringResource(
+        if (reconnectAt != null) R.string.remote_reconnect_now else R.string.remote_error_retry
+    )
+
+/** Live "Reconnecting in N s" line for the next automatic reconnect attempt. */
+@Composable
+private fun ReconnectCountdown(reconnectAt: Long?, now: () -> Long = System::currentTimeMillis) {
+    if (reconnectAt == null) return
+    val seconds by produceState(reconnectSeconds(reconnectAt, now), reconnectAt) {
+        while (true) {
+            value = reconnectSeconds(reconnectAt, now)
+            delay(250)
+        }
+    }
+    Text(
+        stringResource(R.string.remote_reconnecting_in, seconds),
+        Modifier.testTag("reconnectCountdown"),
+        style = MaterialTheme.typography.bodySmall,
+    )
+}
+
+private fun reconnectSeconds(reconnectAt: Long, now: () -> Long): Int =
+    ((reconnectAt - now() + 999) / 1000).toInt().coerceAtLeast(0)
+
 /** Errors a reload can plausibly fix; only these offer "Try again" on the error card. */
 private val RETRYABLE_ERRORS =
     setOf(
         R.string.remote_connection_error,
+        R.string.remote_unreachable,
         R.string.remote_request_error,
         R.string.remote_configuration_error,
         R.string.remote_commands_error,
+        R.string.remote_device_paused,
     )
 
 @Composable
@@ -110,6 +149,8 @@ internal fun RemoteScreen(
     pushConfigured: Boolean,
     pushEnabled: Boolean,
     enablePush: () -> Unit,
+    timelineVisibility: TimelineVisibility,
+    disablePush: () -> Unit = {},
 ) {
     val state by model.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -127,6 +168,9 @@ internal fun RemoteScreen(
     val paneLayout = LocalPaneLayout.current
     val twoPane = LocalTwoPane.current
     val listPane = LocalListPane.current?.takeIf { key is RemoteNavKey.Sessions }
+    // The projects column of the tablet layout; a selected project has its sessions beside it.
+    val projectsColumn = LocalProjectsColumn.current?.takeIf { key is RemoteNavKey.Projects }
+    val projectSelected = projectsColumn?.selectedProjectId != null
     val detailPane = LocalDetailPane.current && key is RemoteNavKey.Chat
     val sideInspector = key is RemoteNavKey.Chat && paneLayout.inspector != InspectorMode.OVERLAY
     // Hardware Enter and Ctrl+Enter only send in the two-pane layout; phones keep Enter as a newline.
@@ -171,6 +215,37 @@ internal fun RemoteScreen(
         }
     val chatKey = key as? RemoteNavKey.Chat
     val chatModel = model as? ChatViewModel
+    val jobsAvailable = canUseBackgroundJobs(state)
+    val jobsLeasable = canLeaseJobsList(state)
+    // A destination cannot refresh while loading. Retry when its snapshot is ready so the
+    // initial list (and its event lease) is not lost when capabilities arrive before the snapshot.
+    LaunchedEffect(state.selection.sessionId, state.connected, state.loading, jobsAvailable, jobsLeasable) {
+        if (state.connected && !state.loading && jobsAvailable) chatModel?.refreshJobs()
+    }
+    val statusJobs = visibleJobs(state)?.takeIf { chatModel != null }
+    val sentImages =
+        state.selection.sessionId?.takeIf { chatModel != null }?.let { sessionId ->
+            val supported = ATTACHMENT_READ_CAPABILITY in state.capabilities
+            remember(chatModel, sessionId, state.connected, state.capabilitiesKnown, supported) {
+                SentImageSource(
+                    sessionId, state.connected, state.capabilitiesKnown, supported,
+                    checkNotNull(chatModel)::readAttachment,
+                )
+            }
+        }
+    val projectImages =
+        state.selection.sessionId?.takeIf { chatModel != null }?.let { sessionId ->
+            val supported = FILES_MEDIA_CAPABILITY in state.capabilities
+            val artifactSupported = FILES_ARTIFACT_CAPABILITY in state.capabilities
+            remember(chatModel, sessionId, state.connected, state.capabilitiesKnown, supported, artifactSupported) {
+                ProjectImageSource(
+                    sessionId, state.connected, state.capabilitiesKnown, supported,
+                    checkNotNull(chatModel)::readProjectImage,
+                    checkNotNull(chatModel)::readProjectArtifact,
+                    artifactSupported,
+                )
+            }
+        }
     val touched = remember(conversation) { touchedFiles(conversation) }
     // Diffing every edit can take a moment in a long chat; keep it off the main thread.
     val touchedLines by
@@ -220,6 +295,13 @@ internal fun RemoteScreen(
             chatModel?.refreshSessions()
         }
     }
+    val viewportPositions = LocalChatViewportPositions.current
+    var savedViewport by remember(chatKey, viewportPositions) {
+        mutableStateOf(chatKey?.let { viewportPositions?.get(it) })
+    }
+    var viewportRestorePending by remember(key) {
+        mutableStateOf(savedViewport?.following == false)
+    }
     val listState = rememberLazyListState()
     val sessionSearchFocus = remember { FocusRequester() }
     if (listPane != null && twoPane != null)
@@ -236,9 +318,19 @@ internal fun RemoteScreen(
     val composerHeight = with(LocalDensity.current) { composerSize.height.toDp() }
     val headerHeight = with(LocalDensity.current) { headerSize.height.toDp() }
     val listScope = rememberCoroutineScope()
-    var autoFollow by remember { mutableStateOf(true) }
+    var autoFollow by rememberSaveable(key) { mutableStateOf(savedViewport?.following ?: true) }
+    var timelineScrollActive by remember(key) { mutableStateOf(false) }
     var tuiInfoOpen by remember { mutableStateOf(false) }
     var scrollingProgrammatically by remember { mutableStateOf(false) }
+    LaunchedEffect(key, listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) {
+            if (!scrollingProgrammatically) timelineScrollActive = true
+        } else {
+            // Leave time to tap a marker or the collapse button after lifting a finger.
+            delay(1500)
+            timelineScrollActive = false
+        }
+    }
     var waitingForOutput by remember { mutableStateOf(false) }
     LaunchedEffect(sessionActive, state.status, state.questions, conversation) {
         waitingForOutput = false
@@ -251,17 +343,19 @@ internal fun RemoteScreen(
         if (key is RemoteNavKey.Chat)
             snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
                 .collect { (scrolling, canScrollForward) ->
-                    if (scrolling && !scrollingProgrammatically)
+                    if (scrolling && !scrollingProgrammatically) {
+                        if (!onlyErrorsShown) viewportRestorePending = false
                         autoFollow = !canScrollForward
+                    }
                 }
     }
     val viewportHeight = listState.layoutInfo.viewportSize.height
     LaunchedEffect(
         key, conversation, state.questions, state.error, waitingForOutput,
-        viewportHeight, composerHeight, headerHeight, onlyErrorsShown,
+        viewportHeight, composerHeight, headerHeight, onlyErrorsShown, autoFollow,
     ) {
         // The error filter shows a fixed selection; following new output would only jump around.
-        if (key is RemoteNavKey.Chat && autoFollow && !onlyErrorsShown) {
+        if (key is RemoteNavKey.Chat && autoFollow && !onlyErrorsShown && !viewportRestorePending) {
             withFrameNanos { }
             if (!autoFollow || onlyErrorsShown) return@LaunchedEffect
             scrollingProgrammatically = true
@@ -273,6 +367,43 @@ internal fun RemoteScreen(
         }
     }
     val leadingItems = remember { LeadingItems() }
+    LaunchedEffect(key, state.loading, shownItems, viewportHeight, composerHeight, headerHeight,
+        viewportRestorePending, onlyErrorsShown, savedViewport) {
+        val position = savedViewport ?: return@LaunchedEffect
+        if (!viewportRestorePending || state.loading || onlyErrorsShown ||
+            viewportHeight <= 0 || composerHeight == 0.dp || headerHeight == 0.dp) return@LaunchedEffect
+        val index = restoredChatIndex(position, shownItems.map { it.id }, leadingItems.count)
+            ?: return@LaunchedEffect
+        withFrameNanos { }
+        // User intent can change while waiting for the layout frame.
+        if (!viewportRestorePending || onlyErrorsShown || state.loading) return@LaunchedEffect
+        scrollingProgrammatically = true
+        try {
+            listState.scrollToItem(index, position.offset)
+            viewportRestorePending = false
+        } finally {
+            scrollingProgrammatically = false
+        }
+    }
+    val viewportSaveBlocked by rememberUpdatedState(
+        viewportRestorePending || state.loading || onlyErrorsShown || shownItems.isEmpty()
+    )
+    LaunchedEffect(chatKey, viewportPositions, listState) {
+        if (chatKey == null || viewportPositions == null) return@LaunchedEffect
+        snapshotFlow {
+            if (viewportSaveBlocked || listState.layoutInfo.totalItemsCount == 0) null
+            else {
+                val first = listState.firstVisibleItemIndex
+                val anchor = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == first }?.key as? String
+                ChatViewportPosition(
+                    anchor, (first - leadingItems.count).coerceAtLeast(0),
+                    listState.firstVisibleItemScrollOffset, autoFollow,
+                )
+            }
+        }.collect { position ->
+            if (position != null) viewportPositions[chatKey] = position
+        }
+    }
     var jumpRequest by remember { mutableStateOf<JumpRequest?>(null) }
     var highlightedId by remember { mutableStateOf<String?>(null) }
     val jumpFocus = remember { FocusRequester() }
@@ -284,6 +415,7 @@ internal fun RemoteScreen(
     }
     val currentShownItems by rememberUpdatedState(shownItems)
     fun scrollToLatestItem() {
+        viewportRestorePending = false
         autoFollow = true
         listScope.launch {
             scrollingProgrammatically = true
@@ -300,6 +432,7 @@ internal fun RemoteScreen(
             return
         }
         if (onlyErrorsShown && shownItems.none { it.id == itemId }) onlyErrorsShown = false
+        viewportRestorePending = false
         autoFollow = false
         jumpRequest = JumpRequest(itemId, (jumpRequest?.nonce ?: 0L) + 1)
     }
@@ -445,6 +578,100 @@ internal fun RemoteScreen(
         renameSessionId = sessionId
         renameDraft = TextFieldValue(title, TextRange(title.length))
     }
+    var exportState by remember(key) { mutableStateOf<ExportState?>(null) }
+    val exportScope = rememberCoroutineScope()
+    val exportChooserTitle = stringResource(R.string.remote_export_chooser)
+    fun shareExport(uri: String) {
+        // No app may accept the file; the status stays so the user can try again.
+        runCatching {
+            context.startActivity(exportShareIntent(Uri.parse(uri), exportChooserTitle).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+    fun startExport(sessionId: String) {
+        val chat = model as? ChatViewModel ?: return
+        if (exportState == ExportState.Exporting) return
+        exportState = ExportState.Exporting
+        exportScope.launch {
+            exportState =
+                when (val result = chat.exportSession(sessionId)) {
+                    is ExportResult.Failed -> ExportState.Failed(result.failure)
+                    is ExportResult.Ready ->
+                        try {
+                            val uri = withContext(Dispatchers.IO) { storeExport(context, result) }
+                            shareExport(uri.toString())
+                            ExportState.Done(uri.toString())
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            ExportState.Failed(ExportFailure.STORAGE)
+                        }
+                }
+        }
+    }
+    var reloading by remember(key) { mutableStateOf(false) }
+    val resources = androidx.compose.ui.platform.LocalResources.current
+    fun showToast(@androidx.annotation.StringRes text: Int) {
+        Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+    }
+    fun startReload(sessionId: String) {
+        val chat = model as? ChatViewModel ?: return
+        if (reloading) return
+        reloading = true
+        showToast(R.string.remote_reload_running)
+        exportScope.launch {
+            try {
+                when (val result = chat.reloadSession(sessionId)) {
+                    ReloadResult.Done -> showToast(R.string.remote_reload_done)
+                    is ReloadResult.Failed -> {
+                        val failure = result.failure
+                        val message = (failure as? ReloadFailure.Failed)?.message
+                        if (message == null) showToast(reloadFailureText(failure))
+                        else Toast.makeText(context, resources.getString(reloadFailureText(failure), message), Toast.LENGTH_LONG).show()
+                    }
+                }
+            } finally {
+                reloading = false
+            }
+        }
+    }
+    var modelPickerRequested by remember(key) { mutableStateOf(false) }
+    var settingsSheetRequested by remember(key) { mutableStateOf(false) }
+    var treeSheetRequested by remember(key) { mutableStateOf(false) }
+    var artifactsSheetRequested by remember(key) { mutableStateOf(false) }
+    // A sheet closed by a lost connection or capability must not reappear by itself after a reconnect.
+    val artifactsAvailable = canShowArtifacts(state)
+    LaunchedEffect(artifactsAvailable) { if (!artifactsAvailable) artifactsSheetRequested = false }
+    /**
+     * Runs the draft when it names an available [LocalCommand] and clears it; false leaves the draft
+     * for the normal send, which reports unknown or unavailable commands.
+     */
+    fun runLocalCommand(): Boolean {
+        val chat = key as? RemoteNavKey.Chat ?: return false
+        val invocation =
+            localInvocation(state, availableLocalCommands(state, true, System.currentTimeMillis(), reloading))
+                ?: return false
+        model.draft("")
+        when (invocation.command) {
+            LocalCommand.NEW -> navigator.createSession(chat.routeId, chat.projectId)
+            LocalCommand.COMPACT -> model.compactContext()
+            LocalCommand.MODEL -> modelPickerRequested = true
+            LocalCommand.SETTINGS -> settingsSheetRequested = true
+            LocalCommand.EXPORT -> state.selection.sessionId?.let(::startExport)
+            LocalCommand.TREE -> treeSheetRequested = true
+            LocalCommand.RELOAD ->
+                if (reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
+                    showToast(R.string.remote_reload_terminal_hint)
+                else if (reloading) showToast(R.string.remote_reload_running)
+                else state.selection.sessionId?.let(::startReload)
+            LocalCommand.ARTIFACTS -> artifactsSheetRequested = true
+            LocalCommand.NAME -> {
+                val session = state.session ?: return true
+                if (invocation.argument.isEmpty()) startRename(session.text("id"), session.text("title"))
+                else model.renameSession(session.text("id"), invocation.argument)
+            }
+        }
+        return true
+    }
     var abortTarget by remember { mutableStateOf<AbortRunTarget?>(null) }
     var disconnecting by rememberSaveable(key) { mutableStateOf(false) }
     val abortTargetIsCurrent =
@@ -465,9 +692,18 @@ internal fun RemoteScreen(
                 ) == PackageManager.PERMISSION_GRANTED
         )
     }
+    // The user can change this in Android's settings while the app is in the background.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        notificationGranted =
+            Build.VERSION.SDK_INT < 33 ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                    PackageManager.PERMISSION_GRANTED
+    }
+    var notificationDenied by remember { mutableStateOf(false) }
     val notificationPermission =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             notificationGranted = granted
+            if (!granted) notificationDenied = true
             if (granted) enablePush()
         }
     fun enableNotifications() {
@@ -485,6 +721,7 @@ internal fun RemoteScreen(
                     is RemoteNavKey.Sessions -> R.string.remote_sessions
                     is RemoteNavKey.Chat -> R.string.remote_chat
                     is RemoteNavKey.FolderBrowser -> R.string.remote_folders_title
+                    is RemoteNavKey.Providers -> R.string.providers_title
                     RemoteNavKey.Settings -> R.string.remote_settings
                 }
         )
@@ -501,11 +738,7 @@ internal fun RemoteScreen(
                     }
                 )
             val statusColor = chatStatusColor(state.status, state.connected)
-            val canRename =
-                state.connected && !state.loading &&
-                    RENAME_CAPABILITY in state.capabilities &&
-                    state.session?.text("origin") in setOf("tui", "rpc") &&
-                    state.status != "offline"
+            val canRename = canRenameSession(state)
             val hasTuiInfo =
                 state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
             val headerColor = floatingHeaderColor()
@@ -516,6 +749,10 @@ internal fun RemoteScreen(
                         if (canViewChanges(state) && state.connected) add(ChatAction.CHANGES)
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
                         if (canRename) add(ChatAction.RENAME)
+                        if (state.connected && !state.loading) add(ChatAction.NEW_SESSION)
+                        // Offered while pi runs (the sheet then explains it is read-only); `/settings` is typed into an idle draft only.
+                        if (state.connected && !state.loading && sessionSettingsAvailable(state))
+                            add(ChatAction.SESSION_SETTINGS)
                         add(ChatAction.REFRESH)
                         add(ChatAction.SETTINGS)
                     },
@@ -527,7 +764,9 @@ internal fun RemoteScreen(
                     ChatAction.FILES -> chatModel?.openFiles()
                     ChatAction.RENAME ->
                         state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
+                    ChatAction.NEW_SESSION -> navigator.createSession(key.routeId, key.projectId)
                     ChatAction.REFRESH -> model.refresh()
+                    ChatAction.SESSION_SETTINGS -> settingsSheetRequested = true
                     ChatAction.SETTINGS -> navigator.settings()
                 }
             }
@@ -624,39 +863,17 @@ internal fun RemoteScreen(
                             actionsControl()
                         }
                     }
-                    if (errorCount > 0 || onlyErrorsShown)
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .padding(top = 8.dp)
-                                .horizontalScroll(rememberScrollState())
-                                .testTag("chatInsights"),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            ErrorFilterChip(errorCount, onlyErrorsShown) {
-                                onlyErrorsShown = !onlyErrorsShown
-                                if (onlyErrorsShown) autoFollow = false
-                            }
-                        }
-                    if (strip.entries.isNotEmpty())
-                        Box(
-                            Modifier.fillMaxWidth()
-                                .padding(top = 8.dp)
-                                .heightIn(max = 280.dp)
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            SubagentStrip(
-                                strip,
-                                canAbort = { entry ->
-                                    entry.sessionId?.let { canAbortSubagent(state, it) } == true
-                                },
-                                onOpen = { entry -> entry.sessionId?.takeIf { entry.openable }?.let(::openChildSession) },
-                                onAbort = { entry -> if (entry.sessionId != null) abortChild = entry },
-                            )
-                        }
                     if (compactionVisible(state.compaction, compactionNow))
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             CompactionBanner(state.compaction, compactionNow)
+                        }
+                    if (exportState != null)
+                        Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                            ExportStatus(exportState, ::shareExport) {
+                                if (exportState is ExportState.Done)
+                                    exportScope.launch(Dispatchers.IO) { ExportStorage.clear(context.cacheDir) }
+                                exportState = null
+                            }
                         }
                 }
             }
@@ -671,6 +888,7 @@ internal fun RemoteScreen(
                     changes,
                     remember(chatModel) { changesActions(checkNotNull(chatModel)) { composerFocusRequest++ } },
                     Modifier.fillMaxSize(),
+                    projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
                 )
             }
         }
@@ -682,6 +900,7 @@ internal fun RemoteScreen(
                     files,
                     remember(chatModel) { filesActions(checkNotNull(chatModel)) { composerFocusRequest++ } },
                     Modifier.fillMaxSize(),
+                    projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
                 )
             }
         }
@@ -722,7 +941,8 @@ internal fun RemoteScreen(
         }
     InspectorRow(
         shown = sideInspector && (paneLayout.inspector == InspectorMode.PERSISTENT || inspectorContent != null),
-        width = paneLayout.inspectorWidth,
+        width = { twoPane?.inspectorWidth(paneLayout) ?: paneLayout.inspectorWidth },
+        onResize = twoPane?.let { pane -> { width -> pane.resizeInspector(paneLayout, width) } },
         inspector = inspectorContent,
     ) {
     Scaffold(
@@ -784,13 +1004,23 @@ internal fun RemoteScreen(
                             is RemoteNavKey.Sessions -> Unit
                             is RemoteNavKey.Chat -> Unit
                             is RemoteNavKey.FolderBrowser -> Unit
-                            is RemoteNavKey.Projects ->
+                            is RemoteNavKey.Providers -> Unit
+                            is RemoteNavKey.Projects -> {
+                                if (canManageProviders(state))
+                                    OutlinedButton(
+                                        onClick = { navigator.openProviders(key.routeId) },
+                                        enabled = !state.loading,
+                                        modifier = Modifier.fillMaxWidth().testTag("providersButton"),
+                                    ) {
+                                        Text(stringResource(R.string.providers_open))
+                                    }
                                 OutlinedButton(
                                     onClick = { disconnecting = true },
                                     modifier = Modifier.fillMaxWidth(),
                                 ) {
                                     Text(stringResource(R.string.remote_disconnect))
                                 }
+                            }
                         }
                     }
                 }
@@ -807,16 +1037,19 @@ internal fun RemoteScreen(
         val readingInset =
             if (key is RemoteNavKey.Chat) ((maxWidth - 40.dp - MAX_READING_WIDTH) / 2).coerceAtLeast(0.dp)
             else 0.dp
-        val railShown = key is RemoteNavKey.Chat && timelineRailVisible(markers) && listScrollable
+        val timelineControlsShown = key is RemoteNavKey.Chat && timelineRailVisible(markers) &&
+            listScrollable && timelineScrollActive
+        val timelineExpanded = chatKey?.let(timelineVisibility::expanded) ?: true
+        val railShown = timelineControlsShown && timelineExpanded
         LazyColumn(
-            if (key is RemoteNavKey.Chat) Modifier.fillMaxSize().then(underlay)
+            if (key is RemoteNavKey.Chat) Modifier.fillMaxSize().testTag("conversationList").then(underlay)
             else Modifier.fillMaxSize(),
             state = listState,
             contentPadding =
                 PaddingValues(
                     start = 20.dp + readingInset,
                     // Room for the timeline rail, so it never covers a card's controls.
-                    end = maxOf(if (railShown) 52.dp else 20.dp, 20.dp + readingInset),
+                    end = maxOf(if (railShown) 76.dp else 20.dp, 20.dp + readingInset),
                     top = headerHeight + if (key is RemoteNavKey.Chat) 16.dp else 48.dp,
                     bottom =
                         if (
@@ -906,8 +1139,14 @@ internal fun RemoteScreen(
                         }
                     }
                 }
-            // Beside an open chat, the chat pane shows the error; the list does not repeat it.
-            if (state.error != null && listPane?.selectedSessionId == null) {
+            // Chat feedback belongs beside the composer, not above the conversation.
+            // Do not carry an unavailable-command warning into the session overview.
+            // Beside a project's sessions, the session list shows the error, not both columns.
+            if (state.error != null && key !is RemoteNavKey.Chat &&
+                state.error != R.string.remote_command_unknown &&
+                listPane?.selectedSessionId == null &&
+                !projectSelected
+            ) {
                 leading++
                 item {
                     Card(
@@ -929,6 +1168,7 @@ internal fun RemoteScreen(
                                 Icon(Icons.Default.ErrorOutline, contentDescription = null)
                                 Text(stringResource(state.error!!), Modifier.weight(1f))
                             }
+                            ReconnectCountdown(state.reconnectAt)
                             Row(
                                 Modifier.fillMaxWidth(),
                                 horizontalArrangement =
@@ -944,12 +1184,22 @@ internal fun RemoteScreen(
                                 ) {
                                     Text(stringResource(R.string.remote_error_close))
                                 }
+                                if (state.error == R.string.remote_device_revoked)
+                                    state.hosts.find { it.routeId == state.deniedRouteId }?.let { host ->
+                                        FilledTonalButton(
+                                            onClick = { removing = host },
+                                            modifier = Modifier.testTag("removePairing"),
+                                        ) {
+                                            Text(stringResource(R.string.remote_remove))
+                                        }
+                                    }
                                 if (!state.loading && state.error in RETRYABLE_ERRORS)
                                     FilledTonalButton(
                                         onClick = {
                                             model.dismissError()
                                             model.refresh()
                                         },
+                                        modifier = Modifier.testTag("reconnectNow"),
                                     ) {
                                         Icon(
                                             Icons.Default.Refresh,
@@ -957,7 +1207,7 @@ internal fun RemoteScreen(
                                             modifier = Modifier.size(ButtonDefaults.IconSize),
                                         )
                                         Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                                        Text(stringResource(R.string.remote_error_retry))
+                                        Text(retryLabel(state.reconnectAt))
                                     }
                             }
                         }
@@ -1001,42 +1251,37 @@ internal fun RemoteScreen(
                         )
                         Row(
                             Modifier.fillMaxWidth()
-                                .selectable(selected = theme == "system", role = Role.RadioButton) {
-                                    (model as SettingsViewModel).setTheme("system")
+                                .toggleable(value = theme == "synthwave", role = Role.Switch) {
+                                    (model as SettingsViewModel).setTheme(if (it) "synthwave" else "system")
                                 }
-                                .testTag("themeSystem")
+                                .testTag("themeSynthwaveSwitch")
                                 .padding(vertical = 8.dp),
-                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            RadioButton(selected = theme == "system", onClick = null)
-                            Text(
-                                stringResource(R.string.remote_theme_system),
-                                Modifier.padding(start = 12.dp).weight(1f),
+                            Text(stringResource(R.string.remote_theme_system))
+                            Switch(
+                                checked = theme == "synthwave",
+                                onCheckedChange = null,
+                                modifier = Modifier.padding(horizontal = 12.dp),
                             )
-                            SystemThemeIcon()
+                            Text(stringResource(R.string.remote_theme_synthwave))
                         }
-                        BoxWithConstraints(Modifier.fillMaxWidth()) {
-                            if (maxWidth < 240.dp) {
-                                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    ThemeChoice("light", R.string.remote_theme_light, theme == "light") {
-                                        (model as SettingsViewModel).setTheme("light")
-                                    }
-                                    ThemeChoice("dark", R.string.remote_theme_dark, theme == "dark") {
-                                        (model as SettingsViewModel).setTheme("dark")
-                                    }
-                                }
-                            } else {
-                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    Box(Modifier.weight(1f)) {
-                                        ThemeChoice("light", R.string.remote_theme_light, theme == "light") {
-                                            (model as SettingsViewModel).setTheme("light")
-                                        }
-                                    }
-                                    Box(Modifier.weight(1f)) {
-                                        ThemeChoice("dark", R.string.remote_theme_dark, theme == "dark") {
-                                            (model as SettingsViewModel).setTheme("dark")
-                                        }
-                                    }
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            listOf(false, true).forEach { dark ->
+                                Column(
+                                    Modifier.weight(1f),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    ThemePreview(
+                                        if (theme == "synthwave") {
+                                            if (dark) "synthwave" else "synthwave-light"
+                                        } else if (dark) "dark" else "light"
+                                    )
+                                    Text(
+                                        stringResource(if (dark) R.string.remote_theme_dark else R.string.remote_theme_light),
+                                        style = MaterialTheme.typography.labelLarge,
+                                    )
                                 }
                             }
                         }
@@ -1091,6 +1336,7 @@ internal fun RemoteScreen(
                                 R.string.remote_keyboard_shortcut_send,
                                 R.string.remote_keyboard_shortcut_search,
                                 R.string.remote_keyboard_shortcut_switch,
+                                R.string.remote_keyboard_shortcut_project,
                             ).forEach {
                                 Text(
                                     stringResource(it),
@@ -1104,21 +1350,68 @@ internal fun RemoteScreen(
                 item { PredictionSettingsSection() }
                 item {
                     Section(stringResource(R.string.remote_notifications)) {
-                        SettingsOption(
-                            Icons.Default.Notifications,
-                            stringResource(R.string.remote_notifications),
+                        val hint =
                             stringResource(
                                 when {
                                     !pushConfigured -> R.string.remote_notification_unconfigured
                                     !notificationGranted -> R.string.remote_notification_denied
+                                    !pushEnabled -> R.string.remote_notification_toggle_off
                                     else -> R.string.remote_notification_help
                                 }
-                            ),
-                        ) {}
-                        if (pushConfigured && !pushEnabled) {
-                            Button(onClick = { enableNotifications() }) {
-                                Text(stringResource(R.string.remote_notification_allow))
+                            )
+                        if (pushConfigured) {
+                            // One focusable row: TalkBack reads the label, the state and the hint.
+                            Column(
+                                Modifier.fillMaxWidth()
+                                    .toggleable(value = pushEnabled, role = Role.Switch) {
+                                        if (it) enableNotifications() else disablePush()
+                                    }
+                                    .testTag("pushSwitch")
+                                    .padding(vertical = 8.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Notifications, contentDescription = null)
+                                    Spacer(Modifier.width(14.dp))
+                                    Text(
+                                        stringResource(R.string.remote_notification_toggle),
+                                        Modifier.weight(1f),
+                                        style = MaterialTheme.typography.titleSmall,
+                                    )
+                                    Switch(checked = pushEnabled, onCheckedChange = null)
+                                }
+                                Text(
+                                    hint,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
+                            if (
+                                Build.VERSION.SDK_INT >= 33 &&
+                                    !notificationGranted &&
+                                    (notificationDenied || preferences?.notificationPromptShown == true)
+                            ) {
+                                // After a denial or two Android no longer shows its own prompt.
+                                TextButton(
+                                    onClick = {
+                                        // Some OEM builds have no per-app notification screen.
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            )
+                                        }
+                                    }
+                                ) {
+                                    Text(stringResource(R.string.remote_notification_open_settings))
+                                }
+                            }
+                        } else {
+                            Text(
+                                hint,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
@@ -1173,6 +1466,7 @@ internal fun RemoteScreen(
                 when (key) {
                     RemoteNavKey.Settings -> Unit
                     is RemoteNavKey.FolderBrowser -> Unit
+                    is RemoteNavKey.Providers -> Unit
                     RemoteNavKey.Hosts -> {
                         if (state.hosts.isEmpty()) {
                             item {
@@ -1211,15 +1505,18 @@ internal fun RemoteScreen(
                                 ProjectRow(
                                     projectId = projectId,
                                     name = project.text("name"),
-                                    unshare = projectUnshare(state.connected, state.loading, state.capabilities),
-                                    onClick = {
-                                        navigator.open(RemoteNavKey.Sessions(key.routeId, projectId))
-                                    },
+                                    // The host only unshares while no project is open.
+                                    unshare =
+                                        if (projectSelected) ProjectUnshare.NONE
+                                        else projectUnshare(state.connected, state.loading, state.capabilities),
+                                    onClick = { openProject(navigator, twoPane, key.routeId, projectId) },
                                     onUnshare = { unsharing = projectId to project.text("name") },
+                                    selected = projectsColumn?.let { projectId == it.selectedProjectId },
                                 )
                             }
                         }
-                        if (state.projectChats.isNotEmpty()) {
+                        // Quick chats only refresh while no project is open; beside one they hide.
+                        if (state.projectChats.isNotEmpty() && !projectSelected) {
                             item(key = "project_chats_heading") {
                                 Text(
                                     stringResource(R.string.remote_projects_quick_chats),
@@ -1371,6 +1668,10 @@ internal fun RemoteScreen(
                             }
                         }
                         leadingItems.count = leading
+                        val copyButtonId =
+                            shownItems.lastOrNull {
+                                it is ConversationItem.Bubble && it.role == "assistant"
+                            }?.id
                         items(shownItems, key = { it.id }) { item ->
                             val highlighted = item.id == highlightedId
                             Box(
@@ -1388,6 +1689,9 @@ internal fun RemoteScreen(
                                     onAskToFix = if (acceptsPrompts) ::askToFix else null,
                                     highlighted = highlighted,
                                     fork = messageFork?.takeIf { item.id in forkableIds },
+                                    images = sentImages,
+                                    projectImages = projectImages,
+                                    copyButton = item.id == copyButtonId,
                                 )
                             }
                         }
@@ -1423,7 +1727,8 @@ internal fun RemoteScreen(
                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (key != RemoteNavKey.Hosts)
+                    // Beside the projects column, its own Back pill leads back.
+                    if (key != RemoteNavKey.Hosts && listPane?.besideProjects != true)
                         FloatingSurface(
                             modifier = Modifier.testTag("navigationPill"),
                             shape = CircleShape,
@@ -1436,19 +1741,42 @@ internal fun RemoteScreen(
                             }
                         }
                     Spacer(Modifier.weight(1f))
-                    if (!settings)
+                    // The full projects column beside the list already offers refresh and settings;
+                    // the strip beside a chat does not.
+                    if (!settings && !(listPane?.besideProjects == true && !listPane.projectsStrip))
                         FloatingSurface(
                             modifier = Modifier.testTag("headerActionsPill"),
                             shape = CircleShape,
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (state.host != null)
-                                    IconButton(onClick = model::refresh, modifier = Modifier.size(48.dp)) {
+                                if (state.host != null) {
+                                    val rotation =
+                                        if (state.loading && ValueAnimator.areAnimatorsEnabled()) {
+                                            val transition = rememberInfiniteTransition(label = "refresh")
+                                            transition.animateFloat(
+                                                initialValue = 0f,
+                                                targetValue = 360f,
+                                                animationSpec = infiniteRepeatable(
+                                                    animation = tween(900, easing = LinearEasing),
+                                                    repeatMode = RepeatMode.Restart,
+                                                ),
+                                                label = "refresh-rotation",
+                                            ).value
+                                        } else 0f
+                                    val refreshing = stringResource(R.string.remote_refreshing)
+                                    IconButton(
+                                        onClick = model::refresh,
+                                        modifier = Modifier.size(48.dp).semantics {
+                                            if (state.loading) stateDescription = refreshing
+                                        },
+                                    ) {
                                         Icon(
                                             Icons.Default.Refresh,
                                             stringResource(R.string.remote_refresh),
+                                            modifier = Modifier.graphicsLayer { rotationZ = rotation },
                                         )
                                     }
+                                }
                                 IconButton(onClick = navigator::settings, modifier = Modifier.size(48.dp)) {
                                     Icon(
                                         Icons.Default.Settings,
@@ -1469,31 +1797,30 @@ internal fun RemoteScreen(
                 chatHeader()
             }
         }
-        if (railShown)
-            TimelineRail(
-                markers,
-                onJump = ::jumpTo,
-                scrollState = listState,
-                // Between the header and the composer, above the scroll-to-bottom button's slot.
-                modifier =
-                    Modifier.align(Alignment.TopEnd)
-                        .fillMaxHeight()
-                        .padding(
-                            top = headerHeight + 8.dp,
-                            bottom = composerHeight + 16.dp + 40.dp + 8.dp,
-                        )
-                        .then(underlay),
-            )
+        if (railShown) {
+            Box(
+                Modifier.align(Alignment.TopCenter)
+                    .widthIn(max = MAX_READING_WIDTH + 32.dp)
+                    .fillMaxWidth()
+                    .fillMaxHeight()
+                    .padding(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = headerHeight + 8.dp,
+                        bottom = composerHeight + 8.dp,
+                    )
+                    .then(underlay),
+            ) {
+                TimelineRail(
+                    markers = markers,
+                    onJump = ::jumpTo,
+                    scrollState = listState,
+                    // Share the composer's inset and the toggle button's center axis.
+                    modifier = Modifier.align(Alignment.TopEnd).width(48.dp).fillMaxHeight(),
+                )
+            }
+        }
         if (key is RemoteNavKey.Chat) {
-            if (!autoFollow)
-                SmallFloatingActionButton(
-                    onClick = ::scrollToLatestItem,
-                    modifier = Modifier.align(Alignment.BottomEnd)
-                        .padding(end = 16.dp, bottom = composerHeight + 16.dp)
-                        .then(underlay),
-                ) {
-                    Icon(Icons.Default.ArrowDownward, stringResource(R.string.remote_scroll_to_bottom))
-                }
             Box(
                 Modifier.align(Alignment.BottomCenter)
                     .widthIn(max = MAX_READING_WIDTH + 32.dp)
@@ -1503,16 +1830,172 @@ internal fun RemoteScreen(
                     .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TouchedFilesSummary(touched, touchedLines) {
-                        when (touchedFilesTarget(canViewChanges(state) && state.connected)) {
-                            TouchedFilesTarget.CHANGES -> chatModel?.openChanges()
-                            TouchedFilesTarget.SHEET -> touchedSheet = true
+                    state.error?.let { error ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().testTag("errorCard"),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            ),
+                        ) {
+                            Column(Modifier.padding(16.dp)) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    verticalAlignment = Alignment.Top,
+                                ) {
+                                    Icon(Icons.Default.ErrorOutline, contentDescription = null)
+                                    Text(stringResource(error), Modifier.weight(1f))
+                                }
+                                ReconnectCountdown(state.reconnectAt)
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    TextButton(
+                                        onClick = model::dismissError,
+                                        colors = ButtonDefaults.textButtonColors(
+                                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                                        ),
+                                    ) {
+                                        Text(stringResource(R.string.remote_error_close))
+                                    }
+                                    if (error == R.string.remote_device_revoked)
+                                        state.hosts.find { it.routeId == state.deniedRouteId }?.let { host ->
+                                            FilledTonalButton(
+                                                onClick = { removing = host },
+                                                modifier = Modifier.testTag("removePairing"),
+                                            ) {
+                                                Text(stringResource(R.string.remote_remove))
+                                            }
+                                        }
+                                    if (!state.loading && error in RETRYABLE_ERRORS)
+                                        FilledTonalButton(
+                                            onClick = {
+                                                model.dismissError()
+                                                model.refresh()
+                                            },
+                                            modifier = Modifier.testTag("reconnectNow"),
+                                        ) {
+                                            Text(retryLabel(state.reconnectAt))
+                                        }
+                                }
+                            }
                         }
                     }
+                    if (touched.total > 0 || errorCount > 0 || onlyErrorsShown ||
+                        strip.entries.isNotEmpty() || statusJobs != null || !autoFollow || timelineControlsShown
+                    )
+                        Row(
+                            Modifier.fillMaxWidth().testTag("chatInsights"),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.Bottom,
+                        ) {
+                            Row(
+                                Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                TouchedFilesSummary(touched, touchedLines) {
+                                    when (touchedFilesTarget(canViewChanges(state) && state.connected)) {
+                                        TouchedFilesTarget.CHANGES -> chatModel?.openChanges()
+                                        TouchedFilesTarget.SHEET -> touchedSheet = true
+                                    }
+                                }
+                                ErrorFilterChip(errorCount, onlyErrorsShown) {
+                                    onlyErrorsShown = !onlyErrorsShown
+                                    if (onlyErrorsShown) autoFollow = false
+                                    else if (chatKey != null && viewportPositions != null) {
+                                        savedViewport = viewportPositions[chatKey]
+                                        viewportRestorePending = savedViewport?.following == false
+                                        autoFollow = savedViewport?.following ?: false
+                                    }
+                                }
+                                statusJobs?.let { jobs ->
+                                    key(jobs.sessionId) {
+                                        val chat = checkNotNull(chatModel)
+                                        BackgroundJobsChip(jobs, remember(chat) {
+                                            JobsActions(chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs, chat::stopJob)
+                                        })
+                                    }
+                                }
+                                SubagentStrip(
+                                    strip,
+                                    canAbort = { entry ->
+                                        entry.sessionId?.let { canAbortSubagent(state, it) } == true
+                                    },
+                                    onOpen = { entry -> entry.sessionId?.takeIf { entry.openable }?.let(::openChildSession) },
+                                    onAbort = { entry -> if (entry.sessionId != null) abortChild = entry },
+                                )
+                            }
+                            if (timelineControlsShown || !autoFollow) {
+                                Spacer(Modifier.width(8.dp))
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                ) {
+                                    if (timelineControlsShown)
+                                        SmallFloatingActionButton(
+                                            onClick = { chatKey?.let(timelineVisibility::toggle) },
+                                            modifier = Modifier.testTag("timelineToggle"),
+                                        ) {
+                                            Icon(
+                                                if (timelineExpanded) Icons.Default.ChevronRight
+                                                else Icons.Default.ChevronLeft,
+                                                stringResource(
+                                                    if (timelineExpanded) R.string.remote_panel_timeline_hide
+                                                    else R.string.remote_panel_timeline_show,
+                                                ),
+                                            )
+                                        }
+                                    if (!autoFollow)
+                                        SmallFloatingActionButton(onClick = ::scrollToLatestItem) {
+                                            Icon(
+                                                Icons.Default.ArrowDownward,
+                                                stringResource(R.string.remote_scroll_to_bottom),
+                                            )
+                                        }
+                                }
+                            }
+                        }
+                    val treeSessionId = state.selection.sessionId
+                    val treeChat = model as? ChatViewModel
+                    if (treeSheetRequested && chatKey != null && treeSessionId != null && treeChat != null)
+                        SessionTreeSheet(
+                            state = state,
+                            // Outlives the sheet, so a move that finishes after it closed still lands.
+                            scope = exportScope,
+                            load = { treeChat.loadSessionTree(treeSessionId) },
+                            navigate = { nodeId, summarize ->
+                                treeChat.navigateSessionTree(treeSessionId, nodeId, summarize)
+                            },
+                            onFork = { nodeId ->
+                                treeSheetRequested = false
+                                navigator.forkSessionAtNode(chatKey, nodeId)
+                            },
+                            onAbort = model::abort,
+                            onDismiss = { treeSheetRequested = false },
+                        )
+                    if (artifactsSheetRequested && chatKey != null && treeSessionId != null && treeChat != null &&
+                        canShowArtifacts(state))
+                        SessionArtifactsSheet(
+                            sessionId = treeSessionId,
+                            list = { treeChat.listSessionArtifacts(treeSessionId) },
+                            open = { artifact, listed ->
+                                // The listed version is pinned to the listed digest; a reload takes the latest.
+                                treeChat.openSessionArtifact(
+                                    treeSessionId, artifact.id,
+                                    if (listed) artifact.version else null,
+                                    artifact.type,
+                                    if (listed) artifact.sha256 else null,
+                                )
+                            },
+                            onDismiss = { artifactsSheetRequested = false },
+                        )
                     ChatComposer(
                         state = state,
                         onDraft = model::draft,
-                        onSend = model::prompt,
+                        onSend = { if (!runLocalCommand()) model.prompt() },
                         onFollowUp = model::followUp,
                         onSteer = model::steer,
                         onStopChild = model::stopChild,
@@ -1532,14 +2015,42 @@ internal fun RemoteScreen(
                                 state,
                                 model::refreshConfiguration,
                                 model::refreshContextUsage,
+                                model::compactContext,
                                 model::refreshAdvisor,
                                 model::setAdvisor,
                                 model::setModel,
                                 model::setThinkingLevel,
                                 model::refreshCommands,
                                 model::selectCommand,
-                                refreshJobs = { chatModel?.refreshJobs() },
-                                openJobs = chatModel?.let { chat -> chat::openJobs },
+                                localCommands =
+                                    availableLocalCommands(state, key is RemoteNavKey.Chat, System.currentTimeMillis(), reloading),
+                                selectLocalCommand = { command ->
+                                    // The tree and the artifacts only read, so they open at once, also while
+                                    // the chat runs, when a /tree or /artifacts draft could not be sent.
+                                    if (command == LocalCommand.TREE || command == LocalCommand.ARTIFACTS) {
+                                        // Like a sent command, a command draft does not stay in the composer.
+                                        if (state.draft.trimStart().startsWith("/")) model.draft("")
+                                        if (command == LocalCommand.TREE) treeSheetRequested = true
+                                        else artifactsSheetRequested = true
+                                    }
+                                    // A terminal session only explains itself; nothing to send.
+                                    else if (command == LocalCommand.RELOAD &&
+                                        (reloading || reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
+                                    ) {
+                                        if (state.draft.trimStart().startsWith("/")) model.draft("")
+                                        showToast(
+                                            if (reloading) R.string.remote_reload_running
+                                            else R.string.remote_reload_terminal_hint
+                                        )
+                                    }
+                                    else model.draft(selectCommandName(state.draft, command.commandName))
+                                },
+                                reloading = reloading,
+                                modelPickerRequested = modelPickerRequested,
+                                onModelPickerRequestHandled = { modelPickerRequested = false },
+                                changeSettings = model::changeSettings,
+                                settingsSheetRequested = settingsSheetRequested,
+                                onSettingsSheetRequestHandled = { settingsSheetRequested = false },
                             )
                         },
                         onRemoveAttachment = model::removeAttachment,
@@ -1571,7 +2082,7 @@ internal fun RemoteScreen(
             state.jobs
                 ?.takeIf {
                     // Stays open through a reconnect, which clears the capabilities for a moment.
-                    it.listOpen && it.sessionId == state.selection.sessionId && chatModel != null
+                    (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId && chatModel != null
                 }
                 ?.let { jobs ->
                     val chat = checkNotNull(chatModel)
@@ -1959,49 +2470,12 @@ private fun SwipeActionChoice(
 }
 
 @Composable
-private fun SystemThemeIcon() {
-    val outline = MaterialTheme.colorScheme.outline
-    Canvas(Modifier.size(28.dp).clearAndSetSemantics {}) {
-        val circle = Path().apply { addOval(Rect(0f, 0f, size.width, size.height)) }
-        val darkHalf = Path().apply {
-            moveTo(0f, size.height)
-            lineTo(size.width, 0f)
-            lineTo(size.width, size.height)
-            close()
-        }
-        clipPath(circle) {
-            drawRect(Color(0xFFF4F7FF))
-            drawPath(darkHalf, Color(0xFF30343C))
-        }
-        drawCircle(outline, style = Stroke(width = 1.5.dp.toPx()))
-    }
-}
-
-@Composable
-private fun ThemeChoice(value: String, label: Int, selected: Boolean, onSelect: () -> Unit) {
-    val outline =
-        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-    Column(
-        Modifier.fillMaxWidth()
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
-            .testTag("theme${value.replaceFirstChar { it.uppercase() }}")
-            .border(2.dp, outline, RoundedCornerShape(16.dp))
-            .padding(8.dp),
-        horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        ThemePreview(dark = value == "dark")
-        Text(stringResource(label), style = MaterialTheme.typography.labelLarge)
-        RadioButton(selected = selected, onClick = null)
-    }
-}
-
-@Composable
-private fun ThemePreview(dark: Boolean) {
-    val shell = if (dark) Color(0xFF30343C) else Color(0xFFECEEF3)
-    val panel = if (dark) Color(0xFF505968) else Color.White
-    val line = if (dark) Color(0xFFB8C2D1) else Color(0xFF6B7586)
-    val dot = if (dark) Color(0xFF90B9FF) else Color(0xFF245DC8)
+private fun ThemePreview(value: String) {
+    val colors = remoteColorScheme(dark = value != "light" && value != "synthwave-light", synthwave = value.startsWith("synthwave"))
+    val shell = colors.background
+    val panel = colors.surfaceContainerHigh
+    val line = colors.onSurfaceVariant
+    val dot = colors.primary
     Box(
         Modifier.fillMaxWidth().height(92.dp)
             .background(shell, RoundedCornerShape(12.dp))
@@ -2018,7 +2492,12 @@ private fun ThemePreview(dark: Boolean) {
                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Box(Modifier.size(8.dp).background(dot, CircleShape))
+                    Box(
+                        Modifier.size(8.dp).background(
+                            if (value.startsWith("synthwave") && index == 1) colors.secondary else dot,
+                            CircleShape,
+                        )
+                    )
                     Box(
                         Modifier.fillMaxWidth(if (index == 0) 0.82f else 0.6f)
                             .height(5.dp).background(line, RoundedCornerShape(3.dp))

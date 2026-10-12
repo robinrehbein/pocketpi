@@ -17,7 +17,7 @@ internal object WearNotifications {
     private const val OPEN = "de.robinrehbein.pocketpi.WATCH_NOTIFICATION"
     fun createChannel(context: Context) {
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL, context.getString(R.string.remote_notification_channel), NotificationManager.IMPORTANCE_DEFAULT),
+            NotificationChannel(CHANNEL, context.getString(R.string.wear_notifications), NotificationManager.IMPORTANCE_DEFAULT),
         )
     }
     fun target(intent: Intent): NotificationTarget? {

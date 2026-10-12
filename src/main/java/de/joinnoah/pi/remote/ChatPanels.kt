@@ -4,12 +4,14 @@ import android.text.format.DateFormat
 import android.text.format.DateUtils
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -17,6 +19,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandLess
@@ -25,6 +29,8 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.QuestionMark
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -56,6 +62,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
@@ -246,43 +256,101 @@ internal fun SubagentStrip(
         if (strip.running > 0)
             pluralStringResource(R.plurals.remote_panel_subagents_running, strip.running, strip.running)
         else pluralStringResource(R.plurals.remote_panel_subagents_queued, strip.entries.size, strip.entries.size)
-    Surface(
-        modifier = Modifier.fillMaxWidth().testTag("subagentStrip"),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    StatusPopover(
+        summary = summary,
+        running = strip.running > 0,
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        expandDescription = stringResource(R.string.remote_panel_subagents_expand),
+        collapseDescription = stringResource(R.string.remote_panel_subagents_collapse),
+        title = stringResource(R.string.remote_subagent_popover_title),
+        closeDescription = stringResource(R.string.remote_subagent_popover_close),
+        chipTag = "subagentStrip",
+        popoverTag = "subagentPopover",
     ) {
-        Column {
+        LazyColumn(Modifier.heightIn(max = 320.dp)) {
+            items(strip.entries) { entry ->
+                SubagentStripRow(entry, canAbort(entry),
+                    onOpen = { expanded = false; onOpen(it) }, onAbort = onAbort)
+            }
+        }
+    }
+}
+
+/** Shared status chip and anchored, dismissible overview used above the composer. */
+@Composable
+internal fun StatusPopover(
+    summary: String,
+    running: Boolean,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    expandDescription: String,
+    collapseDescription: String,
+    title: String,
+    closeDescription: String,
+    chipTag: String,
+    popoverTag: String,
+    actions: @Composable RowScope.() -> Unit = {},
+    content: @Composable () -> Unit,
+) {
+    Box {
+        Surface(
+            shape = CircleShape,
+            color = if (expanded) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+            border = if (expanded) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+        ) {
             Row(
-                Modifier.fillMaxWidth()
-                    .clickable(role = Role.Button) { expanded = !expanded }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                Modifier.clickable(role = Role.Button) { onExpandedChange(!expanded) }
+                    .testTag(chipTag)
+                    .minimumInteractiveComponentSize()
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 StatusDot(
                     sessionStatusColor(
-                        if (strip.running > 0) SessionAvailability.RUNNING else SessionAvailability.IDLE
+                        if (running) SessionAvailability.RUNNING else SessionAvailability.IDLE
                     )
                 )
                 Text(
                     summary,
-                    Modifier.weight(1f),
                     style = MaterialTheme.typography.labelLarge,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
                 Icon(
                     if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription =
-                        stringResource(
-                            if (expanded) R.string.remote_panel_subagents_collapse
-                            else R.string.remote_panel_subagents_expand
-                        ),
+                        if (expanded) collapseDescription else expandDescription,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (expanded)
-                for (entry in strip.entries) SubagentStripRow(entry, canAbort(entry), onOpen, onAbort)
+        }
+        if (expanded) {
+            val margin = with(LocalDensity.current) { 12.dp.roundToPx() }
+            Popup(
+                popupPositionProvider = remember(margin) { SubagentPopoverPosition(margin) },
+                onDismissRequest = { onExpandedChange(false) },
+                properties = PopupProperties(focusable = true),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    shadowElevation = 8.dp,
+                    modifier = Modifier.widthIn(max = 320.dp).fillMaxWidth().testTag(popoverTag),
+                ) {
+                    Column {
+                        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                            actions()
+                            IconButton(onClick = { onExpandedChange(false) }) {
+                                Icon(Icons.Default.Close, closeDescription)
+                            }
+                        }
+                        content()
+                    }
+                }
+            }
         }
     }
 }
@@ -300,47 +368,35 @@ private fun SubagentStripRow(
     onAbort: (SubagentStripEntry) -> Unit,
 ) {
     val openable = entry.openable && entry.sessionId != null
-    Row(
-        Modifier.fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .then(if (openable) Modifier.clickable(role = Role.Button) { onOpen(entry) } else Modifier)
-            .testTag("subagentStripEntry")
-            .padding(start = 28.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    entry.agent ?: entry.title,
-                    Modifier.weight(1f, fill = false),
-                    style = MaterialTheme.typography.labelLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    stringResource(subagentStateLabel(entry.state)),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+    Column(Modifier.fillMaxWidth().testTag("subagentStripEntry").padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainerHighest) {
+                Icon(Icons.Default.Terminal, null, Modifier.padding(12.dp).size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            entry.activity?.takeIf(String::isNotBlank)?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(entry.agent ?: entry.title, style = MaterialTheme.typography.titleSmall)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    StatusDot(sessionStatusColor(if (entry.state == "running") SessionAvailability.RUNNING else SessionAvailability.IDLE))
+                    Text(stringResource(subagentStateLabel(entry.state)), style = MaterialTheme.typography.labelMedium)
+                }
+                entry.activity?.takeIf(String::isNotBlank)?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
-        if (entry.abortable && allowAbort)
-            IconButton(onClick = { onAbort(entry) }) {
-                Icon(
-                    Icons.Default.Stop,
-                    contentDescription = stringResource(R.string.remote_panel_subagent_abort),
-                    tint = MaterialTheme.colorScheme.error,
-                )
+        if (openable || (entry.abortable && allowAbort)) {
+            HorizontalDivider()
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                if (openable) TextButton(onClick = { onOpen(entry) }) {
+                    Text(stringResource(R.string.remote_subagent_open_details))
+                }
+                if (entry.abortable && allowAbort) TextButton(onClick = { onAbort(entry) }) {
+                    Icon(Icons.Default.Stop, stringResource(R.string.remote_panel_subagent_abort), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.remote_subagent_stop_label), color = MaterialTheme.colorScheme.error)
+                }
             }
+        }
     }
 }
 
@@ -355,6 +411,40 @@ private val RAIL_TAP_SLOP = 24.dp
 internal const val MIN_TIMELINE_MARKERS = 2
 
 internal fun timelineRailVisible(markers: List<TimelineMarker>): Boolean = markers.size >= MIN_TIMELINE_MARKERS
+
+@Composable
+internal fun TimelineRailControl(
+    markers: List<TimelineMarker>,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onJump: (itemId: String) -> Unit,
+    modifier: Modifier = Modifier,
+    scrollState: ScrollableState? = null,
+) {
+    if (!timelineRailVisible(markers)) return
+    Column(modifier.width(48.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        FilledTonalIconButton(
+            onClick = onToggle,
+            modifier = Modifier.testTag("timelineToggle"),
+        ) {
+            Icon(
+                if (expanded) Icons.Default.ChevronRight else Icons.Default.ChevronLeft,
+                contentDescription =
+                    stringResource(
+                        if (expanded) R.string.remote_panel_timeline_hide else R.string.remote_panel_timeline_show
+                    ),
+            )
+        }
+        if (expanded) {
+            TimelineRail(
+                markers = markers,
+                onJump = onJump,
+                modifier = Modifier.weight(1f),
+                scrollState = scrollState,
+            )
+        }
+    }
+}
 
 /** The marker closest to [fraction] (0..1 along the rail). */
 internal fun nearestMarker(markers: List<TimelineMarker>, fraction: Float): TimelineMarker? =
@@ -387,8 +477,12 @@ private fun TimelineMarkerBadge(kind: TimelineMarkerKind, modifier: Modifier = M
             TimelineMarkerKind.EDIT -> colors.primary to colors.onPrimary
             TimelineMarkerKind.PLAN -> colors.secondary to colors.onSecondary
         }
-    Box(modifier.size(16.dp).clip(CircleShape).background(container), contentAlignment = Alignment.Center) {
-        Icon(timelineMarkerIcon(kind), contentDescription = null, tint = content, modifier = Modifier.size(11.dp))
+    Box(
+        modifier.size(20.dp).clip(CircleShape).background(container)
+            .border(2.dp, colors.surface, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(timelineMarkerIcon(kind), contentDescription = null, tint = content, modifier = Modifier.size(12.dp))
     }
 }
 
@@ -454,7 +548,13 @@ internal fun TimelineRail(
             },
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(Modifier.width(12.dp).fillMaxHeight()) {
+        Canvas(Modifier.width(24.dp).fillMaxHeight()) {
+            drawRoundRect(
+                color = trackColor.copy(alpha = 0.25f),
+                topLeft = Offset.Zero,
+                size = size,
+                cornerRadius = CornerRadius(size.width / 2),
+            )
             val trackWidth = 2.dp.toPx()
             drawRoundRect(
                 trackColor,
@@ -538,20 +638,30 @@ private fun TimelineLegend(offset: IntOffset, labels: Map<TimelineMarkerKind, St
 @Composable
 internal fun ErrorFilterChip(count: Int, selected: Boolean, onToggle: () -> Unit) {
     if (count == 0 && !selected) return
-    FilterChip(
-        selected = selected,
-        onClick = onToggle,
-        label = { Text(stringResource(R.string.remote_panel_errors_filter, count)) },
-        leadingIcon = {
+    FloatingSurface(
+        shape = CircleShape,
+        color = if (selected) MaterialTheme.colorScheme.errorContainer else floatingHeaderColor(),
+    ) {
+        Row(
+            Modifier.selectable(selected = selected, role = Role.Button, onClick = onToggle)
+                .testTag("errorFilterChip")
+                .minimumInteractiveComponentSize()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Icon(
                 Icons.Default.ErrorOutline,
                 contentDescription = null,
-                modifier = Modifier.size(FilterChipDefaults.IconSize),
+                modifier = Modifier.size(18.dp),
                 tint = MaterialTheme.colorScheme.error,
             )
-        },
-        modifier = Modifier.testTag("errorFilterChip"),
-    )
+            Text(
+                stringResource(R.string.remote_panel_errors_filter, count),
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+    }
 }
 
 // ---- Compaction ---------------------------------------------------------------------------
@@ -680,5 +790,21 @@ internal fun UsageSummary(totals: SessionUsageTotals) {
                 )
                 Text(value, style = MaterialTheme.typography.bodyMedium)
             }
+    }
+}
+
+
+/** Anchors the panel above the pill, clamped inside the visible window. */
+internal class SubagentPopoverPosition(private val margin: Int) : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset {
+        val desiredX = if (layoutDirection == LayoutDirection.Ltr) anchorBounds.right - popupContentSize.width else anchorBounds.left
+        val maxX = (windowSize.width - popupContentSize.width - margin).coerceAtLeast(margin)
+        val maxY = (windowSize.height - popupContentSize.height - margin).coerceAtLeast(margin)
+        return IntOffset(desiredX.coerceIn(margin, maxX), (anchorBounds.top - popupContentSize.height - margin).coerceIn(margin, maxY))
     }
 }

@@ -39,6 +39,8 @@ ones a change needs instead of claiming them.
 
 ## Releases
 
-`.github/workflows/release.yml` publishes to Play testing tracks after a merge to `main`. It stays
-disabled until the setup in `docs/runbooks/play-testing-release.md` is complete. Never target the
-old `de.joinnoah.pocketpi` app or the production track.
+`.github/workflows/release.yml` publishes to Play testing tracks when Robin starts it by hand
+(`workflow_dispatch` on `main`); a merge alone does not publish. It refuses to run unless the Android
+CI push run for the current `main` commit succeeded. Setup and recovery are in
+`docs/runbooks/play-testing-release.md`. Never target the old `de.joinnoah.pocketpi` app or the
+production track.
