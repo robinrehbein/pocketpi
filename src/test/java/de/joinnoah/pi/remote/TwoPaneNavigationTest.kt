@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import android.content.res.Configuration
+import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -14,6 +15,8 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.doubleClick
 import androidx.compose.ui.test.performTouchInput
@@ -22,6 +25,9 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -75,12 +81,21 @@ class TwoPaneNavigationTest {
 
     private val sessions = listOf(session("s1", "First session"), session("s2", "Second session"), session("s3", "Third session"))
 
+    private fun project(id: String, name: String): JsonObject = buildJsonObject {
+        put("id", id)
+        put("name", name)
+    }
+
+    private val projects = listOf(project("project", "noah-monorepo"), project("other", "pocketpi"))
+
     init {
         repository.state.value =
             RemoteState(
                 connected = true,
                 connection = R.string.remote_connected,
                 status = "idle",
+                projects = projects,
+                project = projects[0],
                 sessions = sessions,
                 session = sessions[0],
                 messages =
@@ -183,7 +198,7 @@ class TwoPaneNavigationTest {
         render()
         compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
         compose.onNode(hasTestTag("composerField") and hasAnyAncestor(hasTestTag("chatPane"))).assertIsDisplayed()
-        compose.onNode(isSelected()).assertIsDisplayed()
+        compose.onNode(isSelected() and hasAnyAncestor(hasTestTag("sessionListPane"))).assertIsDisplayed()
         compose.onNode(isSelected() and hasAnyAncestor(hasTestTag("sessionListPane"))).assertExists()
         compose.onNodeWithText("Second session").assertIsDisplayed()
         compose.onNodeWithTag("sessionSearch").assertIsDisplayed()
@@ -267,7 +282,9 @@ class TwoPaneNavigationTest {
     @Config(qualifiers = "w753dp-h1205dp")
     fun aTabletInPortraitShowsTheSessionListBesideTheChat() {
         render()
-        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        compose.onNodeWithTag("projectStrip").assertWidthIsEqualTo(PROJECT_STRIP_WIDTH)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(280.dp)
+        assertTrue(widthOf("chatPane") >= CHAT_PANE_MIN_WIDTH)
         assertChatShown()
     }
 
@@ -275,6 +292,15 @@ class TwoPaneNavigationTest {
     @Config(qualifiers = "w1205dp-h753dp")
     fun aTabletInLandscapeOpensTheInspectorBesideTheChat() {
         render()
+        compose.onNodeWithTag("projectStrip").assertWidthIsEqualTo(PROJECT_STRIP_WIDTH)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(320.dp)
+        assertTrue(widthOf("chatPane") >= CHAT_PANE_MIN_WIDTH)
+        compose.onNodeWithContentDescription("Open noah-monorepo").assertIsSelected()
+        compose.onNodeWithContentDescription("Open pocketpi").assertIsNotSelected()
+        // TalkBack reads only "Open <name>", not the initials.
+        compose.onNodeWithText("NM", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNode(hasText("noah-monorepo") and hasTestTag("projectStripLabel")).assertExists()
+        compose.onNodeWithTag("pageColumn").assertDoesNotExist()
         openTool()
         compose.onNode(hasTestTag("toolDetail") and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
         assertChatShown()
@@ -305,6 +331,148 @@ class TwoPaneNavigationTest {
         compose.onNodeWithTag("toolDetail").assertDoesNotExist()
         compose.onNodeWithTag("inspectorPlaceholder").assertIsDisplayed()
         assertChatShown()
+    }
+
+    // ---- Projects column -----------------------------------------------------------------
+
+    private fun navigationPillIn(tag: String) =
+        compose.onNode(hasTestTag("navigationPill") and hasAnyAncestor(hasTestTag(tag)))
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun backWidensTheStripThenLeavesTheProjectThenTheHost() {
+        render()
+        compose.onNodeWithTag("projectStrip").assertIsDisplayed()
+        compose.onNodeWithTag("projectsPane").assertDoesNotExist()
+        back()
+        // The sessions: the full projects column with the project selected, then the list.
+        compose.onNodeWithTag("projectsPane").assertWidthIsEqualTo(240.dp)
+        compose.onNodeWithTag("projectRow-project").assertIsSelected()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(280.dp)
+        compose.onNodeWithTag("chatPlaceholder").assertIsDisplayed()
+        navigationPillIn("sessionListPane").assertDoesNotExist()
+        navigationPillIn("projectsPane").assertIsDisplayed()
+        compose.onNode(hasTestTag("headerActionsPill") and hasAnyAncestor(hasTestTag("sessionListPane"))).assertDoesNotExist()
+        back()
+        // The projects alone.
+        compose.onNodeWithTag("projectsPlaceholder").assertIsDisplayed()
+        compose.onNodeWithTag("projectsPane").assertIsDisplayed()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        compose.onNodeWithTag("pageColumn").assertDoesNotExist()
+        compose.onNode(isSelected()).assertDoesNotExist()
+        compose.onNodeWithTag("projectRow-project").assertIsNotSelected()
+        back()
+        // The hosts, a page of their own.
+        compose.onNodeWithTag("projectsPane").assertDoesNotExist()
+        compose.onNodeWithTag("pageColumn").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w1205dp-h753dp")
+    fun theStripSwitchesTheProjectAndClosesTheChat() {
+        render()
+        compose.onNodeWithContentDescription("Open pocketpi").performClick()
+        compose.waitForIdle()
+        assertEquals(RemoteSelection("host", "other") to ActivationMode.USER_OPEN, repository.activations.last())
+        compose.onNodeWithTag("chatPlaceholder").assertIsDisplayed()
+        compose.onNodeWithTag("projectsPane").assertWidthIsEqualTo(280.dp)
+        compose.onNodeWithTag("projectRow-other").assertIsSelected()
+        back()
+        compose.onNodeWithTag("projectsPlaceholder").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w1205dp-h753dp")
+    fun theSelectedAvatarClosesTheChat() {
+        render()
+        compose.onNodeWithContentDescription("Open noah-monorepo").performClick()
+        compose.waitForIdle()
+        assertEquals(RemoteSelection("host", "project") to ActivationMode.USER_OPEN, repository.activations.last())
+        compose.onNodeWithTag("chatPlaceholder").assertIsDisplayed()
+        compose.onNodeWithTag("projectsPane").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun theFullColumnSwitchesTheProject() {
+        render()
+        back()
+        compose.onNodeWithTag("projectRow-other").performClick()
+        compose.waitForIdle()
+        assertEquals(RemoteSelection("host", "other") to ActivationMode.USER_OPEN, repository.activations.last())
+        compose.onNodeWithTag("projectRow-other").assertIsSelected()
+        compose.onNodeWithTag("projectRow-project").assertIsNotSelected()
+        compose.onNodeWithTag("chatPlaceholder").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun phoneShowsTheProjectsFullScreen() {
+        render()
+        compose.onNodeWithTag("projectStrip").assertDoesNotExist()
+        compose.onNodeWithTag("projectsPane").assertDoesNotExist()
+        back()
+        back()
+        compose.onNodeWithTag("projectRow-project").assertIsDisplayed()
+        compose.onNode(hasTestTag("projectRow-project") and hasAnyAncestor(hasTestTag("pageColumn"))).assertExists()
+        compose.onNodeWithTag("projectsPane").assertDoesNotExist()
+        compose.onNodeWithTag("projectsPlaceholder").assertDoesNotExist()
+        compose.onNode(isSelected()).assertDoesNotExist()
+        // A page of its own has nothing to select.
+        compose.onNodeWithTag("projectRow-project").assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.Selected))
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun aCancelledBackGestureKeepsTheChatAndACommittedOneClosesIt() {
+        render()
+        val dispatcher = compose.activity.onBackPressedDispatcher
+        val stripEdge = PROJECT_STRIP_RESERVE
+        // Halfway, the strip has grown halfway to the 240 dp column and the list moved with it.
+        val halfway = PROJECT_STRIP_RESERVE + (240.dp - PROJECT_STRIP_WIDTH) / 2
+        fun listLeft() = compose.onNodeWithTag("sessionListPane").getUnclippedBoundsInRoot().left
+        fun assertNear(expected: Dp, actual: Dp) =
+            assertTrue("expected about $expected, was $actual", (actual - expected).value in -1f..1f)
+        assertNear(stripEdge, listLeft())
+        compose.runOnUiThread {
+            dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT))
+            dispatcher.dispatchOnBackProgressed(BackEventCompat(100f, 0f, 0.5f, BackEventCompat.EDGE_LEFT))
+        }
+        compose.waitForIdle()
+        // The scene's own handler has the gesture: its preview is on screen.
+        assertChatShown()
+        assertNear(halfway, listLeft())
+        compose.onNodeWithTag("projectStrip").assertWidthIsEqualTo(PROJECT_STRIP_WIDTH)
+        compose.runOnUiThread { dispatcher.dispatchOnBackCancelled() }
+        compose.waitForIdle()
+        assertChatShown()
+        assertNear(stripEdge, listLeft())
+        compose.mainClock.autoAdvance = false
+        compose.runOnUiThread {
+            dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT))
+            dispatcher.dispatchOnBackProgressed(BackEventCompat(100f, 0f, 0.5f, BackEventCompat.EDGE_LEFT))
+            dispatcher.onBackPressed()
+        }
+        compose.mainClock.advanceTimeByFrame()
+        compose.mainClock.advanceTimeByFrame()
+        // The column goes on growing from where the gesture let go instead of starting over.
+        compose.onNodeWithTag("chatPlaceholder").assertExists()
+        assertTrue(listLeft() >= halfway - 1.dp)
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatPlaceholder").assertIsDisplayed()
+        compose.onNodeWithTag("projectsPane").assertWidthIsEqualTo(240.dp)
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        assertNear(240.dp + PANE_DIVIDER_WIDTH, listLeft())
+    }
+
+    @Test
+    @Config(qualifiers = "w1205dp-h753dp")
+    fun theStripScrollsTheSelectedProjectIntoView() {
+        val many = (1..30).map { project("p$it", "Project $it") } + projects[0]
+        repository.state.value = repository.state.value.copy(projects = many)
+        render()
+        compose.onNodeWithTag("projectAvatar-project").assertIsDisplayed().assertIsSelected()
     }
 
     // ---- Resizes and recreation ----------------------------------------------------------
@@ -389,16 +557,16 @@ class TwoPaneNavigationTest {
         val restoration = StateRestorationTester(compose)
         restoration.setContent { App() }
         compose.waitForIdle()
-        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(280.dp)
         drag("sessionListDivider", 120.dp)
         val dragged = widthOf("sessionListPane")
-        assertTrue("list is $dragged", dragged > 340.dp)
+        assertTrue("list is $dragged", dragged > 320.dp)
         restoration.emulateSavedInstanceStateRestore()
         compose.waitForIdle()
         compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(dragged)
-        // The chat keeps its minimum however far the divider goes.
+        // The chat keeps its minimum beside the strip however far the divider goes: 900 - 65 - 401.
         drag("sessionListDivider", 600.dp)
-        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(480.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(434.dp)
         assertTrue(widthOf("chatPane") >= CHAT_PANE_MIN_WIDTH)
     }
 
@@ -406,12 +574,12 @@ class TwoPaneNavigationTest {
     @Config(qualifiers = "w900dp-h1200dp")
     fun draggingPastTheLimitAndBackFollowsTheFingerAgain() {
         render()
-        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
-        // 300 + 300 - 150 = 450 once the first 48 dp or so of touch slop are lost; a drag that
-        // added its deltas to the clamped 480 dp would end near 330 dp instead.
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(280.dp)
+        // 280 + 300 - 150 = 430 less the first 48 dp or so of touch slop; a drag that added its
+        // deltas to the clamped 434 dp would end near 284 dp instead.
         dragThereAndBack("sessionListDivider", 300.dp, (-150).dp)
         val width = widthOf("sessionListPane")
-        assertTrue("list is $width", width > 380.dp && width < 480.dp)
+        assertTrue("list is $width", width > 340.dp && width < 434.dp)
     }
 
     @Test
@@ -422,12 +590,12 @@ class TwoPaneNavigationTest {
         divider.assertWidthIsEqualTo(24.dp)
         divider.assert(hasContentDescription(label(R.string.remote_pane_resize_list)))
         accessibilityAction("sessionListDivider", label(R.string.remote_pane_wider))
-        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(340.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(320.dp)
         accessibilityAction("sessionListDivider", label(R.string.remote_pane_narrower))
         accessibilityAction("sessionListDivider", label(R.string.remote_pane_narrower))
-        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(260.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(240.dp)
         accessibilityAction("sessionListDivider", label(R.string.remote_pane_reset_width))
-        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(280.dp)
     }
 
     @Test
@@ -435,10 +603,10 @@ class TwoPaneNavigationTest {
     fun doubleTapOnTheDividerResetsTheList() {
         render()
         drag("sessionListDivider", 120.dp)
-        assertTrue(widthOf("sessionListPane") > 340.dp)
+        assertTrue(widthOf("sessionListPane") > 320.dp)
         compose.onNodeWithTag("sessionListDivider").performTouchInput { doubleClick() }
         compose.waitForIdle()
-        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(280.dp)
     }
 
     @Test
@@ -462,7 +630,7 @@ class TwoPaneNavigationTest {
         compose.waitForIdle()
         // The list is on the right; the chat is to its left.
         drag("sessionListDivider", (-120).dp)
-        assertTrue(widthOf("sessionListPane") > 340.dp)
+        assertTrue(widthOf("sessionListPane") > 320.dp)
     }
 
     @Test
@@ -499,7 +667,7 @@ class TwoPaneNavigationTest {
         compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
         window.value = 900.dp
         compose.waitForIdle()
-        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(300.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(280.dp)
         window.value = 1300.dp
         compose.waitForIdle()
         compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(360.dp)
@@ -610,6 +778,26 @@ class TwoPaneNavigationTest {
         compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.AltLeft) { pressKey(Key.DirectionUp) } }
         compose.waitForIdle()
         assertEquals(count, repository.activations.size)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun altPageDownSwitchesTheProject() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.AltLeft) { pressKey(Key.PageDown) } }
+        compose.waitForIdle()
+        assertEquals(RemoteSelection("host", "other") to ActivationMode.USER_OPEN, repository.activations.last())
+        compose.onNodeWithTag("chatPlaceholder").assertIsDisplayed()
+        // No project after the last one: nothing happens.
+        val count = repository.activations.size
+        compose.onNodeWithTag("sessionSearch").performClick()
+        compose.onNodeWithTag("sessionSearch").performKeyInput { withKeyDown(Key.AltLeft) { pressKey(Key.PageDown) } }
+        compose.waitForIdle()
+        assertEquals(count, repository.activations.size)
+        compose.onNodeWithTag("sessionSearch").performKeyInput { withKeyDown(Key.AltLeft) { pressKey(Key.PageUp) } }
+        compose.waitForIdle()
+        assertEquals(RemoteSelection("host", "project") to ActivationMode.USER_OPEN, repository.activations.last())
     }
 
     @Test

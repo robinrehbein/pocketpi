@@ -86,4 +86,24 @@ class FolderNavigationTest {
         runCurrent()
         assertEquals(1, repository.folderOpens.size)
     }
+
+    @Test
+    fun `beside the projects column the browser closes the open project first`() = runTest {
+        for (open in listOf(RemoteSelection("host", "project"), RemoteSelection("host", "project", "s1"))) {
+            val repository = NavigationFakeRepository()
+            val stack = open.keys().toMutableList<NavKey>()
+            val navigation = RemoteNavigator(repository, stack, backgroundScope)
+            navigation.openFolders("other")
+            assertEquals(open.keys(), stack)
+            navigation.openFolders("host")
+            runCurrent()
+            assertEquals(projects + RemoteNavKey.FolderBrowser("host"), stack)
+            assertEquals(RemoteSelection("host") to ActivationMode.RESTORE, repository.activations.last())
+            assertEquals(listOf("host" to ""), repository.browsed)
+            // Back from the browser lands on the projects.
+            navigation.back()
+            runCurrent()
+            assertEquals(projects, stack)
+        }
+    }
 }
