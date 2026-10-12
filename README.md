@@ -177,7 +177,7 @@ Keystore and encrypted file recreation. With an attached emulator, run
 `./gradlew connectedDebugAndroidTest`. For the managed API 36 device used by CI, run
 `./gradlew pixel2Api36DebugAndroidTest`.
 
-Unit tests consume the twelve JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
+Unit tests consume the thirteen JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
 of `packages/pi-remote/protocol/fixtures/` from noah-monorepo commit
 `1550dcc200459913b9b1dc9b16fc3439db341c68`. `provider-auth-v1.json` (provider login) is a
 byte-for-byte copy from noah-monorepo commit `daca1ee562ca661fb76ce2d61a75ca2fc8c8059f`, the
@@ -195,7 +195,10 @@ artifacts behind `session.files.artifact.v1`) is a byte-for-byte copy from noah-
 byte-for-byte copy from noah-monorepo commit `a6120a90b9ab580dc7684bad01fb494a6c2b2137`, the merge
 of pull request #663. `session-artifacts-v1.json` (the per-session artifact list and
 `session.artifacts.open`, including `text/vnd.mermaid`) is a byte-for-byte copy from noah-monorepo
-commit `de58394641ea248b9acee8b924a4605af6275490`, the merge of pull request #667. When the
+commit `de58394641ea248b9acee8b924a4605af6275490`, the merge of pull request #667.
+`session-notice-v1.json` (an extension's notify message as a transient session event) is a
+byte-for-byte copy from noah-monorepo commit `9fb60e7acf084324a521fa2eda2ba30d67a9882b`, the head of
+pull request #691. When the
 upstream protocol fixtures change, copy the changed files into
 `src/test/resources/`, compare their bytes with the upstream source, and run
 `./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and

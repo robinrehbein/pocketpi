@@ -2513,7 +2513,8 @@ class DefaultRemoteRepository(
 
     /**
      * Shows an extension's notice for the selected session once: a replayed event, at or below the
-     * timeline's revision, is ignored.
+     * timeline's revision, is ignored. It runs before the timeline applies the event, and a notice
+     * after a revision gap shows at once, while the timeline waits for the events before it.
      */
     private fun sessionNotice(payload: JsonObject) {
         val current = timeline ?: return

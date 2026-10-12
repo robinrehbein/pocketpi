@@ -486,9 +486,9 @@ internal fun RemoteScreen(
     }
     val snackbar = remember { SnackbarHostState() }
     val childNotice = stringResource(R.string.remote_insights_child_not_found)
-    // An extension's notice (`session.notice`) shows once; the repository forgets it at once, so a
-    // recomposition or a return to this chat does not show it again.
-    val notice = state.notice?.takeIf { it.sessionId == state.selection.sessionId }
+    // An extension's notice (`session.notice`) shows once, in the chat only, which holds the snackbar
+    // host; the repository forgets it at once, so a recomposition or a return does not show it again.
+    val notice = state.notice?.takeIf { key is RemoteNavKey.Chat && it.sessionId == state.selection.sessionId }
     LaunchedEffect(notice?.id) {
         val shown = notice ?: return@LaunchedEffect
         model.dismissNotice(shown.id)

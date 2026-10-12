@@ -325,7 +325,8 @@ internal fun SessionControls(
                 LazyColumn(Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(max = 160.dp)) {
                     items(localSuggestions, key = { "local:" + it.commandName }) { command ->
                         // Tappable for its hint, but dimmed: it does not run from here.
-                        val dimmed =
+                        val hint = command == LocalCommand.ARTIFACTS && artifactsNeedNewerHost(state)
+                        val dimmed = hint ||
                             command == LocalCommand.RELOAD &&
                                 (reloading || reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
                         ListItem(
@@ -333,7 +334,7 @@ internal fun SessionControls(
                             supportingContent = {
                                 Text(
                                     stringResource(localCommandDescription(command, state, reloading)),
-                                    maxLines = if (command == LocalCommand.RELOAD) 2 else 1,
+                                    maxLines = if (command == LocalCommand.RELOAD || hint) 2 else 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             },

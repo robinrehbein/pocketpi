@@ -50,6 +50,7 @@ internal open class DestinationViewModel(
                     changes = null,
                     compaction = null,
                     compactionRequesting = false,
+                    notice = null,
                 )
         }
 

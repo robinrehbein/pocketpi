@@ -22,10 +22,12 @@ internal const val MAX_SESSION_NOTICE_BYTES = 1000
 data class SessionNotice(val id: Long, val sessionId: String, val level: String, val message: String)
 
 private val noticeLevels = setOf("info", "warning", "error")
+private val noticeKeys = setOf("type", "sessionId", "revision", "kind", "level", "message")
 
 /** The notice [event] carries, or null when a field breaks the protocol's rules. */
 internal fun sessionNotice(event: JsonObject, id: Long): SessionNotice? {
     fun field(key: String): String? = (event[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    if (event.keys != noticeKeys) return null
     val sessionId = field("sessionId") ?: return null
     val level = field("level")?.takeIf { it in noticeLevels } ?: return null
     val message = field("message") ?: return null
