@@ -24,9 +24,11 @@ class GitChangesSubagentsTest {
         val statuses = mutableListOf<Pair<String, GitBase>>()
         val diffs = mutableListOf<Triple<String, String, String>>()
         val failing = mutableSetOf<String>()
+        val emptied = mutableSetOf<String>()
         override suspend fun gitStatus(sessionId: String, base: GitBase): GitStatus {
             statuses += sessionId to base
             if (sessionId in failing) throw RemoteRequestException("forbidden")
+            if (sessionId in emptied) return GitStatus(base, "empty-$sessionId", emptyList(), branch = "pi-agent-$sessionId")
             return when (sessionId) {
                 "session" -> GitStatus(base, "own", listOf(GitFile("own.kt", GitChange.MODIFIED, 1, 0)), branch = "feature")
                 "same-folder" -> GitStatus(base, "same", listOf(GitFile("own.kt", GitChange.MODIFIED, 1, 0)), branch = "feature")
@@ -66,19 +68,23 @@ class GitChangesSubagentsTest {
                     session("live", "running", parent = "session", updatedAt = 1),
                     session("same-folder", "running", parent = "session"),
                     session("clean", "idle", parent = "session"),
-                    session("broken", "idle", parent = "session"),
+                    session("broken", "idle", parent = "session", updatedAt = 3),
                     session("elsewhere", "running", parent = "other"),
                 ),
             )
         h.source.failing += "broken"
         h.loader.open(emptyList())
         runCurrent()
-        // Running subagents first, all against HEAD, at most four; another session's child is not asked.
+        // The session's own status comes first; then running subagents, then the newest, all against
+        // HEAD, at most four; another session's child is not asked.
+        assertEquals("session", h.source.statuses.first().first)
         val asked = h.source.statuses.filter { it.first != "session" }
-        assertEquals(listOf("live", "same-folder", "done", "clean"), asked.map { it.first })
+        assertEquals(listOf("live", "same-folder", "done", "broken"), asked.map { it.first })
         assertTrue(asked.all { it.second == GitBase.HEAD })
         val changes = h.state.changes!!
+        // The failing subagent gets no group and no error.
         assertEquals(listOf("live", "same-folder", "done"), changes.subagents.map { it.sessionId })
+        assertNull(changes.failure)
         assertTrue(changes.subagents.first().running)
         assertFalse(changes.subagents.last().running)
         // The one on the session's own branch works in its checkout: no group of its own.
@@ -110,6 +116,23 @@ class GitChangesSubagentsTest {
         runCurrent()
         assertNull(h.state.changes!!.fileSession)
         assertEquals(Triple("session", "own", "own.kt"), h.source.diffs.last())
+    }
+
+    @Test
+    fun aSubagentFileThatIsNoLongerListedEndsLoadingWithNotFound() = runTest {
+        val h = Harness(backgroundScope, listOf(session("session", "running"), session("done", "idle", parent = "session")))
+        h.loader.open(emptyList())
+        runCurrent()
+        h.loader.openSubagentFile("done", "done.kt")
+        runCurrent()
+        // The session took the subagent's changes over: a reload finds nothing left to reopen.
+        h.source.emptied += "done"
+        h.loader.reload()
+        runCurrent()
+        val changes = h.state.changes!!
+        assertFalse(changes.diffLoading)
+        assertEquals(ChangesFailure.NOT_FOUND, changes.diffFailure)
+        assertTrue(visibleSubagents(changes).isEmpty())
     }
 
     @Test

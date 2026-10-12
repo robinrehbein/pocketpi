@@ -288,8 +288,6 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
                         Notice(stringResource(unavailableText(status.unavailable)), Modifier.testTag("changesUnavailable"))
                     }
                 else -> {
-                    if (status.files.isEmpty())
-                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_empty)) }
                     if (status.files.isNotEmpty() || subagents.isNotEmpty())
                         item(key = "filesHeader", span = { GridItemSpan(maxLineSpan) }) {
                             Text(
@@ -299,6 +297,8 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
                                 style = MaterialTheme.typography.titleSmall,
                             )
                         }
+                    if (status.files.isEmpty())
+                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_empty)) }
                     items(status.files.size, key = { "file:" + status.files[it].path }) { index ->
                         val file = status.files[index]
                         ChangesFileTile(file, commentCounts[file.path] ?: 0, state.previews[file.path],
@@ -309,9 +309,9 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
                     if (status.truncated)
                         item(key = "truncated", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_truncated)) }
                     commits(state, context, actions.onReload)
+                    subagents.forEach { sub -> subagentGroup(sub, actions) }
                 }
             }
-            subagents.forEach { sub -> subagentGroup(sub, actions) }
         }
         peek?.let { (path, anchor) ->
             FilePeekPopup(FilesPeek(path, FileEntryType.FILE), state.previews[path], anchor) { peek = null }
@@ -519,8 +519,8 @@ private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesA
         when {
             failure != null -> item(key = "failure") {
                 FailureNotice(failure) {
-                    val owner = state.fileSession
-                    if (owner == null) actions.onOpenFile(path) else actions.onOpenSubagentFile(owner, path)
+                    // A subagent's snapshot comes back with a reload of the whole view.
+                    if (state.fileSession == null) actions.onOpenFile(path) else actions.onReload()
                 }
             }
             state.diffLoading || diff == null -> item(key = "loading") { Loading() }

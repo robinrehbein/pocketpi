@@ -183,13 +183,16 @@ internal const val MAX_SUBAGENT_GROUPS = 4
  * The subagents the changes view groups under the session. One that works in the session's own
  * checkout reports the session's branch (git checks a branch out in one worktree at most): its
  * changes already show under the session, so it gets no group. One without a branch cannot be told
- * apart and gets none either.
+ * apart and gets none either, and none show while the session's own branch is unknown.
  */
-internal fun visibleSubagents(changes: ChangesState): List<SubagentChanges> =
-    changes.subagents.filter { sub ->
+internal fun visibleSubagents(changes: ChangesState): List<SubagentChanges> {
+    // Without the session's own branch nothing tells a separate worktree from the same checkout.
+    val own = changes.status?.branch ?: return emptyList()
+    return changes.subagents.filter { sub ->
         val branch = sub.status.branch
-        branch != null && branch != changes.status?.branch && sub.status.files.isNotEmpty()
+        branch != null && branch != own && sub.status.files.isNotEmpty()
     }
+}
 
 /** Why the changes view shows no data. */
 enum class ChangesFailure {
