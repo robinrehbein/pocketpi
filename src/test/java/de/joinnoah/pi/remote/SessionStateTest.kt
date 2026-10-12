@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -48,6 +49,53 @@ class SessionStateTest {
             )
         )
         assertEquals("idle", timeline.status)
+    }
+
+    @Test
+    fun noticesAdvanceTheRevisionWithoutASnapshotAndParseStrictly() {
+        val timeline = Timeline("one")
+        timeline.snapshot(
+            Wire.objectOf(
+                "sessionId" to "one",
+                "revision" to 3,
+                "status" to "idle",
+                "messages" to kotlinx.serialization.json.JsonArray(emptyList()),
+                "pendingQuestions" to kotlinx.serialization.json.JsonArray(emptyList()),
+            )
+        )
+        fun notice(level: Any, message: Any) =
+            Wire.objectOf(
+                "type" to "event",
+                "sessionId" to "one",
+                "revision" to 4,
+                "kind" to "session.notice",
+                "level" to level,
+                "message" to message,
+            )
+        val event = notice("info", "No artifacts in this session yet.")
+        assertFalse(timeline.event(event))
+        assertEquals(4L, timeline.revision)
+        assertEquals(
+            SessionNotice(7, "one", "info", "No artifacts in this session yet."),
+            sessionNotice(event, 7),
+        )
+        assertEquals("error", sessionNotice(notice("error", "x"), 1)?.level)
+        assertNull(sessionNotice(notice("debug", "x"), 1))
+        assertNull(sessionNotice(notice("info", " "), 1))
+        assertNull(sessionNotice(notice("info", 3), 1))
+        assertNull(sessionNotice(notice("info", "é".repeat(MAX_SESSION_NOTICE_BYTES / 2 + 1)), 1))
+        assertNotNull(sessionNotice(notice("info", "a".repeat(MAX_SESSION_NOTICE_BYTES)), 1))
+    }
+
+    @Test
+    fun sharedNoticeFixturesParseAsTheHostDoes() {
+        val fixture =
+            Wire.json.parseToJsonElement(javaClass.getResource("/session-notice-v1.json")!!.readText()).jsonObject
+        fun payloads(list: String) = fixture.array(list).map { it.text("name") to it.obj("payload") }
+        assertTrue(payloads("wireValid").isNotEmpty())
+        for ((name, payload) in payloads("wireValid")) assertNotNull(name, sessionNotice(payload, 1))
+        assertTrue(payloads("wireInvalid").isNotEmpty())
+        for ((name, payload) in payloads("wireInvalid")) assertNull(name, sessionNotice(payload, 1))
     }
 
     @Test

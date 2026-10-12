@@ -270,13 +270,18 @@ internal fun reloadAvailability(state: RemoteState): ReloadAvailability =
         else -> ReloadAvailability.NONE
     }
 
-/** The description of [command] for the selected session; `/reload` explains a terminal session. */
+/**
+ * The description of [command] for the selected session; `/reload` explains a terminal session and
+ * `/artifacts` a host without artifacts.
+ */
 internal fun localCommandDescription(
     command: LocalCommand,
     state: RemoteState,
     reloading: Boolean = false,
 ): Int =
     when {
+        command == LocalCommand.ARTIFACTS && artifactsNeedNewerHost(state) ->
+            R.string.remote_local_command_artifacts_host_outdated
         command != LocalCommand.RELOAD -> command.description
         reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY ->
             R.string.remote_local_command_reload_terminal
@@ -325,7 +330,7 @@ internal fun availableLocalCommands(
                 ReloadAvailability.TERMINAL_ONLY -> true
                 ReloadAvailability.RUNS -> reloading || sendable
             }
-        else if (command == LocalCommand.ARTIFACTS) canShowArtifacts(state)
+        else if (command == LocalCommand.ARTIFACTS) canShowArtifacts(state) || artifactsNeedNewerHost(state)
         else sendable && localCommandAvailable(command, state, inChat, nowMillis)
     }
 }
@@ -347,7 +352,7 @@ private fun localCommandAvailable(
         LocalCommand.EXPORT -> canExportSession(state)
         LocalCommand.TREE -> canShowTree(state)
         LocalCommand.RELOAD -> reloadAvailability(state) == ReloadAvailability.RUNS
-        LocalCommand.ARTIFACTS -> canShowArtifacts(state)
+        LocalCommand.ARTIFACTS -> canShowArtifacts(state) || artifactsNeedNewerHost(state)
     }
 
 /**

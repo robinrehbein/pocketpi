@@ -204,6 +204,7 @@ class DefaultRemoteRepository(
     private var requestedSelection: RemoteSelection? = null
     private val recovery = RemoteRecovery()
     private var timeline: Timeline? = null
+    private var noticeCount = 0L
     private data class CachedSessions(
         val routeId: String,
         val projectId: String,
@@ -763,6 +764,8 @@ class DefaultRemoteRepository(
 
     override fun dismissError() = update { it.copy(error = null) }
 
+    override fun dismissNotice(id: Long) = update { if (it.notice?.id == id) it.copy(notice = null) else it }
+
     override fun dismissFollowUp(requestId: String) {
         val key = currentDraftKey() ?: return
         val draft = drafts[key] ?: return
@@ -1086,6 +1089,7 @@ class DefaultRemoteRepository(
                     if (payload.text("kind") in setOf("follow_up.status", "steer.status")) followUpReceipt(payload)
                     val timelineEvent = if (payload.text("kind") in setOf("follow_up.status", "steer.status"))
                         JsonObject(payload + ("kind" to JsonPrimitive("command.status"))) else payload
+                    if (payload.text("kind") == "session.notice") sessionNotice(payload)
                     if (timeline?.event(timelineEvent) == true && !resynchronizing) snapshotAsync()
                     publishTimeline()
                     if (payload.text("kind") == "session.compaction" &&
@@ -1418,6 +1422,7 @@ class DefaultRemoteRepository(
                 commandsLoading = false,
                 commandsTruncated = false,
                 commandNotice = null,
+                notice = null,
             )
         }
         cacheCurrentScreen()
@@ -2504,6 +2509,19 @@ class DefaultRemoteRepository(
                 else -> return
             }
         update { it.copy(commandNotice = notice) }
+    }
+
+    /**
+     * Shows an extension's notice for the selected session once: a replayed event, at or below the
+     * timeline's revision, is ignored. It runs before the timeline applies the event, and a notice
+     * after a revision gap shows at once, while the timeline waits for the events before it.
+     */
+    private fun sessionNotice(payload: JsonObject) {
+        val current = timeline ?: return
+        if (payload.text("sessionId") != current.sessionId || payload.long("revision") <= current.revision) return
+        if (current.sessionId != state.value.selection.sessionId) return
+        val notice = sessionNotice(payload, ++noticeCount) ?: return
+        update { it.copy(notice = notice) }
     }
 
     override fun older() = snapshotAsync(true)

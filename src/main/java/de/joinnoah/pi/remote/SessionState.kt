@@ -15,6 +15,26 @@ fun compactionVisible(c: SessionCompaction?, nowMillis: Long): Boolean =
 
 private val compactionReasons = setOf("manual", "threshold", "overflow")
 
+/** Longest `session.notice` message, in UTF-8 bytes. */
+internal const val MAX_SESSION_NOTICE_BYTES = 1000
+
+/** An extension's `ctx.ui.notify` in a session (`session.notice`); [id] tells repeated texts apart. */
+data class SessionNotice(val id: Long, val sessionId: String, val level: String, val message: String)
+
+private val noticeLevels = setOf("info", "warning", "error")
+private val noticeKeys = setOf("type", "sessionId", "revision", "kind", "level", "message")
+
+/** The notice [event] carries, or null when a field breaks the protocol's rules. */
+internal fun sessionNotice(event: JsonObject, id: Long): SessionNotice? {
+    fun field(key: String): String? = (event[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    if (event.keys != noticeKeys) return null
+    val sessionId = field("sessionId") ?: return null
+    val level = field("level")?.takeIf { it in noticeLevels } ?: return null
+    val message = field("message") ?: return null
+    if (message.isBlank() || message.encodeToByteArray().size > MAX_SESSION_NOTICE_BYTES) return null
+    return SessionNotice(id, sessionId, level, message)
+}
+
 data class PendingRequest(
     val type: String,
     val sessionId: String? = null,
@@ -128,6 +148,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
                     it.text("id") == event.text("questionId")
                 }
             "session.compaction" -> compaction(event)
+            "session.notice" -> Unit
             else -> return true
         }
         return false

@@ -3821,6 +3821,58 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun noticesReachTheSelectedSessionOnceAndResetOnSelection() = runTest {
+        val sessionId = "session"
+        val transport = Transport()
+        configure(transport, sessions = listOf(session(sessionId), session("other")), opened = session(sessionId))
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && request.text("sessionId") == sessionId)
+                JsonObject(original(request)!! + ("revision" to JsonPrimitive(3)))
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        fun notice(revision: Int, message: String, session: String = sessionId) =
+            Wire.objectOf(
+                "type" to "event",
+                "sessionId" to session,
+                "revision" to revision,
+                "kind" to "session.notice",
+                "level" to "info",
+                "message" to message,
+            )
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        transport.listener.message(notice(4, "No artifacts in this session yet."))
+        runCurrent()
+        val first = repository.state.value.notice
+        assertEquals("No artifacts in this session yet.", first?.message)
+        // The timeline takes the notice without asking for a snapshot.
+        assertEquals(snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        // A replay and another session's notice change nothing.
+        transport.listener.message(notice(4, "No artifacts in this session yet."))
+        transport.listener.message(notice(5, "elsewhere", "other"))
+        runCurrent()
+        assertEquals(first, repository.state.value.notice)
+        transport.listener.message(notice(5, "second"))
+        runCurrent()
+        val second = repository.state.value.notice!!
+        assertEquals("second", second.message)
+        // Dismissing the earlier notice keeps the newer one.
+        repository.dismissNotice(first!!.id)
+        assertEquals(second, repository.state.value.notice)
+        repository.dismissNotice(second.id)
+        assertNull(repository.state.value.notice)
+        transport.listener.message(notice(6, "third"))
+        runCurrent()
+        assertNotNull(repository.state.value.notice)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertNull(repository.state.value.notice)
+    }
+
+    @Test
     fun manualCompactionDispatchesWithoutChangingTheDraft() = runTest {
         val transport = Transport()
         configure(transport)

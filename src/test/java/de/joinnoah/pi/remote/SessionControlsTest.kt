@@ -368,6 +368,27 @@ class SessionControlsTest {
     }
 
     @Test
+    fun artifactsExplainAHostWithoutTheCapability() {
+        val base = chatState.copy(selection = RemoteSelection(sessionId = "s1"), capabilitiesKnown = true)
+        assertTrue(artifactsNeedNewerHost(base))
+        assertTrue(LocalCommand.ARTIFACTS in availableLocalCommands(base.copy(status = "running"), true, 0))
+        assertEquals(
+            R.string.remote_local_command_artifacts_host_outdated,
+            localCommandDescription(LocalCommand.ARTIFACTS, base),
+        )
+        // Not before the capabilities are known, nor without a connection or a selected session.
+        assertFalse(artifactsNeedNewerHost(base.copy(capabilitiesKnown = false)))
+        assertFalse(artifactsNeedNewerHost(base.copy(connected = false)))
+        assertFalse(artifactsNeedNewerHost(base.copy(selection = RemoteSelection())))
+        val supported = base.copy(capabilities = base.capabilities + ARTIFACTS_CAPABILITY)
+        assertFalse(artifactsNeedNewerHost(supported))
+        assertEquals(
+            R.string.remote_local_command_artifacts,
+            localCommandDescription(LocalCommand.ARTIFACTS, supported),
+        )
+    }
+
+    @Test
     fun localCommandsFollowTheControlsTheyStandFor() {
         val all = listOf(LocalCommand.NEW, LocalCommand.COMPACT, LocalCommand.MODEL, LocalCommand.NAME)
         assertEquals(all, availableLocalCommands(chatState, true, 0))

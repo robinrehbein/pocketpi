@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "wireValid": [
+    {
+      "name": "notice-info",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 21,
+        "kind": "session.notice",
+        "level": "info",
+        "message": "No artifacts in this session yet."
+      }
+    },
+    {
+      "name": "notice-warning",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 22,
+        "kind": "session.notice",
+        "level": "warning",
+        "message": "Context is almost full."
+      }
+    },
+    {
+      "name": "notice-error",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 23,
+        "kind": "session.notice",
+        "level": "error",
+        "message": "Extension failed: grüße 👋"
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "notice-unknown-level",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 24,
+        "kind": "session.notice",
+        "level": "debug",
+        "message": "hello"
+      }
+    },
+    {
+      "name": "notice-missing-level",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 24,
+        "kind": "session.notice",
+        "message": "hello"
+      }
+    },
+    {
+      "name": "notice-empty-message",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 24,
+        "kind": "session.notice",
+        "level": "info",
+        "message": ""
+      }
+    },
+    {
+      "name": "notice-missing-message",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 24,
+        "kind": "session.notice",
+        "level": "info"
+      }
+    },
+    {
+      "name": "notice-non-string-message",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 24,
+        "kind": "session.notice",
+        "level": "info",
+        "message": 42
+      }
+    },
+    {
+      "name": "notice-extra-key",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 24,
+        "kind": "session.notice",
+        "level": "info",
+        "message": "hello",
+        "title": "Artifacts"
+      }
+    }
+  ]
+}
