@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import androidx.navigation3.runtime.NavKey
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.test.runCurrent
@@ -474,5 +475,83 @@ class RemoteNavigationTest {
         navigation.forkSession(chat, "user-1", ForkMode.EDIT)
         runCurrent()
         assertEquals(before, stack)
+    }
+
+    @Test
+    fun `rapid createSession calls reach the host once and do not cancel the first`() = runTest {
+        val reply = CompletableDeferred<RemoteSelection>()
+        var cancelled = false
+        val repository = NavigationFakeRepository()
+        repository.create = { _, _ ->
+            try {
+                reply.await()
+            } catch (e: CancellationException) {
+                cancelled = true
+                throw e
+            }
+        }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.createSession("host", "project")
+        runCurrent()
+        navigation.createSession("host", "project")
+        runCurrent()
+        assertEquals(1, repository.createdSessions)
+        assertFalse(cancelled)
+        assertTrue(navigation.mutating)
+        reply.complete(RemoteSelection("host", "project", "created"))
+        runCurrent()
+        assertEquals(RemoteNavKey.Chat("host", "project", "created"), stack.last())
+        assertFalse(navigation.mutating)
+    }
+
+    @Test
+    fun `createSession works again after the previous one completed`() = runTest {
+        val repository = NavigationFakeRepository()
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.createSession("host", "project")
+        runCurrent()
+        navigation.createSession("host", "project")
+        runCurrent()
+        assertEquals(2, repository.createdSessions)
+    }
+
+    @Test
+    fun `a create cancelled by other navigation releases the guard`() = runTest {
+        val reply = CompletableDeferred<RemoteSelection>()
+        val repository = NavigationFakeRepository()
+        repository.create = { _, _ -> reply.await() }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.createSession("host", "project")
+        runCurrent()
+        navigation.open(RemoteNavKey.Projects("host"))
+        runCurrent()
+        assertFalse(navigation.mutating)
+        repository.create = { routeId, projectId -> RemoteSelection(routeId, projectId, "second") }
+        navigation.createSession("host", "project")
+        runCurrent()
+        assertEquals(2, repository.createdSessions)
+        assertEquals(RemoteNavKey.Chat("host", "project", "second"), stack.last())
+    }
+
+    @Test
+    fun `a fork in flight blocks a second fork and a create`() = runTest {
+        val reply = CompletableDeferred<RemoteSelection>()
+        val repository = NavigationFakeRepository()
+        repository.fork = { reply.await() }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        val chat = RemoteNavKey.Chat("host", "project", "session")
+        navigation.open(chat)
+        runCurrent()
+        navigation.forkSession(chat, "user-1", ForkMode.EDIT)
+        runCurrent()
+        navigation.forkSession(chat, "user-2", ForkMode.EDIT)
+        navigation.createSession("host", "project")
+        runCurrent()
+        assertEquals(1, repository.forks.size)
+        assertEquals(0, repository.createdSessions)
     }
 }
