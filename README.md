@@ -197,7 +197,7 @@ of pull request #663. `session-artifacts-v1.json` (the per-session artifact list
 `session.artifacts.open`, including `text/vnd.mermaid`) is a byte-for-byte copy from noah-monorepo
 commit `de58394641ea248b9acee8b924a4605af6275490`, the merge of pull request #667. `git-v1.json`
 (the changes view, including `devBase` for the branch the `dev` base compares against) is a
-byte-for-byte copy from noah-monorepo commit `23d54d40bf04b9fd0611e603b815bb348c068652`. When the
+byte-for-byte copy from noah-monorepo commit `5025773464c96d8f5b70117e51e79bbe010bed18`, the squash merge of pull request #692. When the
 upstream protocol fixtures change, copy the changed files into
 `src/test/resources/`, compare their bytes with the upstream source, and run
 `./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and
