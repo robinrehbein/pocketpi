@@ -1484,7 +1484,7 @@ class RemoteNavigationUiTest {
     }
 
     @Test
-    fun settingsSwitchAndThemeCardsExposeOneSelectableTargetEach() {
+    fun settingsSwitchesExposeOneToggleTargetEach() {
         settings()
         val thinking = { compose.onNodeWithTag("thinkingSwitch") }
         thinking().assert(hasClickAction()).assertIsOff()
@@ -1501,31 +1501,18 @@ class RemoteNavigationUiTest {
         thinking().assertIsOff()
         compose.runOnIdle { assertEquals("status", uiSettings.state.value.thinkingDisplay) }
 
-        val themes = listOf(
-            "themeSystem" to "system",
-            "themeLight" to "light",
-            "themeDark" to "dark",
-            "themeSynthwave" to "synthwave",
-        )
-        compose.onNodeWithTag("themeSystem").assertIsSelected()
-        for ((tag, value) in themes.drop(1) + themes.first()) {
-            compose.onNodeWithTag(tag)
-                .performScrollTo()
-                .assert(hasClickAction())
-                .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
-                .performClick()
-            compose.waitForIdle()
-            for ((candidate, _) in themes) {
-                compose.onNodeWithTag(candidate).let {
-                    if (candidate == tag) it.assertIsSelected() else it.assertIsNotSelected()
-                }
-                compose.onAllNodes(
-                    hasClickAction() and hasAnyAncestor(hasTestTag(candidate)),
-                    useUnmergedTree = true,
-                ).assertCountEquals(0)
-            }
-            compose.runOnIdle { assertEquals(value, uiSettings.state.value.theme) }
-        }
+        val themeSwitch = compose.onNodeWithTag("themeSynthwaveSwitch")
+        themeSwitch.performScrollTo().assertIsOff()
+            .assert(hasClickAction())
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
+        compose.onAllNodes(
+            hasClickAction() and hasAnyAncestor(hasTestTag("themeSynthwaveSwitch")),
+            useUnmergedTree = true,
+        ).assertCountEquals(0)
+        themeSwitch.performClick().assertIsOn()
+        compose.runOnIdle { assertEquals("synthwave", uiSettings.state.value.theme) }
+        themeSwitch.performClick().assertIsOff()
+        compose.runOnIdle { assertEquals("system", uiSettings.state.value.theme) }
     }
 
     @Test
@@ -1547,7 +1534,7 @@ class RemoteNavigationUiTest {
                 .putString("thinking_display", "text")
                 .putBoolean("hide_offline_sessions", true)
                 .commit()
-            for (theme in listOf("system", "light", "dark", "synthwave")) {
+            for (theme in listOf("system", "synthwave")) {
                 DefaultSettingsRepository(context).setTheme(theme)
                 assertEquals(theme, preferences.getString("theme", null))
                 val restored = DefaultSettingsRepository(context).state.value
@@ -1555,7 +1542,12 @@ class RemoteNavigationUiTest {
                 assertEquals("text", restored.thinkingDisplay)
                 assertTrue(restored.hideOfflineSessions)
             }
+            for (legacyTheme in listOf("light", "dark")) {
+                preferences.edit().putString("theme", legacyTheme).commit()
+                assertEquals("system", DefaultSettingsRepository(context).state.value.theme)
+            }
             val repository = DefaultSettingsRepository(context)
+            repository.setTheme("synthwave")
             repository.setThinkingDisplay("status")
             val restored = DefaultSettingsRepository(context).state.value
             assertEquals("status", restored.thinkingDisplay)

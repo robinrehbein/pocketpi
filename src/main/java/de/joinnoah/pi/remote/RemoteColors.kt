@@ -72,7 +72,9 @@ internal fun diffRemovedContent(): Color =
 
 /** The app's color scheme; the home-screen widget uses the same one through Glance. */
 internal fun remoteColorScheme(dark: Boolean, synthwave: Boolean = false): ColorScheme =
-    if (synthwave) synthwaveColorScheme()
+    if (synthwave) {
+        if (dark) synthwaveColorScheme() else synthwaveLightColorScheme()
+    }
     else if (dark)
         darkColorScheme(
             primary = Color(0xFFABC7FF),
@@ -194,4 +196,44 @@ private fun synthwaveColorScheme(): ColorScheme = darkColorScheme(
     surfaceContainer = Color(0xFF2A2139),
     surfaceContainerHigh = Color(0xFF34294F),
     surfaceContainerHighest = Color(0xFF463465),
+)
+
+/** Daytime Synthwave: lavender surfaces with ink-toned pink, cyan and mint accents. */
+private fun synthwaveLightColorScheme(): ColorScheme = lightColorScheme(
+    primary = Color(0xFF962576),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFFFD7F1),
+    onPrimaryContainer = Color(0xFF510A3E),
+    inversePrimary = Color(0xFFFF7EDB),
+    secondary = Color(0xFF006B70),
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFB5F5F2),
+    onSecondaryContainer = Color(0xFF003E42),
+    tertiary = Color(0xFF206B4B),
+    onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFB9F5D6),
+    onTertiaryContainer = Color(0xFF073D27),
+    background = Color(0xFFFAF3FF),
+    onBackground = Color(0xFF2E203E),
+    surface = Color(0xFFFFFBFF),
+    onSurface = Color(0xFF2E203E),
+    surfaceVariant = Color(0xFFEADFF3),
+    onSurfaceVariant = Color(0xFF594868),
+    surfaceTint = Color(0xFF962576),
+    inverseSurface = Color(0xFF34294F),
+    inverseOnSurface = Color(0xFFF4EEFF),
+    error = Color(0xFFAB2444),
+    onError = Color.White,
+    errorContainer = Color(0xFFFFD9DF),
+    onErrorContainer = Color(0xFF390B19),
+    outline = Color(0xFF79658A),
+    outlineVariant = Color(0xFFCEC0DD),
+    scrim = Color.Black,
+    surfaceBright = Color(0xFFFFFBFF),
+    surfaceDim = Color(0xFFDFD2E9),
+    surfaceContainerLowest = Color.White,
+    surfaceContainerLow = Color(0xFFFAF3FF),
+    surfaceContainer = Color(0xFFF3EAF9),
+    surfaceContainerHigh = Color(0xFFEDE2F5),
+    surfaceContainerHighest = Color(0xFFE6D9EF),
 )
