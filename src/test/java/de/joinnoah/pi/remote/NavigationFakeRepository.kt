@@ -27,6 +27,11 @@ internal class NavigationFakeRepository : RemoteRepository {
         childResumes += message
     }
     val jobOpens = mutableListOf<String?>()
+    var jobRefreshes = 0
+
+    override fun refreshJobs() {
+        jobRefreshes++
+    }
 
     override fun openJobs() {
         jobOpens += null
