@@ -161,6 +161,27 @@ one across all artifacts/tracks. `:wear:bundleRelease` depends on the existing
 upload-certificate validation and this watch version-code check. Wear OS form-factor
 setup, screenshots, review and testing-track uploads are separate release work.
 
+## Manual Play testing release
+
+After merging into `main` and passing its Android CI push run, start **Build
+PocketPi Wear testing bundle** in GitHub Actions. It uses the protected
+`play-testing` signing/Firebase configuration, checks the registered upload
+certificate, and saves `wear-release.aab` as a seven-day workflow artifact. It
+never uploads to Play or changes a track. The phone release workflow stays separate.
+
+The Wear build uses the next code observed across Play tracks, APKs and bundles.
+Downloading an artifact does not reserve that code: check that it is still unused
+in Play Console before upload. Serialize phone and watch releases; both workflows
+share the `pocketpi-play-testing` concurrency group. The root phone version code
+is set to 1 only as an unbuilt configuration value, distinct from the Wear code.
+
+In the existing `de.robinrehbein.pocketpi` app, add the Wear OS form factor, upload
+real Wear screenshots, configure the intended testers, and upload the verified
+artifact to the Wear internal testing track. Promote the same artifact to Wear
+Closed Alpha. Complete any required Wear review and record the actual delivery
+state separately for each track. Physical-device checks above remain outstanding
+until performed; a testing release does not establish device acceptance.
+
 ## Required Galaxy Watch Ultra checks
 
 - Install matching phone/watch builds and approve the independent watch device.
