@@ -674,6 +674,8 @@ internal fun RemoteScreen(
         val invocation =
             localInvocation(state, availableLocalCommands(state, true, System.currentTimeMillis(), reloading))
                 ?: return false
+        // Keeps the typed `/new` while another create is in flight; the navigator would drop it.
+        if (invocation.command == LocalCommand.NEW && navigator.mutating) return true
         model.draft("")
         when (invocation.command) {
             LocalCommand.NEW -> navigator.createSession(chat.routeId, chat.projectId)
@@ -2019,6 +2021,7 @@ internal fun RemoteScreen(
                             },
                             onAbort = model::abort,
                             onDismiss = { treeSheetRequested = false },
+                            forkBlocked = navigator.mutating,
                         )
                     if (artifactsSheetRequested && chatKey != null && treeSessionId != null && treeChat != null &&
                         canShowArtifacts(state))
