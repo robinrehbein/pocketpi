@@ -498,11 +498,12 @@ internal data class SubagentStrip(
 )
 
 private const val STRIP_RECENT_SUBAGENTS = 3
-private const val MAX_STRIP_ENTRIES = 16
 
 /**
- * The running subagents of a session: its live child sessions (abortable), enriched with the
- * latest progress, plus running or queued progress agents that have no live child yet.
+ * The subagents of a session, including finished children and terminal progress. Live child
+ * sessions remain authoritative for running/abortable state; an idle child without terminal
+ * progress is simply ended, not assumed successful. Only recent active progress contributes
+ * unresolved running agents, so historical progress cannot resurrect a stale running entry.
  */
 internal fun subagentStrip(
     items: List<ConversationItem>,
@@ -510,45 +511,63 @@ internal fun subagentStrip(
     parentSessionId: String,
 ): SubagentStrip {
     val knownIds = sessions.mapTo(HashSet()) { it.id }
-    val runningChildren = sessions.filter { it.parentSessionId == parentSessionId && it.live() }
-    val runningChildIds = runningChildren.mapTo(HashSet()) { it.id }
+    val children = sessions.filter { it.parentSessionId == parentSessionId }
+    val childIds = children.mapTo(HashSet()) { it.id }
     val subagents = items.filterIsInstance<ConversationItem.Subagent>()
     val latestBySession = HashMap<String, AgentProgress>()
     for (item in subagents) for (agent in item.agents) agent.sessionId?.let { latestBySession[it] = agent }
 
     data class Recent(val agent: AgentProgress, val match: String?)
     val recent =
-        subagents.takeLast(STRIP_RECENT_SUBAGENTS).flatMap { item ->
+        subagents.flatMapIndexed { itemIndex, item ->
             item.agents.mapIndexedNotNull { index, agent ->
-                if (!agent.active()) return@mapIndexedNotNull null
+                if (agent.active() && itemIndex < subagents.size - STRIP_RECENT_SUBAGENTS)
+                    return@mapIndexedNotNull null
+                if (agent.sessionId != null) {
+                    if (latestBySession[agent.sessionId] != agent) return@mapIndexedNotNull null
+                    // A known session under a different parent must never leak into this overview.
+                    if (agent.sessionId in knownIds && agent.sessionId !in childIds) return@mapIndexedNotNull null
+                }
                 val match =
-                    if (agent.sessionId != null) agent.sessionId.takeIf { it in knownIds }
+                    if (agent.sessionId != null) agent.sessionId.takeIf { it in childIds }
                     else
-                        (resolveSubagentChild(item, index, parentSessionId, sessions) as? ChildResolution.Exact)
+                        (resolveSubagentChild(item, index, parentSessionId, children) as? ChildResolution.Exact)
                             ?.sessionId
                 Recent(agent, match)
             }
         }
-    val heuristic = HashMap<String, AgentProgress>()
-    recent.forEach { if (it.agent.sessionId == null && it.match != null) heuristic.putIfAbsent(it.match, it.agent) }
+    val heuristic = HashMap<String, Recent>()
+    recent.asReversed().forEach {
+        if (it.agent.sessionId == null && it.match != null) heuristic.putIfAbsent(it.match, it)
+    }
 
     val entries = buildList {
-        for (child in runningChildren) {
-            val agent = latestBySession[child.id] ?: heuristic[child.id]
+        for (child in children) {
+            val agent = latestBySession[child.id] ?: heuristic[child.id]?.agent
             add(
                 SubagentStripEntry(
                     sessionId = child.id,
                     agent = agent?.name,
                     title = child.title,
-                    state = agent?.state?.takeIf { it == "queued" } ?: "running",
+                    state =
+                        when {
+                            child.live() -> agent?.state?.takeIf { it == "queued" } ?: "running"
+                            child.availability == SessionAvailability.OFFLINE -> agent?.state ?: "offline"
+                            else -> agent?.state?.takeUnless { agent.active() } ?: "ended"
+                        },
                     activity = if (agent != null) agent.activity ?: agent.preview else child.preview,
-                    abortable = true,
+                    abortable = child.live(),
                 )
             )
         }
         val seen = HashSet<String>()
-        for ((agent, match) in recent) {
-            if (match != null && match in runningChildIds) continue
+        for (record in recent.asReversed()) {
+            val (agent, match) = record
+            // Matched active progress is represented by the child's authoritative state. Retain
+            // distinct id-less terminal tasks, consuming only the record used to enrich the child.
+            if (match != null && match in childIds &&
+                (agent.active() || agent.sessionId != null ||
+                    (latestBySession[match] == null && heuristic[match] === record))) continue
             if (agent.sessionId != null && !seen.add(agent.sessionId)) continue
             add(
                 SubagentStripEntry(
@@ -563,12 +582,20 @@ internal fun subagentStrip(
             )
         }
     }
-    val ordered = entries.sortedBy { if (it.state == "queued") 1 else 0 }.take(MAX_STRIP_ENTRIES)
+    val ordered = entries.sortedBy {
+        when (it.state) {
+            "running" -> 0
+            "queued" -> 1
+            else -> 2
+        }
+    }
     return SubagentStrip(
         entries = ordered,
         running = ordered.count { it.state == "running" },
         missingSessionIds = recent.mapNotNullTo(HashSet()) { r -> r.agent.sessionId?.takeIf { it !in knownIds } },
-        unmatchedRunning = recent.count { it.agent.state == "running" && it.match == null },
+        unmatchedRunning = recent.count {
+            it.agent.state == "running" && it.match == null && it.agent.sessionId !in childIds
+        },
     )
 }
 

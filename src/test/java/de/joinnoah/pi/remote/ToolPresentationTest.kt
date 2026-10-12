@@ -398,6 +398,9 @@ class ToolPresentationTest {
                 SubagentStripEntry("c2", null, "waiting child", "running", "asks", true),
                 SubagentStripEntry(null, "reviewer", "Review the diff", "running", "looking", false),
                 SubagentStripEntry("missing-1", "planner", "Plan it", "queued", null, false, openable = false),
+                SubagentStripEntry("c3", null, "idle child", "ended", null, false),
+                SubagentStripEntry(null, "finished", "finished", "succeeded", null, false),
+                SubagentStripEntry(null, "done", "done", "succeeded", null, false),
             ),
             strip.entries,
         )
@@ -414,6 +417,122 @@ class ToolPresentationTest {
         assertEquals(listOf(SubagentStripEntry("c", "reviewer", "reviewer: Review the diff", "running", "grep", true)), strip.entries)
         assertEquals(0, strip.unmatchedRunning)
         assertTrue(strip.missingSessionIds.isEmpty())
+    }
+
+    @Test
+    fun subagentStripRetainsTerminalHistoryAndLatestStateWithoutDuplicates() {
+        val items = listOf(
+            subagent("first", AgentProgress("scout", "running", null, "reading", sessionId = "c1")),
+            subagent("final", AgentProgress("scout", "succeeded", "result", null, sessionId = "c1")),
+            subagent("failed", AgentProgress("reviewer", "failed", "test failure", null, sessionId = "c2")),
+            subagent("cancelled", AgentProgress("planner", "cancelled", null, null, sessionId = "c3")),
+            subagent("recent", AgentProgress("new", "running", null, null, sessionId = "missing")),
+        )
+        val sessions = listOf(
+            session("c1", "Scout", availability = SessionAvailability.IDLE),
+            session("c2", "Reviewer", availability = SessionAvailability.IDLE),
+            session("c3", "Planner", availability = SessionAvailability.IDLE),
+        )
+        val strip = subagentStrip(items, sessions, "parent")
+        assertEquals(listOf("running", "succeeded", "failed", "cancelled"), strip.entries.map { it.state })
+        assertEquals(1, strip.entries.count { it.sessionId == "c1" })
+        assertEquals("result", strip.entries.first { it.sessionId == "c1" }.activity)
+        assertTrue(strip.entries.none { it.abortable })
+        assertTrue(strip.entries.filter { it.sessionId != "missing" }.all { it.openable })
+        assertEquals(1, strip.running)
+    }
+
+    @Test
+    fun subagentStripDoesNotAssumeIdleChildrenSucceededOrResurrectStaleRunningProgress() {
+        val items = listOf(subagent("s", AgentProgress("scout", "running", "reading", null, sessionId = "c1")))
+        val strip = subagentStrip(items, listOf(session("c1", "Scout", availability = SessionAvailability.IDLE)), "parent")
+        assertEquals("ended", strip.entries.single().state)
+        assertFalse(strip.entries.single().abortable)
+        assertEquals(0, strip.running)
+        assertEquals(0, strip.unmatchedRunning)
+    }
+
+    @Test
+    fun subagentStripKeepsAllCompletedEntriesBeyondPreviousLimits() {
+        val items = (1..25).map { index ->
+            subagent("s$index", AgentProgress("scout", "succeeded", "result $index", null, sessionId = "c$index"))
+        }
+        val strip = subagentStrip(items, emptyList(), "parent")
+        assertEquals(25, strip.entries.size)
+        assertEquals((1..25).map { "c$it" }.toSet(), strip.entries.map { it.sessionId }.toSet())
+        assertTrue(strip.entries.all { it.state == "succeeded" && !it.openable && !it.abortable })
+    }
+
+    @Test
+    fun subagentStripUsesCurrentLiveChildrenAndExcludesOtherParents() {
+        val items = listOf(
+            subagent("s", AgentProgress("scout", "succeeded", null, null, sessionId = "c1")),
+            subagent("foreign", AgentProgress("other", "failed", null, null, sessionId = "foreign")),
+        )
+        val sessions = listOf(session("c1", "Scout"), session("foreign", "Other", parent = "elsewhere"))
+        val strip = subagentStrip(items, sessions, "parent")
+        assertEquals(listOf("c1"), strip.entries.map { it.sessionId })
+        assertEquals("running", strip.entries.single().state)
+        assertTrue(strip.entries.single().abortable)
+        assertTrue(subagentStrip(items, sessions, "unrelated").entries.isEmpty())
+    }
+
+    @Test
+    fun subagentStripMatchesCompletedProgressToIdleChildByTask() {
+        val items = listOf(subagent("s", AgentProgress("reviewer", "succeeded", "done", null, task = "Review the diff")))
+        val sessions = listOf(session("c", "reviewer: Review the diff", availability = SessionAvailability.IDLE))
+        val strip = subagentStrip(items, sessions, "parent")
+        assertEquals(listOf(SubagentStripEntry("c", "reviewer", "reviewer: Review the diff", "succeeded", "done", false)), strip.entries)
+    }
+
+    @Test
+    fun subagentStripPreservesDistinctIdlessTasksMatchingTheSameChild() {
+        val items = listOf(
+            subagent("first", AgentProgress("reviewer", "failed", "First result", null, task = "Check first task")),
+            subagent("second", AgentProgress("reviewer", "succeeded", "Second result", null, task = "Check second task")),
+        )
+        val strip = subagentStrip(items, listOf(session("c", "reviewer", availability = SessionAvailability.IDLE)), "parent")
+        assertEquals(2, strip.entries.size)
+        assertEquals(setOf("First result", "Second result"), strip.entries.map { it.activity }.toSet())
+        assertEquals(setOf("failed", "succeeded"), strip.entries.map { it.state }.toSet())
+        assertEquals("Second result", strip.entries.single { it.sessionId == "c" }.activity)
+        assertTrue(strip.entries.none { it.abortable })
+    }
+
+    @Test
+    fun subagentStripDoesNotReviveMatchedIdlessRunningProgressAfterCompletion() {
+        val items = listOf(
+            subagent("first", AgentProgress("reviewer", "running", "Reading", null, task = "Review the diff")),
+            subagent("last", AgentProgress("reviewer", "succeeded", "Done", null, task = "Review the diff")),
+        )
+        val strip = subagentStrip(items, listOf(session("c", "reviewer: Review the diff", availability = SessionAvailability.IDLE)), "parent")
+        assertEquals(listOf("succeeded"), strip.entries.map { it.state })
+        assertEquals(0, strip.running)
+        assertEquals(0, strip.unmatchedRunning)
+        assertFalse(strip.entries.single().abortable)
+    }
+
+    @Test
+    fun subagentStripPreservesActiveProgressWhileDisconnectedWithoutAllowingStop() {
+        val items = listOf(subagent("s",
+            AgentProgress("scout", "running", "Reading", null, sessionId = "c1"),
+            AgentProgress("planner", "queued", null, null, sessionId = "c2"),
+        ))
+        val sessions = sessionListItems(listOf(
+            Wire.objectOf("id" to "c1", "title" to "Scout", "status" to "running", "origin" to "rpc", "parentSessionId" to "parent"),
+            Wire.objectOf("id" to "c2", "title" to "Planner", "status" to "waiting", "origin" to "rpc", "parentSessionId" to "parent"),
+        ), connected = false, loading = false)
+        val strip = subagentStrip(items, sessions, "parent")
+        assertEquals(listOf("running", "queued"), strip.entries.map { it.state })
+        assertEquals(1, strip.running)
+        assertTrue(strip.entries.none { it.abortable })
+    }
+
+    @Test
+    fun subagentStripDoesNotAssumeOfflineChildWithNoProgressHasEnded() {
+        val strip = subagentStrip(emptyList(), listOf(session("c", "Scout", availability = SessionAvailability.OFFLINE)), "parent")
+        assertEquals("offline", strip.entries.single().state)
+        assertFalse(strip.entries.single().abortable)
     }
 
     @Test
