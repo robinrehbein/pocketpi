@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
@@ -15,11 +16,14 @@ import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -91,14 +95,14 @@ class ChatNavigationUiTest {
         }
     }
 
-    private fun render() {
+    private fun render(direction: LayoutDirection = LayoutDirection.Ltr) {
         compose.setContent {
             val configuration =
                 Configuration(LocalConfiguration.current).apply {
                     keyboard = Configuration.KEYBOARD_NOKEYS
                     hardKeyboardHidden = Configuration.HARDKEYBOARDHIDDEN_YES
                 }
-            CompositionLocalProvider(LocalConfiguration provides configuration) {
+            CompositionLocalProvider(LocalConfiguration provides configuration, LocalLayoutDirection provides direction) {
                 MaterialTheme {
                     RemoteNavigation(repository, settings, false, {}, RemoteNotification("host", "s1", 1))
                 }
@@ -178,11 +182,11 @@ class ChatNavigationUiTest {
         compose.onNodeWithText("Late output").assertIsDisplayed()
     }
 
-    @Test
-    @Config(qualifiers = "w411dp-h891dp")
-    fun holdingTheScrollbarWidensTheThumbAndShowsTheBubble() {
-        render()
+    /** Holds the bar, checks the thumb and the bubble on the lane's start side, and lets go. */
+    private fun holdScrollbar(direction: LayoutDirection) {
+        render(direction)
         fun thumbWidth() = compose.onNodeWithTag("chatScrollbarThumb").getUnclippedBoundsInRoot().let { it.right - it.left }
+        val screen = compose.onRoot().getUnclippedBoundsInRoot()
         val lane = compose.onNodeWithTag("chatScrollbar").getUnclippedBoundsInRoot()
         assertEquals(SCROLLBAR_THUMB_WIDTH.value, thumbWidth().value, 0.5f)
         compose.onNodeWithTag("chatScrollbarBubble").assertDoesNotExist()
@@ -194,13 +198,29 @@ class ChatNavigationUiTest {
         assertEquals(SCROLLBAR_THUMB_HELD_WIDTH.value, thumbWidth().value, 0.5f)
         val thumb = compose.onNodeWithTag("chatScrollbarThumb").getUnclippedBoundsInRoot()
         assertTrue("The thumb leaves the lane", thumb.left >= lane.left && thumb.right <= lane.right)
-        // The bubble sits to the start of the lane.
         val bubble = compose.onNodeWithTag("chatScrollbarBubble").getUnclippedBoundsInRoot()
-        assertTrue("The bubble at ${bubble.right} reaches into the lane at ${lane.left}", bubble.right <= lane.left)
+        assertTrue("The bubble has no width", bubble.right - bubble.left > 0.dp)
+        assertTrue("The bubble ${bubble.left}..${bubble.right} leaves the screen", bubble.left >= screen.left && bubble.right <= screen.right)
+        if (direction == LayoutDirection.Ltr)
+            assertTrue("The bubble at ${bubble.right} reaches into the lane at ${lane.left}", bubble.right <= lane.left)
+        else
+            assertTrue("The bubble at ${bubble.left} reaches into the lane at ${lane.right}", bubble.left >= lane.right)
         compose.onNodeWithTag("chatScrollbar").performTouchInput { up() }
         compose.waitForIdle()
         compose.onNodeWithTag("chatScrollbarBubble").assertDoesNotExist()
         assertEquals(SCROLLBAR_THUMB_WIDTH.value, thumbWidth().value, 0.5f)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun holdingTheScrollbarWidensTheThumbAndShowsTheBubble() = holdScrollbar(LayoutDirection.Ltr)
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun theBubbleSitsOnTheStartSideInRightToLeft() {
+        holdScrollbar(LayoutDirection.Rtl)
+        // The lane mirrors to the left edge.
+        assertTrue(compose.onNodeWithTag("chatScrollbar").getUnclippedBoundsInRoot().left < 40.dp)
     }
 
     @Test

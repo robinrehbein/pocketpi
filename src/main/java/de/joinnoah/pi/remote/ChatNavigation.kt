@@ -52,6 +52,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import java.text.NumberFormat
 import java.util.Date
@@ -304,22 +305,27 @@ internal fun ChatScrollbar(
                     }
                 }
                 .pointerInput(listState) {
-                    detectVerticalDragGestures(
-                        onDragStart = { offset ->
-                            dragging = true
-                            seek(offset.y, size.height)
-                        },
-                        onDragEnd = {
-                            dragging = false
-                            currentSeek(!listState.canScrollForward)
-                        },
-                        onDragCancel = {
-                            dragging = false
-                            currentSeek(!listState.canScrollForward)
-                        },
-                    ) { change, _ ->
-                        change.consume()
-                        seek(change.position.y, size.height)
+                    // A restart mid-drag cancels the detector without onDragCancel.
+                    try {
+                        detectVerticalDragGestures(
+                            onDragStart = { offset ->
+                                dragging = true
+                                seek(offset.y, size.height)
+                            },
+                            onDragEnd = {
+                                dragging = false
+                                currentSeek(!listState.canScrollForward)
+                            },
+                            onDragCancel = {
+                                dragging = false
+                                currentSeek(!listState.canScrollForward)
+                            },
+                        ) { change, _ ->
+                            change.consume()
+                            seek(change.position.y, size.height)
+                        }
+                    } finally {
+                        dragging = false
                     }
                 }
                 .pointerInput(listState) {
@@ -334,7 +340,10 @@ internal fun ChatScrollbar(
         ) {
             Canvas(Modifier.matchParentSize()) {
                 val tickWidth = SCROLLBAR_TICK_WIDTH.toPx()
-                val axis = size.width - SCROLLBAR_AXIS_END.toPx()
+                // The thumb's axis, mirrored like its end padding.
+                val axis =
+                    if (layoutDirection == LayoutDirection.Rtl) SCROLLBAR_AXIS_END.toPx()
+                    else size.width - SCROLLBAR_AXIS_END.toPx()
                 for (tick in ticks(size.height)) {
                     val y = (tick.fraction * size.height - tickHeight / 2)
                         .coerceIn(0f, (size.height - tickHeight).coerceAtLeast(0f))
@@ -383,7 +392,7 @@ internal fun ChatScrollbar(
                     )
                 }
         )
-        if (held) ScrollbarBubble(laneHeight, minThumb, ::metrics, ::ticks)
+        if (held) ScrollbarBubble(laneHeight, minThumb, markers, ::metrics, ::ticks)
     }
 }
 
@@ -395,6 +404,7 @@ internal fun ChatScrollbar(
 private fun ScrollbarBubble(
     laneHeight: Int,
     minThumb: Float,
+    markers: List<TimelineMarker>,
     metrics: () -> ScrollMetrics,
     ticks: (height: Float) -> List<ScrollbarTick>,
 ) {
@@ -402,18 +412,22 @@ private fun ScrollbarBubble(
         derivedStateOf { if (laneHeight > 0) scrollbarThumb(metrics(), minThumb / laneHeight) else null }
     }
     val current = thumb ?: return
-    val kind = remember(current, laneHeight) { scrollbarBubbleKind(ticks(laneHeight.toFloat()), current, SCROLLBAR_BUBBLE_SLOP) }
+    val kind = remember(current, laneHeight, markers) { scrollbarBubbleKind(ticks(laneHeight.toFloat()), current, SCROLLBAR_BUBBLE_SLOP) }
     val locale = LocalConfiguration.current.locales[0]
+    val percent = remember(locale) { NumberFormat.getPercentInstance(locale) }
     val text =
         if (kind != null) stringResource(timelineMarkerLabel(kind))
-        else NumberFormat.getPercentInstance(locale).format(scrollbarProgress(current).toDouble())
+        else percent.format(scrollbarProgress(current).toDouble())
     Box(
         Modifier.layout { measurable, constraints ->
             val placeable = measurable.measure(Constraints())
             val centre = (current.top + current.size / 2) * constraints.maxHeight
+            val gap = SCROLLBAR_BUBBLE_GAP.roundToPx()
+            // Sits at the lane's start corner; placeRelative does not mirror inside a zero-width
+            // layout, so the start side is picked here.
             layout(0, 0) {
                 placeable.place(
-                    -placeable.width - SCROLLBAR_BUBBLE_GAP.roundToPx(),
+                    if (layoutDirection == LayoutDirection.Rtl) gap else -placeable.width - gap,
                     (centre - placeable.height / 2f).roundToInt()
                         .coerceIn(0, (constraints.maxHeight - placeable.height).coerceAtLeast(0)),
                 )
