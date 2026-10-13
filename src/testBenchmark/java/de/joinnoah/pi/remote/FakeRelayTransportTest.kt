@@ -5,6 +5,8 @@ import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -128,17 +130,25 @@ class FakeRelayTransportTest {
         assertNotNull(opened.nextCursor)
         assertEquals("idle", opened.status)
 
+        val script = fixture.stream
         val stream = transport.stream(chat.sessionId!!)
-        advanceTimeBy(fixture.stream.intervalMs * 10 + 1)
+        advanceTimeBy(script.intervalMs * 10 + 1)
         assertEquals("running", repository.state.value.status)
         assertEquals("streaming", repository.state.value.messages.last().text("state"))
         stream.join()
         val streamed = repository.state.value
         assertEquals("idle", streamed.status)
-        assertEquals(fixture.stream.complete, streamed.messages.last().text("text"))
-        val answer = streamed.messages[streamed.messages.size - 2]
-        assertEquals("complete", answer.text("state"))
-        assertEquals((0 until fixture.stream.chunks).joinToString("") { fixture.stream.chunk(it) }, answer.text("text"))
+        // First answer, the edit tool call and its result, second answer, completion marker.
+        val tail = streamed.messages.takeLast(5)
+        assertEquals(fixture.stream.complete, tail[4].text("text"))
+        assertEquals(listOf("assistant", "assistant", "tool", "assistant"), tail.take(4).map { it.text("role") })
+        assertTrue(tail.take(4).all { it.text("state") == "complete" })
+        assertEquals(script.text(0 until script.toolAt), tail[0].text("text"))
+        assertEquals(tail[1].array("parts").single().text("id"), tail[2].text("toolCallId"))
+        assertEquals(script.text(script.toolAt until script.chunks), tail[3].text("text"))
+        // The Timeline projects the streamed edit like any other.
+        val projected = conversationItems(streamed.messages)
+        assertTrue(touchedFiles(projected).changed.any { it.path == "example-stream.kt" })
 
         // A dropped socket reconnects, and the fresh snapshot already holds the streamed answer.
         transport.drop()
@@ -151,6 +161,160 @@ class FakeRelayTransportTest {
         assertEquals(chat, recovered.selection)
         assertEquals(fixture.stream.complete, recovered.messages.last().text("text"))
         assertEquals(emptySet<String>(), transport.unsupported)
+    }
+
+    /** Records [FlowTrace] sections with their durations on the test clock. */
+    private class Sections(private val clock: () -> Long) : FlowTrace {
+        private val open = mutableMapOf<Int, Pair<String, Long>>()
+        private var next = 0
+        val ended = mutableListOf<Pair<String, Long>>()
+
+        override fun begin(name: String) = (++next).also { open[it] = name to clock() }
+
+        override fun end(name: String, cookie: Int) {
+            val (begun, at) = checkNotNull(open.remove(cookie))
+            assertEquals(begun, name)
+            ended += name to clock() - at
+        }
+
+        fun duration(name: String) = ended.single { it.first == name }.second
+
+        val pending: Collection<String> get() = open.values.map { it.first }
+    }
+
+    /**
+     * [harness] paired and settled on the uncached chat, with a [FlowFreshness] that follows its
+     * repository and relay as ConnectedFlowRelay wires it in the benchmark APK.
+     */
+    private fun TestScope.flowChat(harness: Harness, sections: Sections): FlowFreshness {
+        val freshness = FlowFreshness(harness.transport, sections)
+        backgroundScope.launch {
+            combine(harness.repository.state, harness.transport.replies) { state, _ -> state }.collect(freshness::observe)
+        }
+        return freshness
+    }
+
+    private suspend fun TestScope.openFlowChat(harness: Harness): RemoteSelection {
+        harness.repository.pair(fixture.pairingCode(Long.MAX_VALUE))
+        val chat = RemoteSelection(fixture.routeId, "project-pocketpi", "session-uncached")
+        assertEquals(chat, harness.repository.activate(chat, ActivationMode.USER_OPEN))
+        advanceTimeBy(5_000)
+        assertEquals(0, harness.transport.inFlight.value)
+        return chat
+    }
+
+    @Test
+    fun dropCommandIsFreshOnceTheReconnectReadTheChatAgain() = runTest {
+        val harness = harness()
+        val sections = Sections { testScheduler.currentTime }
+        val freshness = flowChat(harness, sections)
+        val chat = openFlowChat(harness)
+        assertEquals(FlowFreshness.Status(0, fresh = true), freshness.status.value)
+
+        // As ConnectedFlowActivity's `drop` command: mark, then fail the socket.
+        freshness.mark(FlowFreshness.Cause.DROP)
+        harness.transport.drop()
+        testScheduler.runCurrent()
+        assertFalse(harness.repository.state.value.connected)
+        assertTrue(harness.repository.state.value.stale)
+        assertEquals(FlowFreshness.Status(1, fresh = false), freshness.status.value)
+        advanceTimeBy(10_000)
+
+        assertEquals(FlowFreshness.Status(1, fresh = true), freshness.status.value)
+        assertEquals(2, harness.transport.connections)
+        assertEquals(chat, harness.repository.state.value.selection)
+        assertEquals(emptyList<String>(), sections.pending.toList())
+        // The quiet reconnect waits its first backoff (1 s at this jitter), then four handshake
+        // round trips; reading projects, sessions and the snapshot takes three more.
+        val connected = sections.duration(FlowFreshness.DROP_TO_CONNECTED)
+        val fresh = sections.duration(FlowFreshness.Cause.DROP.section)
+        assertTrue("connected after $connected ms", connected in 1_000L + 4 * 100..1_000L + 4 * 200)
+        assertTrue("fresh after $fresh ms", fresh - connected in 3L * 100..3L * 200 + 100)
+    }
+
+    @Test
+    fun dropWithoutASocketStaysPending() = runTest {
+        val harness = harness()
+        val sections = Sections { testScheduler.currentTime }
+        val freshness = flowChat(harness, sections)
+        openFlowChat(harness)
+        harness.repository.setNetwork(null, validated = false, path = null)
+        harness.transport.drop()
+        testScheduler.runCurrent()
+        // No network, no reconnect: a mark now never turns fresh, so a benchmark fails instead
+        // of measuring nothing.
+        freshness.mark(FlowFreshness.Cause.DROP)
+        harness.transport.drop()
+        advanceTimeBy(60_000)
+        assertEquals(FlowFreshness.Status(1, fresh = false), freshness.status.value)
+        assertEquals(
+            listOf(FlowFreshness.DROP_TO_CONNECTED, FlowFreshness.Cause.DROP.section).sorted(),
+            sections.pending.sorted(),
+        )
+    }
+
+    @Test
+    fun resumeIsMarkedOnlyAfterAStopAndFreshOnceTheProbeReadTheChat() = runTest {
+        val harness = harness()
+        val repository = harness.repository
+        val sections = Sections { testScheduler.currentTime }
+        val freshness = flowChat(harness, sections)
+        // The process's first start is no resume.
+        freshness.foreground(true)
+        openFlowChat(harness)
+        assertEquals(0, freshness.status.value.mark)
+
+        // As ProcessLifecycleOwner reports it: the application's observer first, then this one.
+        repository.setForeground(false)
+        freshness.foreground(false)
+        advanceTimeBy(20_000)
+        repository.setForeground(true)
+        freshness.foreground(true)
+        assertEquals(FlowFreshness.Status(1, fresh = false), freshness.status.value)
+        advanceTimeBy(10_000)
+
+        assertEquals(FlowFreshness.Status(1, fresh = true), freshness.status.value)
+        // Away for less than a minute: the socket was probed, not replaced.
+        assertEquals(1, harness.transport.connections)
+        val resumed = sections.duration(FlowFreshness.Cause.RESUME.section)
+        assertTrue("fresh after $resumed ms", resumed in 3L * 100..3L * 200 + 100)
+    }
+
+    @Test
+    fun resumeAfterAMinuteIsFreshOnceTheQuietReconnectReadTheChat() = runTest {
+        val harness = harness()
+        val repository = harness.repository
+        val sections = Sections { testScheduler.currentTime }
+        val freshness = flowChat(harness, sections)
+        val chat = openFlowChat(harness)
+
+        repository.setForeground(false)
+        freshness.foreground(false)
+        advanceTimeBy(65_000)
+        repository.setForeground(true)
+        freshness.foreground(true)
+        testScheduler.runCurrent()
+        assertFalse(freshness.status.value.fresh)
+        advanceTimeBy(10_000)
+
+        assertEquals(FlowFreshness.Status(1, fresh = true), freshness.status.value)
+        assertEquals(2, harness.transport.connections)
+        assertEquals(chat, repository.state.value.selection)
+        // Four handshake round trips and three reads, without a backoff.
+        val resumed = sections.duration(FlowFreshness.Cause.RESUME.section)
+        assertTrue("fresh after $resumed ms", resumed in 7L * 100..7L * 200 + 100)
+    }
+
+    @Test
+    fun streamCommandLeavesFreshnessAlone() = runTest {
+        val harness = harness()
+        val sections = Sections { testScheduler.currentTime }
+        val freshness = flowChat(harness, sections)
+        val chat = openFlowChat(harness)
+        harness.transport.stream(chat.sessionId!!).join()
+        assertEquals(FlowFreshness.Status(0, fresh = true), freshness.status.value)
+        assertEquals(emptyList<Pair<String, Long>>(), sections.ended)
+        assertEquals(fixture.stream.complete, harness.repository.state.value.messages.last().text("text"))
     }
 
     @Test
@@ -230,5 +394,12 @@ class FakeRelayTransportTest {
         val projected = conversationItems(fixture.transcript(checkNotNull(fixture.session("session-cached"))))
         assertEquals(48, projected.filterIsInstance<ConversationItem.Activity>().size)
         assertEquals(48, touchedFiles(projected).changed.size)
+        // 20 upserts per second, and each streamed answer closes the code blocks it opens.
+        val script = fixture.stream
+        assertEquals(50, script.intervalMs)
+        assertEquals(120, script.chunks)
+        for (answer in listOf(0 until script.toolAt, script.toolAt until script.chunks)) {
+            assertEquals(0, Regex("```").findAll(script.text(answer)).count() % 2)
+        }
     }
 }

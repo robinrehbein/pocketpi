@@ -36,6 +36,9 @@ APKs contain no fake relay or fixture; CI checks the debug APK's dex files for t
 | `coldStartToProjects` | Cold process on the fake relay, paired with the fixture Mac: launch, tap the Mac, wait for the projects | TTID (TTFD once the app reports it), `PocketPi.activate` sum |
 | `openUncachedChat` | Fresh process on the session list; tap a 48-turn chat never opened in this process, wait for its tail | `PocketPi.activate` (first), `PocketPi.publishTimeline` and `PocketPi.conversationItems` sums, frame timing |
 | `openCachedChat` | Same, after opening and leaving that chat once in the process, so the repository's chat cache holds it | Same as `openUncachedChat` |
+| `resumeAfterBackground` | Settled on a 48-turn chat; Home, 20 s away, the task brought back to the front; wait until the chat was read again | `ConnectedFlow.resumeToFresh`, the three `PocketPi.*` sums, frame timing |
+| `reconnectAfterDrop` | Settled on the same chat; the fake relay fails the socket; wait until the chat was read again | `ConnectedFlow.dropToConnected`, `ConnectedFlow.dropToFresh`, the three `PocketPi.*` sums |
+| `streamingThroughRepository` | Settled on the same chat; 120 scripted upserts at 20 per second with an edit tool call midway, while following the tail | Frame CPU duration and overrun percentiles, the three `PocketPi.*` sums and counts |
 
 All tests use `CompilationMode.None()` so compilation policy is explicit and repeatable. This is
 not representative of an app already optimized by Play/baseline profiles; keep the same policy for
@@ -105,13 +108,16 @@ authentication). The profiles, with a fixed random seed per process:
 | `lte` (default) | 150 ms ± 50 ms | none |
 | `bad` | 400 ms ± 100 ms | 2 % of replies held another 5 s |
 
-The fake relay can also stream the fixture's scripted answer (120 `message.upsert` events, 50 ms
-apart, with `session.status` running/idle and consecutive revisions) and fail the socket with
+The fake relay can also stream the fixture's scripted answer and fail the socket with
 `failed(true)`, so the repository reconnects. `ConnectedFlowActivity` takes them as the `command`
-extra (`stream`, `drop`) for later flow benchmarks; the three tests here do not use them. Streamed
-events skip the latency profile and arrive at once, while replies wait a round trip, so a
-`session.snapshot` answered at revision R can arrive after events R+1 and later. A real relay keeps
-host frames in order; start a stream only once the chat's snapshot is in.
+extra (`stream`, `drop`); the flow scenarios below send them. The stream (the `stream` block of the
+fixture) is 120 chunks, 50 ms apart: `session.status` running, 60 upserts growing a first Markdown
+answer (headings, lists, links, a fenced Kotlin block and a table, cycled), that answer completed,
+an edit tool call and its result, 60 upserts into a second answer, a separate completion marker and
+`session.status` idle, all with consecutive revisions. Streamed events skip the latency profile and
+arrive at once, while replies wait a round trip, so a `session.snapshot` answered at revision R can
+arrive after events R+1 and later. A real relay keeps host frames in order; start a stream only
+once the chat's snapshot is in.
 
 Before its first iteration each test clears the app and starts `ConnectedFlowActivity` with the
 `prepare` extra. That pass pairs with the fixture Mac through `repository.pair()` (the real pairing
@@ -147,6 +153,53 @@ changes.
 The trace sections come from `Diagnostics.kt` (connection diagnostics, PR #78). `PocketPi.activate`
 is an async section and needs API 29 or newer, as the benchmark module does.
 
+### Resume, reconnect and streaming
+
+The flow scenarios start each iteration in a fresh process, open the uncached chat (48 turns, no
+draft, so no keyboard) from the session list and wait until it is settled. Only then does the
+measured block start.
+
+- `resumeAfterBackground` presses Home, waits `pocketpi.resumeAwaySeconds` (20 by default) and
+  brings the app's task back with `am start`, as the launcher icon does. The process and the
+  activity stay alive, so this is a warm process with a hot activity; ProcessLifecycleOwner reports
+  the stop and the return to `RemoteApplication`, which hands them to the repository exactly as on
+  a phone. The time away picks the repository's resume tier: below 15 s with a live socket it does
+  nothing (and the scenario would time out), up to 60 s it probes the socket with a snapshot and
+  reads the lists again in place, beyond 60 s with a quiet socket it reconnects quietly. 20 s
+  measures the probe; pass 65 for the reconnect.
+- `reconnectAfterDrop` sends `drop`: the fake relay closes the socket with code 1006 and fails it,
+  as a dead socket does. The repository keeps the chat on screen as stale, waits its first backoff
+  (about one second with jitter) and reconnects.
+- `streamingThroughRepository` sends `stream` and waits for the completion marker, which shows only
+  while the list follows the tail. Every iteration after the first runs the prepare pass again, so
+  the stored navigation snapshot does not hold an earlier iteration's stream.
+
+Commands reach `ConnectedFlowActivity` through `am start --activity-single-top`, which pauses and
+resumes the activity once at the start of the measured block. `PocketPi.publishTimelineCount` and
+the other `Count` entries say how many times each section ran.
+
+**Fresh.** `FlowFreshness` (in `src/benchmark`) decides when the app has the open screen again.
+A mark starts a wait: every return of the process to the foreground after a stop, and every `drop`.
+The screen is fresh once the fake relay delivered, after the mark, a reply to each read that shows
+it (`projects.list`, `sessions.list` of the open project, the newest `session.snapshot` page of the
+open chat) and the repository is connected, not loading and no longer stale. Both resume tiers and
+the reconnect read all three again. The wait ends at the reply that completed the set; the
+repository applies it in the same main-thread turn or the next one. `ConnectedFlowActivity` shows
+the newest mark as `connected-flow-mark-<n>-<fresh|pending>`, and the benchmarks wait for mark n+1
+to turn fresh, so a stale node from the previous mark never ends a measurement.
+
+The harness's own async trace sections:
+
+| Section | From | To |
+| --- | --- | --- |
+| `ConnectedFlow.resumeToFresh` | ProcessLifecycleOwner's `ON_START` after a stop, right after the repository picked its tier | Fresh |
+| `ConnectedFlow.dropToConnected` | Just before the socket fails | The next connection is ready and the state says connected |
+| `ConnectedFlow.dropToFresh` | Just before the socket fails | Fresh |
+
+They include the fake relay's latency: one round trip per read, four for the handshake. A mark
+that never turns fresh (the tier did nothing, or no reconnect happened) fails the iteration after
+90 s instead of measuring nothing.
+
 Pass the latency profile as an instrumentation argument:
 
 ```sh
@@ -161,6 +214,10 @@ paths, and anything behind a capability. Use the Diagnostics report on a real ph
 
 ## Comparing before and after
 
+Numbers are comparable only within one device, or one emulator image (system image, API level,
+ABI, RAM and host machine), one profile and one `CompilationMode`. Never compare an emulator run
+with a phone run, or runs on two emulator images.
+
 1. Pick one device, one profile and the same `CompilationMode` for both runs.
 2. Check out the baseline commit, run the scenarios, and archive the output directory (see
    [Results](#results)) together with the SHA.
@@ -172,7 +229,34 @@ paths, and anything behind a capability. Use the Diagnostics report on a real ph
 5. When the change is about latency rather than CPU, compare under `lte` and `bad` as well: the
    fake relay's delays are part of every activation.
 
-A baseline needs the trace sections, so it must be a commit that contains `Diagnostics.kt`.
+For the flow scenarios:
+
+1. Run all three on the baseline and the candidate with the same arguments:
+
+   ```sh
+   ANDROID_SERIAL=<serial> ./gradlew :benchmarks:connectedBenchmarkAndroidTest \
+     -Pandroid.testInstrumentationRunnerArguments.class=de.robinrehbein.pocketpi.benchmarks.ConnectedFlowBenchmarks#resumeAfterBackground,de.robinrehbein.pocketpi.benchmarks.ConnectedFlowBenchmarks#reconnectAfterDrop,de.robinrehbein.pocketpi.benchmarks.ConnectedFlowBenchmarks#streamingThroughRepository \
+     -Pandroid.testInstrumentationRunnerArguments.pocketpi.relayProfile=lte
+   ```
+
+2. Resume: compare `ConnectedFlow.resumeToFreshFirstMs` once with the default 20 s away (probe)
+   and once with `-Pandroid.testInstrumentationRunnerArguments.pocketpi.resumeAwaySeconds=65`
+   (reconnect). `PocketPi.activateSumMs` is 0 for a probe and covers the restore activation for a
+   reconnect, which tells which tier ran.
+3. Reconnect: compare `ConnectedFlow.dropToConnectedFirstMs` (backoff and handshake) and
+   `ConnectedFlow.dropToFreshFirstMs`; their difference is the time from ready to the chat read
+   again, which is what a faster reconnect path should shrink.
+4. Streaming: compare the frame percentiles and `frameOverrunMs`, then `PocketPi.publishTimelineSumMs`
+   and `PocketPi.conversationItemsSumMs` with their counts: a lower sum at the same count means
+   cheaper publishes, a lower count means fewer of them.
+5. When the candidate is a rewrite of the resume or reconnect path, also run the commit just before
+   it, so the table in the pull request shows before and after on the same image.
+
+A baseline needs the trace sections, so it must be a commit that contains `Diagnostics.kt`. A
+baseline for the flow scenarios also needs this harness (`FlowFreshness.kt`): to measure an older
+commit, check it out and copy `src/benchmark` and `benchmarks/` from the candidate over it. The
+harness compiles against the app's repository, so that works only back to commits whose
+`RemoteState` already has `stale`.
 
 ## Build and correctness checks
 
@@ -238,7 +322,7 @@ In `*-benchmarkData.json`:
 - `metrics.timeToInitialDisplayMs` contains startup median and all ten iteration values;
   `timeToFullDisplayMs` appears once the app reports itself fully drawn.
 - `metrics.PocketPi.activateFirstMs` / `SumMs` and the other `<section><Mode>Ms` entries come from
-  the connected-flow trace sections.
+  the connected-flow trace sections; `ConnectedFlow.*FirstMs` come from the flow harness.
 - `PocketPi.fullChat.timelineEvent` trace sections cover real Timeline ingestion only; subsequent
   repository publication, conversation projection and Compose work are outside that section.
 - `sampledMetrics.frameDurationCpuMs` and `frameOverrunMs` contain P50/P90/P95/P99 and raw frame samples.
