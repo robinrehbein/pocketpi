@@ -75,15 +75,22 @@ class DiagnosticsTest {
         for (ms in 1L..20L) Diagnostics.request("sessions.list", ms * 10, 64, "ok")
         Diagnostics.request("sessions.list", 30_000, 64, "timeout")
         Diagnostics.request("sessions.list", 15, 64, "error.not_found")
+        // Abandoned waits stay out of the latencies and the failures.
+        Diagnostics.request("sessions.list", 25_000, 64, "cancelled")
+        Diagnostics.request("sessions.list", 9_000, 64, "lost")
         Diagnostics.request("projects.list", 40, 32, "ok")
+        Diagnostics.request("projects.list", 35, 32, "retry.v1")
 
         val stats = Diagnostics.report().requests
         val sessions = stats.first { it.type == "sessions.list" }
-        assertEquals(22, sessions.count)
+        assertEquals(24, sessions.count)
         assertEquals(100L, sessions.p50)
-        assertEquals(200L, sessions.p95)
+        assertEquals(190L, sessions.p95)
         assertEquals(1, sessions.timeouts)
-        assertEquals(1, sessions.failures)
+        assertEquals(2, sessions.failures)
+        val projects = stats.first { it.type == "projects.list" }
+        assertEquals(40L, projects.p95)
+        assertEquals(0, projects.failures)
         assertEquals(listOf("sessions.list", "projects.list"), stats.map { it.type })
     }
 

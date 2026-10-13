@@ -288,7 +288,7 @@ class SecureRemoteTransport(
                             } catch (e: Exception) {
                                 Diagnostics.caught("transport.message", e)
                                 if (epoch == generation) {
-                                    trace.finish("protocol." + phase.name.lowercase())
+                                    trace.end("protocol." + phase.name.lowercase())
                                     val error =
                                         if (phase == HandshakePhase.PERSISTING) R.string.remote_storage_error
                                         else R.string.remote_connection_error
@@ -310,7 +310,7 @@ class SecureRemoteTransport(
                         scope.launch {
                             if (epoch == generation) {
                                 val approved = approvedHost
-                                trace.finish("closed.$code")
+                                if (approved == null) trace.end("closed.$code")
                                 close()
                                 if (approved != null) listener.paired(approved)
                                 else {
@@ -332,7 +332,7 @@ class SecureRemoteTransport(
                         scope.launch {
                             if (epoch == generation) {
                                 val approved = approvedHost
-                                trace.finish("failure." + t.javaClass.simpleName)
+                                if (approved == null) trace.end("failure." + t.javaClass.simpleName.ifEmpty { "Throwable" })
                                 close()
                                 if (approved != null) listener.paired(approved)
                                 else

@@ -218,6 +218,8 @@ class DefaultRemoteRepository(
     /** When the connection was lost, for the offline interval Diagnostics records on ready(). */
     private var offlineSince: Long? = null
     private var hostWaitHint: Job? = null
+    /** Whether the current attempt reached the relay and the Mac has been silent for the hint delay. */
+    private var macSilent = false
     private var restartRetryUsed = false
     private var reconnectEnabled = true
     /** The selection the latest activation was opening, whether or not it got selected. */
@@ -395,7 +397,7 @@ class DefaultRemoteRepository(
                 }
 
                 override fun ready(capabilities: Set<String>) {
-                    hostWaitHint?.cancel()
+                    cancelHostWaitHint()
                     offlineSince?.let {
                         Diagnostics.record(Diagnostics.Kind.OFFLINE, "reconnected", Diagnostics.now() - it)
                     }
@@ -462,17 +464,32 @@ class DefaultRemoteRepository(
      * connection line says the app waits for the Mac; any later phase puts "Connecting…" back.
      */
     private fun handshakeProgress(phase: HandshakePhase) {
-        hostWaitHint?.cancel()
-        hostWaitHint = null
+        cancelHostWaitHint()
         if (state.value.connection == R.string.remote_waiting_for_mac)
             update { it.copy(connection = R.string.remote_connecting) }
         if (phase != HandshakePhase.CHALLENGE) return
         hostWaitHint = scope.launch {
             delay(HOST_WAIT_HINT_MILLIS)
+            macSilent = true
             if (!state.value.connected && state.value.connection == R.string.remote_connecting)
                 update { it.copy(connection = R.string.remote_waiting_for_mac) }
         }
     }
+
+    private fun cancelHostWaitHint() {
+        hostWaitHint?.cancel()
+        hostWaitHint = null
+        macSilent = false
+    }
+
+    /**
+     * The connection line while [host] is not connected: an activation that joins an attempt
+     * still waiting on a silent Mac keeps the hint, since no new phase will bring it back.
+     */
+    private fun connectingLine(host: PairedHost) =
+        if (macSilent && ready?.isActive == true && activeHost?.routeId == host.routeId)
+            R.string.remote_waiting_for_mac
+        else R.string.remote_connecting
 
     private fun clearNavigationCache() {
         cachedProjects = null
@@ -1023,6 +1040,7 @@ class DefaultRemoteRepository(
         val traceName = "PocketPi.req.$type"
         val cookie = Diagnostics.beginAsync(traceName)
         var outcome = "failed"
+        var ended: Long? = null
         try {
             // Set before sending: a send that throws may still have reached the host.
             onSent?.invoke()
@@ -1039,6 +1057,9 @@ class DefaultRemoteRepository(
                 if (id.startsWith(CAPABILITIES_V2_ROUTE) && result["capabilities"] !is JsonArray) {
                     // A host that predates the v2 route treats the ID as opaque and sends no list.
                     capabilityRoute = CAPABILITIES_V1_ROUTE
+                    // The retry records its own round trip; this one ends here.
+                    outcome = "retry.v1"
+                    ended = Diagnostics.now()
                     return request(type, epoch, *fields, draft = draft, timeoutMillis = timeoutMillis)
                 }
                 val advertised = (result["capabilities"] as? JsonArray)
@@ -1067,7 +1088,7 @@ class DefaultRemoteRepository(
             completions.remove(id)
             Diagnostics.endAsync(traceName, cookie)
             // The payload is ASCII JSON in all but rare cases, so its length stands for its size.
-            Diagnostics.request(type, Diagnostics.now() - started, payload.toString().length.toLong(), outcome)
+            Diagnostics.request(type, (ended ?: Diagnostics.now()) - started, payload.toString().length.toLong(), outcome)
         }
     }
 
@@ -1626,10 +1647,11 @@ class DefaultRemoteRepository(
             val alreadyConnected = state.value.connected && activeHost?.routeId == host.routeId
             if (!alreadyConnected) {
                 stopToolOutput()
+                val line = connectingLine(host)
                 update {
                     it.copy(
                         connected = false,
-                        connection = R.string.remote_connecting,
+                        connection = line,
                         compaction = null,
                         compactionRequesting = false,
                         toolOutput = null,
@@ -2038,7 +2060,7 @@ class DefaultRemoteRepository(
     override fun disconnect() {
         reconnectEnabled = false
         offlineSince = null
-        hostWaitHint?.cancel()
+        cancelHostWaitHint()
         cancelSelection()
         clearNavigationCache()
         projectImageBytes.clear()
@@ -2119,7 +2141,7 @@ class DefaultRemoteRepository(
             outcome = errorName(error) + if (reconnect) ".retry" else ".stop",
         )
         if (offlineSince == null && activeHost != null) offlineSince = Diagnostics.now()
-        hostWaitHint?.cancel()
+        cancelHostWaitHint()
         deferredRecovery = null
         generation++
         folderVersion++

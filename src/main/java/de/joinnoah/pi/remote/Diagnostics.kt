@@ -62,6 +62,11 @@ internal object Diagnostics {
             }
     }
 
+    /**
+     * Requests of one type. [p50] and [p95] cover only round trips the host answered (`ok` and
+     * `error.*`), so abandoned waits do not skew them; [failures] leaves out timeouts, which
+     * [timeouts] counts, and requests the app itself cancelled or retried.
+     */
     data class RequestStats(
         val type: String,
         val count: Int,
@@ -176,15 +181,25 @@ internal object Diagnostics {
             }
         }
 
-        /** Ends the attempt once; later calls are ignored. */
-        fun finish(result: String) {
+        /** Ends the attempt once and returns true; later calls are ignored and return false. */
+        fun finish(result: String): Boolean {
             val duration =
                 synchronized(Diagnostics) {
-                    if (outcome != null) return
+                    if (outcome != null) return false
                     outcome = safeToken(result)
                     (now() - at).also { durationMs = it }
                 }
             record(Kind.CONNECT, label, duration, outcome = result)
+            return true
+        }
+
+        /**
+         * Records why the connection ended: as the attempt's outcome while the handshake runs,
+         * and as a separate [Kind.FAILURE] entry once it has finished, so a dropped established
+         * connection keeps its close code or exception class.
+         */
+        fun end(cause: String) {
+            if (!finish(cause)) record(Kind.FAILURE, "$label.socket", outcome = cause)
         }
 
         internal fun snapshot() =
@@ -226,14 +241,17 @@ internal object Diagnostics {
             all.filter { it.kind == Kind.REQUEST }
                 .groupBy { it.label }
                 .map { (type, list) ->
-                    val durations = list.map { it.durationMs }.sorted()
+                    val durations = list.filter { answered(it.outcome) }.map { it.durationMs }.sorted()
                     RequestStats(
                         type,
                         list.size,
                         percentile(durations, 50),
                         percentile(durations, 95),
                         list.count { it.outcome == "timeout" },
-                        list.count { it.outcome != "ok" && it.outcome != "timeout" },
+                        list.count {
+                            it.outcome != "ok" && it.outcome != "timeout" && it.outcome != "cancelled" &&
+                                !it.outcome.startsWith("retry.")
+                        },
                     )
                 }
                 .sortedByDescending { it.count }
@@ -263,6 +281,8 @@ internal object Diagnostics {
         )
     }
 
+    private fun answered(outcome: String) = outcome == "ok" || outcome.startsWith("error.")
+
     /** The plain-text report the Diagnostics page copies. It holds only what [report] holds. */
     fun export(): String {
         val report = report()
@@ -276,7 +296,7 @@ internal object Diagnostics {
             }
             appendLine("Times are seconds before this report.")
             appendLine()
-            appendLine("Requests (count, p50, p95, timeouts, failures)")
+            appendLine("Requests (count, p50 and p95 of answered requests, timeouts, failures)")
             if (report.requests.isEmpty()) appendLine("  none")
             report.requests.forEach {
                 appendLine("  ${it.type} n=${it.count} p50=${it.p50}ms p95=${it.p95}ms timeouts=${it.timeouts} failures=${it.failures}")
@@ -296,7 +316,7 @@ internal object Diagnostics {
             appendLine("Offline intervals")
             if (report.offline.isEmpty()) appendLine("  none")
             report.offline.forEach {
-                appendLine("  ${ago(report.now, it.at)} ${it.durationMs}ms after ${it.label}")
+                appendLine("  ${ago(report.now, it.at)} offline ${it.durationMs}ms (until ${it.label})")
             }
             appendLine()
             report.frames?.let {
