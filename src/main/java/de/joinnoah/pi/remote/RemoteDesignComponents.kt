@@ -135,6 +135,7 @@ internal fun ProjectRow(
     selected: Boolean? = null,
 ) {
     val context = LocalContext.current
+    val regionChild = rememberRegionChild()
     val unshareLabel = stringResource(R.string.remote_project_unshare)
     val updateNeededLabel = stringResource(R.string.remote_project_unshare_update_needed)
     val updateHint = stringResource(R.string.remote_project_unshare_update_host)
@@ -191,6 +192,8 @@ internal fun ProjectRow(
                         }
                     )
                 }
+                .focusRing(RoundedCornerShape(16.dp))
+                .then(regionChild)
                 .combinedClickable(
                     onClick = onClick,
                     // Only an outdated host needs the long press: it is the one place a swipe

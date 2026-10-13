@@ -9,6 +9,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertWidthIsAtLeast
@@ -126,6 +129,29 @@ class FilesPaneUiTest {
         val tiles = names.map { compose.onNodeWithTag("filesEntry:$it").getUnclippedBoundsInRoot() }
         for (tile in tiles.drop(1)) assertEquals(tiles[0].top, tile.top)
         assertEquals(true, tiles.zipWithNext().all { (a, b) -> a.left < b.left })
+    }
+
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun rightOpensATileAtTheRowsEndAndBackspaceGoesUp() {
+        val listing = FileListing("src", listOf(FileEntry("lib", FileEntryType.DIR), FileEntry("Main.kt", FileEntryType.FILE, 10), FileEntry("Util.kt", FileEntryType.FILE, 10)))
+        render(FilesState("s", loading = false, path = "src", listing = listing))
+        val main = compose.onNodeWithTag("filesEntry:Main.kt")
+        main.performSemanticsAction(SemanticsActions.RequestFocus)
+        // Main.kt has Util.kt to its right: Right moves there and opens nothing.
+        main.performKeyInput { pressKey(androidx.compose.ui.input.key.Key.DirectionRight) }
+        compose.waitForIdle()
+        assertEquals(emptyList<String?>(), files)
+        compose.onNodeWithTag("filesEntry:Util.kt").assertIsFocused()
+        // At the row's end Right opens the file, as Enter would.
+        compose.onNodeWithTag("filesEntry:Util.kt").performKeyInput { pressKey(androidx.compose.ui.input.key.Key.DirectionRight) }
+        compose.waitForIdle()
+        assertEquals(listOf<String?>("src/Util.kt"), files)
+        // Backspace goes up a folder.
+        compose.onNodeWithTag("filesEntry:Util.kt").performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Backspace) }
+        compose.waitForIdle()
+        assertEquals(listOf(""), opened)
     }
 
     @Test

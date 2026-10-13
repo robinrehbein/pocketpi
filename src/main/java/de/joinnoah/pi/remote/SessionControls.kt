@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -328,16 +331,49 @@ internal fun SessionControls(
         val slashShown =
             slashCommands && (slashLoading || localSuggestions.isNotEmpty() || hostSuggestions.isNotEmpty())
         val keyTarget = LocalChatKeyTarget.current
-        if (keyTarget != null) {
-            SideEffect { keyTarget.slashShown = slashShown }
-            DisposableEffect(keyTarget) { onDispose { keyTarget.slashShown = false } }
+        val names = remember(localSuggestions, hostSuggestions) {
+            localSuggestions.map { it.commandName } + hostSuggestions.map { it.name }
         }
+        if (keyTarget != null) {
+            SideEffect {
+                keyTarget.slashShown = slashShown
+                // A new list highlights the command typed in full, or else its first one.
+                if (keyTarget.slashNames != names) {
+                    keyTarget.slashNames = names
+                    keyTarget.slashHighlight = names.indexOfFirst { it.equals(slash, ignoreCase = true) }.coerceAtLeast(0)
+                }
+                keyTarget.runSlash = { index ->
+                    localSuggestions.getOrNull(index)?.let(selectLocalCommand)
+                        ?: hostSuggestions.getOrNull(index - localSuggestions.size)?.let(selectCommand)
+                }
+            }
+            DisposableEffect(keyTarget) {
+                onDispose {
+                    keyTarget.slashShown = false
+                    keyTarget.slashNames = emptyList()
+                }
+            }
+        }
+        // Up and Down move this highlight from a hardware keyboard; touch never shows it.
+        val highlight = keyTarget?.slashHighlight?.takeIf { LocalHardwareKeyboard.current }
         if (slashSuggestions && slashCommands) {
             if (slashLoading)
                 LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 8.dp))
-            else if (localSuggestions.isNotEmpty() || hostSuggestions.isNotEmpty())
-                LazyColumn(Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(max = 160.dp)) {
-                    items(localSuggestions, key = { "local:" + it.commandName }) { command ->
+            else if (localSuggestions.isNotEmpty() || hostSuggestions.isNotEmpty()) {
+                val suggestionList = rememberLazyListState()
+                LaunchedEffect(highlight, names) {
+                    val index = highlight ?: return@LaunchedEffect
+                    val info = suggestionList.layoutInfo
+                    val item = info.visibleItemsInfo.firstOrNull { it.index == index }
+                    if (item == null || item.offset < info.viewportStartOffset ||
+                        item.offset + item.size > info.viewportEndOffset)
+                        suggestionList.animateScrollToItem(index)
+                }
+                LazyColumn(
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(max = 160.dp).testTag("slashSuggestions"),
+                    state = suggestionList,
+                ) {
+                    itemsIndexed(localSuggestions, key = { _, command -> "local:" + command.commandName }) { index, command ->
                         // Tappable for its hint, but dimmed: it does not run from here.
                         val hint = command == LocalCommand.ARTIFACTS && artifactsNeedNewerHost(state)
                         val dimmed = hint ||
@@ -352,10 +388,15 @@ internal fun SessionControls(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             },
-                            modifier = Modifier.alpha(if (dimmed) 0.6f else 1f).clickable { selectLocalCommand(command) },
+                            colors = suggestionColors(index == highlight),
+                            modifier = Modifier.alpha(if (dimmed) 0.6f else 1f)
+                                .suggestionHighlight(index == highlight)
+                                .focusRing()
+                                .clickable { selectLocalCommand(command) },
                         )
                     }
-                    items(hostSuggestions, key = { it.name }) { command ->
+                    itemsIndexed(hostSuggestions, key = { _, command -> command.name }) { hostIndex, command ->
+                        val index = localSuggestions.size + hostIndex
                         ListItem(
                             headlineContent = { Text("/" + command.name) },
                             supportingContent = {
@@ -363,10 +404,12 @@ internal fun SessionControls(
                                     Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             },
-                            modifier = Modifier.clickable { selectCommand(command) },
+                            colors = suggestionColors(index == highlight),
+                            modifier = Modifier.suggestionHighlight(index == highlight).focusRing().clickable { selectCommand(command) },
                         )
                     }
                 }
+            }
             if (hostCommands && state.commandsTruncated)
                 Text(
                     stringResource(R.string.remote_catalog_truncated),
@@ -811,3 +854,12 @@ internal fun thinkingLevelLabel(level: String): String =
         "xhigh" -> stringResource(R.string.remote_thinking_xhigh)
         else -> level
     }
+
+/** The slash suggestion Tab or Enter runs stands out ([ChatKeyTarget.slashHighlight]). */
+@Composable
+private fun suggestionColors(highlighted: Boolean): ListItemColors =
+    if (highlighted) ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+    else ListItemDefaults.colors()
+
+private fun Modifier.suggestionHighlight(highlighted: Boolean): Modifier =
+    if (highlighted) semantics { selected = true }.testTag("slashHighlight") else this

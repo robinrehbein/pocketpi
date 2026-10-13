@@ -36,6 +36,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
@@ -80,8 +81,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -93,6 +102,7 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.scene.Scene
 import androidx.navigation3.scene.SceneStrategy
 import androidx.navigation3.scene.SceneStrategyScope
+import kotlinx.serialization.json.JsonObject
 
 /*
  * Tablet layout. The window size alone picks the layout, so portrait, landscape, split-screen
@@ -830,6 +840,112 @@ internal fun composerEnter(
     }
 }
 
+/** What a hardware key does in the composer besides Enter ([composerEnter]). */
+internal enum class ComposerKey {
+    /** The text field handles the key as before. */
+    DEFAULT,
+
+    /** Moves the slash suggestions' highlight up or down. */
+    SUGGESTION_UP,
+    SUGGESTION_DOWN,
+
+    /** Runs the highlighted slash suggestion, as a tap on it does. */
+    SUGGESTION_RUN,
+
+    /** Closes the slash suggestions; the next edit brings them back. */
+    SUGGESTIONS_CLOSE,
+
+    /** Takes the prompt prediction into the empty composer. */
+    ACCEPT_PREDICTION,
+
+    /** Shows an older or newer user message of this session ([MessageRecall]). */
+    PREVIOUS_MESSAGE,
+    NEXT_MESSAGE,
+}
+
+/**
+ * The composer's completion keys for a hardware key without modifiers. While the slash
+ * suggestions show, Up and Down move the highlight, Tab runs it, Esc closes the list, and Enter
+ * runs it too unless the highlighted command is [highlightTyped] in full already, so a partial
+ * "/com" is never sent. With an empty draft, Tab or Right takes a shown prediction, and Up walks
+ * this session's earlier messages; while [recalling] one, Up and Down walk on.
+ */
+internal fun composerKey(
+    key: Key,
+    keyDown: Boolean,
+    ctrl: Boolean,
+    alt: Boolean,
+    shift: Boolean,
+    hardwareKeyboard: Boolean,
+    suggestionsOpen: Boolean,
+    highlightTyped: Boolean,
+    predictionShown: Boolean,
+    draftEmpty: Boolean,
+    recalling: Boolean,
+): ComposerKey {
+    if (!hardwareKeyboard || !keyDown || ctrl || alt || shift) return ComposerKey.DEFAULT
+    if (suggestionsOpen)
+        when (key) {
+            Key.DirectionUp -> return ComposerKey.SUGGESTION_UP
+            Key.DirectionDown -> return ComposerKey.SUGGESTION_DOWN
+            Key.Tab -> return ComposerKey.SUGGESTION_RUN
+            Key.Enter, Key.NumPadEnter -> return if (highlightTyped) ComposerKey.DEFAULT else ComposerKey.SUGGESTION_RUN
+            Key.Escape -> return ComposerKey.SUGGESTIONS_CLOSE
+        }
+    if (draftEmpty && predictionShown && (key == Key.Tab || key == Key.DirectionRight)) return ComposerKey.ACCEPT_PREDICTION
+    if (draftEmpty || recalling)
+        when (key) {
+            Key.DirectionUp -> return ComposerKey.PREVIOUS_MESSAGE
+            Key.DirectionDown -> if (recalling) return ComposerKey.NEXT_MESSAGE
+        }
+    return ComposerKey.DEFAULT
+}
+
+/** The highlight [step]s on through [count] suggestions, wrapping at either end. */
+internal fun moveHighlight(current: Int, count: Int, step: Int): Int =
+    if (count <= 0) 0 else Math.floorMod(current + step, count)
+
+/** This session's user messages, newest first and without repeats in a row, for [MessageRecall]. */
+internal fun recallableMessages(messages: List<JsonObject>): List<String> =
+    messages.asReversed().asSequence()
+        .filter { it.optionalText("role") == "user" }
+        .mapNotNull { it.optionalText("text")?.takeIf(String::isNotBlank) }
+        .fold(mutableListOf<String>()) { list, text -> list.apply { if (lastOrNull() != text) add(text) } }
+
+/**
+ * Up and Down in an empty composer, as in a shell: Up shows this session's previous message,
+ * Down a newer one and past the newest an empty draft again. Editing the shown text ends it.
+ */
+internal class MessageRecall {
+    private var index = -1
+    private var shown: String? = null
+
+    /** The composer shows [draft]: true while it is the recalled message, unchanged. */
+    fun recalling(draft: String): Boolean = shown != null && shown == draft
+
+    /**
+     * The text to show for a step through [history] (newest first): 1 is older, -1 newer. Null
+     * when there is nothing further that way.
+     */
+    fun step(history: List<String>, draft: String, step: Int): String? {
+        if (!recalling(draft)) {
+            index = -1
+            shown = null
+        }
+        val next = index + step
+        if (next >= history.size || index < 0 && step < 0) return null
+        index = next
+        if (next < 0) {
+            shown = null
+            return ""
+        }
+        return history[next].also { shown = it }
+    }
+}
+
+/** The Settings keyboard section shows with a keyboard attached or in the wide layout. */
+internal fun keyboardSettingsShown(hardwareKeyboard: Boolean, twoPane: Boolean): Boolean = hardwareKeyboard || twoPane
+
 /** Case-insensitive title or preview match; a blank query keeps every row. */
 internal fun filterSessions(items: List<SessionListItem>, query: String): List<SessionListItem> {
     val needle = query.trim()
@@ -855,6 +971,9 @@ internal fun InspectorRow(
     inspector: (@Composable () -> Unit)?,
     content: @Composable () -> Unit,
 ) {
+    // F6 reaches the pane's content, and comes back to the row it left there.
+    val region =
+        rememberFocusRegion(FocusRegion.INSPECTOR, enabled = shown && inspector != null, children = LocalFocusRegionChildren.current)
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val available by rememberUpdatedState(maxWidth)
         val paneWidth = inspectorPaneWidth(width(), maxWidth)
@@ -862,7 +981,7 @@ internal fun InspectorRow(
             Box(Modifier.weight(1f).fillMaxHeight()) { content() }
             if (shown) {
                 VerticalDivider()
-                Box(Modifier.width(paneWidth).fillMaxHeight().testTag("inspectorPane")) {
+                Box(Modifier.width(paneWidth).fillMaxHeight().testTag("inspectorPane").then(region)) {
                     if (inspector != null) inspector()
                     else
                         Box(
@@ -906,6 +1025,7 @@ internal fun SessionSearchField(
     onSearch: () -> Unit,
     focusRequester: FocusRequester,
 ) {
+    val focusManager = LocalFocusManager.current
     OutlinedTextField(
         value = query,
         onValueChange = onQuery,
@@ -918,6 +1038,12 @@ internal fun SessionSearchField(
         modifier =
             Modifier.fillMaxWidth()
                 .focusRequester(focusRequester)
+                // Down leaves the one-line field for the rows below it, as in a list.
+                .onPreviewKeyEvent { event ->
+                    event.key == Key.DirectionDown && event.type == KeyEventType.KeyDown &&
+                        !event.isCtrlPressed && !event.isAltPressed && !event.isMetaPressed &&
+                        focusManager.moveFocus(FocusDirection.Down)
+                }
                 .testTag("sessionSearch"),
     )
 }

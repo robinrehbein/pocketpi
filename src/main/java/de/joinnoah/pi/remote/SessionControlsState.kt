@@ -284,8 +284,8 @@ internal fun localCommandDescription(
             R.string.remote_local_command_artifacts_host_outdated
         command != LocalCommand.RELOAD -> command.description
         reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY ->
-            R.string.remote_local_command_reload_terminal
-        reloading -> R.string.remote_local_command_reload_running
+            R.string.remote_reload_terminal_hint
+        reloading -> R.string.remote_reload_running
         else -> command.description
     }
 

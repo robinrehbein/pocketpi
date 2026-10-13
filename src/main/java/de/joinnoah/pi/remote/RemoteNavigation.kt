@@ -15,6 +15,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.platform.LocalContext
@@ -570,6 +571,26 @@ internal class RemoteNavigator(
                 if (!repeat) refresh()
                 return true
             }
+            Shortcut.HELP -> {
+                if (!repeat) targets.help = if (top is RemoteNavKey.Chat) KeyContext.CHAT else KeyContext.GLOBAL
+                return true
+            }
+            Shortcut.NEXT_REGION,
+            Shortcut.PREVIOUS_REGION -> {
+                if (!repeat) targets.regions.cycle(if (shortcut == Shortcut.NEXT_REGION) 1 else -1)
+                return true
+            }
+            // Held, the page keys page on. With focus in a list or the inspector, or a pane over
+            // the chat, they stay there, which scrolls itself.
+            Shortcut.PAGE_UP,
+            Shortcut.PAGE_DOWN,
+            Shortcut.CHAT_START,
+            Shortcut.CHAT_END -> {
+                val target = (top as? RemoteNavKey.Chat)?.let(targets::chat) ?: return false
+                val region = targets.regions.current
+                if (target.composerCovered || (region != null && region != FocusRegion.CHAT)) return false
+                return target.shortcut(shortcut)
+            }
             Shortcut.FOCUS_COMPOSER,
             Shortcut.STOP,
             Shortcut.CHANGES,
@@ -584,11 +605,10 @@ internal class RemoteNavigator(
                 target.stopNow()
                 return true
             }
-            // Esc runs in the key handlers, Alt+Enter in the composer; help and the inspector
-            // keys have no action yet.
+            // Esc runs in the key handlers, Alt+Enter in the composer; the inspector keys have
+            // no action yet.
             Shortcut.ESCAPE,
             Shortcut.OTHER_BUSY_ACTION,
-            Shortcut.HELP,
             Shortcut.EXPAND_INSPECTOR,
             Shortcut.TOGGLE_INSPECTOR -> return false
             else -> Unit
@@ -859,6 +879,7 @@ internal fun RemoteNavigation(
             LocalHardwareKeyboard provides hardwareKeyboard,
             LocalEditorFocus provides navigator.editorFocus,
             LocalShortcutTargets provides targets,
+            LocalFocusRingColor provides MaterialTheme.colorScheme.primary,
         ) {
             Box(
                 // While something in the layout has focus (the composer, the search field), the
@@ -879,6 +900,9 @@ internal fun RemoteNavigation(
                     enablePush,
                     disablePush,
                 )
+            }
+            targets.help?.let { context ->
+                ShortcutHelpDialog(context) { targets.help = null }
             }
             navigator.editorLeave?.let { held ->
                 EditorDiscardDialog(
@@ -906,8 +930,10 @@ private fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets
         // Up and down alike, so no half of the key becomes Back.
         return true
     }
-    if (event.type != KeyEventType.KeyDown || editing) return false
+    if (event.type != KeyEventType.KeyDown) return false
     val shortcut = resolveShortcut(event, if (chat != null) KeyContext.CHAT else KeyContext.GLOBAL)
+    // The editor keeps its keys, apart from F6 and its alias, which leave it for the next pane.
+    if (editing && shortcut != Shortcut.NEXT_REGION && shortcut != Shortcut.PREVIOUS_REGION) return false
     if (shortcut != null) return shortcut(shortcut, twoPane, targets, repeat = native.repeatCount > 0)
     // Over Files, Changes, a tool detail or the jobs the composer is hidden: no typing into it.
     if (!unhandled || chat == null || chat.composerCovered) return false
