@@ -102,9 +102,12 @@ class ProjectFilesWriteTest {
         for (path in listOf(".pi/settings.json", ".claude/settings.json", ".husky/pre-commit", ".githooks/pre-push",
             ".idea/workspace.xml", "packages/x/.vscode/tasks.json", ".Claude/settings.json", ".VSCODE/launch.json",
             ".envrc", "apps/web/.envrc", ".mcp.json", "packages/x/.MCP.json", ".cursor/rules/a.mdc", ".lefthook/pre-commit/a.sh",
-            "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml", ".pre-commit-config.yaml"))
+            "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml", ".pre-commit-config.yaml",
+            ".gemini/settings.json", ".codex/config.toml", ".mise/tasks/build", "mise.toml", "apps/web/.mise.toml",
+            "mise.local.toml", ".mise.local.toml", ".config/mise/config.toml", ".huſky/pre-commit", ".ＣＬＡＵＤＥ/settings.json"))
             assertTrue(path, writeDeniedPath(path))
-        for (path in listOf(".github/workflows/ci.yml", "notes.pi", "docs/.envrc.md", "src/claude/a.kt", "README.md", "mcp.json", "docs/.mcp.json.md"))
+        for (path in listOf(".github/workflows/ci.yml", "notes.pi", "docs/.envrc.md", "src/claude/a.kt", "README.md", "mcp.json", "docs/.mcp.json.md",
+            ".config/other/mise.md", "mise/notes.md", "docs/mise.toml.md"))
             assertFalse(path, writeDeniedPath(path))
         val file = OpenFile(".claude/settings.json", loading = false, version = "RmlsZVZlcnNpb25BYmMxMg", size = 2, content = "{}")
         val state =

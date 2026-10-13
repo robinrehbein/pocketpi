@@ -224,21 +224,33 @@ internal fun canEditFile(state: RemoteState): Boolean {
 }
 
 /** Folders whose files a tool runs on its own; the host refuses to write anywhere below them. */
-private val WRITE_DENIED_SEGMENTS = setOf(".pi", ".claude", ".cursor", ".husky", ".githooks", ".lefthook", ".vscode", ".idea")
+private val WRITE_DENIED_SEGMENTS = setOf(
+    ".pi", ".claude", ".cursor", ".gemini", ".codex", ".husky", ".githooks", ".lefthook", ".mise", ".vscode", ".idea",
+)
 
 /** Files a tool runs or loads on its own, wherever they are. */
-private val WRITE_DENIED_NAMES =
-    setOf(".envrc", ".mcp.json", "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml", ".pre-commit-config.yaml")
+private val WRITE_DENIED_NAMES = setOf(
+    ".envrc", ".mcp.json", "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml", ".pre-commit-config.yaml",
+    "mise.toml", ".mise.toml", "mise.local.toml", ".mise.local.toml",
+)
 
 /**
  * Whether the host refuses to save [path] as auto-executed configuration: any segment is one of
- * [WRITE_DENIED_SEGMENTS], or the file name is one of [WRITE_DENIED_NAMES]. Segments compare
- * NFC-normalised and lower-cased, as the host does. The host also refuses paths the app cannot
- * judge (such as git's `core.hooksPath`); this list only hides Edit.
+ * [WRITE_DENIED_SEGMENTS], the path passes through `.config/mise`, or the file name is one of
+ * [WRITE_DENIED_NAMES]. Segments compare like the host's folding (NFKC, then upper- and
+ * lower-cased). The host also refuses paths the app cannot judge (such as git's `core.hooksPath`);
+ * this list only hides Edit.
  */
 internal fun writeDeniedPath(path: String): Boolean {
-    val segments = path.split('/').map { Normalizer.normalize(it, Normalizer.Form.NFC).lowercase(Locale.ROOT) }
-    return segments.any { it in WRITE_DENIED_SEGMENTS } || segments.lastOrNull() in WRITE_DENIED_NAMES
+    val segments = path.split('/').map { foldSegment(it) }
+    val miseConfig = segments.zipWithNext().any { (a, b) -> a == ".config" && b == "mise" }
+    return miseConfig || segments.any { it in WRITE_DENIED_SEGMENTS } || segments.lastOrNull() in WRITE_DENIED_NAMES
+}
+
+/** The host's segment folding: NFKC, then upper- and lower-cased, then NFC. */
+private fun foldSegment(segment: String): String {
+    val compatible = Normalizer.normalize(segment, Normalizer.Form.NFKC)
+    return Normalizer.normalize(compatible.uppercase(Locale.ROOT).lowercase(Locale.ROOT), Normalizer.Form.NFC)
 }
 
 /** The folder above [path]; `""` for a top-level entry. */
