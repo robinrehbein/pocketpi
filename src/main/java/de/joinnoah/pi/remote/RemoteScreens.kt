@@ -2,7 +2,6 @@ package de.joinnoah.pi.remote
 
 import android.Manifest
 import android.animation.ValueAnimator
-import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
 import android.os.Build
 import android.widget.Toast
@@ -1498,7 +1497,8 @@ internal fun RemoteScreen(
                             onClick = {
                                 try {
                                     uriHandler.openUri(PRIVACY_POLICY_URL)
-                                } catch (_: ActivityNotFoundException) {
+                                } catch (_: IllegalArgumentException) {
+                                    // No app opens the link; the URI handler wraps ActivityNotFoundException.
                                     Toast.makeText(context, unavailable, Toast.LENGTH_SHORT).show()
                                 }
                             },

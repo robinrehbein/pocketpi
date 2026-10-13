@@ -14,7 +14,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.WindowCompat
@@ -124,8 +127,15 @@ internal fun RemoteApp(
     val theme = preferences.theme
     val dark = isSystemInDarkTheme()
     val activity = LocalActivity.current
+    val context = LocalContext.current
     val view = LocalView.current
     val colors = remoteColorScheme(dark, synthwave = theme == "synthwave")
+    // Read at each tap: the window can enter split screen or change its width without a new activity.
+    val windowWidth by rememberUpdatedState(LocalWindowInfo.current.containerDpSize.width)
+    val uriHandler =
+        remember(activity, context) {
+            AdjacentUriHandler(context) { opensLinksAdjacent(activity?.isInMultiWindowMode == true, windowWidth) }
+        }
     SideEffect {
         activity?.window?.let { window ->
             // A dark mode switch no longer recreates the activity, so the window behind the content
@@ -142,24 +152,26 @@ internal fun RemoteApp(
             }
         }
     }
-    MaterialTheme(
-        colorScheme = colors,
-        typography = RemoteTypography,
-        shapes =
-            Shapes(
-                extraLarge = RoundedCornerShape(28.dp),
-                large = RoundedCornerShape(24.dp),
-                medium = RoundedCornerShape(20.dp),
-            ),
-    ) {
-        RemoteNavigation(
-            repository,
-            settings,
-            pushConfigured,
-            enablePush,
-            notification,
-            consumeNotification,
-            disablePush,
-        )
+    CompositionLocalProvider(LocalUriHandler provides uriHandler) {
+        MaterialTheme(
+            colorScheme = colors,
+            typography = RemoteTypography,
+            shapes =
+                Shapes(
+                    extraLarge = RoundedCornerShape(28.dp),
+                    large = RoundedCornerShape(24.dp),
+                    medium = RoundedCornerShape(20.dp),
+                ),
+        ) {
+            RemoteNavigation(
+                repository,
+                settings,
+                pushConfigured,
+                enablePush,
+                notification,
+                consumeNotification,
+                disablePush,
+            )
+        }
     }
 }
