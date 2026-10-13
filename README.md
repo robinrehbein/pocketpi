@@ -30,10 +30,13 @@ phone-only release; watch release artifacts require their own unused Play versio
 
 [`Android CI`](.github/workflows/ci.yml) checks the exact head commit of each pull request
 into `main` and each commit pushed to `main`. The workflow uses JDK 25, Android SDK platform
-37 and build tools 37.0.0. It checks English and German resource keys, runs unit tests, builds
-the debug APK, runs Android Lint, and runs the managed API 36 emulator instrumentation tests.
-GitHub-hosted Linux must provide `/dev/kvm` for the emulator step. On failure, the workflow
-uploads available Gradle reports and test results as the `pocketpi-verification` artifact.
+37 and build tools 37.0.0, and runs four parallel jobs: `Unit tests and debug builds` (English
+and German resource keys, phone and watch unit tests and debug APKs), `Android Lint` (phone and
+watch, against the committed lint baselines), `Benchmark isolation` (benchmark APKs and fixture
+isolation) and `Emulator tests` (the managed API 36 instrumentation tests, with the AVD and its
+boot snapshot cached). GitHub-hosted Linux must provide `/dev/kvm` for the emulator job. A failing
+job uploads its Gradle reports and test results as a `pocketpi-*` artifact. Every action is pinned
+to a commit SHA; Dependabot proposes action and Gradle dependency updates weekly.
 
 Run the resource check locally with `python3 scripts/i18n-check.py .`. The checker uses only
 Python's standard library and reports keys missing from either locale. CI builds do not use
