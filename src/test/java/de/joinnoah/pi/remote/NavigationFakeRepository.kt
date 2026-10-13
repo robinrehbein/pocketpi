@@ -202,6 +202,19 @@ internal class NavigationFakeRepository : RemoteRepository {
         state.value = state.value.copy(draft = text)
     }
 
+    /** Drafts written for a chat that was no longer selected, filed per chat like the real repository. */
+    val filedDrafts = mutableMapOf<RemoteSelection, String>()
+
+    override fun draft(selection: RemoteSelection, text: String) {
+        if (selection == state.value.selection) draft(text) else filedDrafts[selection] = text
+    }
+
+    var compactions = 0
+
+    override fun compactContext() {
+        compactions++
+    }
+
     override fun quote(messageId: String?) {
         if (messageId != null) quotes += messageId
     }

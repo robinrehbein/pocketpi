@@ -756,8 +756,10 @@ private fun AgentUsageLine(usage: AgentUsage) {
 private fun spelledCount(value: Long, locale: Locale): String =
     NumberFormat.getIntegerInstance(locale).format(value.coerceAtLeast(0))
 
-internal fun subagentPreviewText(preview: String): String =
-    preview.replace(Regex("\\[([^]\\n]+)]\\(https?://[^)\\s]*$"), "$1…")
+/** A Markdown link cut off by the preview's length limit, at the very end of the text. */
+private val TRUNCATED_LINK = Regex("\\[([^]\\n]+)]\\(https?://[^)\\s]*$")
+
+internal fun subagentPreviewText(preview: String): String = preview.replace(TRUNCATED_LINK, "$1…")
 
 @Composable
 private fun MessageTimestamp(timestamp: Long, modifier: Modifier = Modifier) {
