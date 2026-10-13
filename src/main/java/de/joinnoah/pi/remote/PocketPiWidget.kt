@@ -1,6 +1,9 @@
 package de.joinnoah.pi.remote
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.text.format.DateFormat
 import androidx.compose.runtime.Composable
@@ -21,6 +24,7 @@ import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionStartActivity as actionStartIntent
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
+import androidx.glance.appwidget.updateAll
 import androidx.glance.background
 import androidx.glance.color.ColorProvider
 import androidx.glance.layout.Alignment
@@ -43,6 +47,12 @@ import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider as GlanceColor
 import java.util.Calendar
 import java.util.Date
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 
 private val WidgetColors =
     ColorProviders(light = remoteColorScheme(false), dark = remoteColorScheme(true))
@@ -79,16 +89,105 @@ class PocketPiWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val home = (context.applicationContext as RemoteApplication).home
         home.load()
+        WidgetNewDay.schedule(context)
         provideContent {
             val snapshot by home.snapshot.collectAsState()
-            GlanceTheme(colors = WidgetColors) { WidgetContent(snapshot) }
+            // Read so that a running widget recomposes when a new day begins.
+            val newDay by WidgetNewDay.began.collectAsState()
+            GlanceTheme(colors = WidgetColors) {
+                WidgetContent(snapshot, now = maxOf(newDay, System.currentTimeMillis()))
+            }
         }
     }
 }
 
 class PocketPiWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = PocketPiWidget()
+
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != WidgetNewDay.ACTION) return super.onReceive(context, intent)
+        WidgetNewDay.began.value = System.currentTimeMillis()
+        WidgetNewDay.schedule(context)
+        val pending: PendingResult? = goAsync()
+        scope.launch {
+            try {
+                glanceAppWidget.updateAll(context)
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("widget.newDay", swallowed)
+            } finally {
+                pending?.finish()
+            }
+        }
+    }
+
+    override fun onDisabled(context: Context) {
+        super.onDisabled(context)
+        WidgetNewDay.cancel(context)
+    }
+
+    private companion object {
+        val scope =
+            CoroutineScope(
+                SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, _ -> }
+            )
+    }
 }
+
+/**
+ * Redraws the widget at each local midnight, when a refresh time from earlier today becomes
+ * yesterday's and the freshness line must show its date instead. Nothing else may redraw the
+ * widget for days, and "Updated 14:02" would then read as today's.
+ */
+internal object WidgetNewDay {
+    const val ACTION = "de.joinnoah.pi.remote.action.WIDGET_NEW_DAY"
+
+    /** Up to ten minutes late is fine, and a window that long needs no exact-alarm permission. */
+    private const val WINDOW_MS = 10 * 60_000L
+
+    /** When the last new day began in this process; the widget content reads it to recompose. */
+    val began = MutableStateFlow(0L)
+
+    /**
+     * Sets the alarm for the next midnight, replacing an earlier one. It does not wake the phone:
+     * a sleeping phone shows no widget, and the alarm fires once the screen is on again.
+     */
+    fun schedule(context: Context, now: Long = System.currentTimeMillis()) {
+        try {
+            val alarms = context.getSystemService(AlarmManager::class.java) ?: return
+            alarms.setWindow(AlarmManager.RTC, nextLocalMidnight(now), WINDOW_MS, intent(context))
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("widget.scheduleNewDay", swallowed)
+        }
+    }
+
+    /** The last widget was removed. */
+    fun cancel(context: Context) {
+        try {
+            context.getSystemService(AlarmManager::class.java)?.cancel(intent(context))
+        } catch (_: Exception) {}
+    }
+
+    private fun intent(context: Context): PendingIntent =
+        PendingIntent.getBroadcast(
+            context,
+            0,
+            Intent(context, PocketPiWidgetReceiver::class.java).setAction(ACTION),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+}
+
+/** The start of the local day after [now]. */
+internal fun nextLocalMidnight(now: Long): Long =
+    Calendar.getInstance()
+        .apply {
+            timeInMillis = now
+            add(Calendar.DAY_OF_YEAR, 1)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        .timeInMillis
 
 @Composable
 internal fun WidgetContent(snapshot: HomeSnapshot, now: Long = System.currentTimeMillis()) {
@@ -152,7 +251,8 @@ internal fun WidgetContent(snapshot: HomeSnapshot, now: Long = System.currentTim
 
 /**
  * When the widget's rows were last confirmed by the host: "Updated 14:02", or the date once that
- * was before today. [short] leaves out the word, for a narrow widget.
+ * was before today. [short] leaves out the word, for a narrow widget. The choice depends on [now],
+ * so [WidgetNewDay] redraws the widget when the day changes.
  */
 internal fun widgetFreshness(context: Context, refreshedAt: Long, now: Long, short: Boolean = false): String {
     val format =

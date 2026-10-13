@@ -3,9 +3,10 @@
 <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="UnusedResources">
     <!-- The widget's header says when the host last confirmed its rows; %1$s is a time or date. -->
     <string name="remote_widget_updated">Updated %1$s</string>
-    <!-- Sample content of the widget picker's preview (layout/pocketpi_widget_preview.xml). -->
+    <!-- Sample content of the widget picker's preview (layout/pocketpi_widget_preview.xml). The
+         time reads the same on a 12-hour and a 24-hour clock. -->
     <string name="remote_widget_preview_header">1 session waiting for you</string>
-    <string name="remote_widget_preview_updated">Updated 14:02</string>
+    <string name="remote_widget_preview_updated">Updated 9:41</string>
     <string name="remote_widget_preview_waiting_title">Fix the login redirect</string>
     <string name="remote_widget_preview_waiting_detail">web-app · Waiting for you</string>
     <string name="remote_widget_preview_running_title">Write the release notes</string>

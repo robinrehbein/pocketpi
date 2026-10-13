@@ -27,8 +27,11 @@ internal data class HomeSnapshot(
     val paired: Boolean = false,
     val sessions: List<HomeSession> = emptyList(),
     /**
-     * When the host last confirmed these rows: a trusted merge of the app's state or a push about
-     * a known session, at a minute's resolution. The widget shows it as "Updated 14:02".
+     * When the app last heard from a host about these rows: a trusted merge of the app's state,
+     * which runs about once a minute while the app stays connected, or a push about a known
+     * session. The widget shows it as "Updated 14:02". It is the last news from any host, so with
+     * two paired Macs, or rows from other projects, it also covers rows that this news did not
+     * re-confirm.
      */
     val refreshedAt: Long? = null,
 )
@@ -158,20 +161,43 @@ private val HOME_PROJECT_FIELDS = setOf("id", "name")
 private fun JsonObject.only(fields: Set<String>) =
     if (keys.all { it in fields }) this else JsonObject(filterKeys { it in fields })
 
-internal fun homeInputs(state: RemoteState): HomeInputs {
+/**
+ * The [HomeInputs] of [state]. [previous] is the last state and its inputs: lists that are still
+ * the same instances are reused instead of stripped again, so a streamed delta, which replaces
+ * neither the sessions nor the project chats, costs no copies.
+ */
+internal fun homeInputs(state: RemoteState, previous: Pair<RemoteState, HomeInputs>? = null): HomeInputs {
     val routeId = state.selection.routeId
+    val (last, lastInputs) = previous ?: (null to null)
     return HomeInputs(
-        hostRoutes = state.hosts.map { it.routeId },
+        hostRoutes =
+            if (lastInputs != null && state.hosts === last?.hosts) lastInputs.hostRoutes
+            else state.hosts.map { it.routeId },
         selection = state.selection,
         connectedToSelection =
             state.connected && !state.loading && routeId != null && state.host?.routeId == routeId,
-        project = state.project?.only(HOME_PROJECT_FIELDS),
-        sessions = state.sessions.map { it.only(HOME_SESSION_FIELDS) },
+        project =
+            if (lastInputs != null && state.project === last?.project) lastInputs.project
+            else state.project?.only(HOME_PROJECT_FIELDS),
+        sessions =
+            if (lastInputs != null && state.sessions === last?.sessions) lastInputs.sessions
+            else state.sessions.map { it.only(HOME_SESSION_FIELDS) },
         sessionsFresh = state.sessionsFresh,
         projectChats =
-            state.projectChats.map { it.copy(session = it.session.only(HOME_SESSION_FIELDS)) },
+            if (lastInputs != null && state.projectChats === last?.projectChats) lastInputs.projectChats
+            else state.projectChats.map { it.copy(session = it.session.only(HOME_SESSION_FIELDS)) },
     )
 }
+
+/**
+ * How old the freshness time or an open chat's openedAt may get before a merge rewrites it. A
+ * little under the minute of [HOME_REFRESH_INTERVAL_MS], so the connected app's tick refreshes the
+ * time each minute despite jitter.
+ */
+internal const val HOME_TIME_RESOLUTION_MS = 50_000L
+
+/** [time] is unset, at least [HOME_TIME_RESOLUTION_MS] old, or in the future of a clock set back. */
+private fun outdated(time: Long?, now: Long) = time == null || now - time !in 0 until HOME_TIME_RESOLUTION_MS
 
 internal fun mergeHomeSnapshot(
     previous: HomeSnapshot,
@@ -191,8 +217,8 @@ internal fun mergeHomeSnapshot(
  *   is no longer among its project's most active chats is no longer shown as active;
  * - the open chat counts as used now.
  *
- * A trusted state also marks the rows as refreshed now, at a minute's resolution unless they
- * changed, so a connected app does not rewrite the snapshot for every update.
+ * A trusted state also marks the rows as refreshed now: whenever they changed, and otherwise once
+ * [HOME_TIME_RESOLUTION_MS] passed, so a connected app does not rewrite the snapshot constantly.
  */
 internal fun mergeHomeSnapshot(
     previous: HomeSnapshot,
@@ -240,7 +266,7 @@ internal fun mergeHomeSnapshot(
     if (routeId != null && open != null) {
         rows[routeId to open]?.let {
             // A minute's resolution keeps an open chat from rewriting the snapshot constantly.
-            if (now - (it.openedAt ?: 0L) >= 60_000) rows[it.key()] = it.copy(openedAt = now)
+            if (outdated(it.openedAt, now)) rows[it.key()] = it.copy(openedAt = now)
         }
     }
     val sessions =
@@ -251,7 +277,7 @@ internal fun mergeHomeSnapshot(
             )
             .take(MAX_HOME_SESSIONS)
     val refreshedAt =
-        if (trusted && (sessions != previous.sessions || now - (previous.refreshedAt ?: 0L) >= 60_000)) now
+        if (trusted && (sessions != previous.sessions || outdated(previous.refreshedAt, now))) now
         else previous.refreshedAt
     return HomeSnapshot(paired, sessions, refreshedAt)
 }

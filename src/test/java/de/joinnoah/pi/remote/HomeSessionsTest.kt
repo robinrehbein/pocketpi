@@ -281,6 +281,28 @@ class HomeSessionsTest {
     }
 
     @Test
+    fun aRefreshTimeFromAClockSetBackIsReplaced() {
+        // Stored while the clock was a day ahead: it would otherwise stay until the rows change.
+        val ahead = HomeSnapshot(true, listOf(home("a")), refreshedAt = 100_000 + 86_400_000)
+        val state = connected(sessions = listOf(session("a", "idle")), projectId = "p")
+        assertEquals(100_000L, mergeHomeSnapshot(ahead, state, true, setOf("r"), now = 100_000).refreshedAt)
+    }
+
+    @Test
+    fun homeInputsReuseTheListsOfTheLastStateWhenTheyAreTheSame() {
+        val state = connected(sessions = listOf(session("a", "running")), projectId = "p")
+        val first = homeInputs(state)
+        val delta = state.copy(draft = "d", status = "running")
+        val next = homeInputs(delta, state to first)
+        assertEquals(homeInputs(delta), next)
+        assertTrue(next.sessions === first.sessions)
+        assertTrue(next.project === first.project)
+        // A new list is stripped again.
+        val waiting = delta.copy(sessions = listOf(session("a", "waiting")))
+        assertEquals(homeInputs(waiting), homeInputs(waiting, delta to next))
+    }
+
+    @Test
     fun aPushAboutAKnownSessionRefreshesTheRows() {
         val snapshot = HomeSnapshot(true, listOf(home("a")), refreshedAt = 1L)
         val next = snapshot.withPush("r", "a", "waiting", now = 9L)

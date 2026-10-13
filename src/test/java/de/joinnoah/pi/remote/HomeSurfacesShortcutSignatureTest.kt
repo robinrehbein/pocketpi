@@ -258,6 +258,32 @@ class HomeSurfacesShortcutSignatureTest {
     }
 
     @Test
+    fun aConnectedAppFoldsItsStateInAboutOnceAMinuteSoTheRefreshTimeFollows() = runTest {
+        val state = MutableStateFlow(streaming("running", ""))
+        val seen = mutableListOf<HomeInputs>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { homeUpdates(state).toList(seen) }
+        assertEquals(1, seen.size)
+
+        // Nothing changes for three minutes: the same inputs come again each minute.
+        advanceTimeBy(3 * HOME_REFRESH_INTERVAL_MS + 1)
+        assertEquals(4, seen.size)
+        assertEquals(1, seen.toSet().size)
+        // Each pass marks the rows refreshed at its time.
+        var snapshot = HomeSnapshot()
+        seen.forEachIndexed { index, inputs ->
+            snapshot = mergeHomeSnapshot(snapshot, inputs, true, setOf("route"), index * HOME_REFRESH_INTERVAL_MS)
+        }
+        assertEquals(3 * HOME_REFRESH_INTERVAL_MS, snapshot.refreshedAt)
+
+        // Offline, nothing is confirmed, so nothing comes again.
+        state.value = streaming("running", "").copy(connected = false)
+        advanceTimeBy(HOME_UPDATE_INTERVAL_MS)
+        val offline = seen.size
+        advanceTimeBy(5 * HOME_REFRESH_INTERVAL_MS)
+        assertEquals(offline, seen.size)
+    }
+
+    @Test
     fun shortcutIdsParseBackToTheirSession() {
         assertEquals("route" to "019a-session", shortcutTarget(shortcutId("route", "019a-session")))
         assertEquals("route" to "a:b", shortcutTarget(shortcutId("route", "a:b")))

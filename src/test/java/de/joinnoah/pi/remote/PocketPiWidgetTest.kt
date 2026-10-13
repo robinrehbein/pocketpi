@@ -1,6 +1,8 @@
 package de.joinnoah.pi.remote
 
+import android.app.AlarmManager
 import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
 import android.provider.Settings
 import android.text.format.DateFormat
@@ -28,6 +30,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.xmlpull.v1.XmlPullParser
 
@@ -124,6 +127,40 @@ class PocketPiWidgetTest {
         assertEquals(3, shown.count { it.startsWith("Session ") })
         assertTrue(shown.contains("14:02"))
         assertFalse(shown.contains("Updated 14:02"))
+    }
+
+    @Test
+    fun aWidgetDrawnTheDayAfterItsLastRefreshShowsTheDate() {
+        // Refreshed on Monday afternoon, drawn on Tuesday morning without news in between.
+        val shown = render(running.copy(refreshedAt = at(12, 14, 2)), DpSize(260.dp, 175.dp), now = at(13, 9, 0))
+        val date = DateFormat.getDateFormat(context).format(Date(at(12, 14, 2)))
+        assertTrue(shown.contains("Updated $date"))
+        assertFalse(shown.any { it.contains("14:02") })
+        val narrow = render(running.copy(refreshedAt = at(12, 14, 2)), DpSize(180.dp, 175.dp), now = at(13, 9, 0))
+        assertTrue(narrow.contains(date))
+    }
+
+    @Test
+    fun theWidgetIsRedrawnAtTheNextLocalMidnight() {
+        assertEquals(at(14, 0, 0), nextLocalMidnight(at(13, 14, 2)))
+        assertEquals(at(14, 0, 0), nextLocalMidnight(at(13, 0, 0)))
+        val november = Calendar.getInstance().apply { clear(); set(2026, Calendar.NOVEMBER, 1) }
+        assertEquals(november.timeInMillis, nextLocalMidnight(at(31, 23, 59)))
+
+        val alarms = shadowOf(context.getSystemService(AlarmManager::class.java))
+        WidgetNewDay.schedule(context, now = at(13, 14, 2))
+        assertEquals(at(14, 0, 0), alarms.peekNextScheduledAlarm()!!.triggerAtTime)
+        assertEquals(AlarmManager.RTC, alarms.peekNextScheduledAlarm()!!.type)
+
+        // The alarm sets the next one and makes a running widget recompose.
+        val before = WidgetNewDay.began.value
+        PocketPiWidgetReceiver().onReceive(context, Intent(WidgetNewDay.ACTION))
+        assertTrue(WidgetNewDay.began.value > before)
+        assertEquals(1, alarms.scheduledAlarms.size)
+        assertTrue(alarms.peekNextScheduledAlarm()!!.triggerAtTime > System.currentTimeMillis())
+
+        WidgetNewDay.cancel(context)
+        assertTrue(alarms.scheduledAlarms.isEmpty())
     }
 
     @Test
