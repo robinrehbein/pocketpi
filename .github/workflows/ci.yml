@@ -107,11 +107,13 @@ jobs:
       - *install-sdk
       - name: Compile benchmark APKs and verify isolation
         run: |
-          ./gradlew :processDebugManifest :assembleBenchmark :benchmarks:assembleBenchmark
-          ./gradlew :testBenchmarkUnitTest --tests '*FullChatFixtureRepositoryTest'
+          ./gradlew :assembleDebug :assembleBenchmark :benchmarks:assembleBenchmark
+          ./gradlew :testBenchmarkUnitTest --tests '*FullChatFixtureRepositoryTest' --tests '*FakeRelayTransportTest'
           python3 scripts/check-benchmark-isolation.py \
             build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml \
-            build/intermediates/merged_manifests/benchmark/processBenchmarkManifest/AndroidManifest.xml
+            build/intermediates/merged_manifests/benchmark/processBenchmarkManifest/AndroidManifest.xml \
+            build/outputs/apk/debug/pocketpi-debug.apk \
+            build/outputs/apk/benchmark/pocketpi-benchmark.apk
       - name: Upload benchmark reports
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -8,4 +8,7 @@
     <string name="performance_fixture_session" translatable="false">Session %1$d</string>
     <string name="performance_full_chat_title" translatable="false">Full chat fixture</string>
     <string name="performance_full_chat_continue" translatable="false">Continue stream</string>
+    <string name="connected_flow_preparing" translatable="false">Pairing with the fixture Mac…</string>
+    <string name="connected_flow_prepared" translatable="false">Fixture Mac paired; chat, draft and navigation saved</string>
+    <string name="connected_flow_prepare_failed" translatable="false">Preparing the fixture Mac failed</string>
 </resources>
