@@ -80,6 +80,18 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
 
     var compaction: SessionCompaction? = null
         private set
+
+    /**
+     * Whether a snapshot of this epoch has been applied. Until then [messages], [questions] and
+     * [nextCursor] are empty placeholders, not the session's state, and the owner keeps showing
+     * what it had.
+     */
+    var hasSnapshot = false
+        private set
+
+    /** Pages shown before this epoch began, kept as the prefix of a snapshot that overlaps them. */
+    private var retained = listOf<JsonObject>()
+    private var retainedCursor: String? = null
     private val pendingEvents = sortedMapOf<Long, JsonObject>()
     private var snapshotRevision = -1L
     val needsSnapshot: Boolean
@@ -95,12 +107,24 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     fun beginSnapshotEpoch(status: String) {
         revision = -1L
         snapshotRevision = -1L
+        hasSnapshot = false
+        if (messages.isNotEmpty()) retain(messages, nextCursor)
         messages = emptyList()
         questions = emptyList()
         nextCursor = null
         pendingEvents.clear()
         compaction = null
         this.status = status
+    }
+
+    /**
+     * Keeps [messages] (with the cursor before them) that an earlier Timeline of this session
+     * showed, so the first snapshot keeps the older pages it overlaps.
+     */
+    fun retain(messages: List<JsonObject>, nextCursor: String?) {
+        if (hasSnapshot) return
+        retained = messages
+        retainedCursor = nextCursor
     }
 
     fun snapshot(data: JsonObject, older: Boolean = false) {
@@ -119,9 +143,24 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         snapshotRevision = incomingRevision
         revision = incomingRevision
         status = incomingStatus
-        messages = data.array("messages")
+        val page = data.array("messages")
+        // A resync of the same session keeps the older pages loaded before it: they end where the
+        // new page begins, so the prefix before its oldest message and the cursor before them stay.
+        val shown = if (hasSnapshot) messages else retained
+        val shownCursor = if (hasSnapshot) nextCursor else retainedCursor
+        val oldest = page.firstOrNull()?.optionalText("id")
+        val overlap = if (oldest == null) -1 else shown.indexOfFirst { it.optionalText("id") == oldest }
+        if (overlap > 0) {
+            messages = (shown.subList(0, overlap) + page).associateBy { it.text("id") }.values.toList()
+            nextCursor = shownCursor
+        } else {
+            messages = page
+            nextCursor = data.optionalText("nextCursor")
+        }
+        retained = emptyList()
+        retainedCursor = null
+        hasSnapshot = true
         questions = data.array("pendingQuestions")
-        nextCursor = data.optionalText("nextCursor")
         compaction =
             if ((data["compacting"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull == true)
                 compaction ?: SessionCompaction(null, now())
