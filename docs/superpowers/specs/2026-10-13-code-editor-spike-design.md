@@ -115,9 +115,21 @@ this document.
 
 ### State
 
-- `FilesState.editor: FileEditor?` holds path, base version, original text, the editing state and
-  the save status. It lives with the loader so rotation and the phone/tablet switch keep it. A
-  session change or closing the pane drops it after the discard prompt. Drafts are not persisted.
+- `FilesState.editor: FileEditor?` holds path, base version, original text, the save status and a
+  transient `EditorBuffer` with the live `TextFieldState`. It lives with the loader so rotation and
+  the phone/tablet switch keep text, cursor and undo. The text is pushed to the loader debounced and
+  at once on save, send, leave and dispose. Drafts are not persisted across process death.
+- Leaving with unsaved changes asks first: Back, Files, Changes, and on the tablet opening another
+  session, a child, a new session or a fork. Switches the user did not choose (notification tap,
+  restore) park the changed editor with its session in memory and bring it back when that session
+  opens again.
+- While keyboard focus is in the editor, the app's own shortcuts (session search, new session,
+  session up/down, sidebar) are not handled, so the editor keeps Ctrl+F and the arrow keys.
+- Saves check the JSON-encoded size (192 KiB) before sending. A save whose reply was lost is retried
+  with the same request ID, which the host answers from its ledger. On `conflict` the app reads the
+  file once; if it already holds what was sent, the save counts as done.
+- "Send to agent" diffs off the main thread and gives up above 1,000 edits, which would exceed the
+  32 KiB prompt limit anyway.
 - New strings go into `values/` and `values-de/`.
 
 ## Out of scope
