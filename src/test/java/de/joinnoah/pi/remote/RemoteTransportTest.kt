@@ -84,6 +84,12 @@ class RemoteTransportTest {
 
         override fun message(payload: JsonObject) {}
 
+        var brokenCount = 0
+
+        override fun broken() {
+            brokenCount++
+        }
+
         val reconnects = mutableListOf<Boolean>()
         val errors = mutableListOf<Int>()
 
@@ -581,6 +587,8 @@ class RemoteTransportTest {
         runCurrent()
         assertEquals(listOf(R.string.remote_connection_error), listener.errors)
         assertEquals(listOf(true), listener.reconnects)
+        // Reported as broken, so the repository counts it against the backoff.
+        assertEquals(1, listener.brokenCount)
         assertTrue(socket.cancelled)
     }
 
@@ -595,6 +603,7 @@ class RemoteTransportTest {
         socket.receive(frame)
         runCurrent()
         assertEquals(listOf(true), listener.reconnects)
+        assertEquals(1, listener.brokenCount)
     }
 
     @Test

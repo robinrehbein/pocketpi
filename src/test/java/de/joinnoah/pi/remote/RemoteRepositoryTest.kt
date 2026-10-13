@@ -18,10 +18,14 @@ class RemoteRepositoryTest {
     ) = Wire.objectOf("id" to id, "origin" to origin, "status" to status, "projectId" to projectId)
 
     private class Pairings(var hosts: List<PairedHost>) : PairingStorage {
+        /** Runs once after the next save, as if during the write. */
+        var afterSave: (() -> Unit)? = null
+
         override fun load() = hosts
 
         override fun save(hosts: List<PairedHost>) {
             this.hosts = hosts
+            afterSave?.also { afterSave = null }?.invoke()
         }
     }
 
@@ -130,10 +134,11 @@ class RemoteRepositoryTest {
         drafts: Drafts = Drafts(),
         attachmentStorage: AttachmentStorage? = null,
         hosts: List<PairedHost> = listOf(host),
+        pairings: Pairings = Pairings(hosts),
         attachmentImporter: (suspend (String, Boolean) -> LocalAttachment)? = null,
     ) =
         DefaultRemoteRepository(
-            Pairings(hosts),
+            pairings,
             drafts,
             transport,
             backgroundScope,
@@ -5174,6 +5179,43 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun unknownSessionStatusKeepsTheLastStatusAndRequestsOneSnapshot() = runTest {
+        val transport = Transport().also { configure(it) }
+        val original = transport.response
+        val repository = chatRepository(transport)
+        transport.listener.message(event(1, "session.status", "status" to "running"))
+        runCurrent()
+        assertEquals("running", repository.state.value.status)
+        // The resync stays unanswered, so the state shows what the event left behind.
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else original(request) }
+        val snapshots = transport.snapshotRequests()
+
+        transport.listener.message(event(2, "session.status", "status" to "retrying"))
+        runCurrent()
+
+        assertEquals("running", repository.state.value.status)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertEquals(snapshots + 1, transport.snapshotRequests())
+    }
+
+    @Test
+    fun advisorStatusWithTheTimelineRevisionCostsNoSnapshot() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val snapshots = transport.snapshotRequests()
+
+        transport.listener.message(event(1, "advisor.status", "advisor" to Wire.objectOf()))
+        runCurrent()
+        transport.listener.message(event(2, "session.status", "status" to "running"))
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertEquals("running", repository.state.value.status)
+        assertEquals(snapshots, transport.snapshotRequests())
+    }
+
+    @Test
     fun malformedFollowUpReceiptIsDroppedAndTheTimelineStaysInStep() = runTest {
         val transport = Transport().also { configure(it) }
         val repository = chatRepository(transport)
@@ -5315,6 +5357,65 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun connectionsBrokenAfterTheirFirstAnswerGrowTheBackoffAndStopAfterFive() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        assertTrue(repository.state.value.connected)
+
+        // Every connection answers its requests and then gets a frame this app cannot read.
+        fun breakConnection() {
+            transport.listener.broken()
+            transport.listener.failed(true, R.string.remote_connection_error)
+        }
+        breakConnection()
+        val waits = mutableListOf<Long>()
+        repeat(MAX_BROKEN_CONNECTIONS - 1) {
+            val wait = repository.state.value.reconnectAt!! - testScheduler.currentTime
+            waits += wait
+            val connects = transport.connects
+            val sent = transport.sent.size
+            advanceTimeBy(wait)
+            runCurrent()
+            assertEquals(connects + 1, transport.connects)
+            assertTrue(repository.state.value.connected)
+            // The reconnect answered requests, which proves it, but it breaks again.
+            assertTrue(transport.sent.size > sent)
+            advanceTimeBy(500)
+            breakConnection()
+        }
+
+        // The answered requests did not reset the backoff of the broken connections.
+        assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L), waits)
+        assertNull(repository.state.value.reconnectAt)
+        assertEquals(R.string.remote_unreachable, repository.state.value.error)
+        val connects = transport.connects
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        // Retry still connects; a connection that stays up ends the run of broken ones.
+        repository.refresh()
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        advanceTimeBy(CONNECTION_PROVEN_MILLIS)
+        runCurrent()
+        breakConnection()
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        breakConnection()
+        assertEquals(2_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+
+        // A plain drop after an answer still starts the backoff from the beginning.
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+    }
+
+    @Test
     fun backoffResetsOnlyAfterAnAnsweredRequestOrThirtySecondsUp() = runTest {
         val transport = Transport().also { configure(it) }
         val repository = chatRepository(transport)
@@ -5364,10 +5465,13 @@ class RemoteRepositoryTest {
             ).toString().toByteArray()
         )
 
-    private suspend fun TestScope.pairingRepository(transport: Transport): DefaultRemoteRepository {
+    private suspend fun TestScope.pairingRepository(
+        transport: Transport,
+        pairings: Pairings = Pairings(emptyList()),
+    ): DefaultRemoteRepository {
         Diagnostics.clear()
         Diagnostics.clock = { testScheduler.currentTime }
-        val repository = repository(transport, hosts = emptyList())
+        val repository = repository(transport, hosts = emptyList(), pairings = pairings)
         repository.setForeground(true)
         repository.setValidatedNetwork("wifi")
         runCurrent()
@@ -5461,6 +5565,31 @@ class RemoteRepositoryTest {
             assertNull(repository.state.value.pairingDeadline)
             assertNull(repository.state.value.error)
             assertEquals(R.string.remote_offline, repository.state.value.connection)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun pairingCancelledDuringItsWriteDoesNotStayPaired() = runTest {
+        try {
+            val transport = Transport().also { configure(it) }
+            val pairings = Pairings(emptyList())
+            val repository = pairingRepository(transport, pairings)
+            val pairing = async { repository.pair(pairingCode()) }
+            runCurrent()
+            transport.listener.approval()
+            val paired = PairedHost(transport.pairing!!.text("routeId"), "https://relay.test", "device", "secret", "Mac")
+            pairings.afterSave = { repository.cancelPairing() }
+
+            // The transport then never acknowledges the pairing to the Mac.
+            assertTrue(runCatching { transport.listener.persistPairing(paired) }.isFailure)
+            runCurrent()
+
+            assertNull(pairing.await())
+            assertEquals(emptyList<PairedHost>(), pairings.hosts)
+            assertEquals(emptyList<PairedHost>(), repository.state.value.hosts)
+            assertFalse(repository.state.value.loading)
         } finally {
             Diagnostics.clear()
         }

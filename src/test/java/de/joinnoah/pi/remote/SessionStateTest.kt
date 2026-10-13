@@ -417,6 +417,18 @@ class SnapshotFencingTest {
     }
 
     @Test
+    fun unknownStatusEventKeepsTheStatusAndThrowsAfterAdvancingTheRevision() {
+        val timeline = Timeline("one") { 1L }
+        timeline.snapshot(snapshotData("one", 0))
+        assertThrows(IllegalArgumentException::class.java) {
+            timeline.event(Wire.objectOf("sessionId" to "one", "revision" to 1, "kind" to "session.status", "status" to "retrying"))
+        }
+        // The revision stays in step; the caller marks the timeline for a resync.
+        assertEquals(1L, timeline.revision)
+        assertEquals("running", timeline.status)
+    }
+
+    @Test
     fun eventWithoutASessionIsNotTheTimelines() {
         val timeline = Timeline("one") { 1L }
         timeline.snapshot(snapshotData("one", 0))

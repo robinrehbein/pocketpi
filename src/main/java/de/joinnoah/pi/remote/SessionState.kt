@@ -15,6 +15,9 @@ fun compactionVisible(c: SessionCompaction?, nowMillis: Long): Boolean =
 
 private val compactionReasons = setOf("manual", "threshold", "overflow")
 
+/** The session statuses this app knows; snapshots and `session.status` events carry one. */
+internal val SESSION_STATUSES = setOf("idle", "running", "waiting", "offline")
+
 /** Longest `session.notice` message, in UTF-8 bytes. */
 internal const val MAX_SESSION_NOTICE_BYTES = 1000
 
@@ -112,7 +115,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         }
         if (incomingRevision < revision) return
         val incomingStatus = data.text("status")
-        require(incomingStatus in listOf("idle", "running", "waiting", "offline"))
+        require(incomingStatus in SESSION_STATUSES)
         snapshotRevision = incomingRevision
         revision = incomingRevision
         status = incomingStatus
@@ -158,7 +161,12 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
             }
             "command.status" -> Unit
             "session.title" -> Unit
-            "session.status" -> status = event.text("status")
+            "session.status" -> {
+                // A status this app does not know keeps the previous one and asks for a snapshot.
+                val incomingStatus = event.text("status")
+                require(incomingStatus in SESSION_STATUSES)
+                status = incomingStatus
+            }
             "question.open" -> {
                 val question = event.obj("question")
                 questions = questions.filterNot { it.text("id") == question.text("id") } + question
@@ -168,6 +176,8 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
                 }
             "session.compaction" -> compaction(event)
             "session.notice" -> Unit
+            // Applied outside the timeline (the advisor chip); its revision needs no snapshot.
+            "advisor.status" -> Unit
             else -> unknownKindSeen = true
         }
         return false

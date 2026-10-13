@@ -69,6 +69,12 @@ internal const val SHORT_LIVED_CONNECTION_MILLIS = 5_000L
 /** Automatic reconnects stop after this many short-lived connections in a row. */
 internal const val MAX_SHORT_LIVED_CONNECTIONS = 5
 
+/**
+ * Automatic reconnects stop after this many connections in a row that an unreadable frame ended
+ * before they stayed up for [CONNECTION_PROVEN_MILLIS].
+ */
+internal const val MAX_BROKEN_CONNECTIONS = 5
+
 /** At most one snapshot per this interval for events of unknown kinds or malformed ones. */
 internal const val RESYNC_INTERVAL_MILLIS = 10_000L
 private const val SERVICE_RESTART_CLOSE_CODE = 1012
@@ -235,6 +241,13 @@ class DefaultRemoteRepository(
     private var provenTimer: Job? = null
     /** Connections in a row that failed within [SHORT_LIVED_CONNECTION_MILLIS] of ready. */
     private var shortLivedConnections = 0
+    /**
+     * Connections in a row that an unreadable frame ended. A reply does not reset this, since a
+     * host can answer once and then break every connection the same way; staying up does.
+     */
+    private var brokenConnections = 0
+    /** The transport reported that an unreadable frame ends the current connection. */
+    private var brokenTeardown = false
     private var serviceRestart = false
     /** When the connection was lost, for the offline interval Diagnostics records on ready(). */
     private var offlineSince: Long? = null
@@ -417,6 +430,10 @@ class DefaultRemoteRepository(
                     serviceRestart = code == SERVICE_RESTART_CLOSE_CODE
                 }
 
+                override fun broken() {
+                    brokenTeardown = true
+                }
+
                 override fun progress(phase: HandshakePhase) {
                     handshakeProgress(phase)
                 }
@@ -468,6 +485,16 @@ class DefaultRemoteRepository(
                         reportError(R.string.remote_storage_error)
                         throw e
                     }
+                    if (pairing?.isActive != true) {
+                        // Cancelled during the write: the Mac never gets pair.ack, so the host
+                        // must not stay paired here either.
+                        try {
+                            withContext(io) { pairings.save(state.value.hosts) }
+                        } catch (e: Exception) {
+                            Diagnostics.caught("repo.persistPairing.rollback", e)
+                        }
+                        error("Pairing cancelled")
+                    }
                     checkEpoch(epoch)
                     update { it.copy(hosts = hosts) }
                 }
@@ -481,7 +508,9 @@ class DefaultRemoteRepository(
                 }
 
                 override fun failed(reconnect: Boolean, error: Int) {
-                    this@DefaultRemoteRepository.failed(reconnect, error)
+                    val broken = brokenTeardown
+                    brokenTeardown = false
+                    this@DefaultRemoteRepository.failed(reconnect, error, broken)
                 }
             }
     }
@@ -1171,7 +1200,7 @@ class DefaultRemoteRepository(
             }
         } catch (swallowed: Exception) {
             Diagnostics.caught("repo.receive", swallowed)
-            failed(true, R.string.remote_connection_error)
+            failed(true, R.string.remote_connection_error, broken = true)
         }
     }
 
@@ -1443,7 +1472,7 @@ class DefaultRemoteRepository(
         val id = event.text("sessionId")
         val revision = event.long("revision")
         val status = event.text("status")
-        require(revision >= 0 && status in setOf("idle", "running", "waiting", "offline"))
+        require(revision >= 0 && status in SESSION_STATUSES)
         if (revision <= (sessionStatusRevisions[id] ?: -1L)) return
         val known =
             sessionStatusOverrides[id]
@@ -2139,6 +2168,8 @@ class DefaultRemoteRepository(
         pairing = deferred
         pairingEpoch = epoch
         if (markPendingFollowUpsUncertain(activeHost?.routeId)) persist().await()
+        // cancelPairing() or a newer pair() during the write gave this pairing up already.
+        if (!deferred.isActive || pairing !== deferred) return null
         activeHost = null
         update {
             it.copy(loading = true, connected = false, connection = R.string.remote_connecting, pairingDeadline = null)
@@ -2266,7 +2297,8 @@ class DefaultRemoteRepository(
         removal.start()
     }
 
-    private fun failed(reconnect: Boolean, error: Int) {
+    /** [broken]: an unreadable frame ended the connection, see [brokenConnections]. */
+    private fun failed(reconnect: Boolean, error: Int, broken: Boolean = false) {
         Diagnostics.record(
             Diagnostics.Kind.FAILURE,
             "connection." + if (state.value.connected) "lost" else "attempt",
@@ -2278,6 +2310,12 @@ class DefaultRemoteRepository(
         val hadConnection = readyAt != null
         val shortLived = connectionEnded()
         if (shortLived) shortLivedConnections++ else if (hadConnection) shortLivedConnections = 0
+        if (broken) {
+            brokenConnections++
+            // Each broken connection waits longer than the one before, even after a reply reset
+            // the backoff, so a host that breaks every connection after its first answer backs off.
+            reconnectAttempts = maxOf(reconnectAttempts, brokenConnections - 1)
+        }
         cancelHostWaitHint()
         deferredRecovery = null
         generation++
@@ -2360,11 +2398,19 @@ class DefaultRemoteRepository(
                 reconnectEnabled &&
                 recovery.canRecover &&
                 host != null &&
-                shortLivedConnections >= MAX_SHORT_LIVED_CONNECTIONS
+                (shortLivedConnections >= MAX_SHORT_LIVED_CONNECTIONS ||
+                    brokenConnections >= MAX_BROKEN_CONNECTIONS)
         ) {
-            // The Mac accepts connections and drops them at once: stop retrying on a timer. Retry,
-            // the next foreground and a network change still try again (they reset the count).
-            Diagnostics.record(Diagnostics.Kind.RECOVERY, "reconnect.stopped", outcome = "short_lived.$shortLivedConnections")
+            // The Mac accepts connections and drops them at once, or breaks each one with a frame
+            // this app cannot read: stop retrying on a timer. Retry, the next foreground and a
+            // network change still try again (they reset the counts).
+            Diagnostics.record(
+                Diagnostics.Kind.RECOVERY,
+                "reconnect.stopped",
+                outcome =
+                    if (brokenConnections >= MAX_BROKEN_CONNECTIONS) "broken.$brokenConnections"
+                    else "short_lived.$shortLivedConnections",
+            )
             retry?.cancel()
             retry = null
             update { it.copy(error = R.string.remote_unreachable, reconnectAt = null) }
@@ -2376,7 +2422,7 @@ class DefaultRemoteRepository(
         ) {
             val generationAtFailure = generation
             // The relay announced a restart, so one retry per failure streak does not wait.
-            val immediate = restart && !restartRetryUsed
+            val immediate = restart && !restartRetryUsed && !broken
             if (immediate) {
                 restartRetryUsed = true
                 reconnectAttempts = 0
@@ -2422,6 +2468,12 @@ class DefaultRemoteRepository(
     }
 
     private fun resetReconnect() {
+        resetBackoff()
+        brokenConnections = 0
+    }
+
+    /** Resets the backoff but keeps the count of [brokenConnections]. */
+    private fun resetBackoff() {
         reconnectAttempts = 0
         failureStreak = 0
         restartRetryUsed = false
@@ -2436,17 +2488,23 @@ class DefaultRemoteRepository(
         val connection = generation
         provenTimer = scope.launch {
             delay(CONNECTION_PROVEN_MILLIS)
-            if (connection == generation && state.value.connected) connectionProven()
+            if (connection == generation && state.value.connected) {
+                // Staying up also ends a run of connections broken by unreadable frames.
+                brokenConnections = 0
+                connectionProven()
+            }
         }
     }
 
-    /** The current connection works, so the next failure starts the backoff from the beginning. */
+    /**
+     * The current connection works, so the next failure starts the backoff from the beginning,
+     * unless an unreadable frame ends it again (see [brokenConnections]).
+     */
     private fun connectionProven() {
         if (connectionProven || readyAt == null) return
         connectionProven = true
-        provenTimer?.cancel()
-        provenTimer = null
-        resetReconnect()
+        // The timer keeps running: only staying up resets [brokenConnections].
+        resetBackoff()
     }
 
     /**

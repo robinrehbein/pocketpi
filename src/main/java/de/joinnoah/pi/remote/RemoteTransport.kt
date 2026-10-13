@@ -46,6 +46,12 @@ interface RemoteTransport {
         /** The relay closed the socket with [code]; delivered just before [failed]. */
         fun closed(code: Int) {}
 
+        /**
+         * A frame this app cannot read (undecryptable, out of sequence, too large or malformed)
+         * ended the connection; delivered just before [failed].
+         */
+        fun broken() {}
+
         /** The handshake reached [phase]: the transport now waits for what the phase names. */
         fun progress(phase: HandshakePhase) {}
     }
@@ -299,6 +305,7 @@ class SecureRemoteTransport(
                                         if (phase == HandshakePhase.PERSISTING) R.string.remote_storage_error
                                         else R.string.remote_connection_error
                                     close()
+                                    listener.broken()
                                     // A frame that fails to decrypt, arrives out of sequence or breaks
                                     // the handshake ends this connection, and a paired device tries
                                     // again. A pairing code is single-use, a storage error needs the
