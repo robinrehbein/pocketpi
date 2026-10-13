@@ -36,7 +36,11 @@ class AliasLaunchEmulatorTest {
     fun aNotificationTapReachesTheRunningActivityThroughOnNewIntent() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var running: MainActivity
-            scenario.onActivity { running = it }
+            lateinit var launchIntent: Intent
+            scenario.onActivity {
+                running = it
+                launchIntent = it.intent
+            }
             // A notification's tap target, sent as the system sends it.
             LaunchIntents.open(context, "route", "session").send()
             val deadline = SystemClock.uptimeMillis() + 10_000
@@ -53,6 +57,10 @@ class AliasLaunchEmulatorTest {
                 assertEquals(0, running.intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)
                 val resumed = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED)
                 assertSame(running, resumed.single())
+                // ActivityScenario recognises its activity by the intent it launched it with, and
+                // onNewIntent replaced that. Without the original back, close() never sees the
+                // activity reach DESTROYED.
+                running.intent = launchIntent
             }
         }
     }
