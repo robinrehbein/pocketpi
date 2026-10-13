@@ -519,6 +519,8 @@ internal class BackgroundJobsController(
     private val current: () -> RemoteState,
     private val update: ((RemoteState) -> RemoteState) -> Unit,
     private val renewMillis: Long = JOB_LEASE_RENEW_MILLIS,
+    /** Whether a recovery is about to activate the selection again, whose reads list the jobs. */
+    private val recoveryStarting: () -> Boolean = { false },
 ) {
     private var listJob: Job? = null
     private var listVersion = 0L
@@ -635,12 +637,13 @@ internal class BackgroundJobsController(
 
     /**
      * The app left or returned to the foreground; a backgrounded app holds no list lease. Returning
-     * lists again right away, the same as a reconnect, instead of waiting out the renewal interval.
+     * lists again right away, the same as a reconnect, instead of waiting out the renewal interval,
+     * unless a recovery is starting: its activation lists them, and a second list would be wasted.
      */
     fun setForeground(value: Boolean) {
         if (foreground == value) return
         foreground = value
-        if (!foreground) stopLease() else refresh()
+        if (!foreground) stopLease() else if (!recoveryStarting()) refresh()
     }
 
     /**

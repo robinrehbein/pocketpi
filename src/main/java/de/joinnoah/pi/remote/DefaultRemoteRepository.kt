@@ -55,6 +55,8 @@ private val DENIED_DEVICE_ERRORS =
     setOf(R.string.remote_device_revoked, R.string.remote_device_paused)
 private val CONNECTION_ERRORS =
     setOf(R.string.remote_connection_error, R.string.remote_unreachable) + DENIED_DEVICE_ERRORS
+/** Errors that "Waiting for network…" replaces once the network is gone. */
+private val NETWORK_WAIT_ERRORS = setOf(R.string.remote_connection_error, R.string.remote_unreachable)
 /** The connection lines of an attempt that is under way and has not heard from the Mac yet. */
 private val ATTEMPT_LINES = setOf(R.string.remote_connecting, R.string.remote_reconnecting)
 private const val RECONNECT_BASE_MILLIS = 1_000L
@@ -93,6 +95,21 @@ internal const val QUIET_RECONNECT_MILLIS = 5_000L
 
 /** The default wait for a request's reply. */
 internal const val REQUEST_TIMEOUT_MILLIS = 30_000L
+
+/** Back this soon, on the same screen and with frames flowing, the app resumes without a request. */
+internal const val RESUME_QUIET_AWAY_MILLIS = 15_000L
+
+/** A socket that delivered a frame this recently counts as alive when the app resumes. */
+internal const val RESUME_LIVE_SOCKET_MILLIS = 25_000L
+
+/** Back this soon, or with a live socket, a connected app probes the socket instead of reconnecting. */
+internal const val RESUME_PROBE_AWAY_MILLIS = 60_000L
+
+/** How long the resume probe waits for its reply; a timeout with no frame meanwhile reconnects. */
+internal const val RESUME_PROBE_TIMEOUT_MILLIS = 5_000L
+
+/** A resume probe still pending after this long says so on the connection line. */
+internal const val RESUME_PROBE_HINT_MILLIS = 1_000L
 
 /**
  * Idempotent reads that tell whether the socket is alive: one that times out with no frame since
@@ -273,6 +290,8 @@ class DefaultRemoteRepository(
     private var pairingStartedAt: Long? = null
     private var retry: Job? = null
     private var recoveryJob: Job? = null
+    /** The running [recoveryJob] activates the selection again, rather than probing the socket. */
+    private var recoveryActivates = false
     private var deferredRecovery: RemoteRecovery.Signal? = null
     private var reconnectAttempts = 0
     private var failureStreak = 0
@@ -300,6 +319,22 @@ class DefaultRemoteRepository(
     private var inboundFrames = 0L
     /** When the app last went to the background, by [now]; null while it never did. */
     private var backgroundedAt: Long? = null
+    /** When the latest frame arrived, by [now]; how long the socket was quiet picks the resume tier. */
+    private var lastInboundAt: Long? = null
+    /** What was selected when the app went to the background; a resume elsewhere is not free. */
+    private var selectionAtBackground: RemoteSelection? = null
+    /** How long the app was away before its latest return, also for a resume that was deferred. */
+    private var resumeAway: Long? = null
+    /** Connections that became ready; a count, so one ready in the same millisecond still counts. */
+    private var readyConnections = 0L
+    /** [readyConnections] when [deferredRecovery] was deferred: a connection since then read it all. */
+    private var deferredRecoveryReady = 0L
+    /** When the running activation started, by [now]; null while none runs. */
+    private var activationStartedAt: Long? = null
+    /** Times the app went to the background; a count, so the same millisecond still orders. */
+    private var backgrounds = 0L
+    /** [backgrounds] when the running activation started. */
+    private var activationBackgrounds = 0L
     /** Raises the error card once a quiet reconnect has taken [QUIET_RECONNECT_MILLIS]. */
     private var quietReconnect: Job? = null
     /**
@@ -496,6 +531,8 @@ class DefaultRemoteRepository(
 
                 override fun ready(capabilities: Set<String>) {
                     inboundFrames++
+                    readyConnections++
+                    lastInboundAt = now()
                     cancelHostWaitHint()
                     cancelQuietReconnect()
                     offlineSince?.let {
@@ -563,6 +600,7 @@ class DefaultRemoteRepository(
 
                 override fun message(payload: JsonObject) {
                     inboundFrames++
+                    lastInboundAt = now()
                     receive(payload)
                 }
 
@@ -985,6 +1023,11 @@ class DefaultRemoteRepository(
         val signal = deferredRecovery ?: return
         if (state.value.loading || pairing?.isActive == true || hasPendingRecoveryWork()) return
         deferredRecovery = null
+        // A connection that came up after the signal was followed by an activation that read it all.
+        if (readyConnections != deferredRecoveryReady) {
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "recover." + signal.name.lowercase(), outcome = "fresh")
+            return
+        }
         recover(signal)
     }
 
@@ -1885,6 +1928,8 @@ class DefaultRemoteRepository(
         val epoch = selectionEpoch
         stopReconnectTimer()
         requestedSelection = selection
+        activationStartedAt = now()
+        activationBackgrounds = backgrounds
         update { it.copy(loading = true, deniedRouteId = null) }
         val started = Diagnostics.now()
         val cookie = Diagnostics.beginAsync("PocketPi.activate")
@@ -2049,9 +2094,12 @@ class DefaultRemoteRepository(
                 outcome = "$outcome:projects.${hit(projectsCached)}:sessions.${hit(sessionsCached)}:chat.${hit(chatCached)}",
             )
             if (epoch == selectionEpoch) {
+                activationStartedAt = null
                 update { it.copy(loading = false) }
                 if (outcome == "ok" || outcome == "parent" || outcome == "no_host") staleReplaced()
                 cacheCurrentScreen()
+                // A foreground or network signal that came in while this loaded runs now.
+                resumeDeferredRecovery()
             }
         }
     }
@@ -2500,7 +2548,10 @@ class DefaultRemoteRepository(
         val restart = serviceRestart
         serviceRestart = false
         val transient = reconnect && error == R.string.remote_connection_error
-        if (transient) failureStreak++
+        // The network went away in the foreground: the reconnect waits for its return, which says
+        // nothing about the Mac, so it neither counts as a failure nor raises the card.
+        val waitingForNetwork = transient && reconnectEnabled && host != null && recovery.waitingForNetwork
+        if (transient && !waitingForNetwork) failureStreak++
         val retrying = reconnect && reconnectEnabled && recovery.canRecover && host != null
         // The Mac accepts connections and drops them at once, or breaks each one with a frame
         // this app cannot read: stop retrying on a timer. Retry, the next foreground and a
@@ -2514,6 +2565,7 @@ class DefaultRemoteRepository(
         val keep = transient && showsRoute(host?.routeId)
         val shownError =
             when {
+                waitingForNetwork -> null
                 stopped || (transient && failureStreak >= UNREACHABLE_AFTER_FAILURES) -> R.string.remote_unreachable
                 quiet -> null
                 else -> error
@@ -2529,9 +2581,15 @@ class DefaultRemoteRepository(
                 // A finished download stays readable; a running one stopped above.
                 toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },
                 projectChats = it.projectChats.map { chat -> chat.copy(verified = false) },
+                // A verdict on the Mac's version lasts only for the connection that gave it.
+                childControlUnsupported = emptySet(),
                 followUps = currentDraftKey()?.let { key -> drafts[key]?.followUps }.orEmpty(),
                 connection =
-                    if (quiet && retrying) R.string.remote_reconnecting else R.string.remote_offline,
+                    when {
+                        waitingForNetwork -> R.string.remote_waiting_for_network
+                        quiet && retrying -> R.string.remote_reconnecting
+                        else -> R.string.remote_offline
+                    },
                 error = shownError,
                 loading = false,
                 pairingDeadline = null,
@@ -2553,7 +2611,7 @@ class DefaultRemoteRepository(
                 deniedRouteId = if (error in DENIED_DEVICE_ERRORS) host?.routeId else null,
             )
         }
-        if (quiet) startQuietReconnect() else cancelQuietReconnect()
+        if (quiet && !waitingForNetwork) startQuietReconnect() else cancelQuietReconnect()
         if (stopped) {
             Diagnostics.record(
                 Diagnostics.Kind.RECOVERY,
@@ -2604,7 +2662,7 @@ class DefaultRemoteRepository(
         quietReconnect = scope.launch {
             delay(QUIET_RECONNECT_MILLIS)
             quietReconnect = null
-            if (!state.value.connected && state.value.error == null && reconnectEnabled) {
+            if (!state.value.connected && state.value.error == null && reconnectEnabled && !recovery.waitingForNetwork) {
                 Diagnostics.record(Diagnostics.Kind.RECOVERY, "reconnect.slow", QUIET_RECONNECT_MILLIS)
                 update { it.copy(error = R.string.remote_connection_error) }
             }
@@ -2767,69 +2825,290 @@ class DefaultRemoteRepository(
     }
 
     override fun setForeground(foreground: Boolean) {
-        jobsController.setForeground(foreground)
         val signal = recovery.foreground(foreground)
         if (!foreground) {
+            jobsController.setForeground(false)
             backgroundedAt = now()
+            backgrounds++
+            selectionAtBackground = state.value.selection
             queueNavigationWrite(immediate = true)
             stopReconnectTimer()
             cancelRecovery()
             return
         }
-        signal ?: return
-        // How long the app was away, for the resume that follows.
-        backgroundedAt?.let {
-            Diagnostics.record(Diagnostics.Kind.RECOVERY, "foreground", (now() - it).coerceAtLeast(0))
+        // How long the app was away picks the resume tier, also for a resume that waits for a
+        // deferred signal or for the network, which Android may unblock only after this return.
+        val away = backgroundedAt?.let { (now() - it).coerceAtLeast(0) }
+        resumeAway = away
+        if (signal != null) {
+            away?.let { Diagnostics.record(Diagnostics.Kind.RECOVERY, "foreground", it) }
+            resume(signal)
         }
+        // After the tier: a reconnect it starts lists the jobs once ready, so this one does not.
+        jobsController.setForeground(true)
+    }
+
+    /** Acts on [signal]; [pathMoved]: the network in use only moved its route. */
+    private fun resume(signal: RemoteRecovery.Signal, pathMoved: Boolean = false) {
         onRecoverySignal(signal)
-        resetReconnect()
+        // A moved route says nothing about the Mac, so a backoff under way keeps its count.
+        if (!pathMoved) resetReconnect()
+        if (
+            signal == RemoteRecovery.Signal.FRESH_FOREGROUND &&
+                (resumeAway ?: 0) > RESUME_QUIET_AWAY_MILLIS &&
+                abandonActivationFromBefore()
+        )
+            return
         recover(signal)
     }
 
-    override fun setValidatedNetwork(identity: String?) {
-        val signal = recovery.network(identity)
+    /**
+     * An activation that started before the app went to the background and still runs while the
+     * socket has been quiet is likely stuck on a socket that died meanwhile: the connection ends
+     * as stale, so the activation's requests fail and it returns through its usual error path (a
+     * user's open with the selection from before it), and the reconnect restores the selection.
+     * Returns whether it did; on a socket that still delivers frames the activation runs on, and
+     * the resume waits for it.
+     */
+    private fun abandonActivationFromBefore(): Boolean {
+        val started = activationStartedAt ?: return false
+        if (!state.value.loading || activationBackgrounds == backgrounds || activeHost == null) return false
+        if (pairing?.isActive == true || hasPendingRecoveryWork()) return false
+        val quiet = lastInboundAt?.let { (now() - it).coerceAtLeast(0) } ?: Long.MAX_VALUE
+        if (state.value.connected && quiet < RESUME_LIVE_SOCKET_MILLIS) return false
+        Diagnostics.record(Diagnostics.Kind.RECOVERY, "resume.abandon", (now() - started).coerceAtLeast(0))
+        failed(true, R.string.remote_connection_error, cause = FailureCause.STALE)
+        return true
+    }
+
+    /**
+     * Whether a recovery is about to activate the selection again, which lists the jobs anew: a
+     * reconnect waiting to run, or a recovery job that activates rather than probes.
+     */
+    private fun recoveryStarting(): Boolean =
+        retry?.isActive == true || (recoveryJob?.isActive == true && recoveryActivates)
+
+    override fun setNetwork(identity: String?, validated: Boolean, path: String?) {
+        val wasValidated = recovery.validated
+        val wasWaiting = recovery.waitingForNetwork
+        val signal = recovery.network(identity, validated, path)
         if (identity == null) {
             stopReconnectTimer()
             cancelRecovery()
+            waitForNetwork()
             return
         }
-        signal ?: return
-        onRecoverySignal(signal)
-        resetReconnect()
-        recover(signal)
+        if (signal == null) {
+            // Validation of the network in use: a reconnect that waits for its timer goes now.
+            if (validated && !wasValidated && !state.value.connected) {
+                Diagnostics.record(Diagnostics.Kind.RECOVERY, "network.validated")
+                resetReconnect()
+                recover(RemoteRecovery.Signal.FRESH_NETWORK)
+            }
+            return
+        }
+        // A revalidation on a network that never went away is a moved route: the socket is worth
+        // a probe, but a reconnect that waits for its backoff keeps waiting.
+        val pathMoved = signal == RemoteRecovery.Signal.NETWORK_REVALIDATED && !wasWaiting
+        if (pathMoved && !state.value.connected) {
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "recover.network_revalidated", outcome = "backoff")
+            return
+        }
+        resume(signal, pathMoved)
+    }
+
+    /**
+     * Offline in the foreground with no network: the connection line waits for one instead of
+     * showing the error card and a countdown, and the network's return reconnects at once.
+     */
+    private fun waitForNetwork() {
+        val current = state.value
+        if (!recovery.waitingForNetwork || current.connected || !reconnectEnabled) return
+        if (current.selection.routeId == null || current.loading) return
+        if (current.error != null && current.error !in NETWORK_WAIT_ERRORS) return
+        cancelQuietReconnect()
+        update { it.copy(connection = R.string.remote_waiting_for_network, error = null, reconnectAt = null) }
+    }
+
+    private enum class ResumeTier {
+        /** Back soon with events flowing: nothing to do. */
+        NONE,
+        /** A short probe of the socket and the lists read in place, without a reload. */
+        PROBE,
+        /** A quiet reconnect at once, with what is on screen kept until it is read again. */
+        RECONNECT,
+    }
+
+    /**
+     * The resume tier for [signal]: how long the app was away and how long the socket has been
+     * quiet decide between nothing, a probe and a reconnect. A socket that a foreground service
+     * kept delivering frames is probed, however long the app was away.
+     */
+    private fun resumeTier(signal: RemoteRecovery.Signal, selection: RemoteSelection): ResumeTier {
+        val connected = state.value.connected && activeHost?.routeId == selection.routeId
+        if (!connected) return ResumeTier.RECONNECT
+        val quiet = lastInboundAt?.let { (now() - it).coerceAtLeast(0) } ?: Long.MAX_VALUE
+        val alive = quiet < RESUME_LIVE_SOCKET_MILLIS
+        // A network signal says nothing about the time away; it is the socket that needs a probe.
+        if (signal != RemoteRecovery.Signal.FRESH_FOREGROUND) return ResumeTier.PROBE
+        val away = resumeAway ?: Long.MAX_VALUE
+        return when {
+            alive && away < RESUME_QUIET_AWAY_MILLIS && selection == selectionAtBackground -> ResumeTier.NONE
+            alive || away < RESUME_PROBE_AWAY_MILLIS -> ResumeTier.PROBE
+            else -> ResumeTier.RECONNECT
+        }
     }
 
     private fun recover(signal: RemoteRecovery.Signal) {
         fun note(outcome: String) =
             Diagnostics.record(Diagnostics.Kind.RECOVERY, "recover." + signal.name.lowercase(), outcome = outcome)
         if (!reconnectEnabled || !recovery.canRecover) return note("disabled")
-        if (pairing?.isActive == true || state.value.loading) return note("busy")
+        if (pairing?.isActive == true) return note("busy")
         if (signal == RemoteRecovery.Signal.NETWORK_REPLACED && activeHost != null) {
+            // Also ends an attempt under way, which would wait out its timeout on the old route.
             note("reconnect")
             failed(true, R.string.remote_connection_error, cause = FailureCause.NETWORK_REPLACED)
             return
         }
-        if (hasPendingRecoveryWork()) {
+        if (state.value.loading || hasPendingRecoveryWork() || recoveryJob?.isActive == true) {
+            // Runs once the activation, the pending work or the running recovery ends.
             deferredRecovery = signal
+            deferredRecoveryReady = readyConnections
             return note("deferred")
         }
-        stopReconnectTimer()
-        if (recoveryJob?.isActive == true) return note("running")
         val selection = state.value.selection
-        val epoch = selectionEpoch
         if (selection.routeId == null || state.value.hosts.none { it.routeId == selection.routeId }) return note("no_host")
-        note("activate")
+        val tier = resumeTier(signal, selection)
+        note(tier.name.lowercase())
+        when (tier) {
+            ResumeTier.NONE -> Unit
+            ResumeTier.PROBE -> {
+                val epoch = selectionEpoch
+                startRecovery(activates = false) { revalidate(selection, epoch) }
+            }
+            ResumeTier.RECONNECT -> {
+                stopReconnectTimer()
+                if (state.value.connected && activeHost != null) {
+                    // Ends the socket and retries at once; the retry restores the selection while
+                    // the last-known state stays on screen.
+                    failed(true, R.string.remote_connection_error, cause = FailureCause.STALE)
+                } else {
+                    // Already offline, with no attempt under way (an activation defers this):
+                    // reconnect now instead of failing a connection that is already gone.
+                    val epoch = selectionEpoch
+                    startRecovery(activates = true) {
+                        if (epoch == selectionEpoch && recovery.canRecover && reconnectEnabled)
+                            activate(selection, ActivationMode.RESTORE, force = true)
+                    }
+                }
+            }
+        }
+    }
+
+    /** Runs [block] as the recovery job; a signal deferred meanwhile runs once it ends. */
+    private fun startRecovery(activates: Boolean, block: suspend () -> Unit) {
+        val epoch = selectionEpoch
+        recoveryActivates = activates
         recoveryJob =
             scope.launch {
                 try {
-                    if (epoch == selectionEpoch && recovery.canRecover && reconnectEnabled)
-                        activate(selection, ActivationMode.RESTORE, force = true)
+                    block()
                 } catch (_: CancellationException) {
+                    return@launch
                 } catch (swallowed: Exception) {
                     Diagnostics.caught("repo.recover", swallowed)
                     if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
                 }
+                if (recoveryJob === coroutineContext[Job]) recoveryJob = null
+                resumeDeferredRecovery()
             }
+    }
+
+    /**
+     * Tier 1: probes the socket with a short read instead of reconnecting. In a chat the probe is
+     * a snapshot into the Timeline on screen, elsewhere the project list. The lists are then read
+     * again and applied in place; only a selection they no longer hold is selected anew, on its
+     * parent. Configuration, advisor and commands are read again only if the chat moved on.
+     */
+    private suspend fun revalidate(selection: RemoteSelection, epoch: Long) {
+        val host = activeHost?.takeIf { it.routeId == selection.routeId } ?: return
+        val routeId = host.routeId
+        val chat = timeline?.takeIf { selection.sessionId != null && it.sessionId == selection.sessionId }
+        val before = chat?.let { it.revision to it.status }
+        val hint =
+            scope.launch {
+                delay(RESUME_PROBE_HINT_MILLIS)
+                if (epoch == selectionEpoch && state.value.connected && state.value.connection == R.string.remote_connected)
+                    update { it.copy(connection = R.string.remote_checking_connection) }
+            }
+        val started = Diagnostics.now()
+        var projects: List<JsonObject>? = null
+        try {
+            if (chat != null) snapshot(epoch, timeoutMillis = RESUME_PROBE_TIMEOUT_MILLIS)
+            else projects = request("projects.list", epoch, timeoutMillis = RESUME_PROBE_TIMEOUT_MILLIS).array("items")
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "resume.probe", Diagnostics.now() - started, outcome = "ok")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "resume.probe", Diagnostics.now() - started, outcome = requestOutcome(e))
+            // A probe that got no reply and saw no frame meanwhile already reconnects quietly; one
+            // behind a slow host leaves the socket alone. A refusal still lets the lists tell why.
+            if (!state.value.connected || e.requestKind == RemoteRequestException.Kind.TIMEOUT) return
+        } finally {
+            hint.cancel()
+            if (state.value.connection == R.string.remote_checking_connection && state.value.connected)
+                update { it.copy(connection = R.string.remote_connected) }
+        }
+        if (chat != null && chat === timeline && before != (chat.revision to chat.status)) {
+            refreshConfiguration()
+            refreshAdvisor()
+            refreshCommands()
+        }
+        try {
+            val fresh = projects ?: request("projects.list", epoch).array("items")
+            checkEpoch(epoch)
+            if (!state.value.connected || activeHost?.routeId != routeId || state.value.selection != selection) return
+            cachedProjects = routeId to fresh
+            val projectId = selection.projectId
+            val project = projectId?.let { id -> fresh.find { it.text("id") == id } }
+            if (project == null) {
+                if (projectId == null) update { it.copy(projects = fresh) }
+                else select(RemoteSelection(routeId), host, fresh)
+                refreshProjectChats(routeId, fresh, epoch)
+                return
+            }
+            val sessions = listSessions(project.text("id"), epoch)
+            checkEpoch(epoch)
+            if (!state.value.connected || activeHost?.routeId != routeId || state.value.selection != selection) return
+            cachedSessions = CachedSessions(routeId, project.text("id"), project, sessions)
+            val sessionId = selection.sessionId
+            val session = sessionId?.let { id -> sessions.find { it.text("id") == id } }
+            if (
+                sessionId != null &&
+                    (session == null ||
+                        session.optionalText("origin") !in setOf("rpc", "tui") ||
+                        session.text("status") == "offline")
+            ) {
+                // Gone, or no longer live: the same parent a restore lands on.
+                select(RemoteSelection(routeId, project.text("id")), host, fresh, project, sessions, sessionsFresh = true)
+                return
+            }
+            update {
+                it.copy(
+                    projects = fresh,
+                    project = project,
+                    sessions = sessions,
+                    sessionsFresh = true,
+                    session = session?.let(::withSessionTitle) ?: it.session,
+                )
+            }
+            cacheCurrentScreen()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (swallowed: Exception) {
+            // The chat is live again; lists that failed to load stay as they were.
+            Diagnostics.caught("repo.revalidate", swallowed)
+        }
     }
 
     override fun refreshConfiguration() {
@@ -4908,6 +5187,7 @@ class DefaultRemoteRepository(
             },
             { state.value },
             ::update,
+            recoveryStarting = ::recoveryStarting,
         )
     }
 
