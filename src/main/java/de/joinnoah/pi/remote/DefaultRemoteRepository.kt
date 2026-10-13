@@ -51,6 +51,8 @@ private const val MAX_ROUTE_CAPABILITIES = 32
 
 /** Sessions whose unsaved editor is kept while another session is open; the oldest goes first. */
 private const val MAX_PARKED_EDITORS = 4
+/** Events kept for a held snapshot's chat, as many as a Timeline buffers; older ones need a resync. */
+private const val MAX_HELD_EVENTS = 128
 private val DENIED_DEVICE_ERRORS =
     setOf(R.string.remote_device_revoked, R.string.remote_device_paused)
 private val CONNECTION_ERRORS =
@@ -453,6 +455,18 @@ class DefaultRemoteRepository(
      * it buffers waits for it instead of asking for one more.
      */
     private var snapshotPending: Timeline? = null
+
+    /**
+     * A snapshot read before select() made its chat's Timeline: a restore reads it alongside the
+     * lists, an open of a live chat alongside `sessions.open`. The chat's events that arrive
+     * meanwhile wait here for that Timeline, so none is lost before it exists.
+     */
+    private class HeldSnapshot(val sessionId: String) {
+        lateinit var reply: Deferred<Result<JsonObject>>
+        val events = ArrayDeque<JsonObject>()
+    }
+
+    private var heldSnapshot: HeldSnapshot? = null
     private var pushToken: String? = null
     private var pushTokenKnown = false
     private val drafts = mutableMapOf<DraftKey, StoredDraft>()
@@ -1161,6 +1175,26 @@ class DefaultRemoteRepository(
         completions.clear()
     }
 
+    /**
+     * The chat [selection] as the caches last held it, with its stored draft. A history session
+     * without a cached chat still gets its list row, so the preview can say it continues as a copy.
+     */
+    override fun peekCachedChat(selection: RemoteSelection): ChatPreview? {
+        val routeId = selection.routeId ?: return null
+        val projectId = selection.projectId ?: return null
+        val sessionId = selection.sessionId ?: return null
+        val chat = chatCache[selection]
+        val row =
+            chat?.session
+                ?: sessionCache[routeId to projectId]?.sessions?.find { it.optionalText("id") == sessionId }
+        if (chat == null && row?.optionalText("origin") != "history") return null
+        return ChatPreview(
+            session = row?.let(::withSessionTitle),
+            messages = chat?.messages.orEmpty(),
+            draft = drafts[DraftKey(routeId, sessionId)]?.text.orEmpty(),
+        )
+    }
+
     override fun cancelSelection() {
         cacheCurrentScreen(immediate = true)
         projectChatsJob?.cancel()
@@ -1325,6 +1359,8 @@ class DefaultRemoteRepository(
         requestId: String = Wire.random(),
         onSent: (() -> Unit)? = null,
         timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
+        // Runs once the request went out, for one that follows it without waiting for its reply.
+        thenSend: (() -> Unit)? = null,
     ): JsonObject {
         checkEpoch(epoch)
         check(state.value.connected)
@@ -1355,6 +1391,7 @@ class DefaultRemoteRepository(
             // Set before sending: a send that throws may still have reached the host.
             onSent?.invoke()
             transport.send(payload)
+            thenSend?.invoke()
             val result =
                 withTimeoutOrNull(timeoutMillis) { completion.await() }
                     ?: run {
@@ -1409,6 +1446,31 @@ class DefaultRemoteRepository(
             // The payload is ASCII JSON in all but rare cases, so its length stands for its size.
             Diagnostics.request(type, (ended ?: Diagnostics.now()) - started, payload.toString().length.toLong(), outcome)
         }
+    }
+
+    /**
+     * Runs [block] beside the caller, started at once so its request goes out before the caller's
+     * next one. Its result or failure waits for the caller to take; it never fails the caller on
+     * its own, and the caller cancels it when it does not take it.
+     */
+    private fun <T> CoroutineScope.alongside(block: suspend () -> T): Deferred<Result<T>> =
+        async(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                Result.success(block())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
+
+    /** Asks for the snapshot of [sessionId] before select() makes its Timeline; see [HeldSnapshot]. */
+    private fun CoroutineScope.holdSnapshot(sessionId: String, epoch: Long): HeldSnapshot {
+        val held = HeldSnapshot(sessionId)
+        // Set first: an event that follows the request is kept for the Timeline.
+        heldSnapshot = held
+        held.reply = alongside { request("session.snapshot", epoch, "sessionId" to sessionId) }
+        return held
     }
 
     /** A request's outcome for Diagnostics: the host's error code, or what ended the wait. */
@@ -1490,24 +1552,16 @@ class DefaultRemoteRepository(
             // event, so its revision stays in step.
             Diagnostics.caught("repo.receive.event", dropped)
         }
-        timeline?.let { current ->
-            try {
-                val timelineEvent =
-                    if (payload.optionalText("kind") in setOf("follow_up.status", "steer.status"))
-                        JsonObject(payload + ("kind" to JsonPrimitive("command.status")))
-                    else payload
-                // The snapshot select() set up takes in what this buffered; asking for another
-                // one would only be discarded.
-                if (current.event(timelineEvent) && !resynchronizing && snapshotPending !== current)
-                    snapshotAsync()
-            } catch (malformed: Exception) {
-                Diagnostics.caught("repo.receive.timeline", malformed)
-                current.unknownKindSeen = true
-            }
-            resyncAfterUnknownEvents(current)
-            // Another session's event cannot change this chat.
-            if ((payload["sessionId"] as? JsonPrimitive)?.content == current.sessionId) publishTimeline()
-        }
+        val forTimeline =
+            if (payload.optionalText("kind") in setOf("follow_up.status", "steer.status"))
+                JsonObject(payload + ("kind" to JsonPrimitive("command.status")))
+            else payload
+        val held = heldSnapshot
+        if (held != null && (payload["sessionId"] as? JsonPrimitive)?.content == held.sessionId) {
+            // Kept for the Timeline the held snapshot is for, which select() has not made yet.
+            held.events.addLast(forTimeline)
+            while (held.events.size > MAX_HELD_EVENTS) held.events.removeFirst()
+        } else timeline?.let { current -> timelineEvent(current, forTimeline) }
         try {
             if (payload.optionalText("kind") == "session.compaction" &&
                 payload.optionalText("sessionId") == state.value.selection.sessionId &&
@@ -1517,6 +1571,36 @@ class DefaultRemoteRepository(
             }
         } catch (dropped: Exception) {
             Diagnostics.caught("repo.receive.compaction", dropped)
+        }
+    }
+
+    private fun timelineEvent(current: Timeline, event: JsonObject) {
+        try {
+            // The snapshot select() set up takes in what this buffered; asking for another
+            // one would only be discarded.
+            if (current.event(event) && !resynchronizing && snapshotPending !== current)
+                snapshotAsync()
+        } catch (malformed: Exception) {
+            Diagnostics.caught("repo.receive.timeline", malformed)
+            current.unknownKindSeen = true
+        }
+        resyncAfterUnknownEvents(current)
+        // Another session's event cannot change this chat.
+        if ((event["sessionId"] as? JsonPrimitive)?.content == current.sessionId) publishTimeline()
+    }
+
+    /**
+     * Ends [held]. The events that waited go to the Timeline of its chat, if there is one: the one
+     * select() just made, which buffers them for the snapshot that follows, or the chat still on
+     * screen when the activation ended without it, which takes them as they would have come.
+     */
+    private fun releaseHeldSnapshot(held: HeldSnapshot) {
+        if (heldSnapshot !== held) return
+        heldSnapshot = null
+        val current = timeline?.takeIf { it.sessionId == held.sessionId }
+        while (held.events.isNotEmpty()) {
+            val event = held.events.removeFirst()
+            if (current != null && current === timeline) timelineEvent(current, event)
         }
     }
 
@@ -1811,11 +1895,16 @@ class DefaultRemoteRepository(
         cacheCurrentScreen()
     }
 
-    /** [timeoutMillis] lets a probe give up sooner; a timeout with no frame meanwhile reconnects. */
+    /**
+     * [timeoutMillis] lets a probe give up sooner; a timeout with no frame meanwhile reconnects.
+     * [held] is the reply of a request already sent for this Timeline's session, taken instead of
+     * a new one.
+     */
     private suspend fun snapshot(
         epoch: Long,
         older: Boolean = false,
         timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
+        held: Deferred<Result<JsonObject>>? = null,
     ) {
         val current = timeline ?: return
         val cursor = if (older) current.nextCursor ?: return else null
@@ -1823,7 +1912,20 @@ class DefaultRemoteRepository(
         if (snapshotPending === current) snapshotPending = null
         try {
             val data =
-                if (cursor == null)
+                if (held != null && cursor == null)
+                    held.await().getOrElse { failed ->
+                        // It was read before the lists or the open confirmed the chat, so a host
+                        // error may not hold any more: it is asked once again. A reply that never
+                        // came fails as any other would.
+                        if (failed.requestKind != RemoteRequestException.Kind.HOST_ERROR) throw failed
+                        request(
+                            "session.snapshot",
+                            epoch,
+                            "sessionId" to current.sessionId,
+                            timeoutMillis = timeoutMillis,
+                        )
+                    }
+                else if (cursor == null)
                     request(
                         "session.snapshot",
                         epoch,
@@ -2160,6 +2262,12 @@ class DefaultRemoteRepository(
         var cachedShown = false
         // The requested list was selected from the caches: a failed open stays on it, offline.
         var cacheSelected = false
+        // The snapshot and session list read alongside other requests; see [HeldSnapshot].
+        var held: HeldSnapshot? = null
+        var earlySessions: Deferred<Result<List<JsonObject>>>? = null
+        var snapshotHeld = false
+        // Their coroutines belong to this activation: its cancellation ends them too.
+        val beside = CoroutineScope(currentCoroutineContext())
         try {
             val host = state.value.hosts.find { it.routeId == selection.routeId }
             if (host == null) {
@@ -2236,6 +2344,38 @@ class DefaultRemoteRepository(
                     }
                     ?.second
             projectsCached = reusedProjects != null
+            fun reusedSessions(projectId: String): List<JsonObject>? =
+                sessionCache[host.routeId to projectId]
+                    ?.takeIf { useCache && !force && alreadyConnected && it.readOn == generation }
+                    ?.sessions
+                    // A session opened by hand may have registered after the cached list was
+                    // fetched (a subagent child, for example), so a miss there asks the host again.
+                    ?.takeUnless { list ->
+                        mode == ActivationMode.USER_OPEN &&
+                            selection.sessionId != null &&
+                            list.none { it.text("id") == selection.sessionId }
+                    }
+            // A restored chat's IDs come from the user's own stack, so its snapshot and its session
+            // list are read alongside the projects instead of one after another. The snapshot is
+            // applied only once the lists confirm the chat; a row known not to be live skips it.
+            val restoredProjectId = selection.projectId
+            val restoredSessionId =
+                selection.sessionId?.takeIf { sessionId ->
+                    mode == ActivationMode.RESTORE && restoredProjectId != null &&
+                        sessionCache[host.routeId to restoredProjectId]
+                            ?.sessions
+                            ?.find { it.text("id") == sessionId }
+                            .let { row ->
+                                row == null ||
+                                    (row.optionalText("origin") in setOf("rpc", "tui") &&
+                                        row.optionalText("status") != "offline")
+                            }
+                }
+            if (restoredSessionId != null && restoredProjectId != null) {
+                held = beside.holdSnapshot(restoredSessionId, epoch)
+                if (reusedSessions(restoredProjectId) == null)
+                    earlySessions = beside.alongside { listSessions(restoredProjectId, epoch) }
+            }
             val projects = reusedProjects ?: request("projects.list", epoch).array("items")
             checkEpoch(epoch)
             cachedProjects = host.routeId to projects
@@ -2248,19 +2388,11 @@ class DefaultRemoteRepository(
                 outcome = "parent"
                 return parent
             }
-            val cached =
-                sessionCache[host.routeId to project.text("id")]
-                    ?.takeIf { useCache && !force && alreadyConnected && it.readOn == generation }
-                    ?.sessions
-            // A session opened by hand may have registered after the cached list was fetched
-            // (a subagent child, for example), so a miss there asks the host again.
             var sessionsFetchedNow = false
             val sessions =
-                cached?.takeUnless { list ->
-                    mode == ActivationMode.USER_OPEN &&
-                        selection.sessionId != null &&
-                        list.none { it.text("id") == selection.sessionId }
-                } ?: listSessions(project.text("id"), epoch).also { sessionsFetchedNow = true }
+                earlySessions?.let { early -> early.await().getOrThrow().also { sessionsFetchedNow = true } }
+                    ?: reusedSessions(project.text("id"))
+                    ?: listSessions(project.text("id"), epoch).also { sessionsFetchedNow = true }
             sessionsCached = !sessionsFetchedNow
             checkEpoch(epoch)
             cachedSessions = CachedSessions(host.routeId, project.text("id"), project, sessions, generation)
@@ -2276,10 +2408,19 @@ class DefaultRemoteRepository(
                 return parent
             }
             val chosen =
-                if (mode == ActivationMode.USER_OPEN)
-                    request("sessions.open", epoch, "sessionId" to session.text("id"))
-                        .obj("session")
-                else session
+                if (mode == ActivationMode.USER_OPEN) {
+                    // An open of a live chat keeps its ID, so its snapshot follows the open without
+                    // waiting for its reply. An open of a history session forks it: its snapshot
+                    // waits for the fork's ID.
+                    val live =
+                        session.optionalText("origin") in setOf("rpc", "tui") && session.text("status") != "offline"
+                    request(
+                        "sessions.open",
+                        epoch,
+                        "sessionId" to session.text("id"),
+                        thenSend = { if (live) held = beside.holdSnapshot(session.text("id"), epoch) },
+                    ).obj("session")
+                } else session
             val canonicalProject =
                 projects.find { it.text("id") == chosen.text("projectId") }
                     ?: run {
@@ -2300,8 +2441,18 @@ class DefaultRemoteRepository(
                 chatCache[canonical]?.takeIf { useCache },
                 sessionsFresh = sessionsFetchedNow,
             )
+            // Only a snapshot of the chat now selected is taken; another one is dropped below. The
+            // events that waited for it go to the new Timeline, which buffers them until it is in.
+            val heldReply = held?.takeIf { it.sessionId == canonical.sessionId }?.reply
+            held?.let(::releaseHeldSnapshot)
+            snapshotHeld = heldReply != null
+            // The controls need only the connection and its capabilities, so they are read while
+            // the snapshot is.
+            refreshConfiguration()
+            refreshAdvisor()
+            refreshCommands()
             try {
-                snapshot(epoch)
+                snapshot(epoch, held = heldReply)
             } catch (e: CancellationException) {
                 throw e
             } catch (swallowed: Exception) {
@@ -2309,20 +2460,36 @@ class DefaultRemoteRepository(
                 checkEpoch(epoch)
                 // The reconnect after a lost connection opens the chat again.
                 if (chatCache[canonical] != null || lostWithConnection(swallowed)) {
+                    if (swallowed.requestKind == RemoteRequestException.Kind.HOST_ERROR) {
+                        // The host refused the chat, so its controls' reads, started before the
+                        // snapshot, would only add their own errors to this one.
+                        configurationVersion++
+                        advisorVersion++
+                        commandsVersion++
+                        update {
+                            it.copy(
+                                configurationLoading = false,
+                                advisorLoading = false,
+                                advisorChanging = false,
+                                commandsLoading = false,
+                            )
+                        }
+                    }
                     reportReadError(swallowed)
                     outcome = "snapshot_failed"
                     return canonical
                 }
                 cachedChat = null
+                // The controls read for the chat left behind no longer land.
+                configurationVersion++
+                advisorVersion++
+                commandsVersion++
                 select(parent, host, projects, project, sessions, sessionsFresh = sessionsFetchedNow)
                 reportError(R.string.remote_request_error)
                 outcome = "snapshot_failed"
                 return parent
             }
             refreshPanes()
-            refreshConfiguration()
-            refreshAdvisor()
-            refreshCommands()
             outcome = "ok"
             return canonical
         } catch (e: CancellationException) {
@@ -2335,13 +2502,21 @@ class DefaultRemoteRepository(
             if (!connectionDown()) reportError(R.string.remote_request_error)
             return if (mode == ActivationMode.USER_OPEN && !cacheSelected) previousSelection else state.value.selection
         } finally {
+            // What was read alongside and not taken is dropped; its late replies find no request.
+            held?.let { unused ->
+                releaseHeldSnapshot(unused)
+                unused.reply.cancel()
+            }
+            earlySessions?.cancel()
             Diagnostics.endAsync("PocketPi.activate", cookie)
             fun hit(cached: Boolean) = if (cached) "hit" else "miss"
             Diagnostics.record(
                 Diagnostics.Kind.ACTIVATE,
                 "activate." + mode.name.lowercase() + if (force) ".force" else "",
                 Diagnostics.now() - started,
-                outcome = "$outcome:projects.${hit(projectsCached)}:sessions.${hit(sessionsCached)}:chat.${hit(chatCached)}",
+                outcome =
+                    "$outcome:projects.${hit(projectsCached)}:sessions.${hit(sessionsCached)}:chat.${hit(chatCached)}" +
+                        if (snapshotHeld) ":snapshot.held" else "",
             )
             if (epoch == selectionEpoch) {
                 activationStartedAt = null

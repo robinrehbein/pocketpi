@@ -307,4 +307,59 @@ class ChatNavigationTest {
         compose.onNodeWithText(empty).assertExists()
         compose.onNodeWithContentDescription(skeleton).assertDoesNotExist()
     }
+
+    /** Opens [session] of a connected Mac from its session list while the open still runs. */
+    private fun openFromTheList(session: kotlinx.serialization.json.JsonObject, cached: ChatPreview?): NavigationFakeRepository {
+        val project = Wire.objectOf("id" to "project", "name" to "noah-monorepo")
+        val repository = NavigationFakeRepository()
+        repository.state.value =
+            RemoteState(
+                hosts = listOf(coldHost),
+                hostsLoaded = true,
+                host = coldHost,
+                connected = true,
+                connection = R.string.remote_connected,
+                projects = listOf(project),
+                project = project,
+                sessions = listOf(session),
+            )
+        val chat = RemoteSelection("host", "project", session.text("id"))
+        if (cached != null) repository.cachedChats[chat] = cached
+        val opened = CompletableDeferred<Unit>()
+        repository.activation = { selection, _ ->
+            if (selection.sessionId != null) opened.await()
+            selection
+        }
+        compose.setContent { RemoteApp(repository, FakeSettingsRepository(), false, {}) }
+        compose.waitForIdle()
+        compose.onNodeWithText("Studio Mac").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("noah-monorepo").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText(session.text("title")).performClick()
+        compose.waitForIdle()
+        // The open has not selected the chat.
+        assertEquals(RemoteSelection("host", "project"), repository.state.value.selection)
+        return repository
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun openingACachedChatShowsItsConversationAtOnce() {
+        val session = Wire.objectOf("id" to "s1", "title" to "First session", "status" to "idle", "origin" to "rpc")
+        val message =
+            Wire.objectOf("id" to "reply", "role" to "assistant", "text" to "The cached answer", "state" to "complete")
+        openFromTheList(session, ChatPreview(session, listOf(message), ""))
+        compose.onNodeWithText("The cached answer").assertExists()
+        compose.onNodeWithTag("chatPreviewCopyHint").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun openingAHistorySessionSaysItContinuesAsACopy() {
+        val session = Wire.objectOf("id" to "old", "title" to "Old session", "status" to "idle", "origin" to "history")
+        openFromTheList(session, ChatPreview(session, emptyList(), ""))
+        compose.onNodeWithTag("chatPreviewCopyHint").assertExists()
+        compose.onNodeWithText(context.getString(R.string.remote_chat_preview_copy_hint)).assertExists()
+    }
 }

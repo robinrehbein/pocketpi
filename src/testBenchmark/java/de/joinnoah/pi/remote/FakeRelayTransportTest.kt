@@ -123,8 +123,9 @@ class FakeRelayTransportTest {
         val session = checkNotNull(fixture.session("session-uncached"))
         val started = testScheduler.currentTime
         assertEquals(chat, repository.activate(chat, ActivationMode.USER_OPEN))
-        // sessions.list, sessions.open and session.snapshot each wait an LTE round trip.
-        assertTrue(testScheduler.currentTime - started >= 3 * 100)
+        // sessions.list waits an LTE round trip, then sessions.open another; a live chat's
+        // session.snapshot goes out right behind the open, so it shares that round trip.
+        assertTrue(testScheduler.currentTime - started >= 2 * 100)
         val opened = repository.state.value
         assertEquals(fixture.snapshotPageSize, opened.messages.size)
         assertEquals(session.tail, opened.messages.last().text("text"))
@@ -226,11 +227,11 @@ class FakeRelayTransportTest {
         assertEquals(chat, harness.repository.state.value.selection)
         assertEquals(emptyList<String>(), sections.pending.toList())
         // The quiet reconnect waits its first backoff (1 s at this jitter), then four handshake
-        // round trips; reading projects, sessions and the snapshot takes three more.
+        // round trips; the restore reads projects, sessions and the snapshot together, in one more.
         val connected = sections.duration(FlowFreshness.DROP_TO_CONNECTED)
         val fresh = sections.duration(FlowFreshness.Cause.DROP.section)
         assertTrue("connected after $connected ms", connected in 1_000L + 4 * 100..1_000L + 4 * 200)
-        assertTrue("fresh after $fresh ms", fresh - connected in 3L * 100..3L * 200 + 100)
+        assertTrue("fresh after $fresh ms", fresh - connected in 1L * 100..1L * 200 + 100)
     }
 
     @Test
@@ -301,9 +302,9 @@ class FakeRelayTransportTest {
         assertEquals(FlowFreshness.Status(1, fresh = true), freshness.status.value)
         assertEquals(2, harness.transport.connections)
         assertEquals(chat, repository.state.value.selection)
-        // Four handshake round trips and three reads, without a backoff.
+        // Four handshake round trips and the restore's reads together in one more, without a backoff.
         val resumed = sections.duration(FlowFreshness.Cause.RESUME.section)
-        assertTrue("fresh after $resumed ms", resumed in 7L * 100..7L * 200 + 100)
+        assertTrue("fresh after $resumed ms", resumed in 5L * 100..5L * 200 + 100)
     }
 
     @Test
