@@ -361,6 +361,8 @@ class DefaultRemoteRepository(
         val projectId: String,
         val project: JsonObject,
         val sessions: List<JsonObject>,
+        /** The [generation] whose connection read [sessions]; null for the saved navigation's. */
+        val readOn: Long? = null,
     )
 
     private data class CachedChat(
@@ -372,6 +374,13 @@ class DefaultRemoteRepository(
     )
 
     private var cachedProjects: Pair<String, List<JsonObject>>? = null
+        set(value) {
+            // Another Mac's list, or the saved one, was not read on the connection that read this.
+            if (value?.first != field?.first) projectsReadOn = null
+            field = value
+        }
+    /** The [generation] whose connection read [cachedProjects]; null while they are the saved ones. */
+    private var projectsReadOn: Long? = null
     private var cachedProjectChats: Pair<String, List<ProjectChatSummary>>? = null
     private val projectChatCandidates = linkedMapOf<String, List<ProjectChatSummary>>()
     private var projectChatsJob: Job? = null
@@ -427,6 +436,17 @@ class DefaultRemoteRepository(
     private val removedRoutes = mutableSetOf<String>()
     private val removalJobs = mutableMapOf<String, Job>()
     private var resynchronizing = false
+    /**
+     * The connection was opened by [connectEarly] and no [connect] took it over yet: the caches
+     * hold the saved navigation, not lists this connection read, and push is not registered.
+     */
+    private var earlyConnection = false
+    /**
+     * [connectEarly] opened the connection for a restore that has not started its activation yet.
+     * Until one starts, nothing on screen owns the connection: a failure leaves the reconnect to
+     * that activation instead of a timed retry of the selection from before it.
+     */
+    private var restorePending = false
 
     /**
      * The Timeline select() made for a snapshot that follows; until that snapshot starts, an event
@@ -453,6 +473,8 @@ class DefaultRemoteRepository(
     private var storageFailure: Exception? = null
     private var draftsAvailable = false
     private val initialized = CompletableDeferred<Unit>()
+    /** The paired Macs and the drafts are loaded; [initialized] also waits for the saved navigation. */
+    private val connectable = CompletableDeferred<Unit>()
     private var pairingEpoch: Long? = null
     private val pairingWrites = Mutex()
 
@@ -469,11 +491,33 @@ class DefaultRemoteRepository(
                     withContext(io) { pairings.load() }.also { pairingsLoaded = true }
                 } catch (swallowed: Exception) {
                     Diagnostics.caught("repo.loadPairings", swallowed)
+                    // The Hosts screen says so once the error card is gone, instead of loading.
+                    update { it.copy(hostsUnreadable = true) }
                     reportError(R.string.remote_storage_error)
                     null
                 }
             if (hosts != null) {
-                update { it.copy(hosts = hosts.filterNot { host -> host.routeId in removedRoutes }) }
+                update {
+                    it.copy(hosts = hosts.filterNot { host -> host.routeId in removedRoutes }, hostsLoaded = true)
+                }
+            }
+            try {
+                drafts.putAll(loadedDrafts.await().getOrThrow().mapValues { (_, value) ->
+                    value.copy(followUps = value.followUps.map { entry ->
+                        if (entry.status in setOf("pending", "accepted")) entry.copy(status = "uncertain") else entry
+                    })
+                })
+                persistedAttachmentIds = journalAttachmentIds(drafts)
+                draftsAvailable = true
+            } catch (e: Exception) {
+                Diagnostics.caught("repo.loadDrafts", e)
+                storageFailure = e
+                reportError(R.string.remote_storage_error)
+            }
+            // The Macs and the drafts their follow-ups live in are known: a restore may connect
+            // while the saved navigation, the larger read, still loads.
+            connectable.complete(Unit)
+            if (hosts != null) {
                 navigationStorage?.let {
                     try {
                         val allowed = hosts.mapTo(mutableSetOf()) { it.routeId }
@@ -488,21 +532,18 @@ class DefaultRemoteRepository(
                     }
                 }
             }
-            try {
-                drafts.putAll(loadedDrafts.await().getOrThrow().mapValues { (_, value) ->
-                    value.copy(followUps = value.followUps.map { entry ->
-                        if (entry.status in setOf("pending", "accepted")) entry.copy(status = "uncertain") else entry
-                    })
-                })
-                persistedAttachmentIds = journalAttachmentIds(drafts)
-                draftsAvailable = true
-                cleanupAttachments()
-            } catch (e: Exception) {
-                Diagnostics.caught("repo.loadDrafts", e)
-                storageFailure = e
-                reportError(R.string.remote_storage_error)
-            }
             initialized.complete(Unit)
+            // Only directory IO, which no activation needs to wait for; imports and sends hold the
+            // mutex or mark their files in flight, so none of theirs goes.
+            if (draftsAvailable) {
+                try {
+                    cleanupAttachments()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("repo.cleanupAttachments", swallowed)
+                }
+            }
         }
         scope.launch {
             for (write in writes) {
@@ -582,7 +623,9 @@ class DefaultRemoteRepository(
                         )
                     }
                     ready?.complete(Unit)
-                    registerPush()
+                    // An early connection registers once an activation took it over: the
+                    // selection change that starts one would cancel a request sent before.
+                    if (!earlyConnection) registerPush()
                 }
 
                 override fun approval() {
@@ -922,7 +965,9 @@ class DefaultRemoteRepository(
                 if (session != null && current.sessions.none { it.text("id") == session.text("id") })
                     listOf(session) + current.sessions
                 else current.sessions
-            cachedSessions = CachedSessions(routeId, projectId, project, sessions)
+            // What is on screen was read when its cache entry was, if at all.
+            val readOn = sessionCache[routeId to projectId]?.readOn
+            cachedSessions = CachedSessions(routeId, projectId, project, sessions, readOn)
             if (session != null && current.selection.sessionId == session.text("id")) {
                 cachedChat =
                     CachedChat(
@@ -1173,90 +1218,103 @@ class DefaultRemoteRepository(
     }
 
     private suspend fun connect(host: PairedHost, epoch: Long) {
-        if (activeHost?.routeId == host.routeId && state.value.connected) return
-        if (activeHost?.routeId != host.routeId || ready?.isActive != true) {
-            val previousRoute = activeHost?.routeId ?: timedOutRoute
-            timedOutRoute = null
-            if (previousRoute != host.routeId && markPendingFollowUpsUncertain(previousRoute)) {
-                persist().await()
+        if (activeHost?.routeId != host.routeId || !state.value.connected) {
+            if (activeHost?.routeId != host.routeId || ready?.isActive != true) openConnection(host)
+            if (withTimeoutOrNull(CONNECT_READY_WAIT_MILLIS) { checkNotNull(ready).await() } == null) {
+                Diagnostics.record(Diagnostics.Kind.FAILURE, "connect.wait", CONNECT_READY_WAIT_MILLIS, outcome = "timeout")
+                if (epoch == selectionEpoch) {
+                    // Goes offline and schedules the next attempt like any transport failure.
+                    failed(true, R.string.remote_connection_error, cause = FailureCause.HANDSHAKE_TIMEOUT)
+                    ready?.cancel()
+                    ready = null
+                    timedOutRoute = activeHost?.routeId
+                    activeHost = null
+                }
+                throw IllegalStateException("Connection timed out")
             }
-            if (previousRoute != host.routeId) {
-                offlineSince = null
-                cancelQuietReconnect()
-                resetReconnect()
-                clearNavigationCache()
-                attachmentBytes.clear()
-                SentImageThumbnails.clear()
-                projectImageBytes.clear()
-                projectArtifacts.clear()
-                ProjectImageBitmaps.clear()
-                ArtifactThumbnails.clear()
-            }
-            cachedProjectChats = cachedProjectChats?.takeIf { it.first == host.routeId }
-                ?.let { it.first to it.second.map { chat -> chat.copy(verified = false) } }
-            projectChatCandidates.replaceAll { _, chats ->
-                chats.map { it.copy(verified = false) }
-            }
-            // A connection replaced on purpose is no failure.
-            connectionEnded()
-            generation++
-            failFolderRequests()
-            cloneStatusJob?.cancel()
-            providerStatusJob?.cancel()
-            providerVersion++
-            earlyProviderUpdates.clear()
-            folderVersion++
-            folderSession++
-            activeOpen = null
-            sessionStatusRevisions.clear()
-            sessionStatusOverrides.clear()
-            sessionTitleRevisions.clear()
-            sessionTitleOverrides.clear()
-            ready?.cancel()
-            // A reconnect to the Mac on screen keeps its last-known state; another Mac starts empty.
-            val keep = state.value.stale && showsRoute(host.routeId)
-            val line = if (keep) R.string.remote_reconnecting else R.string.remote_connecting
-            activeHost = host
-            ready = CompletableDeferred()
-            stopToolOutput()
-            update {
-                val shown = if (keep) it else lastKnownCleared(it)
-                shown.copy(
-                    connected = false,
-                    connection = line,
-                    compaction = null,
-                    compactionRequesting = false,
-                    // A finished download stays readable; a running one stopped above.
-                    toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },
-                    // A login goes on on the Mac; the same host recovers it once it is reachable.
-                    providerAuth =
-                        if (previousRoute != host.routeId) ProviderAuthState()
-                        else it.providerAuth.offline(),
-                    folders = it.folders.copy(
-                        loaded = it.folders.loaded && !it.folders.loading,
-                        loading = false,
-                        error = null,
-                        working = false,
-                        trust = null,
-                        notice = null,
-                    ),
-                )
-            }
-            transport.connect(host)
+            checkEpoch(epoch)
         }
-        if (withTimeoutOrNull(CONNECT_READY_WAIT_MILLIS) { checkNotNull(ready).await() } == null) {
-            Diagnostics.record(Diagnostics.Kind.FAILURE, "connect.wait", CONNECT_READY_WAIT_MILLIS, outcome = "timeout")
-            if (epoch == selectionEpoch) {
-                // Goes offline and schedules the next attempt like any transport failure.
-                failed(true, R.string.remote_connection_error, cause = FailureCause.HANDSHAKE_TIMEOUT)
-                ready?.cancel()
-                ready = null
-                timedOutRoute = activeHost?.routeId
-                activeHost = null
-            }
-            throw IllegalStateException("Connection timed out")
+        // The first activation on an early connection registers it; ready() left that to it.
+        if (earlyConnection) {
+            earlyConnection = false
+            registerPush()
         }
-        checkEpoch(epoch)
+    }
+
+    /**
+     * Starts a connection to [host] in place of the current one, without waiting for it; [connect]
+     * waits for it to become ready. [early]: [connectEarly] opens it ahead of its activation.
+     */
+    private suspend fun openConnection(host: PairedHost, early: Boolean = false) {
+        earlyConnection = early
+        val previousRoute = activeHost?.routeId ?: timedOutRoute
+        timedOutRoute = null
+        if (previousRoute != host.routeId && markPendingFollowUpsUncertain(previousRoute)) {
+            persist().await()
+        }
+        if (previousRoute != host.routeId) {
+            offlineSince = null
+            cancelQuietReconnect()
+            resetReconnect()
+            clearNavigationCache()
+            attachmentBytes.clear()
+            SentImageThumbnails.clear()
+            projectImageBytes.clear()
+            projectArtifacts.clear()
+            ProjectImageBitmaps.clear()
+            ArtifactThumbnails.clear()
+        }
+        cachedProjectChats = cachedProjectChats?.takeIf { it.first == host.routeId }
+            ?.let { it.first to it.second.map { chat -> chat.copy(verified = false) } }
+        projectChatCandidates.replaceAll { _, chats ->
+            chats.map { it.copy(verified = false) }
+        }
+        // A connection replaced on purpose is no failure.
+        connectionEnded()
+        generation++
+        failFolderRequests()
+        cloneStatusJob?.cancel()
+        providerStatusJob?.cancel()
+        providerVersion++
+        earlyProviderUpdates.clear()
+        folderVersion++
+        folderSession++
+        activeOpen = null
+        sessionStatusRevisions.clear()
+        sessionStatusOverrides.clear()
+        sessionTitleRevisions.clear()
+        sessionTitleOverrides.clear()
+        ready?.cancel()
+        // A reconnect to the Mac on screen keeps its last-known state; another Mac starts empty.
+        val keep = state.value.stale && showsRoute(host.routeId)
+        val line = if (keep) R.string.remote_reconnecting else R.string.remote_connecting
+        activeHost = host
+        ready = CompletableDeferred()
+        stopToolOutput()
+        update {
+            val shown = if (keep) it else lastKnownCleared(it)
+            shown.copy(
+                connected = false,
+                connection = line,
+                compaction = null,
+                compactionRequesting = false,
+                // A finished download stays readable; a running one stopped above.
+                toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },
+                // A login goes on on the Mac; the same host recovers it once it is reachable.
+                providerAuth =
+                    if (previousRoute != host.routeId) ProviderAuthState()
+                    else it.providerAuth.offline(),
+                folders = it.folders.copy(
+                    loaded = it.folders.loaded && !it.folders.loading,
+                    loading = false,
+                    error = null,
+                    working = false,
+                    trust = null,
+                    notice = null,
+                ),
+            )
+        }
+        transport.connect(host)
     }
 
     private suspend fun request(
@@ -2035,7 +2093,29 @@ class DefaultRemoteRepository(
             if (selection.routeId == state.value.deniedRouteId) return state.value.selection
             reconnectEnabled = true
         }
+        if (mode == ActivationMode.RESTORE) connectEarly(selection)
         return activate(selection, mode, force = false)
+    }
+
+    /**
+     * On a cold start the UI's restore connects to its own Mac as soon as the pairings and drafts
+     * are loaded, while the saved navigation still loads. Only the route that restore activates
+     * next, and only from the UI: a process that FCM, a worker or the widget started never
+     * connects, and no other Mac's follow-ups turn uncertain. A navigation that replaced the
+     * restore meanwhile (a notification, an open) cancels it, or changes [selectionEpoch].
+     */
+    private suspend fun connectEarly(selection: RemoteSelection) {
+        if (initialized.isCompleted || selection.routeId == null) return
+        val epoch = selectionEpoch
+        val started = Diagnostics.now()
+        connectable.await()
+        if (initialized.isCompleted || epoch != selectionEpoch) return
+        if (activeHost != null || timedOutRoute != null || ready != null || pairing?.isActive == true) return
+        val host = state.value.hosts.find { it.routeId == selection.routeId } ?: return
+        // How long the pairings and drafts kept the connection waiting.
+        Diagnostics.record(Diagnostics.Kind.ACTIVATE, "activate.connect_early", Diagnostics.now() - started)
+        restorePending = true
+        openConnection(host, early = true)
     }
 
     private suspend fun activate(
@@ -2045,6 +2125,14 @@ class DefaultRemoteRepository(
         useCache: Boolean = true,
     ): RemoteSelection {
         initialized.await()
+        restorePending = false
+        // The early connection was refused as paused or revoked while the saved navigation
+        // loaded: a restore does not try that device again behind the user's back either.
+        if (
+            mode == ActivationMode.RESTORE && !reconnectEnabled && selection.routeId != null &&
+                selection.routeId == state.value.deniedRouteId
+        )
+            return state.value.selection
         val previousSelection = state.value.selection
         if (
             !force &&
@@ -2070,6 +2158,8 @@ class DefaultRemoteRepository(
         var sessionsCached = false
         var chatCached = false
         var cachedShown = false
+        // The requested list was selected from the caches: a failed open stays on it, offline.
+        var cacheSelected = false
         try {
             val host = state.value.hosts.find { it.routeId == selection.routeId }
             if (host == null) {
@@ -2079,6 +2169,7 @@ class DefaultRemoteRepository(
             }
             fun showCached(): Boolean {
                 val shown = showCachedSelection(selection, host)
+                if (shown) cacheSelected = true
                 if (!cachedShown && state.value.selection.routeId == host.routeId && state.value.projects.isNotEmpty()) {
                     cachedShown = true
                     Diagnostics.record(
@@ -2110,8 +2201,10 @@ class DefaultRemoteRepository(
             // Explicit opens can fork historical sessions: wait for canonical IDs before
             // changing selection, but retain cached content while the snapshot refreshes. A
             // reconnect already shows this selection, fresher than the cache.
+            // The project and session lists are read-only, so a user's open shows them cached
+            // too; their rows stay unverified until the Mac confirms them.
             val showCache =
-                useCache && mode == ActivationMode.RESTORE &&
+                useCache && (mode == ActivationMode.RESTORE || selection.sessionId == null) &&
                     !(reconnecting && selection == state.value.selection)
             // The cache shown before connecting stays; only a miss tries again once connected.
             val shownBeforeConnect = showCache && showCached()
@@ -2133,14 +2226,20 @@ class DefaultRemoteRepository(
             } else if (showCache) {
                 showCached()
             }
+            // Only lists this connection read are reused: the saved navigation's, which the
+            // caches show until then, are read again.
             val reusedProjects =
                 cachedProjects
-                    ?.takeIf { useCache && !force && alreadyConnected && it.first == host.routeId }
+                    ?.takeIf {
+                        useCache && !force && alreadyConnected && it.first == host.routeId &&
+                            projectsReadOn == generation
+                    }
                     ?.second
             projectsCached = reusedProjects != null
             val projects = reusedProjects ?: request("projects.list", epoch).array("items")
             checkEpoch(epoch)
             cachedProjects = host.routeId to projects
+            projectsReadOn = generation
             val project = projects.find { it.text("id") == selection.projectId }
             val parent = RemoteSelection(host.routeId, project?.text("id"))
             if (project == null) {
@@ -2151,7 +2250,7 @@ class DefaultRemoteRepository(
             }
             val cached =
                 sessionCache[host.routeId to project.text("id")]
-                    ?.takeIf { useCache && !force && alreadyConnected }
+                    ?.takeIf { useCache && !force && alreadyConnected && it.readOn == generation }
                     ?.sessions
             // A session opened by hand may have registered after the cached list was fetched
             // (a subagent child, for example), so a miss there asks the host again.
@@ -2164,7 +2263,7 @@ class DefaultRemoteRepository(
                 } ?: listSessions(project.text("id"), epoch).also { sessionsFetchedNow = true }
             sessionsCached = !sessionsFetchedNow
             checkEpoch(epoch)
-            cachedSessions = CachedSessions(host.routeId, project.text("id"), project, sessions)
+            cachedSessions = CachedSessions(host.routeId, project.text("id"), project, sessions, generation)
             val session = sessions.find { it.text("id") == selection.sessionId }
             if (
                 session == null ||
@@ -2234,7 +2333,7 @@ class DefaultRemoteRepository(
             checkEpoch(epoch)
             // A lost connection already set its own, more specific error, or reconnects quietly.
             if (!connectionDown()) reportError(R.string.remote_request_error)
-            return if (mode == ActivationMode.USER_OPEN) previousSelection else state.value.selection
+            return if (mode == ActivationMode.USER_OPEN && !cacheSelected) previousSelection else state.value.selection
         } finally {
             Diagnostics.endAsync("PocketPi.activate", cookie)
             fun hit(cached: Boolean) = if (cached) "hit" else "miss"
@@ -2586,7 +2685,7 @@ class DefaultRemoteRepository(
         timedOutRoute = null
         timeline = null
         stopToolOutput()
-        update { RemoteState(hosts = it.hosts) }
+        update { RemoteState(hosts = it.hosts, hostsLoaded = it.hostsLoaded, hostsUnreadable = it.hostsUnreadable) }
     }
 
     override fun remove(routeId: String) {
@@ -2774,7 +2873,11 @@ class DefaultRemoteRepository(
                 deniedRouteId = if (error in DENIED_DEVICE_ERRORS) host?.routeId else null,
             )
         }
-        if (quiet && !waitingForNetwork) startQuietReconnect() else cancelQuietReconnect()
+        // An early connection no activation took over yet: the restore that waits for the saved
+        // navigation connects again itself, and a retry now would activate the empty selection
+        // from before it.
+        val unowned = earlyConnection && restorePending
+        if (quiet && !waitingForNetwork && !unowned) startQuietReconnect() else cancelQuietReconnect()
         if (stopped) {
             Diagnostics.record(
                 Diagnostics.Kind.RECOVERY,
@@ -2786,7 +2889,7 @@ class DefaultRemoteRepository(
             retry?.cancel()
             retry = null
             update { it.copy(reconnectAt = null) }
-        } else if (retrying) {
+        } else if (retrying && !unowned) {
             val generationAtFailure = generation
             // The relay announced a restart, so one retry per failure streak does not wait.
             val restartRetry = restart && !restartRetryUsed && !broken
@@ -3233,6 +3336,7 @@ class DefaultRemoteRepository(
             checkEpoch(epoch)
             if (!state.value.connected || activeHost?.routeId != routeId || state.value.selection != selection) return
             cachedProjects = routeId to fresh
+            projectsReadOn = generation
             val projectId = selection.projectId
             val project = projectId?.let { id -> fresh.find { it.text("id") == id } }
             if (project == null) {
@@ -3244,7 +3348,7 @@ class DefaultRemoteRepository(
             val sessions = listSessions(project.text("id"), epoch)
             checkEpoch(epoch)
             if (!state.value.connected || activeHost?.routeId != routeId || state.value.selection != selection) return
-            cachedSessions = CachedSessions(routeId, project.text("id"), project, sessions)
+            cachedSessions = CachedSessions(routeId, project.text("id"), project, sessions, generation)
             val sessionId = selection.sessionId
             val session = sessionId?.let { id -> sessions.find { it.text("id") == id } }
             if (
@@ -4524,7 +4628,7 @@ class DefaultRemoteRepository(
                     activeHost?.routeId != routeId
                 ) return@launch
                 cachedSessions?.takeIf { it.routeId == routeId && it.projectId == projectId }?.let {
-                    cachedSessions = it.copy(sessions = sessions)
+                    cachedSessions = it.copy(sessions = sessions, readOn = generation)
                 }
                 update { it.copy(sessions = sessions, sessionsFresh = true) }
                 cacheCurrentScreen()
