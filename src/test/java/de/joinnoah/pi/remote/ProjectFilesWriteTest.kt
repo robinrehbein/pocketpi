@@ -104,10 +104,12 @@ class ProjectFilesWriteTest {
             ".envrc", "apps/web/.envrc", ".mcp.json", "packages/x/.MCP.json", ".cursor/rules/a.mdc", ".lefthook/pre-commit/a.sh",
             "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml", ".pre-commit-config.yaml",
             ".gemini/settings.json", ".codex/config.toml", ".mise/tasks/build", "mise.toml", "apps/web/.mise.toml",
-            "mise.local.toml", ".mise.local.toml", ".config/mise/config.toml", ".huſky/pre-commit", ".ＣＬＡＵＤＥ/settings.json"))
+            "mise.local.toml", ".mise.local.toml", ".config/mise/config.toml", ".huſky/pre-commit", ".ＣＬＡＵＤＥ/settings.json",
+            ".config/mise.toml", "a/.Config/MISE.local.toml", "mise/config.toml", "mise/config.local.toml", "packages/x/mise/tasks/build",
+            "mise/notes.md", "config/mise/a.toml", "mise.production.toml", ".mise.dev.toml", "a/Mise.Staging.Local.TOML"))
             assertTrue(path, writeDeniedPath(path))
         for (path in listOf(".github/workflows/ci.yml", "notes.pi", "docs/.envrc.md", "src/claude/a.kt", "README.md", "mcp.json", "docs/.mcp.json.md",
-            ".config/other/mise.md", "mise/notes.md", "docs/mise.toml.md"))
+            ".config/other/mise.md", "docs/mise.toml.md", "docs/mise.md", "bin/mise", "mise.toml.example", "premise.dev.toml"))
             assertFalse(path, writeDeniedPath(path))
         val file = OpenFile(".claude/settings.json", loading = false, version = "RmlsZVZlcnNpb25BYmMxMg", size = 2, content = "{}")
         val state =

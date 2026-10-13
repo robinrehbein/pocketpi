@@ -234,17 +234,32 @@ private val WRITE_DENIED_NAMES = setOf(
     "mise.toml", ".mise.toml", "mise.local.toml", ".mise.local.toml",
 )
 
+/** Folders denied anywhere in a path, though not as a file name (mise's `mise/`, `.config/mise/`). */
+private val WRITE_DENIED_FOLDER_NAMES = setOf("mise")
+
+/** File names denied inside a `.config` folder: mise reads `.config/mise.toml` and its local file. */
+private val WRITE_DENIED_CONFIG_NAMES = setOf("mise.toml", "mise.local.toml")
+
+/** mise's per-environment configuration (`mise.<env>.toml`, `.mise.<env>.toml`), after folding. */
+private val WRITE_DENIED_PATTERN = Regex("""^\.?mise\.[^/]+\.toml$""")
+
 /**
  * Whether the host refuses to save [path] as auto-executed configuration: any segment is one of
- * [WRITE_DENIED_SEGMENTS], the path passes through `.config/mise`, or the file name is one of
- * [WRITE_DENIED_NAMES]. Segments compare like the host's folding (NFKC, then upper- and
- * lower-cased). The host also refuses paths the app cannot judge (such as git's `core.hooksPath`);
- * this list only hides Edit.
+ * [WRITE_DENIED_SEGMENTS], the path passes through a `mise` folder, or the file name is one of
+ * [WRITE_DENIED_NAMES], a `mise.<env>.toml` or `.mise.<env>.toml`, or `mise.toml` or
+ * `mise.local.toml` inside a `.config` folder. Segments compare like the host's folding (NFKC, then
+ * upper- and lower-cased). The host also refuses paths the app cannot judge (such as git's
+ * `core.hooksPath`); this list only hides Edit.
  */
 internal fun writeDeniedPath(path: String): Boolean {
     val segments = path.split('/').map { foldSegment(it) }
-    val miseConfig = segments.zipWithNext().any { (a, b) -> a == ".config" && b == "mise" }
-    return miseConfig || segments.any { it in WRITE_DENIED_SEGMENTS } || segments.lastOrNull() in WRITE_DENIED_NAMES
+    val last = segments.last()
+    val parent = segments.getOrNull(segments.size - 2)
+    return segments.any { it in WRITE_DENIED_SEGMENTS } ||
+        segments.dropLast(1).any { it in WRITE_DENIED_FOLDER_NAMES } ||
+        last in WRITE_DENIED_NAMES ||
+        WRITE_DENIED_PATTERN.matches(last) ||
+        (parent == ".config" && last in WRITE_DENIED_CONFIG_NAMES)
 }
 
 /** The host's segment folding: NFKC, then upper- and lower-cased, then NFC. */
