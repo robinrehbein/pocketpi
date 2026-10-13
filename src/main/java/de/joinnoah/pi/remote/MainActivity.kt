@@ -130,17 +130,31 @@ internal fun RemoteApp(
     val context = LocalContext.current
     val view = LocalView.current
     val colors = remoteColorScheme(dark, synthwave = theme == "synthwave")
-    // Read at each tap: the window can enter split screen or change its width without a new activity.
-    val windowWidth by rememberUpdatedState(LocalWindowInfo.current.containerDpSize.width)
+    val windowInfo = LocalWindowInfo.current
     val uriHandler =
-        remember(activity, context) {
-            AdjacentUriHandler(context) { opensLinksAdjacent(activity?.isInMultiWindowMode == true, windowWidth) }
+        remember(activity, context, windowInfo) {
+            // Read at each tap, outside composition: the window can enter split screen or change its
+            // size without a new activity, and RemoteApp need not recompose while a window is resized.
+            AdjacentUriHandler(context) {
+                val size = windowInfo.containerDpSize
+                opensLinksAdjacent(
+                    inMultiWindow = activity?.isInMultiWindowMode == true,
+                    width = size.width,
+                    // Outside split screen the window fills the screen, so its smaller side is the
+                    // screen's smallest width.
+                    smallestWidth = minOf(size.width, size.height),
+                )
+            }
         }
+    val windowBackground = colors.background
+    DisposableEffect(activity, windowBackground) {
+        // A dark mode switch no longer recreates the activity, so the window behind the content
+        // follows the theme here instead of keeping the one it started with.
+        activity?.window?.setBackgroundDrawable(windowBackground.toArgb().toDrawable())
+        onDispose {}
+    }
     SideEffect {
         activity?.window?.let { window ->
-            // A dark mode switch no longer recreates the activity, so the window behind the content
-            // follows the theme here instead of keeping the one it started with.
-            window.setBackgroundDrawable(colors.background.toArgb().toDrawable())
             WindowCompat.getInsetsController(window, view).apply {
                 isAppearanceLightStatusBars = !dark
                 isAppearanceLightNavigationBars = !dark

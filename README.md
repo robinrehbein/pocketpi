@@ -35,7 +35,10 @@ and German resource keys, phone and watch unit tests and debug APKs), `Android L
 watch, against the committed lint baselines), `Benchmark isolation` (benchmark APKs and fixture
 isolation), `Emulator tests` (the managed API 36 phone instrumentation tests, with the AVD and its
 boot snapshot cached) and `Tablet emulator tests` (the tests annotated `@LargeScreen` on a managed
-API 36 Pixel Tablet). GitHub-hosted Linux must provide `/dev/kvm` for both emulator jobs. A failing
+API 36 Pixel Tablet). Both emulator jobs share one cached API 36 system image, and each caches only
+its own AVD and boot snapshot; push runs on `main` save these entries. After a change to them, check
+the repository's Actions cache usage against GitHub's 10 GB limit. GitHub-hosted Linux must provide
+`/dev/kvm` for both emulator jobs. A failing
 job uploads its Gradle reports and test results as a `pocketpi-*` artifact. Every action is pinned
 to a commit SHA; Dependabot proposes action and Gradle dependency updates weekly.
 

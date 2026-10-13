@@ -38,12 +38,19 @@ class AdjacentUriHandlerTest {
     private val adjacentFlags = Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or Intent.FLAG_ACTIVITY_NEW_TASK
 
     @Test
-    fun splitScreenOrAWideWindowOpensLinksBeside() {
-        assertTrue(opensLinksAdjacent(inMultiWindow = true, width = 360.dp))
-        assertTrue(opensLinksAdjacent(inMultiWindow = false, width = 720.dp))
-        assertTrue(opensLinksAdjacent(inMultiWindow = false, width = 1280.dp))
-        assertFalse(opensLinksAdjacent(inMultiWindow = false, width = 719.dp))
-        assertFalse(opensLinksAdjacent(inMultiWindow = false, width = 411.dp))
+    fun splitScreenOrAWideWindowOnALargeScreenOpensLinksBeside() {
+        assertTrue(opensLinksAdjacent(inMultiWindow = true, width = 360.dp, smallestWidth = 360.dp))
+        assertTrue(opensLinksAdjacent(inMultiWindow = false, width = 720.dp, smallestWidth = 600.dp))
+        assertTrue(opensLinksAdjacent(inMultiWindow = false, width = 1280.dp, smallestWidth = 800.dp))
+        assertFalse(opensLinksAdjacent(inMultiWindow = false, width = 719.dp, smallestWidth = 800.dp))
+        assertFalse(opensLinksAdjacent(inMultiWindow = false, width = 411.dp, smallestWidth = 411.dp))
+    }
+
+    @Test
+    fun aPhoneInLandscapeIsWideButKeepsItsLinksAsBefore() {
+        assertFalse(opensLinksAdjacent(inMultiWindow = false, width = 915.dp, smallestWidth = 411.dp))
+        assertFalse(opensLinksAdjacent(inMultiWindow = false, width = 830.dp, smallestWidth = 384.dp))
+        assertFalse(opensLinksAdjacent(inMultiWindow = false, width = 720.dp, smallestWidth = 599.dp))
     }
 
     @Test

@@ -88,4 +88,10 @@ class AdjacentLinkWiringTest {
     fun aLinkOnAPhoneOpensAsBefore() {
         assertEquals(0, tapLink().flags and adjacentFlags)
     }
+
+    @Test
+    @Config(qualifiers = "sw411dp-w915dp-h411dp-land")
+    fun aLinkOnAPhoneInLandscapeOpensAsBefore() {
+        assertEquals(0, tapLink().flags and adjacentFlags)
+    }
 }

@@ -162,27 +162,42 @@ jobs:
       # Gradle managed devices keep their AVD and boot snapshot under ~/.android/gradle/avd.
       # Restoring them with the system image skips the image download and the cold boot. The
       # plugin checks the snapshot before use and re-creates one the current emulator cannot load.
-      # Every run restores the entry, but only push runs on main save it: the entry is several GB,
-      # and pull request runs would each save their own copy under the pull request's ref.
+      # Both devices use the same system image (API 36, aosp), so the image is one entry the two
+      # emulator jobs share, and each device adds only its own AVD and snapshot. Two full copies
+      # could push each other out of the repository's 10 GB cache on every push to main.
+      # Every run restores the entries, but only push runs on main save them: pull request runs
+      # would each save their own copy under the pull request's ref.
+      - &restore-image
+        id: image-cache
+        name: Restore the managed device system image
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.avd.outputs.images }}
+          key: gmd-image-android-36-aosp-${{ runner.os }}-agp-${{ steps.avd.outputs.agp }}
       - &restore-avd
         id: gmd-cache
         name: Restore the managed device AVD and snapshot
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: |
-            ~/.android/gradle/avd
-            ${{ steps.avd.outputs.images }}
+          path: ~/.android/gradle/avd
           key: gmd-${{ env.GMD_DEVICE }}-aosp-${{ runner.os }}-agp-${{ steps.avd.outputs.agp }}-emulator-${{ steps.avd.outputs.emulator }}
       - name: Navigation and restoration instrumentation tests
         run: ./gradlew pixel2Api36DebugAndroidTest
+      # Both emulator jobs may miss the image entry in the same run; the second save then only
+      # warns that the key is taken.
+      - &save-image
+        name: Save the managed device system image
+        if: github.event_name == 'push' && steps.image-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.avd.outputs.images }}
+          key: ${{ steps.image-cache.outputs.cache-primary-key }}
       - &save-avd
         name: Save the managed device AVD and snapshot
         if: github.event_name == 'push' && steps.gmd-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: |
-            ~/.android/gradle/avd
-            ${{ steps.avd.outputs.images }}
+          path: ~/.android/gradle/avd
           key: ${{ steps.gmd-cache.outputs.cache-primary-key }}
       - name: Upload instrumentation reports
         if: failure()
@@ -209,6 +224,7 @@ jobs:
       - *install-sdk
       - *enable-kvm
       - *locate-avd
+      - *restore-image
       - *restore-avd
       # Only the @LargeScreen tests: the phone job already runs everything, and each test here
       # costs a second emulator's time.
@@ -216,6 +232,7 @@ jobs:
         run: >-
           ./gradlew pixelTabletApi36DebugAndroidTest
           -Pandroid.testInstrumentationRunnerArguments.annotation=de.joinnoah.pi.remote.LargeScreen
+      - *save-image
       - *save-avd
       - name: Upload instrumentation reports
         if: failure()

@@ -6,13 +6,14 @@ import android.content.Context
 import android.content.Intent
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 
 /**
- * Opens links from the chat and the settings. In split screen, a desktop window (DeX) or any window
- * at least [TWO_PANE_MIN_WIDTH] wide, as [adjacent] says at the moment of the tap, the browser opens
- * in the other half of the screen beside PocketPi instead of covering it. Otherwise the link opens
- * the way Compose's own handler opens it.
+ * Opens links from the chat and the settings. In split screen, a desktop window (DeX) or a window
+ * at least [TWO_PANE_MIN_WIDTH] wide on a large screen, as [adjacent] says at the moment of the tap,
+ * the browser opens in the other half of the screen beside PocketPi instead of covering it.
+ * Otherwise, as on any phone, the link opens the way Compose's own handler opens it.
  *
  * Like Compose's handler it throws [IllegalArgumentException], caused by the
  * [ActivityNotFoundException], when no app opens the link; text links drop that silently.
@@ -39,6 +40,12 @@ internal fun linkIntent(uri: String, adjacent: Boolean): Intent =
         if (adjacent) addFlags(Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 
-/** Whether links open beside a window that is in [inMultiWindow] mode and [width] wide. */
-internal fun opensLinksAdjacent(inMultiWindow: Boolean, width: Dp): Boolean =
-    inMultiWindow || width >= TWO_PANE_MIN_WIDTH
+/** The smallest width from which a screen counts as large (a tablet, not a phone in landscape). */
+internal val LARGE_SCREEN_MIN_SMALLEST_WIDTH = 600.dp
+
+/**
+ * Whether links open beside a window that is in [inMultiWindow] mode and [width] wide, on a screen
+ * whose smallest width is [smallestWidth]. A phone in landscape is wide but not a large screen.
+ */
+internal fun opensLinksAdjacent(inMultiWindow: Boolean, width: Dp, smallestWidth: Dp): Boolean =
+    inMultiWindow || (width >= TWO_PANE_MIN_WIDTH && smallestWidth >= LARGE_SCREEN_MIN_SMALLEST_WIDTH)
