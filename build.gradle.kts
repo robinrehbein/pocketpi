@@ -197,6 +197,9 @@ android {
     }
     testOptions {
         unitTests.isIncludeAndroidResources = true
+        // All Robolectric test classes share one forked JVM. Gradle's default 512 MB heap ran out
+        // once the suite grew past about 125 classes.
+        unitTests.all { it.maxHeapSize = "2g" }
         managedDevices {
             localDevices {
                 create("pixel2Api36") {

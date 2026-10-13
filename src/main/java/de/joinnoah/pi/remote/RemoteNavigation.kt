@@ -26,11 +26,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isAltPressed
-import androidx.compose.ui.input.key.isCtrlPressed
-import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -118,6 +116,8 @@ internal class RemoteNavigator(
     private var consumePendingNotification: (() -> Unit)? = null
 
     private fun invalidate(): Long {
+        // Another navigation began before the created chat's screen took it.
+        freshSession = null
         consumePendingNotification?.invoke()
         consumePendingNotification = null
         activation?.cancel()
@@ -133,6 +133,9 @@ internal class RemoteNavigator(
         while (stack.size > common) stack.removeAt(stack.lastIndex)
         stack.addAll(keys.drop(common))
     }
+
+    /** The chat on top of the stack, or null when another destination is (Settings included). */
+    val topChat: RemoteNavKey.Chat? get() = stack.lastOrNull() as? RemoteNavKey.Chat
 
     private fun topKey(): RemoteNavKey? =
         stack.lastOrNull { it != RemoteNavKey.Settings } as? RemoteNavKey
@@ -366,12 +369,15 @@ internal class RemoteNavigator(
      * invalidate() would cancel the first coroutine after the host may already have created its
      * session, leaving an orphan. Other navigation still cancels it, which also releases the guard.
      */
-    private fun mutate(call: suspend () -> RemoteSelection) {
+    private fun mutate(fresh: Boolean = false, call: suspend () -> RemoteSelection) {
         if (mutation?.isActive == true) return
         val current = invalidate()
         val job = scope.launch {
             val selection = call()
-            if (current == request) replace(selection, keepSettings = false)
+            if (current == request) {
+                replace(selection, keepSettings = false)
+                if (fresh) freshSession = selection.keys().lastOrNull() as? RemoteNavKey.Chat
+            }
         }
         activation = job
         mutation = job
@@ -380,7 +386,23 @@ internal class RemoteNavigator(
     }
 
     fun createSession(routeId: String, projectId: String) =
-        leavingEditor(RemoteSelection(routeId, projectId)) { mutate { repository.createSession(routeId, projectId) } }
+        leavingEditor(RemoteSelection(routeId, projectId)) {
+            mutate(fresh = true) { repository.createSession(routeId, projectId) }
+        }
+
+    /**
+     * The chat [createSession] just opened, until its screen took it ([takeFreshSession]) to focus
+     * the composer once. Forks and reopened chats never set it.
+     */
+    var freshSession: RemoteNavKey.Chat? by mutableStateOf(null)
+        private set
+
+    /** True once, for the chat [key] a create just opened. */
+    fun takeFreshSession(key: RemoteNavKey.Chat): Boolean {
+        if (freshSession != key) return false
+        freshSession = null
+        return true
+    }
 
     /**
      * Forks the chat [source] at the user message [messageId]. The fork replaces [source] on the
@@ -529,62 +551,123 @@ internal class RemoteNavigator(
     }
 
     /**
-     * Runs a two-pane keyboard shortcut and reports whether it was handled. Only the columns
-     * react: the project shortcuts wherever the projects column shows, the session ones beside a
-     * session list; hosts, folders and settings leave the keys alone. A [repeat] of a key that
-     * toggles, creates or switches the project is swallowed only where its first press would apply.
+     * Runs a keyboard shortcut and reports whether it was handled, in either layout. The list and
+     * project shortcuts work on the columns' destinations (a host's projects, a project's sessions
+     * and a chat), the chat's own ones on the chat on top; hosts, folders and settings leave those
+     * keys alone. [twoPane] is null in the phone layout. A [repeat] of a key that toggles, creates
+     * or switches the project is swallowed only where its first press would apply.
      */
-    fun shortcut(shortcut: KeyboardShortcut, twoPane: TwoPaneState, repeat: Boolean = false): Boolean {
+    fun shortcut(shortcut: Shortcut, twoPane: TwoPaneState?, targets: ShortcutTargets, repeat: Boolean = false): Boolean {
         val top = stack.lastOrNull()
+        when (shortcut) {
+            Shortcut.SETTINGS -> {
+                settings()
+                return true
+            }
+            Shortcut.REFRESH -> {
+                val refresh = (top as? RemoteNavKey)?.let(targets::refresher) ?: return false
+                // Holding the key must not send a refresh per repeat.
+                if (!repeat) refresh()
+                return true
+            }
+            Shortcut.FOCUS_COMPOSER,
+            Shortcut.STOP,
+            Shortcut.CHANGES,
+            Shortcut.FILES,
+            Shortcut.JOBS,
+            Shortcut.HISTORY,
+            Shortcut.RENAME,
+            Shortcut.FORK -> {
+                val target = (top as? RemoteNavKey.Chat)?.let(targets::chat) ?: return false
+                if (repeat) return true
+                if (shortcut != Shortcut.STOP) return target.shortcut(shortcut)
+                target.stopNow()
+                return true
+            }
+            // Esc runs in the key handlers, Alt+Enter in the composer; help and the inspector
+            // keys have no action yet.
+            Shortcut.ESCAPE,
+            Shortcut.OTHER_BUSY_ACTION,
+            Shortcut.HELP,
+            Shortcut.EXPAND_INSPECTOR,
+            Shortcut.TOGGLE_INSPECTOR -> return false
+            else -> Unit
+        }
         val panes = columnPanes(stack.toList()) ?: return false
-        if (shortcut == KeyboardShortcut.PREVIOUS_PROJECT || shortcut == KeyboardShortcut.NEXT_PROJECT) {
+        if (shortcut == Shortcut.PREVIOUS_PROJECT || shortcut == Shortcut.NEXT_PROJECT) {
             val projects = panes.projects?.let { stack[it] as? RemoteNavKey.Projects } ?: return false
             // Holding the key must not run through every project.
             if (repeat) return true
             val state = repository.state.value
             if (state.selection.routeId != projects.routeId) return true
             val current = panes.list?.let { (stack[it] as? RemoteNavKey.Sessions)?.projectId }
-            val step = if (shortcut == KeyboardShortcut.NEXT_PROJECT) 1 else -1
+            val step = if (shortcut == Shortcut.NEXT_PROJECT) 1 else -1
             adjacentId(state.projects.map { it.text("id") }, current, step)
                 ?.takeIf { it != current }
                 ?.let {
-                    twoPane.listCollapsed = false
+                    twoPane?.listCollapsed = false
                     open(RemoteNavKey.Sessions(projects.routeId, it))
                 }
             return true
         }
         val sessions = panes.list?.let { stack[it] as? RemoteNavKey.Sessions } ?: return false
         return when (shortcut) {
-            KeyboardShortcut.SEARCH -> {
-                twoPane.requestSearch()
+            Shortcut.SEARCH -> {
+                if (twoPane != null) twoPane.listCollapsed = false
+                // The phone shows one destination: the sessions come to the top for their search.
+                // A request waits for the list, so it is made only once the list is on top, never
+                // for a navigation held for an unsaved edit.
+                else if (top != sessions) {
+                    if (repeat) return true
+                    open(sessions)
+                    if (stack.lastOrNull() != sessions) return true
+                }
+                targets.requestSearch()
                 true
             }
-            KeyboardShortcut.PREVIOUS_SESSION,
-            KeyboardShortcut.NEXT_SESSION -> {
-                val step = if (shortcut == KeyboardShortcut.NEXT_SESSION) 1 else -1
+            Shortcut.PREVIOUS_SESSION,
+            Shortcut.NEXT_SESSION -> {
+                val step = if (shortcut == Shortcut.NEXT_SESSION) 1 else -1
                 val current = (top as? RemoteNavKey.Chat)?.sessionId
-                adjacentId(twoPane.visibleSessionIds, current, step)
+                adjacentId(listedSessionIds(sessions, targets), current, step)
                     ?.takeIf { it != current }
                     ?.let { open(RemoteNavKey.Chat(sessions.routeId, sessions.projectId, it)) }
                 true
             }
-            KeyboardShortcut.NEW_SESSION -> {
+            Shortcut.NEW_SESSION -> {
                 if (!canCreateSession(repository.state.value, sessions)) return false
                 // Holding the key must not create a session per repeat.
                 if (repeat) return true
                 createSession(sessions.routeId, sessions.projectId)
                 true
             }
-            KeyboardShortcut.TOGGLE_LIST -> {
-                if (top !is RemoteNavKey.Chat) return false
+            Shortcut.TOGGLE_LIST -> {
+                // The phone has no list beside the chat to toggle.
+                if (top !is RemoteNavKey.Chat || twoPane == null) return false
                 // Holding the key must not flicker the list.
                 if (repeat) return true
                 twoPane.listCollapsed = !twoPane.listCollapsed
                 true
             }
-            KeyboardShortcut.PREVIOUS_PROJECT,
-            KeyboardShortcut.NEXT_PROJECT -> false
+            else -> false
         }
+    }
+
+    /**
+     * The sessions of [sessions] in the list's order and filter. While the list is on screen that
+     * is what it shows; without it (a phone's chat, a collapsed list) the project's current
+     * sessions in list order, without offline ones when the setting hides them.
+     */
+    private fun listedSessionIds(sessions: RemoteNavKey.Sessions, targets: ShortcutTargets): List<String> {
+        if (targets.listedFor == sessions) return targets.listedSessionIds
+        val state = repository.state.value
+        if (state.selection.routeId != sessions.routeId || state.selection.projectId != sessions.projectId) return emptyList()
+        return visibleSessionListItems(
+            state.sessions,
+            state.connected,
+            state.loading,
+            hideOffline = targets.hideOfflineSessions && state.connected,
+        ).map { it.id }
     }
 
     fun disconnect() {
@@ -729,7 +812,13 @@ internal fun RemoteNavigation(
         // Keyed on the bucket, so resize ticks never get here; dragged widths reset per bucket.
         LaunchedEffect(twoPane, layout) { twoPane.adopt(layout) }
         val hardwareKeyboard = hardwareKeyboardAttached()
-        val shortcuts = layout.twoPane && hardwareKeyboard
+        // At every window size: a split screen, a pop-up window or a phone with a Bluetooth
+        // keyboard keeps the keys of the wide layout.
+        val shortcuts = hardwareKeyboard
+        val targets = remember { ShortcutTargets() }
+        val hideOfflineSessions = pushSettings.hideOfflineSessions
+        SideEffect { targets.hideOfflineSessions = hideOfflineSessions }
+        val activeTwoPane by rememberUpdatedState(twoPane.takeIf { layout.twoPane })
         val collapsed = twoPane.listCollapsed
         val sceneStrategies =
             remember(layout, twoPane, collapsed) {
@@ -755,10 +844,10 @@ internal fun RemoteNavigation(
         // where it is, and an open dialog (its own window) keeps every key to itself.
         val view = LocalView.current
         if (shortcuts)
-            DisposableEffect(view, navigator, twoPane) {
+            DisposableEffect(view, navigator, targets) {
                 val listener =
                     ViewCompat.OnUnhandledKeyEventListenerCompat { _, event ->
-                        navigator.shortcut(KeyEvent(event), twoPane)
+                        navigator.key(KeyEvent(event), activeTwoPane, targets, unhandled = true)
                     }
                 ViewCompat.addOnUnhandledKeyEventListener(view, listener)
                 onDispose { ViewCompat.removeOnUnhandledKeyEventListener(view, listener) }
@@ -769,11 +858,13 @@ internal fun RemoteNavigation(
             LocalTwoPane provides twoPane.takeIf { layout.twoPane },
             LocalHardwareKeyboard provides hardwareKeyboard,
             LocalEditorFocus provides navigator.editorFocus,
+            LocalShortcutTargets provides targets,
         ) {
             Box(
                 // While something in the layout has focus (the composer, the search field), the
                 // shortcuts run here, before that field sees the keys.
-                if (shortcuts) Modifier.fillMaxSize().onPreviewKeyEvent { navigator.shortcut(it, twoPane) }
+                if (shortcuts)
+                    Modifier.fillMaxSize().onPreviewKeyEvent { navigator.key(it, activeTwoPane, targets, unhandled = false) }
                 else Modifier.fillMaxSize()
             ) {
                 RemoteNavDisplay(
@@ -800,13 +891,36 @@ internal fun RemoteNavigation(
     }
 }
 
-/** Runs a hardware keyboard shortcut of the two-pane layout; false leaves the key alone. */
-private fun RemoteNavigator.shortcut(event: KeyEvent, twoPane: TwoPaneState): Boolean {
-    if (event.type != KeyEventType.KeyDown) return false
-    val shortcut =
-        keyboardShortcut(event.key, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed, editing)
-            ?: return false
-    return shortcut(shortcut, twoPane, repeat = event.nativeKeyEvent.repeatCount > 0)
+/**
+ * Runs a hardware key in the layout; false leaves it alone. [unhandled] is a key nothing on
+ * screen took: nothing has focus, or the focused element ignored it. In a chat, Esc never gets
+ * past here (Android would turn it into Back), and a printable key nothing took goes into the
+ * composer. With focus in the code editor its keys are its own; an Esc it leaves comes back.
+ */
+private fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets: ShortcutTargets, unhandled: Boolean): Boolean {
+    val chat = topChat?.let(targets::chat)
+    val native = event.nativeKeyEvent
+    if (event.key == Key.Escape) {
+        if (chat == null || (editing && !unhandled)) return false
+        if (event.type == KeyEventType.KeyDown && native.repeatCount == 0) chat.escape(native.eventTime)
+        // Up and down alike, so no half of the key becomes Back.
+        return true
+    }
+    if (event.type != KeyEventType.KeyDown || editing) return false
+    val shortcut = resolveShortcut(event, if (chat != null) KeyContext.CHAT else KeyContext.GLOBAL)
+    if (shortcut != null) return shortcut(shortcut, twoPane, targets, repeat = native.repeatCount > 0)
+    // Over Files, Changes, a tool detail or the jobs the composer is hidden: no typing into it.
+    if (!unhandled || chat == null || chat.composerCovered) return false
+    val text =
+        typedText(
+            native.unicodeChar,
+            native.isCtrlPressed,
+            native.isAltPressed,
+            native.isMetaPressed,
+            altGr = altGrOnly(native.metaState),
+        ) ?: return false
+    chat.type(text)
+    return true
 }
 
 @Composable

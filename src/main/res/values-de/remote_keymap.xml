@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_keymap_search">Sitzungen durchsuchen</string>
+    <string name="remote_keymap_previous_session">Vorherige Sitzung</string>
+    <string name="remote_keymap_next_session">Nächste Sitzung</string>
+    <string name="remote_keymap_new_session">Neue Sitzung</string>
+    <string name="remote_keymap_toggle_list">Sitzungsliste ein- oder ausblenden</string>
+    <string name="remote_keymap_previous_project">Vorheriges Projekt</string>
+    <string name="remote_keymap_next_project">Nächstes Projekt</string>
+    <string name="remote_keymap_focus_composer">Nachricht schreiben</string>
+    <string name="remote_keymap_stop">pi anhalten</string>
+    <string name="remote_keymap_changes">Änderungen</string>
+    <string name="remote_keymap_files">Dateien</string>
+    <string name="remote_keymap_jobs">Hintergrundjobs</string>
+    <string name="remote_keymap_history">Verlauf</string>
+    <string name="remote_keymap_settings">Einstellungen</string>
+    <string name="remote_keymap_help">Tastenkürzel</string>
+    <string name="remote_keymap_expand_inspector">Seitenbereich verbreitern</string>
+    <string name="remote_keymap_toggle_inspector">Seitenbereich ein- oder ausblenden</string>
+    <string name="remote_keymap_other_busy_action">Mit der anderen Wahl senden, Lenken oder Anschluss</string>
+    <string name="remote_keymap_refresh">Aktualisieren</string>
+    <string name="remote_keymap_rename">Sitzung umbenennen</string>
+    <string name="remote_keymap_fork">Ab der letzten Nachricht zurückspulen</string>
+    <string name="remote_keymap_escape">Schließen; zweimal drücken hält pi an</string>
+    <string name="remote_escape_stop_hint">Drück noch mal Esc, um pi anzuhalten</string>
+    <string name="remote_session_search_close">Suche schließen</string>
+</resources>
