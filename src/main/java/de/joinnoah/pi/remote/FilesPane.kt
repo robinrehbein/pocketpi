@@ -83,6 +83,13 @@ internal class FilesActions(
     val onSelectLines: (LineSelection?) -> Unit,
     /** Puts a quote into the composer. Nothing is sent. False when it did not fit. */
     val onSend: (String) -> Boolean,
+    val onStartEditing: () -> Unit = {},
+    val onEditorText: (String) -> Unit = {},
+    val onSaveEditor: () -> Unit = {},
+    val onDiscardEditor: () -> Unit = {},
+    val onReloadAfterConflict: () -> Unit = {},
+    /** The edit as a diff prompt, given an intro; send its text with [onSend]. Null when unchanged. */
+    val onEditorPrompt: (intro: String?) -> EditorPrompt? = { null },
 )
 
 /**
@@ -162,7 +169,8 @@ private fun failureText(failure: FilesFailure): Int =
         FilesFailure.INVALID_PATH -> R.string.remote_files_failure_invalid_path
         FilesFailure.FORBIDDEN -> R.string.remote_files_failure_forbidden
         FilesFailure.BUSY -> R.string.remote_files_failure_busy
-        FilesFailure.FAILED -> R.string.remote_files_failure_failed
+        // Only a save fails with a conflict; the editor shows its own dialog for it.
+        FilesFailure.CONFLICT, FilesFailure.FAILED -> R.string.remote_files_failure_failed
     }
 
 @Composable

@@ -9,6 +9,13 @@ import kotlinx.serialization.json.JsonPrimitive
  */
 internal const val FILES_CAPABILITY = "session.files.v1"
 
+/**
+ * The host replaces an existing text file with `session.files.write`, checked against the version
+ * the app last read or wrote. Advertised only through the `capabilities.v2` route, and only when
+ * the host runs with `PI_REMOTE_FILE_WRITES=1`.
+ */
+internal const val FILES_WRITE_CAPABILITY = "session.files.write.v1"
+
 private const val MAX_FILES_LIST_ENTRIES = 500
 private const val MAX_FILES_CONTENT_JSON_BYTES = 192 * 1024
 private const val MAX_FILES_PATH_BYTES = 4096
@@ -63,8 +70,13 @@ enum class FilesFailure {
     INVALID_PATH,
     FORBIDDEN,
     BUSY,
+    /** A save found the file changed since it was read (`conflict`). */
+    CONFLICT,
     FAILED,
 }
+
+/** One `files.written` result: the saved file's new [version] and [size] in bytes. */
+data class FileWritten(val path: String, val version: String, val size: Long)
 
 /** Lines picked in the file view, 1-based: [anchor] alone until a second tap sets [end]. */
 data class LineSelection(val anchor: Int, val end: Int? = null) {
@@ -112,6 +124,26 @@ data class OpenFile(
 )
 
 /**
+ * The open file while it is edited. [original] is the text of [baseVersion], the last version
+ * read or saved; [text] is what the editor shows now.
+ */
+data class FileEditor(
+    val path: String,
+    val baseVersion: String,
+    val original: String,
+    val text: String = original,
+    val saving: Boolean = false,
+    /** Why the last save failed; the edit stays. */
+    val saveFailure: FilesFailure? = null,
+    /** The last save found a newer file on the host; only a reload or discard clears it. */
+    val conflict: Boolean = false,
+    /** Counts successful saves, so the UI can confirm each one. */
+    val savedAt: Long = 0,
+) {
+    val changed: Boolean get() = text != original
+}
+
+/**
  * The file browser of the selected session. Like [ChangesState] it lives in [RemoteState], so
  * the phone overlay and the tablet inspector show the same state across a resize.
  */
@@ -129,11 +161,27 @@ data class FilesState(
     val file: OpenFile? = null,
     val previews: Map<String, FileTilePreview> = emptyMap(),
     val peek: FilesPeek? = null,
+    /** The open file in the editor; null while it is shown read-only. */
+    val editor: FileEditor? = null,
 )
 
 internal fun canBrowseFiles(state: RemoteState): Boolean =
     FILES_CAPABILITY in state.capabilities && FILES_CAPABILITY !in state.unavailableCapabilities &&
         state.selection.sessionId != null
+
+internal fun canWriteFiles(state: RemoteState): Boolean =
+    canBrowseFiles(state) && FILES_WRITE_CAPABILITY in state.capabilities &&
+        FILES_WRITE_CAPABILITY !in state.unavailableCapabilities
+
+/**
+ * Whether the open file can be edited: the host saves files, and the file is text read whole in
+ * one page.
+ */
+internal fun canEditFile(state: RemoteState): Boolean {
+    val file = state.files?.file ?: return false
+    return canWriteFiles(state) && !file.loading && file.failure == null && file.version != null &&
+        !file.binary && !file.tooLarge && file.nextOffset == null
+}
 
 /** The folder above [path]; `""` for a top-level entry. */
 internal fun parentPath(path: String): String = path.substringBeforeLast('/', "")
@@ -216,6 +264,16 @@ internal fun parseFilesRead(data: JsonObject, sessionId: String, path: String, o
     return FileChunk(path, chunkVersion, size, offset, content, binary, nextOffset, tooLarge)
 }
 
+/** Validates a `files.written` result against the write that produced it. */
+internal fun parseFilesWritten(data: JsonObject, sessionId: String, path: String): FileWritten {
+    require(data.text("kind") == "files.written")
+    data.onlyKeys(setOf("kind", "sessionId", "path", "version", "size"))
+    require(data.text("sessionId") == sessionId && data.text("path") == path)
+    val version = data.text("version")
+    require(version.length <= 22 && runCatching { Wire.decode(version, 16) }.isSuccess)
+    return FileWritten(path, version, data.count("size"))
+}
+
 // ---- Quote ---------------------------------------------------------------------------------
 
 /** A Markdown fence longer than any backtick run in [text], and at least three long. */
@@ -238,4 +296,28 @@ internal fun fileQuotePrompt(intro: String, reference: String, text: String, lan
     if (text.encodeToByteArray().size > MAX_FILE_QUOTE_BYTES) return reference
     val fence = codeFence(text)
     return "$intro\n\n$fence${language?.tag.orEmpty()}\n$text\n$fence"
+}
+
+/** What "Send to agent" puts into the composer for an edit. */
+sealed interface EditorPrompt {
+    data class Ready(val text: String) : EditorPrompt
+
+    /** The diff is over [MAX_FILE_QUOTE_BYTES]; nothing goes to the composer. */
+    data object TooLarge : EditorPrompt
+}
+
+/** The English intro of [editorPrompt], from the spec; the UI may pass a translated one. */
+internal fun editorPromptIntro(path: String): String =
+    "Here is a suggested change to `$path`. Apply it, adapting it if needed, and say what you changed."
+
+/**
+ * [intro] and the diff of [original] to [edited] in a `diff` fence, or null when nothing changed.
+ * A diff above [MAX_FILE_QUOTE_BYTES] is [EditorPrompt.TooLarge].
+ */
+internal fun editorPrompt(path: String, original: String, edited: String, intro: String = editorPromptIntro(path)): EditorPrompt? {
+    val diff = unifiedDiff(path, original, edited) ?: return null
+    if (diff.encodeToByteArray().size > MAX_FILE_QUOTE_BYTES) return EditorPrompt.TooLarge
+    val body = diff.removeSuffix("\n")
+    val fence = codeFence(body)
+    return EditorPrompt.Ready("$intro\n\n${fence}diff\n$body\n$fence")
 }

@@ -423,4 +423,233 @@ class ProjectFilesLoaderTest {
         assertNull(repository.state.value.changes)
         assertEquals(listOf("a.kt"), repository.state.value.files?.listing?.entries?.map { it.name })
     }
+
+    // ---- Editor ---------------------------------------------------------------------------
+
+    private val writeFixture: JsonObject by lazy {
+        Wire.json.parseToJsonElement(javaClass.getResource("/files-write-v1.json")!!.readText()).jsonObject
+    }
+
+    private fun writeValid(name: String): JsonObject =
+        writeFixture.getValue("valid").jsonArray.map { it.jsonObject }.single { it.text("name") == name }.obj("payload")
+
+    private val writeCapabilities =
+        writeValid("projects-files-write-capability").obj("data").getValue("capabilities").jsonArray.map { it.jsonPrimitive.content }
+
+    private val newVersion = "TmV3VmVyc2lvblh5ejk4Nw"
+
+    private fun written(request: JsonObject): JsonObject =
+        Wire.objectOf(
+            "kind" to "files.written",
+            "sessionId" to request.text("sessionId"),
+            "path" to request.text("path"),
+            "version" to newVersion,
+            "size" to request.text("content").encodeToByteArray().size,
+        )
+
+    /** A host with `src/app/main.ts` ("hello\n") that answers writes through [write]. */
+    private fun editorTransport(
+        advertised: List<String> = writeCapabilities,
+        write: (JsonObject) -> JsonObject? = ::written,
+    ) = Transport(advertised) { request ->
+        when (request.text("type")) {
+            "session.files.write" -> write(request)
+            "session.files.read" -> page(request, "hello\n", 6)
+            else -> listing(request, "main.ts")
+        }
+    }
+
+    private suspend fun TestScope.editing(transport: Transport): DefaultRemoteRepository {
+        val repository = opened(transport)
+        repository.openFilesFile("src/app/main.ts")
+        runCurrent()
+        repository.startFileEditing()
+        return repository
+    }
+
+    private fun writes(transport: Transport) = transport.files().filter { it.text("type") == "session.files.write" }
+
+    @Test
+    fun saveSendsTheFixtureCommandAndKeepsTheNewVersion() = runTest {
+        val transport = editorTransport()
+        val repository = editing(transport)
+        var editor = checkNotNull(repository.state.value.files?.editor)
+        assertEquals(FileEditor("src/app/main.ts", version, "hello\n"), editor)
+        assertFalse(editor.changed)
+        repository.updateFileEditorText("hello\nworld\n")
+        assertTrue(checkNotNull(repository.state.value.files?.editor).changed)
+        repository.saveFileEditor()
+        assertTrue(checkNotNull(repository.state.value.files?.editor).saving)
+        runCurrent()
+
+        assertEquals(JsonObject(writeValid("write-command") - "requestId"), JsonObject(writes(transport).single() - "requestId"))
+        val files = checkNotNull(repository.state.value.files)
+        editor = checkNotNull(files.editor)
+        assertEquals(newVersion, editor.baseVersion)
+        assertEquals("hello\nworld\n", editor.original)
+        assertFalse(editor.changed)
+        assertFalse(editor.saving)
+        assertNull(editor.saveFailure)
+        assertEquals(1L, editor.savedAt)
+        val file = checkNotNull(files.file)
+        assertEquals(newVersion, file.version)
+        assertEquals("hello\nworld\n", file.content)
+        assertEquals(12L, file.size)
+
+        // The next save is checked against the saved version.
+        repository.updateFileEditorText("hello\n")
+        repository.saveFileEditor()
+        runCurrent()
+        assertEquals(newVersion, writes(transport).last().text("baseVersion"))
+        assertEquals(2L, repository.state.value.files?.editor?.savedAt)
+    }
+
+    @Test
+    fun textTypedDuringASaveStaysChanged() = runTest {
+        val held = mutableListOf<JsonObject>()
+        val transport = editorTransport { held += it; null }
+        val repository = editing(transport)
+        repository.updateFileEditorText("one\n")
+        repository.saveFileEditor()
+        runCurrent()
+        repository.updateFileEditorText("one\ntwo\n")
+        // A second save while one runs sends nothing.
+        repository.saveFileEditor()
+        runCurrent()
+        assertEquals(1, held.size)
+        transport.result(held.single(), written(held.single()))
+        runCurrent()
+        val editor = checkNotNull(repository.state.value.files?.editor)
+        assertEquals("one\n", editor.original)
+        assertEquals("one\ntwo\n", editor.text)
+        assertTrue(editor.changed)
+    }
+
+    @Test
+    fun aConflictKeepsTheEditUntilReload() = runTest {
+        val transport = editorTransport()
+        transport.failure = { request -> if (request.text("type") == "session.files.write") "conflict" else null }
+        val repository = editing(transport)
+        repository.updateFileEditorText("mine\n")
+        repository.saveFileEditor()
+        runCurrent()
+        var editor = checkNotNull(repository.state.value.files?.editor)
+        assertTrue(editor.conflict)
+        assertEquals(FilesFailure.CONFLICT, editor.saveFailure)
+        assertFalse(editor.saving)
+        assertEquals("mine\n", editor.text)
+        assertEquals(version, editor.baseVersion)
+        // The edit still goes to the agent as a diff against the version it was opened at.
+        val prompt = repository.fileEditorPrompt() as EditorPrompt.Ready
+        assertTrue(prompt.text.startsWith(editorPromptIntro("src/app/main.ts") + "\n\n```diff\n"))
+
+        val reads = transport.files().count { it.text("type") == "session.files.read" }
+        repository.reloadFileAfterConflict()
+        runCurrent()
+        val files = checkNotNull(repository.state.value.files)
+        assertNull(files.editor)
+        assertEquals("hello\n", files.file?.content)
+        assertEquals(reads + 1, transport.files().count { it.text("type") == "session.files.read" })
+    }
+
+    @Test
+    fun hostErrorsAndOfflineLeaveTheEdit() = runTest {
+        val transport = editorTransport()
+        transport.failure = { request -> if (request.text("type") == "session.files.write") "busy" else null }
+        val repository = editing(transport)
+        repository.updateFileEditorText("mine\n")
+        repository.saveFileEditor()
+        runCurrent()
+        var editor = checkNotNull(repository.state.value.files?.editor)
+        assertEquals(FilesFailure.BUSY, editor.saveFailure)
+        assertFalse(editor.conflict)
+
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        val sent = writes(transport).size
+        repository.saveFileEditor()
+        runCurrent()
+        editor = checkNotNull(repository.state.value.files?.editor)
+        assertEquals(FilesFailure.OFFLINE, editor.saveFailure)
+        assertEquals("mine\n", editor.text)
+        assertEquals(sent, writes(transport).size)
+    }
+
+    @Test
+    fun noEditorOrWriteWithoutTheCapability() = runTest {
+        val transport = editorTransport(advertised = capabilities) { error("must not be sent") }
+        val repository = editing(transport)
+        assertNotNull(repository.state.value.files?.file?.version)
+        assertFalse(canEditFile(repository.state.value))
+        assertNull(repository.state.value.files?.editor)
+        val code = (runCatching { repository.filesWrite(sessionId, "src/app/main.ts", version, "x") }.exceptionOrNull() as RemoteRequestException).code
+        assertEquals("unsupported", code)
+        assertTrue(writes(transport).isEmpty())
+    }
+
+    @Test
+    fun aFileWithMorePagesIsNotEditable() = runTest {
+        val transport = Transport(writeCapabilities) { request ->
+            if (request.text("type") == "session.files.read") page(request, "page one\n", 300000, nextOffset = 9)
+            else listing(request, "a.kt")
+        }
+        val repository = opened(transport)
+        repository.openFilesFile("a.kt")
+        runCurrent()
+        repository.startFileEditing()
+        assertNull(repository.state.value.files?.editor)
+    }
+
+    @Test
+    fun lateSaveRepliesAreIgnored() = runTest {
+        val held = mutableListOf<JsonObject>()
+        val transport = editorTransport { held += it; null }
+        val repository = editing(transport)
+
+        // Discarded, then edited again: the old reply touches neither the new editor nor the file.
+        repository.updateFileEditorText("first\n")
+        repository.saveFileEditor()
+        runCurrent()
+        repository.discardFileEditor()
+        assertNull(repository.state.value.files?.editor)
+        repository.startFileEditing()
+        transport.result(held.single(), written(held.single()))
+        runCurrent()
+        var files = checkNotNull(repository.state.value.files)
+        assertEquals(FileEditor("src/app/main.ts", version, "hello\n"), files.editor)
+        assertEquals("hello\n", files.file?.content)
+        assertEquals(version, files.file?.version)
+
+        // Closed and opened again: the reply is dropped as well.
+        held.clear()
+        repository.updateFileEditorText("second\n")
+        repository.saveFileEditor()
+        runCurrent()
+        repository.closeFiles()
+        repository.openFiles()
+        runCurrent()
+        repository.openFilesFile("src/app/main.ts")
+        runCurrent()
+        repository.startFileEditing()
+        transport.result(held.single(), written(held.single()))
+        runCurrent()
+        files = checkNotNull(repository.state.value.files)
+        assertEquals(FileEditor("src/app/main.ts", version, "hello\n"), files.editor)
+
+        // Leaving the file drops the editor.
+        repository.openFilesFile(null)
+        assertNull(repository.state.value.files?.editor)
+    }
+
+    @Test
+    fun promptIsNullUntilTheTextChanges() = runTest {
+        val repository = editing(editorTransport())
+        assertNull(repository.fileEditorPrompt())
+        repository.updateFileEditorText("hello\nworld\n")
+        val prompt = repository.fileEditorPrompt("Intro") as EditorPrompt.Ready
+        assertTrue(prompt.text, prompt.text.startsWith("Intro\n\n```diff\n--- a/src/app/main.ts\n"))
+        assertTrue(prompt.text.endsWith("\n```"))
+        repository.discardFileEditor()
+        assertNull(repository.fileEditorPrompt())
+    }
 }

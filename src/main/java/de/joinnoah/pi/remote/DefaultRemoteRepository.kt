@@ -122,6 +122,8 @@ class DefaultRemoteRepository(
             SESSION_FORK_CAPABILITY,
             GIT_CAPABILITY,
             FILES_CAPABILITY,
+            // Only on the capabilities.v2 route, and only when the host enables writes.
+            FILES_WRITE_CAPABILITY,
             PROVIDER_AUTH_CAPABILITY,
             ATTACHMENT_READ_CAPABILITY,
             EXPORT_CAPABILITY,
@@ -4316,6 +4318,23 @@ class DefaultRemoteRepository(
         return parseFilesRead(data, sessionId, path, offset, version)
     }
 
+    override suspend fun filesWrite(sessionId: String, path: String, baseVersion: String, content: String): FileWritten {
+        requireFiles(sessionId)
+        val current = state.value
+        if (FILES_WRITE_CAPABILITY !in current.capabilities || FILES_WRITE_CAPABILITY in current.unavailableCapabilities)
+            throw RemoteRequestException("unsupported")
+        val data =
+            request(
+                "session.files.write",
+                selectionEpoch,
+                "sessionId" to sessionId,
+                "path" to path,
+                "baseVersion" to baseVersion,
+                "content" to content,
+            )
+        return parseFilesWritten(data, sessionId, path)
+    }
+
     // ---- Sent attachment content (session.attachments.read.v1) ---------------------------
 
     private class AttachmentRead {
@@ -4993,6 +5012,9 @@ class DefaultRemoteRepository(
 
                 override suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?) =
                     this@DefaultRemoteRepository.filesRead(sessionId, path, offset, version)
+
+                override suspend fun filesWrite(sessionId: String, path: String, baseVersion: String, content: String) =
+                    this@DefaultRemoteRepository.filesWrite(sessionId, path, baseVersion, content)
             },
             { state.value },
             ::update,
@@ -5020,6 +5042,18 @@ class DefaultRemoteRepository(
     override fun dismissFilesPeek() = filesLoader.dismissPeek()
 
     override fun selectFileLines(selection: LineSelection?) = filesLoader.selectLines(selection)
+
+    override fun startFileEditing() = filesLoader.startEditing()
+
+    override fun updateFileEditorText(text: String) = filesLoader.updateEditorText(text)
+
+    override fun saveFileEditor() = filesLoader.saveEditor()
+
+    override fun discardFileEditor() = filesLoader.discardEditor()
+
+    override fun reloadFileAfterConflict() = filesLoader.reloadAfterConflict()
+
+    override fun fileEditorPrompt(intro: String?) = filesLoader.editorPrompt(intro)
 
     private fun editReviewComments(block: (List<ReviewComment>) -> List<ReviewComment>) {
         val key = currentDraftKey() ?: return

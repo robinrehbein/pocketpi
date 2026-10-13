@@ -370,6 +370,23 @@ internal class ChatViewModel(
 
     fun selectFileLines(selection: LineSelection?) = active { repository.selectFileLines(selection) }
 
+    fun startFileEditing() = active(repository::startFileEditing)
+
+    fun updateFileEditorText(text: String) = active { repository.updateFileEditorText(text) }
+
+    fun saveFileEditor() = active(repository::saveFileEditor)
+
+    fun discardFileEditor() = repository.discardFileEditor()
+
+    fun reloadFileAfterConflict() = active(repository::reloadFileAfterConflict)
+
+    /** The edit as a diff prompt for the composer; null when unchanged. Nothing is sent. */
+    fun fileEditorPrompt(intro: String? = null): EditorPrompt? {
+        var prompt: EditorPrompt? = null
+        active { prompt = repository.fileEditorPrompt(intro) }
+        return prompt
+    }
+
     /** False when the comment was not saved; the caller keeps the user's text on screen. */
     fun setReviewComment(comment: ReviewComment): Boolean {
         var saved = false

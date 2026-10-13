@@ -293,6 +293,14 @@ interface RemoteRepository {
         throw RemoteRequestException("unsupported")
 
     /**
+     * `session.files.write`: replaces [path] with [content] when its version is still
+     * [baseVersion]; only with [FILES_WRITE_CAPABILITY]. Throws [RemoteRequestException], with
+     * code `conflict` when the file changed.
+     */
+    suspend fun filesWrite(sessionId: String, path: String, baseVersion: String, content: String): FileWritten =
+        throw RemoteRequestException("unsupported")
+
+    /**
      * The bytes of an image this device sent in [sessionId]'s chat, from memory or read from the
      * host in chunks (`session.attachments.get`, only with [ATTACHMENT_READ_CAPABILITY]).
      */
@@ -389,6 +397,26 @@ interface RemoteRepository {
     fun dismissFilesPeek() {}
 
     fun selectFileLines(selection: LineSelection?) {}
+
+    /** Opens the open file in the editor when [canEditFile] allows it. */
+    fun startFileEditing() {}
+
+    fun updateFileEditorText(text: String) {}
+
+    /** Saves the editor's text over the version it was read or last saved as. */
+    fun saveFileEditor() {}
+
+    /** Leaves the editor and drops its text; a save still on its way is ignored. */
+    fun discardFileEditor() {}
+
+    /** After a conflict: drops the edit and reads the file again. */
+    fun reloadFileAfterConflict() {}
+
+    /**
+     * The composer text that hands the edit to the agent as a diff, with [intro] (default
+     * [editorPromptIntro]) above it; null when nothing changed or no editor is open.
+     */
+    fun fileEditorPrompt(intro: String? = null): EditorPrompt? = null
 
     /**
      * Adds [comment], replacing one on the same line, and keeps it in the session's draft. Returns
