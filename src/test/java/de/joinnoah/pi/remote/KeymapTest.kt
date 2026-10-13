@@ -2,6 +2,7 @@ package de.joinnoah.pi.remote
 
 import androidx.compose.ui.input.key.Key
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -144,6 +145,35 @@ class KeymapTest {
         assertNull(typedText('\t'.code, ctrl = false, alt = false, meta = false))
         // A dead key's accent waits for the next key.
         assertNull(typedText('´'.code or android.view.KeyCharacterMap.COMBINING_ACCENT, ctrl = false, alt = false, meta = false))
+    }
+
+    @Test
+    fun altGrTypesItsCharacterButLeftAltDoesNot() {
+        val right = android.view.KeyEvent.META_ALT_ON or android.view.KeyEvent.META_ALT_RIGHT_ON
+        val left = android.view.KeyEvent.META_ALT_ON or android.view.KeyEvent.META_ALT_LEFT_ON
+        assertTrue(altGrOnly(right))
+        assertFalse(altGrOnly(left))
+        assertFalse(altGrOnly(left or android.view.KeyEvent.META_ALT_RIGHT_ON))
+        assertFalse(altGrOnly(0))
+        // German QWERTZ: AltGr+Q is @, AltGr+E is the euro sign.
+        assertEquals("@", typedText('@'.code, ctrl = false, alt = true, meta = false, altGr = true))
+        assertEquals("\u20ac", typedText(0x20ac, ctrl = false, alt = true, meta = false, altGr = true))
+        assertNull(typedText('@'.code, ctrl = true, alt = true, meta = false, altGr = true))
+        assertNull(typedText('q'.code, ctrl = false, alt = true, meta = false, altGr = false))
+    }
+
+    @Test
+    fun aListThatLeftTheScreenNoLongerHoldsItsRows() {
+        val targets = ShortcutTargets()
+        val sessions = RemoteNavKey.Sessions("host", "project")
+        val other = RemoteNavKey.Sessions("host", "other")
+        targets.listed(sessions, listOf("a", "b"))
+        // Another project's late dispose leaves this listing alone.
+        targets.unlisted(other)
+        assertEquals(sessions, targets.listedFor)
+        targets.unlisted(sessions)
+        assertNull(targets.listedFor)
+        assertEquals(emptyList<String>(), targets.listedSessionIds)
     }
 
     @Test

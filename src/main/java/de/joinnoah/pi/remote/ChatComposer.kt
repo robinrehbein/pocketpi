@@ -67,8 +67,15 @@ internal class ComposerDraft(
     initial: String,
     private val push: (RemoteSelection, String) -> Unit,
 ) {
-    var value by mutableStateOf(TextFieldValue(initial, TextRange(initial.length)))
-        private set
+    private var current by mutableStateOf(TextFieldValue(initial, TextRange(initial.length)))
+
+    var value: TextFieldValue
+        get() = current
+        private set(next) {
+            // A changed text brings back the suggestions Esc closed.
+            if (next.text != current.text) suggestionsClosedFor = null
+            current = next
+        }
 
     val text: String get() = value.text
 
@@ -142,7 +149,7 @@ internal class ComposerDraft(
         if (!typing && draft != text) value = TextFieldValue(draft, TextRange(draft.length))
     }
 
-    /** The text whose slash suggestions Esc closed; any edit brings them back. */
+    /** The text whose slash suggestions Esc closed, until the text changes. */
     private var suggestionsClosedFor by mutableStateOf<String?>(null)
 
     val suggestionsClosed: Boolean get() = suggestionsClosedFor == text
@@ -405,23 +412,27 @@ internal fun ChatComposer(
         }
     }
     val latestKeyboardSend = rememberUpdatedState(keyboardSend)
-    // Alt+Enter sends with the choice the chip does not show, when both are offered.
+    // Alt+Enter sends with the choice the chip does not show, when both are offered; otherwise
+    // the key stays the field's.
+    val otherBusyActionOffered = showBusyAction && canQueue && canSteerNow && canFollowUpNow
     val otherBusyAction: () -> Unit = {
-        if (showBusyAction && canQueue && canSteerNow && canFollowUpNow) {
+        if (otherBusyActionOffered) {
             recordPrompt()
             if (busyAction == BusyComposerAction.Steer) onFollowUp() else onSteer()
         }
     }
     val latestOtherBusyAction = rememberUpdatedState(otherBusyAction)
-    val slashOpen = commandName(state.draft) != null && !draft.suggestionsClosed
     if (keyTarget != null) {
         val running = state.status == "running" && state.connected && !state.loading
         SideEffect {
             keyTarget.running = running
             keyTarget.stop = stop
             keyTarget.composerBlank = !hasDraft
-            keyTarget.transientOpen = { slashOpen || prediction != null }
-            keyTarget.closeTransient = { if (slashOpen) draft.closeSuggestions() else predictionClosed = true }
+            // The suggestions count only while they show (SessionControls reports it).
+            keyTarget.transientOpen = { (keyTarget.slashShown && !draft.suggestionsClosed) || prediction != null }
+            keyTarget.closeTransient = {
+                if (keyTarget.slashShown && !draft.suggestionsClosed) draft.closeSuggestions() else predictionClosed = true
+            }
             keyTarget.type = { typed ->
                 if (draft.insert(typed)) voiceInput.userEdited(draft.text)
                 focusRequester?.let { runCatching { it.requestFocus() } }
@@ -630,7 +641,7 @@ internal fun ChatComposer(
                             .onFocusChanged { keyTarget?.composerFocused = it.isFocused }
                             .onPreviewKeyEvent { event ->
                                 if (
-                                    hardwareKeyboard && showBusyAction &&
+                                    hardwareKeyboard && otherBusyActionOffered &&
                                         event.type == KeyEventType.KeyDown &&
                                         resolveShortcut(event, KeyContext.COMPOSER) == Shortcut.OTHER_BUSY_ACTION
                                 ) {

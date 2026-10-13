@@ -615,7 +615,13 @@ internal class RemoteNavigator(
             Shortcut.SEARCH -> {
                 if (twoPane != null) twoPane.listCollapsed = false
                 // The phone shows one destination: the sessions come to the top for their search.
-                else if (top != sessions && !repeat) open(sessions)
+                // A request waits for the list, so it is made only once the list is on top, never
+                // for a navigation held for an unsaved edit.
+                else if (top != sessions) {
+                    if (repeat) return true
+                    open(sessions)
+                    if (stack.lastOrNull() != sessions) return true
+                }
                 targets.requestSearch()
                 true
             }
@@ -623,7 +629,7 @@ internal class RemoteNavigator(
             Shortcut.NEXT_SESSION -> {
                 val step = if (shortcut == Shortcut.NEXT_SESSION) 1 else -1
                 val current = (top as? RemoteNavKey.Chat)?.sessionId
-                adjacentId(listedSessionIds(sessions, twoPane != null, targets), current, step)
+                adjacentId(listedSessionIds(sessions, targets), current, step)
                     ?.takeIf { it != current }
                     ?.let { open(RemoteNavKey.Chat(sessions.routeId, sessions.projectId, it)) }
                 true
@@ -648,17 +654,20 @@ internal class RemoteNavigator(
     }
 
     /**
-     * The sessions of [sessions] in the list's order and filter. Beside the list, or with it on
-     * top, that is what it shows; a phone's chat walks the list as it was last shown, or the
-     * project's sessions in list order when it was not shown yet.
+     * The sessions of [sessions] in the list's order and filter. While the list is on screen that
+     * is what it shows; without it (a phone's chat, a collapsed list) the project's current
+     * sessions in list order, without offline ones when the setting hides them.
      */
-    private fun listedSessionIds(sessions: RemoteNavKey.Sessions, twoPane: Boolean, targets: ShortcutTargets): List<String> {
+    private fun listedSessionIds(sessions: RemoteNavKey.Sessions, targets: ShortcutTargets): List<String> {
         if (targets.listedFor == sessions) return targets.listedSessionIds
-        // The list is on screen and about to report its rows.
-        if (twoPane || stack.lastOrNull() == sessions) return emptyList()
         val state = repository.state.value
         if (state.selection.routeId != sessions.routeId || state.selection.projectId != sessions.projectId) return emptyList()
-        return visibleSessionListItems(state.sessions, state.connected, state.loading, hideOffline = false).map { it.id }
+        return visibleSessionListItems(
+            state.sessions,
+            state.connected,
+            state.loading,
+            hideOffline = targets.hideOfflineSessions && state.connected,
+        ).map { it.id }
     }
 
     fun disconnect() {
@@ -807,6 +816,8 @@ internal fun RemoteNavigation(
         // keyboard keeps the keys of the wide layout.
         val shortcuts = hardwareKeyboard
         val targets = remember { ShortcutTargets() }
+        val hideOfflineSessions = pushSettings.hideOfflineSessions
+        SideEffect { targets.hideOfflineSessions = hideOfflineSessions }
         val activeTwoPane by rememberUpdatedState(twoPane.takeIf { layout.twoPane })
         val collapsed = twoPane.listCollapsed
         val sceneStrategies =
@@ -898,8 +909,16 @@ private fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets
     if (event.type != KeyEventType.KeyDown || editing) return false
     val shortcut = resolveShortcut(event, if (chat != null) KeyContext.CHAT else KeyContext.GLOBAL)
     if (shortcut != null) return shortcut(shortcut, twoPane, targets, repeat = native.repeatCount > 0)
-    if (!unhandled || chat == null) return false
-    val text = typedText(native.unicodeChar, native.isCtrlPressed, native.isAltPressed, native.isMetaPressed) ?: return false
+    // Over Files, Changes, a tool detail or the jobs the composer is hidden: no typing into it.
+    if (!unhandled || chat == null || chat.composerCovered) return false
+    val text =
+        typedText(
+            native.unicodeChar,
+            native.isCtrlPressed,
+            native.isAltPressed,
+            native.isMetaPressed,
+            altGr = altGrOnly(native.metaState),
+        ) ?: return false
     chat.type(text)
     return true
 }

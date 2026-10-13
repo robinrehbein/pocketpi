@@ -123,4 +123,32 @@ class EscapeGestureTest {
         assertFalse(target.stopHint)
         assertEquals(1, stops)
     }
+
+    @Test
+    fun escLeavesAQuestionFieldWithAnAnswerBeforeItStops() {
+        val target = ChatKeyTarget()
+        var stops = 0
+        var blurs = 0
+        target.stop = { stops++ }
+        target.blurComposer = { blurs++ }
+        target.running = true
+        val field = Any()
+        target.questionFieldFocus(field, focused = true, blank = false)
+        target.escape(1_000)
+        target.escape(1_200)
+        // Each Esc leaves the field (the layout parks focus); none of them stops pi.
+        assertEquals(2, blurs)
+        assertEquals(0, stops)
+        assertFalse(target.stopHint)
+        // A blank focused field stops with Esc, Esc, like the composer.
+        target.questionFieldFocus(field, focused = true, blank = true)
+        target.escape(2_000)
+        target.escape(2_200)
+        assertEquals(1, stops)
+        // Another field's late focus loss does not clear this one's.
+        target.questionFieldFocus(Any(), focused = false, blank = true)
+        assertTrue(target.questionFieldFocused)
+        target.questionFieldFocus(field, focused = false, blank = true)
+        assertFalse(target.questionFieldFocused)
+    }
 }

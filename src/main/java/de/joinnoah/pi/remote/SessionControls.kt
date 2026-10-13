@@ -318,10 +318,22 @@ internal fun SessionControls(
         }
         val hostCommands =
             COMMANDS_CAPABILITY in state.capabilities && COMMANDS_CAPABILITY !in state.unavailableCapabilities
-        if (slashSuggestions && slash != null && (hostCommands || localCommands.isNotEmpty())) {
-            val (localSuggestions, hostSuggestions) =
-                mergeCommandSuggestions(localCommands, if (hostCommands) state.commands else emptyList(), slash)
-            if (hostCommands && state.commandsLoading && localSuggestions.isEmpty())
+        val slashCommands = slash != null && (hostCommands || localCommands.isNotEmpty())
+        val (localSuggestions, hostSuggestions) =
+            if (slashCommands)
+                mergeCommandSuggestions(localCommands, if (hostCommands) state.commands else emptyList(), checkNotNull(slash))
+            else emptyList<LocalCommand>() to emptyList<RemoteCommand>()
+        val slashLoading = hostCommands && state.commandsLoading && localSuggestions.isEmpty()
+        // What Esc closes first: suggestions only count while something of them shows.
+        val slashShown =
+            slashCommands && (slashLoading || localSuggestions.isNotEmpty() || hostSuggestions.isNotEmpty())
+        val keyTarget = LocalChatKeyTarget.current
+        if (keyTarget != null) {
+            SideEffect { keyTarget.slashShown = slashShown }
+            DisposableEffect(keyTarget) { onDispose { keyTarget.slashShown = false } }
+        }
+        if (slashSuggestions && slashCommands) {
+            if (slashLoading)
                 LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 8.dp))
             else if (localSuggestions.isNotEmpty() || hostSuggestions.isNotEmpty())
                 LazyColumn(Modifier.fillMaxWidth().padding(horizontal = 8.dp).heightIn(max = 160.dp)) {

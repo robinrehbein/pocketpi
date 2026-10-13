@@ -7,6 +7,8 @@ import androidx.activity.compose.BackHandler
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -14,6 +16,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.isAltPressed
@@ -206,13 +210,19 @@ internal fun escapeStep(
 /**
  * The text a key types when nothing took it: a plain printable character, or null for keys with
  * Ctrl, Alt or Meta, control characters and dead keys (whose accent waits for the next key).
+ * [altGr] is a right Alt alone, which types @, { or € on layouts such as German QWERTZ.
  */
-internal fun typedText(unicodeChar: Int, ctrl: Boolean, alt: Boolean, meta: Boolean): String? {
-    if (ctrl || alt || meta || unicodeChar == 0) return null
+internal fun typedText(unicodeChar: Int, ctrl: Boolean, alt: Boolean, meta: Boolean, altGr: Boolean = false): String? {
+    if (ctrl || (alt && !altGr) || meta || unicodeChar == 0) return null
     if (unicodeChar and KeyCharacterMap.COMBINING_ACCENT != 0) return null
     if (Character.isISOControl(unicodeChar) || !Character.isValidCodePoint(unicodeChar)) return null
     return String(Character.toChars(unicodeChar))
 }
+
+/** The meta state holds the right Alt (AltGr) without the left one. */
+internal fun altGrOnly(metaState: Int): Boolean =
+    metaState and android.view.KeyEvent.META_ALT_RIGHT_ON != 0 &&
+        metaState and android.view.KeyEvent.META_ALT_LEFT_ON == 0
 
 /** TalkBack or another touch exploration service runs; focus then only moves where the user puts it. */
 internal fun touchExplorationEnabled(context: Context): Boolean =
@@ -238,6 +248,35 @@ internal class ChatKeyTarget {
     var composerFocused = false
     var composerBlank = true
 
+    /**
+     * The question's free-text field that has focus ([rememberQuestionFieldKeys]); Esc leaves it
+     * like the composer, and [questionFieldBlank] says whether it holds an answer.
+     */
+    private var questionField: Any? = null
+    var questionFieldBlank = true
+        private set
+    val questionFieldFocused: Boolean get() = questionField != null
+
+    /** The question field [owner] gained or lost focus, or its text changed while focused. */
+    fun questionFieldFocus(owner: Any, focused: Boolean, blank: Boolean) {
+        if (focused) {
+            questionField = owner
+            questionFieldBlank = blank
+        } else if (questionField === owner) {
+            questionField = null
+            questionFieldBlank = true
+        }
+    }
+
+    /**
+     * Files, Changes, a tool detail or the jobs lie over the chat, hiding the composer: typed
+     * keys must not land in it.
+     */
+    var composerCovered = false
+
+    /** The slash suggestions under the composer show; [SessionControls] reports it. */
+    var slashShown = false
+
     /** Slash suggestions or the prompt prediction show; [closeTransient] closes them. */
     var transientOpen: () -> Boolean = { false }
     var closeTransient: () -> Unit = {}
@@ -249,7 +288,7 @@ internal class ChatKeyTarget {
     var focusComposer: () -> Unit = {}
     var blurComposer: () -> Unit = {}
 
-    /** Focuses the composer and types [text] at its cursor. */
+    /** Focuses the composer and types [text] at its cursor; never while [composerCovered]. */
     var type: (String) -> Unit = {}
 
     /** Runs a chat shortcut ([KeyContext.CHAT]); false when it does not apply now. */
@@ -277,8 +316,9 @@ internal class ChatKeyTarget {
 
     /** One Esc: the first [EscapeStep] that applies. Always used up, so it never becomes Back. */
     fun escape(nowMillis: Long) {
-        val step =
-            escapeStep(transientOpen(), selectionActive(), paneOpen, composerFocused, composerBlank, running)
+        val fieldFocused = composerFocused || questionFieldFocused
+        val fieldBlank = if (questionFieldFocused) questionFieldBlank else composerBlank
+        val step = escapeStep(transientOpen(), selectionActive(), paneOpen, fieldFocused, fieldBlank, running)
         if (step != EscapeStep.STOP_GESTURE) {
             escape.reset()
             stopHint = false
@@ -309,6 +349,27 @@ internal class ChatKeyTarget {
         stop()
         return true
     }
+}
+
+/**
+ * A question's free-text field holding [text]: tells the chat's keys when it has focus, so Esc
+ * leaves it first, as it leaves the composer, before Esc, Esc stops pi.
+ */
+@Composable
+internal fun rememberQuestionFieldKeys(text: String): Modifier {
+    val target = LocalChatKeyTarget.current ?: return Modifier
+    val owner = remember { QuestionFieldOwner() }
+    val blank = text.isBlank()
+    SideEffect { if (owner.focused) target.questionFieldFocus(owner, focused = true, blank = blank) }
+    DisposableEffect(target, owner) { onDispose { target.questionFieldFocus(owner, focused = false, blank = true) } }
+    return Modifier.onFocusChanged {
+        owner.focused = it.isFocused
+        target.questionFieldFocus(owner, it.isFocused, blank)
+    }
+}
+
+private class QuestionFieldOwner {
+    var focused = false
 }
 
 /** The chat's [ChatKeyTarget] around the chat screen; null elsewhere. */
@@ -343,7 +404,10 @@ internal class ShortcutTargets {
         searchRequests++
     }
 
-    /** The sessions the list of [listedFor] shows, top to bottom, for Ctrl/Alt+Up/Down. */
+    /**
+     * The sessions the list of [listedFor] shows, top to bottom, for Ctrl/Alt+Up/Down, while that
+     * list is on screen. Without it the shortcuts use the project's sessions as the list orders them.
+     */
     var listedFor: RemoteNavKey.Sessions? = null
         private set
     var listedSessionIds: List<String> = emptyList()
@@ -353,6 +417,16 @@ internal class ShortcutTargets {
         listedFor = sessions
         listedSessionIds = ids
     }
+
+    /** The list of [sessions] left the screen; its rows may change without it. */
+    fun unlisted(sessions: RemoteNavKey.Sessions) {
+        if (listedFor != sessions) return
+        listedFor = null
+        listedSessionIds = emptyList()
+    }
+
+    /** The "hide offline sessions" setting, which the session list applies. */
+    var hideOfflineSessions = false
 
     private val refreshers = mutableMapOf<RemoteNavKey, () -> Unit>()
 

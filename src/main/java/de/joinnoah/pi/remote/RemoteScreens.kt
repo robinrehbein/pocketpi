@@ -58,6 +58,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
@@ -115,6 +119,9 @@ private const val JUMP_HIGHLIGHT_MILLIS = 2_000L
 private const val COMPACTION_TICK_MILLIS = 30_000L
 private const val PRIVACY_POLICY_URL = "https://robinrehbein.de/privacy"
 private val LIST_TO_HEADER_END_SHIFT = 4.dp
+
+/** Keys with which Compose moves focus into a focused group's first child. */
+private val FOCUS_ENTER_KEYS = setOf(Key.Enter, Key.NumPadEnter, Key.DirectionCenter)
 
 /** "Try again", or "Reconnect now" while an automatic reconnect is scheduled. */
 @Composable
@@ -224,8 +231,11 @@ internal fun RemoteScreen(
         remember(visibleSessions, sessionQuery, sessionSearchShown) {
             if (sessionSearchShown) filterSessions(visibleSessions, sessionQuery) else visibleSessions
         }
-    if (key is RemoteNavKey.Sessions && shortcutTargets != null)
+    if (key is RemoteNavKey.Sessions && shortcutTargets != null) {
         LaunchedEffect(listedSessions) { shortcutTargets.listed(key, listedSessions.map { it.id }) }
+        // Off screen the list's rows go stale; the shortcuts then read the project's sessions.
+        DisposableEffect(key, shortcutTargets) { onDispose { shortcutTargets.unlisted(key) } }
+    }
     if (shortcutTargets != null)
         DisposableEffect(key, model, shortcutTargets) {
             val refresh = model::refresh
@@ -1094,17 +1104,51 @@ internal fun RemoteScreen(
     // With a hardware keyboard a chat opens ready for typing, unless a question or a dialog is up
     // or TalkBack runs: then focus stays where the user put it.
     val chatDialogOpen = renameSessionId != null || abortTargetIsCurrent || abortChild != null || tuiInfoOpen
+    val jobsOpen =
+        state.jobs?.let { (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId } == true
+    // Files, Changes, a tool detail or the jobs fill the chat's place and hide the composer.
+    val composerCovered =
+        chatKey != null && chatModel != null &&
+            (jobsOpen || (!sideInspector && (changesOpen != null || filesOpen != null || openTool != null)))
     if (chatKey != null)
         LaunchedEffect(chatKey, hardwareKeyboard) {
-            if (!hardwareKeyboard || questionPending || chatDialogOpen || touchExplorationEnabled(context))
+            if (!hardwareKeyboard || questionPending || chatDialogOpen || composerCovered || touchExplorationEnabled(context))
                 return@LaunchedEffect
             composerFocusRequest++
+        }
+    // Esc and covering panes park keyboard focus on the chat itself (see the Scaffold); it can
+    // take focus only then, so Tab never stops on it.
+    var chatFocusParked by remember { mutableStateOf(false) }
+    var chatFocused by remember { mutableStateOf(false) }
+    fun parkFocus() {
+        chatFocusParked = true
+        runCatching { chatFocus.requestFocus() }.onFailure {
+            chatFocusParked = false
+            focusManager.clearFocus()
+        }
+    }
+    // A pane over the chat takes focus out of the hidden composer, so Enter or a typed key never
+    // reaches it; once the pane closes, focus goes back if nothing else took it meanwhile.
+    var composerParkedForPane by remember { mutableStateOf(false) }
+    if (chatKey != null)
+        LaunchedEffect(composerCovered) {
+            if (composerCovered) {
+                if (chatKeyTarget.composerFocused) {
+                    parkFocus()
+                    composerParkedForPane = true
+                }
+            } else if (composerParkedForPane) {
+                composerParkedForPane = false
+                if (chatFocusParked) composerFocusRequest++
+            }
         }
     /** A chat shortcut from the keyboard ([KeyContext.CHAT]); false when it does not apply now. */
     fun chatShortcut(shortcut: Shortcut): Boolean {
         val chat = chatModel ?: return false
         return when (shortcut) {
             Shortcut.FOCUS_COMPOSER -> {
+                // A pane over the chat hides the composer.
+                if (composerCovered) return false
                 composerFocusRequest++
                 true
             }
@@ -1130,8 +1174,7 @@ internal fun RemoteScreen(
                 }
             Shortcut.JOBS ->
                 when {
-                    state.jobs?.let { (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId } == true ->
-                        chat.closeJobs().let { true }
+                    jobsOpen -> chat.closeJobs().let { true }
                     jobsAvailable && state.connected -> {
                         chat.openJobs()
                         true
@@ -1161,7 +1204,7 @@ internal fun RemoteScreen(
         val linesSelected = filesOpen?.file?.selection != null
         SideEffect {
             chatKeyTarget.focusComposer = { composerFocusRequest++ }
-            val parkFocus = { runCatching { chatFocus.requestFocus() }.onFailure { focusManager.clearFocus() } }
+            chatKeyTarget.composerCovered = composerCovered
             chatKeyTarget.blurComposer = { parkFocus() }
             chatKeyTarget.selectionActive = { conversationFocused || linesSelected }
             chatKeyTarget.clearSelection = {
@@ -1180,8 +1223,22 @@ internal fun RemoteScreen(
     ) {
     Scaffold(
         // Esc parks keyboard focus here, on the chat itself: clearing it would hand it to the
-        // first button (Back) while a keyboard is in use, and Enter would then press it.
-        modifier = if (chatKey != null) Modifier.focusRequester(chatFocus).focusTarget() else Modifier,
+        // first button (Back) while a keyboard is in use, and Enter would then press it. It is
+        // focusable only while parked, so Tab and the initial focus never stop on it. Enter on
+        // it is used up: Compose would move focus into the first button (Back) instead.
+        modifier =
+            if (chatKey != null)
+                Modifier.focusRequester(chatFocus)
+                    .onFocusChanged {
+                        // Only leaving the parked focus ends it; the composer's focus passing
+                        // through on its way here does not.
+                        if (chatFocused && !it.isFocused) chatFocusParked = false
+                        chatFocused = it.isFocused
+                    }
+                    .onKeyEvent { chatFocused && it.key in FOCUS_ENTER_KEYS }
+                    .focusProperties { canFocus = chatFocusParked }
+                    .focusTarget()
+            else Modifier,
         containerColor = MaterialTheme.colorScheme.background,
         floatingActionButtonPosition = FabPosition.Center,
         floatingActionButton = {

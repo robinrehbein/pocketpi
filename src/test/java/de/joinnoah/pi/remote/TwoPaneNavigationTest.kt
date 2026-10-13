@@ -44,6 +44,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.unit.Dp
@@ -1014,6 +1015,10 @@ class TwoPaneNavigationTest {
         compose.onNodeWithTag("composerField").assertIsNotFocused()
         compose.onNodeWithTag("composerField").assert(hasText("/"))
         assertChatShown()
+        // Enter on the parked focus neither moves it to Back nor presses that.
+        windowKey(android.view.KeyEvent.KEYCODE_ENTER)
+        windowKey(android.view.KeyEvent.KEYCODE_ENTER)
+        assertChatShown()
     }
 
     @Test
@@ -1086,6 +1091,97 @@ class TwoPaneNavigationTest {
         windowKey(android.view.KeyEvent.KEYCODE_ESCAPE, time = 1_000)
         compose.onNodeWithTag("changesPane").assertDoesNotExist()
         assertChatShown()
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun keysNeverReachTheComposerHiddenUnderChanges() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performTextInput("abc")
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
+        composerKeys { withKeyDown(Key.CtrlLeft) { withKeyDown(Key.ShiftLeft) { pressKey(Key.G) } } }
+        compose.onNodeWithTag("changesPane").assertIsDisplayed()
+        // Changes covers the chat here (and hides the composer from the semantics): neither
+        // Enter nor a letter reaches the composer.
+        windowKey(android.view.KeyEvent.KEYCODE_ENTER)
+        windowKey(android.view.KeyEvent.KEYCODE_X)
+        // Ctrl+L does not focus a composer nobody sees.
+        windowKey(android.view.KeyEvent.KEYCODE_L, android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_CTRL_LEFT_ON)
+        windowKey(android.view.KeyEvent.KEYCODE_ENTER)
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
+        assertEquals(0, repository.prompts)
+        assertEquals("abc", repository.state.value.draft)
+        // Closing Changes gives the composer its focus back.
+        windowKey(android.view.KeyEvent.KEYCODE_ESCAPE, time = 1_000)
+        compose.onNodeWithTag("changesPane").assertDoesNotExist()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        compose.onNodeWithTag("composerField").assert(hasText("abc"))
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun slashSuggestionsEscClosedComeBackWhenTheSlashIsTypedAgain() {
+        render(hardwareKeyboard = true)
+        clearFocus()
+        windowKey(android.view.KeyEvent.KEYCODE_SLASH)
+        compose.onNodeWithText("/new").assertIsDisplayed()
+        windowKey(android.view.KeyEvent.KEYCODE_ESCAPE, time = 1_000)
+        compose.onNodeWithText("/new").assertDoesNotExist()
+        compose.onNodeWithTag("composerField").performTextReplacement("")
+        compose.onNodeWithTag("composerField").performTextInput("/")
+        compose.waitForIdle()
+        compose.onNodeWithText("/new").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun aSlashThatMatchesNoCommandLeavesTheComposerOnTheFirstEsc() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performTextInput("/zzz")
+        compose.waitForIdle()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        windowKey(android.view.KeyEvent.KEYCODE_ESCAPE, time = 1_000)
+        compose.onNodeWithTag("composerField").assertIsNotFocused()
+        compose.onNodeWithTag("composerField").assert(hasText("/zzz"))
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-keysexposed-qwerty")
+    fun phoneCtrlUpDownWalkTheCurrentSessionsAfterCtrlN() {
+        val offline = buildJsonObject {
+            put("id", "gone")
+            put("title", "Gone session")
+            put("status", "offline")
+            put("origin", "rpc")
+        }
+        settings.setHideOfflineSessions(true)
+        repository.create = { routeId, projectId ->
+            val created = RemoteSelection(routeId, projectId, "created")
+            // The host lists the new session first.
+            repository.state.value =
+                repository.state.value.copy(
+                    selection = created,
+                    sessions = listOf(session("created", "Created session"), offline) + sessions,
+                )
+            created
+        }
+        render(hardwareKeyboard = true)
+        back()
+        compose.onNodeWithText("Second session").assertIsDisplayed()
+        val ctrl = android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_CTRL_LEFT_ON
+        windowKey(android.view.KeyEvent.KEYCODE_N, ctrl)
+        assertEquals(1, repository.createdSessions)
+        assertChatShown()
+        // The new chat is first: nothing above it, and below it the next session shown (the
+        // offline one is hidden), not one of the list as it was before the create.
+        val count = repository.activations.size
+        windowKey(android.view.KeyEvent.KEYCODE_DPAD_UP, ctrl)
+        assertEquals(count, repository.activations.size)
+        windowKey(android.view.KeyEvent.KEYCODE_DPAD_DOWN, ctrl)
+        assertEquals(RemoteSelection("host", "project", "s1"), repository.activations.last().first)
+        windowKey(android.view.KeyEvent.KEYCODE_DPAD_UP, ctrl)
+        assertEquals(RemoteSelection("host", "project", "created"), repository.activations.last().first)
     }
 
     @Test
