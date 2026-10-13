@@ -13,8 +13,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -123,8 +125,12 @@ internal fun RemoteApp(
     val dark = isSystemInDarkTheme()
     val activity = LocalActivity.current
     val view = LocalView.current
+    val colors = remoteColorScheme(dark, synthwave = theme == "synthwave")
     SideEffect {
         activity?.window?.let { window ->
+            // A dark mode switch no longer recreates the activity, so the window behind the content
+            // follows the theme here instead of keeping the one it started with.
+            window.setBackgroundDrawable(colors.background.toArgb().toDrawable())
             WindowCompat.getInsetsController(window, view).apply {
                 isAppearanceLightStatusBars = !dark
                 isAppearanceLightNavigationBars = !dark
@@ -136,7 +142,6 @@ internal fun RemoteApp(
             }
         }
     }
-    val colors = remoteColorScheme(dark, synthwave = theme == "synthwave")
     MaterialTheme(
         colorScheme = colors,
         typography = RemoteTypography,
