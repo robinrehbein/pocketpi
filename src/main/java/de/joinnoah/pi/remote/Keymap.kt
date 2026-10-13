@@ -26,30 +26,47 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 
-/** Everything a hardware keyboard can do in PocketPi; [KEYMAP] binds the keys. */
-internal enum class Shortcut {
-    SEARCH,
-    PREVIOUS_SESSION,
-    NEXT_SESSION,
-    NEW_SESSION,
-    TOGGLE_LIST,
-    PREVIOUS_PROJECT,
-    NEXT_PROJECT,
-    FOCUS_COMPOSER,
-    STOP,
-    CHANGES,
-    FILES,
-    JOBS,
-    HISTORY,
-    SETTINGS,
-    HELP,
-    EXPAND_INSPECTOR,
-    TOGGLE_INSPECTOR,
-    OTHER_BUSY_ACTION,
-    REFRESH,
-    RENAME,
-    FORK,
-    ESCAPE,
+/** The sections of the shortcut lists (the system's Meta+/ helper, Ctrl+/ and Settings). */
+internal enum class ShortcutGroup(@StringRes val titleRes: Int) {
+    NAVIGATION(R.string.remote_shortcut_group_navigation),
+    CHAT(R.string.remote_shortcut_group_chat),
+    COMPOSER(R.string.remote_shortcut_group_composer),
+    PANES(R.string.remote_shortcut_group_panes),
+}
+
+/**
+ * Everything a hardware keyboard can do in PocketPi; [KEYMAP] binds the keys. A shortcut that is
+ * not [listed] has a key but no action yet, so the shortcut lists leave it out.
+ */
+internal enum class Shortcut(val group: ShortcutGroup, val listed: Boolean = true) {
+    SEARCH(ShortcutGroup.NAVIGATION),
+    PREVIOUS_SESSION(ShortcutGroup.NAVIGATION),
+    NEXT_SESSION(ShortcutGroup.NAVIGATION),
+    NEW_SESSION(ShortcutGroup.NAVIGATION),
+    TOGGLE_LIST(ShortcutGroup.PANES),
+    PREVIOUS_PROJECT(ShortcutGroup.NAVIGATION),
+    NEXT_PROJECT(ShortcutGroup.NAVIGATION),
+    FOCUS_COMPOSER(ShortcutGroup.CHAT),
+    STOP(ShortcutGroup.CHAT),
+    CHANGES(ShortcutGroup.PANES),
+    FILES(ShortcutGroup.PANES),
+    JOBS(ShortcutGroup.PANES),
+    HISTORY(ShortcutGroup.PANES),
+    SETTINGS(ShortcutGroup.NAVIGATION),
+    HELP(ShortcutGroup.NAVIGATION),
+    EXPAND_INSPECTOR(ShortcutGroup.PANES, listed = false),
+    TOGGLE_INSPECTOR(ShortcutGroup.PANES, listed = false),
+    OTHER_BUSY_ACTION(ShortcutGroup.COMPOSER),
+    REFRESH(ShortcutGroup.NAVIGATION),
+    RENAME(ShortcutGroup.CHAT),
+    FORK(ShortcutGroup.CHAT),
+    ESCAPE(ShortcutGroup.CHAT),
+    NEXT_REGION(ShortcutGroup.NAVIGATION),
+    PREVIOUS_REGION(ShortcutGroup.NAVIGATION),
+    PAGE_UP(ShortcutGroup.CHAT),
+    PAGE_DOWN(ShortcutGroup.CHAT),
+    CHAT_START(ShortcutGroup.CHAT),
+    CHAT_END(ShortcutGroup.CHAT),
 }
 
 /** Where a binding applies. A context also takes the bindings of its [parent]. */
@@ -80,7 +97,8 @@ internal data class KeyBinding(
 /**
  * The whole keymap, in the order a shortcut list shows it. Ctrl+Tab and Ctrl+digits stay free
  * for pinned sessions later; Ctrl+F stays session search until there is a find in the chat. The
- * Book Cover Keyboard needs Fn for F-keys, so each one also has a Ctrl chord.
+ * Book Cover Keyboard needs Fn for F-keys, so each one also has a Ctrl chord. Ctrl+Down stays
+ * the next session, so the chat's end is Ctrl+End only.
  */
 internal val KEYMAP: List<KeyBinding> =
     listOf(
@@ -98,9 +116,17 @@ internal val KEYMAP: List<KeyBinding> =
         KeyBinding(Shortcut.REFRESH, Key.F5, labelRes = R.string.remote_keymap_refresh),
         KeyBinding(Shortcut.SETTINGS, Key.Comma, ctrl = true, labelRes = R.string.remote_keymap_settings),
         KeyBinding(Shortcut.HELP, Key.Slash, ctrl = true, labelRes = R.string.remote_keymap_help),
+        KeyBinding(Shortcut.NEXT_REGION, Key.F6, labelRes = R.string.remote_keymap_next_region),
+        KeyBinding(Shortcut.NEXT_REGION, Key.DirectionRight, ctrl = true, alt = true, labelRes = R.string.remote_keymap_next_region),
+        KeyBinding(Shortcut.PREVIOUS_REGION, Key.F6, shift = true, labelRes = R.string.remote_keymap_previous_region),
+        KeyBinding(Shortcut.PREVIOUS_REGION, Key.DirectionLeft, ctrl = true, alt = true, labelRes = R.string.remote_keymap_previous_region),
         KeyBinding(Shortcut.FOCUS_COMPOSER, Key.L, ctrl = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_focus_composer),
         KeyBinding(Shortcut.STOP, Key.Period, ctrl = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_stop),
         KeyBinding(Shortcut.ESCAPE, Key.Escape, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_escape),
+        KeyBinding(Shortcut.PAGE_UP, Key.PageUp, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_page_up),
+        KeyBinding(Shortcut.PAGE_DOWN, Key.PageDown, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_page_down),
+        KeyBinding(Shortcut.CHAT_START, Key.MoveHome, ctrl = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_chat_start),
+        KeyBinding(Shortcut.CHAT_END, Key.MoveEnd, ctrl = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_chat_end),
         KeyBinding(Shortcut.CHANGES, Key.G, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_changes),
         KeyBinding(Shortcut.FILES, Key.E, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_files),
         KeyBinding(Shortcut.JOBS, Key.J, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_jobs),
@@ -123,8 +149,25 @@ internal fun resolveShortcut(key: Key, ctrl: Boolean, alt: Boolean, shift: Boole
         it.key == key && it.ctrl == ctrl && it.alt == alt && it.shift == shift && context.includes(it.context)
     }?.shortcut
 
-internal fun resolveShortcut(event: KeyEvent, context: KeyContext): Shortcut? =
-    resolveShortcut(event.key, event.isCtrlPressed || event.isMetaPressed, event.isAltPressed, event.isShiftPressed, context)
+internal fun resolveShortcut(event: KeyEvent, context: KeyContext): Shortcut? {
+    val ctrl = event.isCtrlPressed || event.isMetaPressed
+    return resolveShortcut(event.key, ctrl, event.isAltPressed, event.isShiftPressed, context)
+        ?: typedShortcut(typedWithCtrl(event), ctrl, event.isAltPressed)
+}
+
+/**
+ * A shortcut named after the character its key types rather than the key: Ctrl with whatever
+ * types "/" opens the help, also where "/" is Shift+7 (German) and not the slash key.
+ */
+internal fun typedShortcut(typed: Int, ctrl: Boolean, alt: Boolean): Shortcut? =
+    if (ctrl && !alt && typed == '/'.code) Shortcut.HELP else null
+
+/** The character [event]'s key types with its modifiers but Ctrl and Meta; 0 for none. */
+private fun typedWithCtrl(event: KeyEvent): Int {
+    val native = event.nativeKeyEvent
+    val ctrlMeta = android.view.KeyEvent.META_CTRL_MASK or android.view.KeyEvent.META_META_MASK
+    return runCatching { native.getUnicodeChar(native.metaState and ctrlMeta.inv()) }.getOrDefault(0)
+}
 
 /** How long a first Esc waits for the second one that stops pi. */
 internal const val ESCAPE_STOP_WINDOW_MILLIS = 1500L
@@ -269,6 +312,12 @@ internal class ChatKeyTarget {
     }
 
     /**
+     * A text field with text has focus, the composer or a question's field: text-editing chords
+     * such as Ctrl+Home and Ctrl+End are its own.
+     */
+    val editingText: Boolean get() = (composerFocused && !composerBlank) || (questionFieldFocused && !questionFieldBlank)
+
+    /**
      * Files, Changes, a tool detail or the jobs lie over the chat, hiding the composer: typed
      * keys must not land in it.
      */
@@ -276,6 +325,15 @@ internal class ChatKeyTarget {
 
     /** The slash suggestions under the composer show; [SessionControls] reports it. */
     var slashShown = false
+
+    /** The highlighted slash suggestion, which Tab or Enter runs ([composerKey]). */
+    var slashHighlight by mutableIntStateOf(0)
+
+    /** The slash suggestions' command names in list order; [SessionControls] reports them. */
+    var slashNames: List<String> = emptyList()
+
+    /** Runs the suggestion at an index of [slashNames], as a tap on it does. */
+    var runSlash: (Int) -> Unit = {}
 
     /** Slash suggestions or the prompt prediction show; [closeTransient] closes them. */
     var transientOpen: () -> Boolean = { false }
@@ -396,6 +454,12 @@ internal fun PaneBackHandler(enabled: Boolean = true, onBack: () -> Unit) {
  * and the chats on screen. The screens fill it in; [RemoteNavigation] provides it.
  */
 internal class ShortcutTargets {
+    /** The panes F6 and Ctrl+Alt+Left/Right move between. */
+    val regions = FocusRegions()
+
+    /** The Ctrl+/ list shows, with the keys of this context; null while it is closed. */
+    var help by mutableStateOf<KeyContext?>(null)
+
     /** Ctrl+K asks the session list to focus its search field; the list handles each request once. */
     var searchRequests by mutableIntStateOf(0)
     var searchHandled by mutableIntStateOf(0)

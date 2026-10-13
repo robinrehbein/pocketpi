@@ -55,6 +55,7 @@ internal fun SessionListRow(
             SwipeAction.NONE -> SwipeAction.NONE
         }
     val endToStart = available(swipe.first)
+    val regionChild = rememberRegionChild()
     val startToEnd = available(swipe.second)
     val title = item.title.ifBlank { stringResource(R.string.remote_new_session) }
     val subagentLabel = stringResource(R.string.remote_subagent)
@@ -139,6 +140,8 @@ internal fun SessionListRow(
                                 })
                             }
                         }
+                        .focusRing(RoundedCornerShape(16.dp))
+                        .then(regionChild)
                         .combinedClickable(
                             enabled = enabled,
                             role = Role.Button,

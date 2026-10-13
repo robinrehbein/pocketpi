@@ -47,8 +47,11 @@ internal fun PaneHeader(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             FloatingSurface(Modifier.testTag("${tag}HeaderPill"), shape = CircleShape) {
                 Row(Modifier.padding(start = 8.dp, end = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = if (nested) onBack else onClose, Modifier.size(48.dp).testTag(if (nested) "${tag}Back" else "${tag}Close")) {
-                        Icon(if (nested) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Close, if (nested) backLabel else closeLabel)
+                    // Esc runs the same step as this button (see PaneBackHandler).
+                    ShortcutTooltip(if (nested) backLabel else closeLabel, Shortcut.ESCAPE) {
+                        IconButton(onClick = if (nested) onBack else onClose, Modifier.size(48.dp).testTag(if (nested) "${tag}Back" else "${tag}Close")) {
+                            Icon(if (nested) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Close, if (nested) backLabel else closeLabel)
+                        }
                     }
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.widthIn(max = textWidth)) {
@@ -59,14 +62,18 @@ internal fun PaneHeader(
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     if (nested)
-                        IconButton(onClick = onClose, Modifier.size(48.dp).testTag("${tag}Close")) {
-                            Icon(Icons.Default.Close, closeLabel)
+                        ShortcutTooltip(closeLabel) {
+                            IconButton(onClick = onClose, Modifier.size(48.dp).testTag("${tag}Close")) {
+                                Icon(Icons.Default.Close, closeLabel)
+                            }
                         }
                 }
             }
             FloatingSurface(Modifier.testTag("${tag}ReloadPill"), shape = CircleShape) {
-                IconButton(onClick = onReload, enabled = !busy, modifier = Modifier.size(48.dp).testTag("${tag}Reload")) {
-                    Icon(Icons.Default.Refresh, reloadLabel)
+                ShortcutTooltip(reloadLabel) {
+                    IconButton(onClick = onReload, enabled = !busy, modifier = Modifier.size(48.dp).testTag("${tag}Reload")) {
+                        Icon(Icons.Default.Refresh, reloadLabel)
+                    }
                 }
             }
         }

@@ -49,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -105,6 +106,7 @@ internal fun ChangesPane(state: ChangesState, actions: ChangesActions, modifier:
             )
         }
     val density = LocalDensity.current
+    val focusManager = LocalFocusManager.current
     var headerHeight by remember { mutableStateOf(64.dp) }
     Surface(modifier.fillMaxSize().testTag("changesPane")) {
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
@@ -116,7 +118,9 @@ internal fun ChangesPane(state: ChangesState, actions: ChangesActions, modifier:
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
-                Box(Modifier.weight(1f).fillMaxWidth()) {
+                // Backspace, or Left at the edge, goes from a diff back to the file list.
+                val parent = { actions.onOpenFile(null) }.takeIf { state.file != null }
+                Box(Modifier.weight(1f).fillMaxWidth().parentOnLeft(focusManager, parent)) {
                     val inset = if (prefillFailed) 0.dp else headerHeight
                     val file = state.file
                     if (file == null) ChangesOverview(state, checked, inset)

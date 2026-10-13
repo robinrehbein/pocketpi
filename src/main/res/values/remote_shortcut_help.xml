@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The sections of the shortcut lists: the system's Meta+/ helper, Ctrl+/ and Settings. -->
+    <string name="remote_shortcut_group_navigation">Navigation</string>
+    <string name="remote_shortcut_group_chat">Chat</string>
+    <string name="remote_shortcut_group_composer">Message</string>
+    <string name="remote_shortcut_group_panes">Panes</string>
+    <!-- What the new keys do (Keymap.kt). -->
+    <string name="remote_keymap_next_region">Next pane</string>
+    <string name="remote_keymap_previous_region">Previous pane</string>
+    <string name="remote_keymap_page_up">Scroll the chat up</string>
+    <string name="remote_keymap_page_down">Scroll the chat down</string>
+    <string name="remote_keymap_chat_start">Go to the start of the chat and load older messages</string>
+    <string name="remote_keymap_chat_end">Go to the latest message and follow new ones</string>
+    <!-- Keys of the message field and the file lists. -->
+    <string name="remote_shortcut_enter_sends">Send, unless Enter sends is off in Settings</string>
+    <string name="remote_shortcut_send">Send</string>
+    <string name="remote_shortcut_new_line">Add a line</string>
+    <string name="remote_shortcut_suggestions">Move through the slash commands, or through your earlier messages in an empty field</string>
+    <string name="remote_shortcut_complete">Pick the highlighted command or take the suggested prompt</string>
+    <string name="remote_shortcut_take_prediction">Take the suggested prompt</string>
+    <string name="remote_shortcut_open_file">Open the file, folder or diff</string>
+    <string name="remote_shortcut_parent">Back to the folder or the file list</string>
+    <!-- Key cap names in shortcuts such as Ctrl+Shift+G. -->
+    <string name="remote_key_ctrl">Ctrl</string>
+    <string name="remote_key_alt">Alt</string>
+    <string name="remote_key_shift">Shift</string>
+    <string name="remote_key_enter">Enter</string>
+    <string name="remote_key_escape">Esc</string>
+    <string name="remote_key_tab">Tab</string>
+    <string name="remote_key_backspace">Backspace</string>
+    <string name="remote_key_page_up">Page Up</string>
+    <string name="remote_key_page_down">Page Down</string>
+    <string name="remote_key_home">Home</string>
+    <string name="remote_key_end">End</string>
+    <!-- A button's tooltip: what it does and its shortcut, as "Changes · Ctrl+Shift+G". -->
+    <string name="remote_shortcut_tooltip">%1$s · %2$s</string>
+    <string name="remote_shortcut_help_title">Keyboard shortcuts</string>
+    <string name="remote_shortcut_help_close">Close</string>
+</resources>

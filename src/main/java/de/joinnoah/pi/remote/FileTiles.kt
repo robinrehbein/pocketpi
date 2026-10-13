@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.res.stringResource
@@ -83,6 +84,8 @@ internal fun FileEntryTile(
         }
     )
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val regionChild = rememberRegionChild()
     val fileSize = if (entry.type == FileEntryType.FILE) entry.size?.let { Formatter.formatShortFileSize(context, it) } else null
     val peekAction = stringResource(R.string.remote_files_peek_action)
     var bounds = IntRect.Zero
@@ -102,7 +105,8 @@ internal fun FileEntryTile(
             }
             .testTag(tag)
             .then(
-                if (openable) Modifier.combinedClickable(
+                // Right opens the tile as Enter does, where no tile lies to its right.
+                if (openable) Modifier.focusRing(RoundedCornerShape(18.dp)).then(regionChild).openOnRight(focusManager, onOpen).combinedClickable(
                     onClick = onOpen,
                     onLongClickLabel = peekAction,
                     onLongClick = { onPeek(bounds) },

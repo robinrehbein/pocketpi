@@ -48,6 +48,19 @@ private fun ChatAction.icon(): ImageVector =
         ChatAction.HISTORY -> Icons.AutoMirrored.Filled.List
     }
 
+/** The key that runs the same action, for its tooltip. */
+private fun ChatAction.shortcut(): Shortcut? =
+    when (this) {
+        ChatAction.CHANGES -> Shortcut.CHANGES
+        ChatAction.FILES -> Shortcut.FILES
+        ChatAction.RENAME -> Shortcut.RENAME
+        ChatAction.REFRESH -> Shortcut.REFRESH
+        ChatAction.SETTINGS -> Shortcut.SETTINGS
+        ChatAction.NEW_SESSION -> Shortcut.NEW_SESSION
+        ChatAction.SESSION_SETTINGS -> null
+        ChatAction.HISTORY -> Shortcut.HISTORY
+    }
+
 private fun ChatAction.label(): Int =
     when (this) {
         ChatAction.CHANGES -> R.string.remote_changes_open
@@ -66,26 +79,26 @@ internal fun ChatActionPill(layout: ChatActionLayout, color: Color, onAction: (C
     FloatingSurface(shape = CircleShape, color = color) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             for (action in layout.shown)
-                IconButton(
-                    onClick = { onAction(action) },
-                    modifier = Modifier.size(48.dp).testTag("chatAction_${action.name.lowercase()}"),
-                ) {
-                    Icon(action.icon(), stringResource(action.label()))
+                ShortcutTooltip(stringResource(action.label()), action.shortcut()) {
+                    IconButton(
+                        onClick = { onAction(action) },
+                        modifier = Modifier.size(48.dp).testTag("chatAction_${action.name.lowercase()}"),
+                    ) {
+                        Icon(action.icon(), stringResource(action.label()))
+                    }
                 }
             if (layout.menu.isNotEmpty()) {
                 var open by remember { mutableStateOf(false) }
                 Box {
-                    IconButton(
-                        onClick = { open = !open },
-                        modifier = Modifier.size(48.dp).testTag("chatActionsMore"),
-                    ) {
-                        Icon(
-                            if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                            stringResource(
-                                if (open) R.string.remote_chat_actions_close
-                                else R.string.remote_chat_actions_more
-                            ),
-                        )
+                    val moreLabel =
+                        stringResource(if (open) R.string.remote_chat_actions_close else R.string.remote_chat_actions_more)
+                    ShortcutTooltip(moreLabel) {
+                        IconButton(
+                            onClick = { open = !open },
+                            modifier = Modifier.size(48.dp).testTag("chatActionsMore"),
+                        ) {
+                            Icon(if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore, moreLabel)
+                        }
                     }
                     if (open) {
                         Popup(
