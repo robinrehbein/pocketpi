@@ -293,12 +293,20 @@ class DefaultRemoteRepository(
     private var serviceRestart = false
     /** When the connection was lost, for the offline interval Diagnostics records on ready(). */
     private var offlineSince: Long? = null
-    /** When the latest frame of the current connection arrived, by [now]; 0 before any. */
-    private var lastInboundAt = 0L
+    /**
+     * Counts the frames that arrived, so a read can tell whether any came after it was sent. A
+     * counter, not a clock: a read sent in the same millisecond as a frame must not count it.
+     */
+    private var inboundFrames = 0L
     /** When the app last went to the background, by [now]; null while it never did. */
     private var backgroundedAt: Long? = null
     /** Raises the error card once a quiet reconnect has taken [QUIET_RECONNECT_MILLIS]. */
     private var quietReconnect: Job? = null
+    /**
+     * The Mac whose handshake timed out, which clears [activeHost]: its retry is a reconnect to the
+     * same Mac, not a switch that resets the failure streak and the quiet-reconnect timer.
+     */
+    private var timedOutRoute: String? = null
     private var hostWaitHint: Job? = null
     /** Whether the current attempt reached the relay and the Mac has been silent for the hint delay. */
     private var macSilent = false
@@ -487,7 +495,7 @@ class DefaultRemoteRepository(
                 }
 
                 override fun ready(capabilities: Set<String>) {
-                    lastInboundAt = now()
+                    inboundFrames++
                     cancelHostWaitHint()
                     cancelQuietReconnect()
                     offlineSince?.let {
@@ -554,7 +562,7 @@ class DefaultRemoteRepository(
                 }
 
                 override fun message(payload: JsonObject) {
-                    lastInboundAt = now()
+                    inboundFrames++
                     receive(payload)
                 }
 
@@ -1085,7 +1093,8 @@ class DefaultRemoteRepository(
     private suspend fun connect(host: PairedHost, epoch: Long) {
         if (activeHost?.routeId == host.routeId && state.value.connected) return
         if (activeHost?.routeId != host.routeId || ready?.isActive != true) {
-            val previousRoute = activeHost?.routeId
+            val previousRoute = activeHost?.routeId ?: timedOutRoute
+            timedOutRoute = null
             if (previousRoute != host.routeId && markPendingFollowUpsUncertain(previousRoute)) {
                 persist().await()
             }
@@ -1160,6 +1169,7 @@ class DefaultRemoteRepository(
                 failed(true, R.string.remote_connection_error, cause = FailureCause.HANDSHAKE_TIMEOUT)
                 ready?.cancel()
                 ready = null
+                timedOutRoute = activeHost?.routeId
                 activeHost = null
             }
             throw IllegalStateException("Connection timed out")
@@ -1200,7 +1210,7 @@ class DefaultRemoteRepository(
         var outcome = "failed"
         var ended: Long? = null
         val connection = generation
-        val sentAt = now()
+        val inboundAtSend = inboundFrames
         try {
             // Set before sending: a send that throws may still have reached the host.
             onSent?.invoke()
@@ -1212,7 +1222,7 @@ class DefaultRemoteRepository(
                         // Not a frame since the read went out: the socket is dead, not the host slow.
                         if (
                             type in LIVENESS_READS &&
-                                lastInboundAt < sentAt &&
+                                inboundFrames == inboundAtSend &&
                                 state.value.connected &&
                                 connection == generation
                         )
@@ -1684,6 +1694,9 @@ class DefaultRemoteRepository(
             current.snapshot(data, older)
             current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
             publishTimeline()
+            // The chat on screen is read again, also when the activation after a reconnect failed
+            // to read it and a later refresh did.
+            if (!older && state.value.connected) staleReplaced()
             resyncAfterUnknownEvents(current)
         } finally {
             if (epoch == selectionEpoch) resynchronizing = false
@@ -2129,9 +2142,11 @@ class DefaultRemoteRepository(
         val projectId = source.projectId ?: return source
         val sourceId = source.sessionId ?: return source
         val current = state.value
-        // Older hosts close the connection on unknown commands.
+        // Older hosts close the connection on unknown commands. A quiet reconnect keeps the
+        // capabilities on screen, and cancelling the selection would stop its activation.
         if (
-            capability !in current.capabilities ||
+            !current.connected ||
+                capability !in current.capabilities ||
                 current.selection != source ||
                 current.session?.optionalText("id") != sourceId
         )
@@ -2288,6 +2303,7 @@ class DefaultRemoteRepository(
         // cancelPairing() or a newer pair() during the write gave this pairing up already.
         if (!deferred.isActive || pairing !== deferred) return null
         activeHost = null
+        timedOutRoute = null
         cancelQuietReconnect()
         update {
             it.copy(loading = true, connected = false, connection = R.string.remote_connecting, pairingDeadline = null)
@@ -2356,6 +2372,7 @@ class DefaultRemoteRepository(
         pairing?.cancel()
         if (markPendingFollowUpsUncertain(activeHost?.routeId)) persist()
         activeHost = null
+        timedOutRoute = null
         timeline = null
         stopToolOutput()
         update { RemoteState(hosts = it.hosts) }
@@ -2369,6 +2386,7 @@ class DefaultRemoteRepository(
         ) clearNavigationCache()
         if (activeHost?.routeId == routeId) reconnectEnabled = false
         if (activeHost?.routeId == routeId) disconnect()
+        if (timedOutRoute == routeId) timedOutRoute = null
         attachmentBytes.clear()
         SentImageThumbnails.clear()
         projectImageBytes.clear()
@@ -3910,7 +3928,8 @@ class DefaultRemoteRepository(
 
     override fun resumeChild(message: String) {
         val current = state.value
-        if (offersChildResume(current)) {
+        // Offline, the capabilities kept by a quiet reconnect do not make the resume possible.
+        if (current.connected && offersChildResume(current)) {
             val refusal =
                 when {
                     current.attachments.isNotEmpty() -> R.string.remote_child_attachments_unsupported
@@ -4077,9 +4096,13 @@ class DefaultRemoteRepository(
         fun failure(reason: ToolOutputFailure) = ToolOutputDownload(
             toolCallId, 0, null, null, truncated = false, isError = false, failure = reason,
         )
+        // A quiet reconnect keeps the capabilities on screen: offline is no missing capability.
+        if (sessionId != null && !current.connected) {
+            update { it.copy(toolOutput = failure(ToolOutputFailure.OFFLINE)) }
+            return
+        }
         if (
             sessionId == null ||
-                !current.connected ||
                 TOOL_OUTPUT_CAPABILITY !in current.capabilities ||
                 TOOL_OUTPUT_CAPABILITY in current.unavailableCapabilities
         ) {
