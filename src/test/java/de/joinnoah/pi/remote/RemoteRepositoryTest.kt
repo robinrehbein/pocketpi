@@ -7171,9 +7171,25 @@ class RemoteRepositoryTest {
                 jitter = { 0.5 },
             )
         assertFalse(repository.state.value.hostsLoaded)
+        assertFalse(repository.state.value.hostsUnreadable)
         runCurrent()
         assertFalse(repository.state.value.hostsLoaded)
+        // The Hosts screen says the read failed rather than loading for good.
+        assertTrue(repository.state.value.hostsUnreadable)
         assertEquals(R.string.remote_storage_error, repository.state.value.error)
+        repository.disconnect()
+        assertTrue(repository.state.value.hostsUnreadable)
+    }
+
+    @Test
+    fun aDisconnectKeepsTheHostsLoaded() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        runCurrent()
+        assertTrue(repository.state.value.hostsLoaded)
+        repository.disconnect()
+        assertTrue(repository.state.value.hostsLoaded)
+        assertEquals(listOf(host), repository.state.value.hosts)
     }
 
     @Test
@@ -7277,5 +7293,161 @@ class RemoteRepositoryTest {
         assertEquals(RemoteSelection("host"), opening.await())
         // The activation got past initialization before the directory IO ran.
         assertEquals(1, connectsAtCleanup)
+    }
+
+    /**
+     * A repository whose saved navigation loads on a real IO thread and waits for [gate], like a
+     * large snapshot that decrypts slowly; the test closes [io].
+     */
+    private fun TestScope.gatedRepository(
+        transport: Transport,
+        gate: java.util.concurrent.CountDownLatch,
+        snapshots: Map<String, NavigationSnapshot>,
+        io: CoroutineDispatcher,
+    ): DefaultRemoteRepository {
+        val storage = object : NavigationSnapshotStorage {
+            override fun load(): Map<String, NavigationSnapshot> {
+                gate.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                return snapshots
+            }
+
+            override fun save(snapshots: Map<String, NavigationSnapshot>) = Unit
+        }
+        return DefaultRemoteRepository(
+            Pairings(listOf(host)),
+            Drafts(),
+            transport,
+            backgroundScope,
+            io,
+            now = { testScheduler.currentTime },
+            navigationStorage = storage,
+            jitter = { 0.5 },
+        )
+    }
+
+    @Test
+    fun aUserOpenOfAProjectAfterItsMacReadsTheSavedSessionListAgain() = runTest {
+        val transport = Transport().also { configureNamed(it, sessions = listOf(session(), session("fresh"))) }
+        val saved = savedHost(projectId = "project", sessions = listOf(session()))
+        val repository = repository(transport, navigationStorage = SavedNavigation(saved))
+        runCurrent()
+        assertEquals(RemoteSelection("host"), repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN))
+        // The quick chats' reads of each project are done.
+        runCurrent()
+        val lists = transport.sent.count { it.text("type") == "sessions.list" }
+        val project = RemoteSelection("host", "project")
+        assertEquals(project, repository.activate(project, ActivationMode.USER_OPEN))
+        // The saved list showed the Mac's projects first; this connection never read it.
+        assertTrue(transport.sent.count { it.text("type") == "sessions.list" } > lists)
+        assertEquals(listOf("session", "fresh"), repository.state.value.sessions.map { it.text("id") })
+    }
+
+    @Test
+    fun aListReadOnTheConnectionIsReusedOnTheNextOpen() = runTest {
+        val transport = Transport().also { configureNamed(it) }
+        val repository = repository(transport, navigationStorage = SavedNavigation(savedHost()))
+        runCurrent()
+        val project = RemoteSelection("host", "project")
+        assertEquals(project, repository.activate(project, ActivationMode.USER_OPEN))
+        assertEquals(RemoteSelection("host"), repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN))
+        val projects = transport.sent.count { it.text("type") == "projects.list" }
+        val sessions = transport.sent.count { it.text("type") == "sessions.list" }
+        assertEquals(project, repository.activate(project, ActivationMode.USER_OPEN))
+        assertEquals(projects, transport.sent.count { it.text("type") == "projects.list" })
+        assertEquals(sessions, transport.sent.count { it.text("type") == "sessions.list" })
+    }
+
+    @Test
+    fun aProjectOpenedAfterAnEarlyRestoreReadsItsSessionsAgain() = runTest {
+        val transport = Transport().also { configureNamed(it, sessions = listOf(session(), session("fresh"))) }
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val io = java.util.concurrent.Executors.newFixedThreadPool(2).asCoroutineDispatcher()
+        try {
+            val saved = savedHost(projectId = "project", sessions = listOf(session()))
+            val repository = gatedRepository(transport, gate, saved, io)
+            val restoring = async { repository.activate(RemoteSelection("host"), ActivationMode.RESTORE) }
+            runUntil { transport.connects == 1 }
+            gate.countDown()
+            runUntil { restoring.isCompleted }
+            assertEquals(RemoteSelection("host"), restoring.await())
+            runCurrent()
+            val lists = transport.sent.count { it.text("type") == "sessions.list" }
+
+            val project = RemoteSelection("host", "project")
+            val opening = async { repository.activate(project, ActivationMode.USER_OPEN) }
+            runUntil { opening.isCompleted }
+            assertEquals(project, opening.await())
+            assertTrue(transport.sent.count { it.text("type") == "sessions.list" } > lists)
+            assertEquals(listOf("session", "fresh"), repository.state.value.sessions.map { it.text("id") })
+            assertEquals(1, transport.connects)
+        } finally {
+            gate.countDown()
+            io.close()
+        }
+    }
+
+    @Test
+    fun anEarlyConnectionThatFailsLeavesTheReconnectToTheRestore() = runTest {
+        val transport = Transport().also {
+            configureNamed(it)
+            it.failureOnConnect = R.string.remote_connection_error
+        }
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val io = java.util.concurrent.Executors.newFixedThreadPool(2).asCoroutineDispatcher()
+        try {
+            val repository = gatedRepository(transport, gate, savedHost(), io)
+            repository.setNetwork("wifi", true)
+            repository.setForeground(true)
+            val stack = mutableListOf<androidx.navigation3.runtime.NavKey>(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"))
+            val navigator = RemoteNavigator(repository, stack, backgroundScope)
+            navigator.restore()
+            runUntil { transport.connects == 1 }
+            transport.failureOnConnect = null
+            // Longer than any backoff, while the saved navigation still loads.
+            advanceTimeBy(3_000)
+            runCurrent()
+            assertEquals(1, transport.connects)
+            assertNull(repository.state.value.reconnectAt)
+            assertEquals(RemoteSelection(), repository.state.value.selection)
+
+            gate.countDown()
+            runUntil { repository.state.value.selection == RemoteSelection("host") && !repository.state.value.loading }
+            advanceTimeBy(3_000)
+            runCurrent()
+            assertEquals(RemoteSelection("host"), repository.state.value.selection)
+            assertTrue(repository.state.value.connected)
+            assertEquals(2, transport.connects)
+            navigator.reconcile(repository.state.value)
+            assertEquals(RemoteNavKey.Projects("host"), stack.last())
+        } finally {
+            gate.countDown()
+            io.close()
+        }
+    }
+
+    @Test
+    fun aRestoreDoesNotRetryADeviceItsEarlyConnectionFoundPaused() = runTest {
+        val transport = Transport().also {
+            configureNamed(it)
+            it.failureOnConnect = R.string.remote_device_paused
+        }
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val io = java.util.concurrent.Executors.newFixedThreadPool(2).asCoroutineDispatcher()
+        try {
+            val repository = gatedRepository(transport, gate, savedHost(), io)
+            val restoring = async { repository.activate(RemoteSelection("host"), ActivationMode.RESTORE) }
+            runUntil { transport.connects == 1 }
+            assertEquals("host", repository.state.value.deniedRouteId)
+            gate.countDown()
+            runUntil { restoring.isCompleted }
+            restoring.await()
+            runCurrent()
+            assertEquals(1, transport.connects)
+            assertEquals("host", repository.state.value.deniedRouteId)
+            assertEquals(R.string.remote_device_paused, repository.state.value.error)
+        } finally {
+            gate.countDown()
+            io.close()
+        }
     }
 }

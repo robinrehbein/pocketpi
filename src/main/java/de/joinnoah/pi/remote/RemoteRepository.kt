@@ -64,6 +64,8 @@ data class RemoteState(
      * false when the read failed.
      */
     val hostsLoaded: Boolean = false,
+    /** Reading [hosts] from storage failed: no list is coming, though [hostsLoaded] stays false. */
+    val hostsUnreadable: Boolean = false,
     val host: PairedHost? = null,
     val selection: RemoteSelection = RemoteSelection(),
     val loading: Boolean = false,

@@ -257,6 +257,18 @@ class ChatNavigationTest {
 
     @Test
     @Config(qualifiers = "w411dp-h891dp")
+    fun theHostsScreenSaysWhenThePairingsCouldNotBeRead() {
+        val repository = NavigationFakeRepository()
+        repository.state.value = RemoteState(hostsUnreadable = true)
+        compose.setContent { RemoteApp(repository, FakeSettingsRepository(), false, {}) }
+        compose.waitForIdle()
+        compose.onNodeWithText(context.getString(R.string.remote_storage_error)).assertExists()
+        compose.onNodeWithContentDescription(context.getString(R.string.remote_hosts_loading)).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.remote_welcome)).assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
     fun theProjectsScreenShowsASkeletonWhileItLoadsAndTheEmptyTextOnlyOnceTheMacAnswered() {
         val repository = NavigationFakeRepository()
         repository.state.value = RemoteState(hosts = listOf(coldHost), hostsLoaded = true)
@@ -288,6 +300,7 @@ class ChatNavigationTest {
         compose.waitForIdle()
         compose.onNodeWithContentDescription(skeleton).assertDoesNotExist()
         compose.onNodeWithText(empty).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.remote_projects_unread)).assertExists()
 
         repository.state.value = repository.state.value.copy(connected = true, connection = R.string.remote_connected)
         compose.waitForIdle()

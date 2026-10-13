@@ -193,7 +193,7 @@ internal fun RemoteScreen(
     // The first list the user came for is on screen: the time to full display that startup
     // benchmarks measure. A list from the caches is not it until the Mac confirms it.
     when (key) {
-        RemoteNavKey.Hosts -> ReportDrawnWhen { state.hostsLoaded || state.hosts.isNotEmpty() }
+        RemoteNavKey.Hosts -> ReportDrawnWhen { state.hostsLoaded || state.hostsUnreadable || state.hosts.isNotEmpty() }
         is RemoteNavKey.Projects, is RemoteNavKey.Sessions -> ReportDrawnWhen { state.connected && !state.loading }
         else -> Unit
     }
@@ -1873,8 +1873,11 @@ internal fun RemoteScreen(
                     is RemoteNavKey.Providers -> Unit
                     RemoteNavKey.Hosts -> {
                         // Until the pairings are read, no list is no news: the first-run text
-                        // would flash before the Macs appear.
-                        if (state.hosts.isEmpty() && !state.hostsLoaded) {
+                        // would flash before the Macs appear. A read that failed says so instead.
+                        if (state.hosts.isEmpty() && state.hostsUnreadable) {
+                            item { Text(stringResource(R.string.remote_storage_error)) }
+                            item { Text(stringResource(R.string.remote_pair_help)) }
+                        } else if (state.hosts.isEmpty() && !state.hostsLoaded) {
                             item(key = "hosts_loading") { HostListSkeleton() }
                         } else if (state.hosts.isEmpty()) {
                             item {
@@ -1900,6 +1903,7 @@ internal fun RemoteScreen(
                             // Only a list read on the live connection says there are no projects.
                             if (state.loading) item(key = "projects_loading") { ProjectListSkeleton() }
                             else if (state.connected) item { Text(stringResource(R.string.remote_empty_projects)) }
+                            else item { Text(stringResource(R.string.remote_projects_unread)) }
                         } else {
                             item(key = "shared_projects_heading") {
                                 Text(
