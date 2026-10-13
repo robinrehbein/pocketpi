@@ -55,7 +55,7 @@ class RemoteApplication : Application() {
             DefaultRemoteRepository(
                 PairingStore(this),
                 DraftStore(this),
-                SecureRemoteTransport(scope),
+                remoteTransport(this, scope),
                 scope,
                 navigationStorage = NavigationSnapshotStore(this),
                 attachmentStorage = attachments,
