@@ -58,6 +58,12 @@ enum class ActivationMode {
 
 data class RemoteState(
     val hosts: List<PairedHost> = emptyList(),
+    /**
+     * [hosts] were read from storage. Until then an empty list says nothing, so screens show a
+     * placeholder instead of the first-run text, and nothing prunes state of Macs it lacks. Stays
+     * false when the read failed.
+     */
+    val hostsLoaded: Boolean = false,
     val host: PairedHost? = null,
     val selection: RemoteSelection = RemoteSelection(),
     val loading: Boolean = false,

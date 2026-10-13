@@ -1,0 +1,5 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <string name="remote_hosts_loading">Loading paired computers</string>
+    <string name="remote_projects_loading">Loading projects</string>
+</resources>
