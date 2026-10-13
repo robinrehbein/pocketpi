@@ -54,6 +54,17 @@ internal class FakeRelayTransport(
      */
     val inFlight: StateFlow<Int> get() = _inFlight
 
+    /**
+     * Which reads the app got answers to, and when: [last] maps `projects.list`,
+     * `sessions.list:<projectId>` and `session.snapshot:<sessionId>` (newest page only) to the
+     * [sequence] number of the reply that last answered it. Only successful replies delivered on
+     * the current connection count. [FlowFreshness] compares them with the sequence at its mark.
+     */
+    class Replies(val sequence: Long, val last: Map<String, Long>)
+
+    private val _replies = MutableStateFlow(Replies(0, emptyMap()))
+    val replies: StateFlow<Replies> get() = _replies
+
     suspend fun fixture(): RelayFixture = fixture.await()
 
     private class Transcript(var messages: List<JsonObject>, var revision: Long, var status: String)
@@ -118,15 +129,19 @@ internal class FakeRelayTransport(
             try {
                 val fixture = fixture()
                 val latency = latency(fixture)
-                val text = withContext(host) {
+                val (text, read) = withContext(host) {
                     try {
-                        reply(fixture, payload)
+                        val reply = reply(fixture, payload)
+                        reply.toString() to readKey(payload).takeIf { reply.getValue("ok").jsonPrimitive.boolean }
                     } catch (_: Exception) {
-                        failure(payload.text("requestId"), "invalid_request")
-                    }.toString()
+                        failure(payload.text("requestId"), "invalid_request").toString() to null
+                    }
                 }
                 delay((latency - (now() - started)).coerceAtLeast(0))
-                if (epoch == generation) deliver(text)
+                if (epoch == generation) {
+                    deliver(text)
+                    if (read != null && epoch == generation) answered(read)
+                }
             } finally {
                 _inFlight.update { it - 1 }
             }
@@ -149,10 +164,11 @@ internal class FakeRelayTransport(
     }
 
     /**
-     * Streams the fixture's scripted answer into [sessionId]: `session.status` running, one
-     * `message.upsert` per chunk every [StreamScript.intervalMs], the completed answer, a separate
-     * completion marker and `session.status` idle, with consecutive revisions. A later snapshot of
-     * the session includes the streamed messages.
+     * Streams the fixture's scripted answer ([StreamScript]) into [sessionId]: `session.status`
+     * running, one `message.upsert` per chunk every [StreamScript.intervalMs] into a first answer,
+     * that answer completed, an edit tool call and its result, the remaining chunks into a second
+     * answer, that answer completed, a separate completion marker and `session.status` idle, with
+     * consecutive revisions. A later snapshot of the session includes the streamed messages.
      *
      * Unlike request replies, streamed events skip the latency profile and arrive at once. A real
      * relay delivers host frames in order, but here a `session.snapshot` answered at revision R
@@ -167,21 +183,46 @@ internal class FakeRelayTransport(
             if (connected == null || fixture.session(sessionId) == null) return@launch
             val script = fixture.stream
             val id = "$sessionId-stream-${now()}"
-            var text = ""
             suspend fun event(kind: String, vararg fields: Pair<String, Any?>) {
                 if (epoch != generation) throw CancellationException("Connection closed")
                 deliver(withContext(host) { event(fixture, sessionId, kind, *fields).toString() })
             }
-            event("session.status", "status" to "running")
-            repeat(script.chunks) { index ->
-                delay(script.intervalMs)
-                text += script.chunk(index)
-                event("message.upsert", "message" to message(id, "assistant", text, "streaming"))
+            suspend fun answer(messageId: String, chunks: IntRange) {
+                if (chunks.isEmpty()) return
+                var text = ""
+                for (index in chunks) {
+                    delay(script.intervalMs)
+                    text += script.chunk(index)
+                    event("message.upsert", "message" to message(messageId, "assistant", text, "streaming"))
+                }
+                event("message.upsert", "message" to message(messageId, "assistant", text, "complete"))
             }
-            event("message.upsert", "message" to message(id, "assistant", text, "complete"))
+            event("session.status", "status" to "running")
+            answer("$id-answer-0", 0 until script.toolAt)
+            // The template turn's edit tool call and its result, as the agent edits a file.
+            val tool = withContext(host) { fixture.turn(id, "stream").filter { "parts" in it || it.text("role") == "tool" } }
+            for (message in tool) {
+                delay(script.intervalMs)
+                event("message.upsert", "message" to message)
+            }
+            answer("$id-answer-1", script.toolAt until script.chunks)
             event("message.upsert", "message" to message("$id-complete", "assistant", script.complete, "complete"))
             event("session.status", "status" to "idle")
         }.also { streaming = it }
+    }
+
+    /** The [Replies] key of a read the app makes to show a screen, or null for anything else. */
+    private fun readKey(request: JsonObject): String? =
+        when (request.text("type")) {
+            "projects.list" -> "projects.list"
+            "sessions.list" -> "sessions.list:" + request.text("projectId")
+            "session.snapshot" ->
+                ("session.snapshot:" + request.text("sessionId")).takeIf { request.optionalText("cursor") == null }
+            else -> null
+        }
+
+    private fun answered(read: String) {
+        _replies.update { Replies(it.sequence + 1, it.last + (read to it.sequence + 1)) }
     }
 
     private fun deliver(text: String) {
