@@ -203,7 +203,12 @@ internal class NavigationFakeRepository : RemoteRepository {
         return create(routeId, projectId)
     }
 
-    override suspend fun openNotification(routeId: String, sessionId: String) = notificationLookup()
+    val notificationRequests = mutableListOf<Pair<String, String>>()
+
+    override suspend fun openNotification(routeId: String, sessionId: String): RemoteSelection? {
+        notificationRequests += routeId to sessionId
+        return notificationLookup()
+    }
 
     var pairResult: RemoteSelection? = null
 

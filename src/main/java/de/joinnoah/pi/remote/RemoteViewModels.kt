@@ -94,7 +94,8 @@ internal open class DestinationViewModel(
 
     fun older() = active(repository::older)
 
-    fun draft(text: String) = active { repository.draft(text) }
+    // The draft and its quote are local to the chat, so they are taken while it loads too.
+    fun draft(text: String) = editing { repository.draft(text) }
 
     /**
      * A composer's write for this destination's chat; see [RemoteRepository.draft]. Unlike [draft]
@@ -106,7 +107,7 @@ internal open class DestinationViewModel(
         if (key is RemoteNavKey.Chat && selection == key.selection()) repository.draft(selection, text)
     }
 
-    fun quote(messageId: String?) = active { repository.quote(messageId) }
+    fun quote(messageId: String?) = editing { repository.quote(messageId) }
 
     fun refreshConfiguration() = active(repository::refreshConfiguration)
 

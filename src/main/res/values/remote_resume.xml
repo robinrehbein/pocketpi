@@ -1,0 +1,5 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <string name="remote_checking_connection">Checking connection…</string>
+    <string name="remote_waiting_for_network">Waiting for network…</string>
+</resources>

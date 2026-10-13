@@ -272,13 +272,14 @@ internal fun RemoteScreen(
     // The composer's text lives here rather than in the state, so typing recomposes only the
     // composer; this screen's own draft changes go through it or flush it first. It belongs to
     // this destination's chat from the start, so text typed before a load or a navigation lands
-    // there; while the chat loads it takes no edits.
+    // there. It takes edits once the chat is selected and its stored draft shown, also while the
+    // chat loads (a reconnect, a resume); before that it takes none.
     val composerDraft =
         if (chatKey != null)
             rememberComposerDraft(
                 chatKey.selection(),
                 state.draft,
-                editable = !state.loading && state.selection == chatKey.selection(),
+                editable = state.selection == chatKey.selection(),
                 push = model::draft,
             )
         else null
@@ -1968,6 +1969,7 @@ internal fun RemoteScreen(
                             Spacer(Modifier.width(ButtonDefaults.IconSpacing))
                             Text(stringResource(R.string.remote_settings_privacy_open))
                         }
+                        AppLockSettingRow()
                     }
                 }
                 item {

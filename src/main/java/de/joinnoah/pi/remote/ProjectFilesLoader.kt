@@ -241,8 +241,11 @@ internal class ProjectFilesLoader(
         files()?.let { files -> write(files.sessionId) { it.copy(peek = null) } }
     }
 
-    /** Opens the browser at the session folder. */
-    fun open() {
+    /**
+     * Opens the browser at the session folder, or at its folder [path] with [file] open: the
+     * browser as a return to the session left it.
+     */
+    fun open(path: String = "", file: String? = null) {
         stopList()
         stopFile()
         stopPreviews()
@@ -255,8 +258,21 @@ internal class ProjectFilesLoader(
                 !state.connected -> FilesFailure.OFFLINE
                 else -> null
             }
-        update { it.copy(files = FilesState(sessionId, loading = failure == null, failure = failure)) }
-        if (failure == null) list(sessionId, "", after = null)
+        val opened = file?.takeIf { failure == null }
+        update {
+            it.copy(
+                files = FilesState(
+                    sessionId,
+                    path = path,
+                    loading = failure == null,
+                    failure = failure,
+                    file = opened?.let(::OpenFile),
+                )
+            )
+        }
+        if (failure != null) return
+        list(sessionId, path, after = null)
+        if (opened != null) read(sessionId, opened, 0, null, reopen = false)
     }
 
     fun close() {
@@ -326,6 +342,95 @@ internal class ProjectFilesLoader(
         write(files.sessionId) { it.copy(previews = emptyMap(), peek = null) }
         val file = files.file
         if (file != null) openFile(file.path) else openDir(files.path)
+    }
+
+    /**
+     * Reads the shown file or folder again in place, as after a reconnect: what is shown stays
+     * until the reply replaces it, and a failure leaves it. An open editor keeps its own text and
+     * version; a file or folder with nothing shown yet loads again.
+     */
+    fun refresh() {
+        val files = files() ?: return
+        if (files.editor != null || !current().connected) return
+        stopPreviews()
+        // A preview or peek still loading lost its request; loaded ones stay.
+        write(files.sessionId) {
+            it.copy(
+                previews = it.previews.filterValues { preview -> !preview.loading && preview.failure == null },
+                peek = it.peek?.takeIf { peek -> !peek.loading && peek.failure == null },
+            )
+        }
+        val file = files.file
+        when {
+            file != null && file.version != null && !file.loading && file.failure == null ->
+                reread(files.sessionId, file)
+            file != null -> openFile(file.path)
+            files.listing != null && !files.loading && files.failure == null -> relist(files.sessionId, files.path)
+            else -> openDir(files.path)
+        }
+        // The shown file's folder is listed again too, for Back.
+        if (file != null && files.listing != null && files.failure == null) relist(files.sessionId, files.path)
+    }
+
+    /** The open file's first page again: the same version keeps every page shown. */
+    private fun reread(sessionId: String, shown: OpenFile) {
+        stopFile()
+        val requestVersion = ++fileVersion
+        fun active() =
+            requestVersion == fileVersion &&
+                files()?.let { it.sessionId == sessionId && it.file?.path == shown.path && it.editor == null } == true
+        writeFile(sessionId, shown.path) { it.copy(moreLoading = false) }
+        fileJob = scope.launch {
+            try {
+                val chunk = source.filesRead(sessionId, shown.path, 0, null)
+                if (!active() || chunk.version == shown.version) return@launch
+                writeFile(sessionId, shown.path) {
+                    OpenFile(
+                        shown.path,
+                        loading = false,
+                        version = chunk.version,
+                        size = chunk.size,
+                        content = chunk.content,
+                        binary = chunk.binary,
+                        tooLarge = chunk.tooLarge,
+                        nextOffset = chunk.nextOffset,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Diagnostics.caught("files.reread", e)
+            }
+        }
+    }
+
+    /** The shown folder's first page again; previews of entries listed the same stay. */
+    private fun relist(sessionId: String, path: String) {
+        stopList()
+        val version = ++listVersion
+        fun active() = version == listVersion && files()?.let { it.sessionId == sessionId && it.path == path } == true
+        write(sessionId) { it.copy(moreLoading = false, moreFailure = null) }
+        listJob = scope.launch {
+            try {
+                val page = source.filesList(sessionId, path, null)
+                if (!active()) return@launch
+                write(sessionId) { files ->
+                    val before = files.listing?.entries.orEmpty().associateBy { it.name }
+                    val listed = page.entries.associateBy { it.name }
+                    files.copy(
+                        listing = page,
+                        previews = files.previews.filterKeys { preview ->
+                            val name = preview.substringAfterLast('/')
+                            listed[name] != null && listed[name] == before[name]
+                        },
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Diagnostics.caught("files.relist", e)
+            }
+        }
     }
 
     /** The next page of the open file, or of the shown folder. */

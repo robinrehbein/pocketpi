@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The optional app lock asks through BiometricPrompt; a normal permission, granted at install. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <queries>
@@ -36,6 +38,13 @@
                 <data android:scheme="pocketpi" android:host="session" />
             </intent-filter>
         </activity>
+        <!--
+            The app's own launches (notifications, the widget, launcher shortcuts) go through this
+            alias. It is not exported, so other apps cannot start it, and MainActivity reads a
+            session from intent extras only when it was started through it (LaunchIntents).
+        -->
+        <activity-alias android:name=".InternalLaunch" android:targetActivity=".MainActivity"
+            android:exported="false" />
         <!-- Its Compose content is always light, so its window stays light too. -->
         <activity android:name=".WatchPairingActivity" android:exported="true"
             android:theme="@android:style/Theme.Material.Light.NoActionBar">
@@ -55,6 +64,10 @@
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/export_file_paths" />
         </provider>
         <receiver android:name=".NotificationActionReceiver" android:exported="false" />
+        <!-- Moves shortcuts and the widget to the new version's launch intents right after an update. -->
+        <receiver android:name=".PackageReplacedReceiver" android:exported="false">
+            <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
+        </receiver>
         <receiver android:name=".PocketPiWidgetReceiver" android:exported="true"
             android:label="@string/remote_widget_name">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>

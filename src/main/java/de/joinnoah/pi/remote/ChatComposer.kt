@@ -58,8 +58,8 @@ private const val MAX_DRAFT_BYTES = 128 * 1024
  * pause ([pushPending]) or at once on [flush]: before a send, on stop and when the chat changes.
  * Draft changes made elsewhere (a quote prompt, a prefill, a restored uncertain draft, the clear
  * after a send) come back through [sync] and replace the text, unless the user typed something
- * the repository has not seen yet: that typing wins, and the next push carries it. While the chat
- * loads the text is not [editable], so typing never lands on top of a draft not shown yet.
+ * the repository has not seen yet: that typing wins, and the next push carries it. Until the chat
+ * is selected the text is not [editable], so typing never lands on top of a draft not shown yet.
  */
 @Stable
 internal class ComposerDraft(
@@ -80,7 +80,7 @@ internal class ComposerDraft(
 
     val text: String get() = value.text
 
-    /** False while the chat loads: edits are refused, so typing never lands on a draft not shown yet. */
+    /** False until the chat is selected: edits are refused, so typing never lands on a draft not shown yet. */
     var editable = true
 
     /** The repository's draft as [sync] last saw it. */
@@ -178,7 +178,7 @@ internal class ComposerDraft(
  * The composer text of [selection], starting from the repository's [draft]. It follows later
  * changes of [draft], pushes typing through [push] after [COMPOSER_DRAFT_DEBOUNCE_MILLIS], and
  * flushes on stop, when [selection] changes or the composer leaves the screen, and when it becomes
- * [editable] again after the chat loaded. [push] must file a late write under the selection it
+ * [editable] once the chat is selected. [push] must file a late write under the selection it
  * names, also once that chat is no longer shown (see [RemoteRepository.draft]).
  */
 @Composable

@@ -122,6 +122,28 @@ class RemoteViewModelsTest {
     }
 
     @Test
+    fun `typing and quoting reach the repository while the chat loads`() = runTest {
+        val repository = NavigationFakeRepository()
+        val selection = RemoteSelection("host", "project", "first")
+        val model = ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "first"), FakeSettingsRepository())
+        repository.state.value = RemoteState(selection = selection, loading = true)
+        model.draft("typed while loading")
+        model.quote("message")
+        assertEquals("typed while loading", repository.state.value.draft)
+        assertEquals(listOf("message"), repository.quotes)
+        // A host action still waits for the load.
+        model.prompt()
+        assertEquals(0, repository.prompts)
+
+        // Another chat loading is not this one: nothing reaches its draft.
+        repository.state.value = RemoteState(selection = selection.copy(sessionId = "second"), draft = "second", loading = true)
+        model.draft("stale")
+        model.quote("other")
+        assertEquals("second", repository.state.value.draft)
+        assertEquals(listOf("message"), repository.quotes)
+    }
+
+    @Test
     fun `non chat destination never exposes draft or transcript`() = runTest {
         val repository = NavigationFakeRepository()
         repository.state.value =
