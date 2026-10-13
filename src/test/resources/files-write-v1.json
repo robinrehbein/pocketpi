@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "session.files.write.v1 wire examples. The app must see session.files.write.v1 in the capabilities.v2 projects.list route before sending session.files.write. The host advertises it only when started with PI_REMOTE_FILE_WRITES=1. baseVersion is the version of the last read or write; a different current version is answered with error code conflict. Paths the parser accepts may still be answered invalid_path by the host (malformed, denied, ignored, symlink, hard link, special or binary file).",
+  "note": "session.files.write.v1 wire examples. The app must see session.files.write.v1 in the capabilities.v2 projects.list route before sending session.files.write. The host advertises it only while its file-writes setting is on (the default). baseVersion is the version of the last read or write; a different current version is answered with error code conflict. Paths the parser accepts may still be answered invalid_path by the host (malformed, denied, ignored, symlink, hard link, special or binary file).",
   "valid": [
     {
       "name": "write-command",
