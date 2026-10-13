@@ -148,6 +148,13 @@ data class FileEditor(
     val cursor: Int = 0,
     /** The last save the host never answered; a retry of the same text resends its request ID. */
     val unconfirmed: PendingWrite? = null,
+    /**
+     * Earlier unanswered saves of other text, oldest first, that a newer save replaced as
+     * [unconfirmed]. When the newer save meets a conflict and the host holds one of these, the
+     * host's file is this editor's own write: it becomes the new base and the newer text is sent
+     * again once.
+     */
+    val superseded: List<PendingWrite> = emptyList(),
     /** What waits for the user to discard the unsaved edit; the editor asks first. */
     val leaveRequest: EditorLeave? = null,
     val buffer: EditorBuffer = EditorBuffer(),

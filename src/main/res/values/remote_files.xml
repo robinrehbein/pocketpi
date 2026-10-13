@@ -91,4 +91,5 @@
     <string name="remote_files_save_failed_invalid_path">This file cannot be saved from pi Remote.</string>
     <string name="remote_files_save_failed_too_large">The file is now over 192 KB, too large to save from pi Remote. Shorten it, or make the change on the computer.</string>
     <string name="remote_files_save_failed">The file could not be saved. Your edit is kept.</string>
+    <string name="remote_files_editor_parked_dropped">An unsaved edit in another session was dropped. Only the four most recent unsaved edits are kept.</string>
 </resources>

@@ -944,23 +944,68 @@ class TwoPaneNavigationTest {
     fun anOpenEditorKeepsTheShortcutKeys() {
         render(hardwareKeyboard = true)
         openEditor("hello\n")
+        // With focus in the editor, its keys are its own.
         val count = repository.activations.size
-        ctrl("composerField", Key.DirectionDown)
+        ctrl("filesEditorText", Key.DirectionDown)
         assertEquals(count, repository.activations.size)
-        ctrl("composerField", Key.N)
-        assertEquals(0, repository.createdSessions)
-        ctrl("composerField", Key.F)
+        // No second tap: on a focused field it opens the cursor handle's popup.
+        compose.onNodeWithTag("filesEditorText").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.F) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("filesEditorFindQuery").assertIsDisplayed()
         compose.onNodeWithTag("sessionSearch").assertIsNotFocused()
-        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.AltLeft) { pressKey(Key.DirectionDown) } }
+        compose.onNodeWithTag("filesEditorFindQuery").performKeyInput { withKeyDown(Key.AltLeft) { pressKey(Key.DirectionDown) } }
         compose.waitForIdle()
         assertEquals(count, repository.activations.size)
-        // Without the editor the same keys work again.
-        repository.state.value = repository.state.value.copy(files = null)
-        compose.waitForIdle()
-        ctrl("composerField", Key.DirectionDown)
+        // With focus elsewhere (the session list; the editor covers the chat here), the layout's
+        // shortcuts work while the editor stays open.
+        ctrl("sessionSearch", Key.DirectionDown)
         assertEquals(RemoteSelection("host", "project", "s2"), repository.activations.last().first)
-        ctrl("composerField", Key.N)
+        ctrl("sessionSearch", Key.N)
         assertEquals(1, repository.createdSessions)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun aShortcutOutsideTheEditorAsksBeforeItDropsAnUnsavedEdit() {
+        render(hardwareKeyboard = true)
+        openEditor("changed\n")
+        val count = repository.activations.size
+        ctrl("sessionSearch", Key.DirectionDown)
+        assertEquals(count, repository.activations.size)
+        compose.onNodeWithTag("filesEditorKeep").performClick()
+        compose.waitForIdle()
+        assertEquals(count, repository.activations.size)
+        assertEquals("changed\n", repository.state.value.files?.editor?.text)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun aDiscardPromptOnlyDropsTheEditItAskedAbout() {
+        render(hardwareKeyboard = true)
+        openEditor("changed\n")
+        val count = repository.activations.size
+        compose.onNodeWithText("Second session").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("filesEditorDiscard").assertIsDisplayed()
+        // Another file's edit took its place: Discard drops neither it nor runs the navigation.
+        val other = OpenFile("src/Other.kt", loading = false, version = "v1", size = 6, content = "other\n")
+        repository.state.value =
+            repository.state.value.copy(
+                files = FilesState("s1", loading = false, file = other, editor = FileEditor(other.path, "v1", other.content, "mine\n"))
+            )
+        compose.waitForIdle()
+        compose.onNodeWithTag("filesEditorDiscard").performClick()
+        compose.waitForIdle()
+        assertEquals(count, repository.activations.size)
+        assertEquals("mine\n", repository.state.value.files?.editor?.text)
+        // Another session ends the prompt without an answer.
+        compose.onNodeWithText("Second session").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("filesEditorDiscard").assertIsDisplayed()
+        repository.state.value = repository.state.value.copy(selection = RemoteSelection("host", "project", "s3"))
+        compose.waitForIdle()
+        compose.onNodeWithTag("filesEditorDiscard").assertDoesNotExist()
+        assertEquals("mine\n", repository.state.value.files?.editor?.text)
     }
 
     @Test

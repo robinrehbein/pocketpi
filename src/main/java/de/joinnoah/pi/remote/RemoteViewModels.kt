@@ -387,7 +387,7 @@ internal class ChatViewModel(
 
     fun discardFileEditor() = repository.discardFileEditor()
 
-    fun reloadFileAfterConflict() = active(repository::reloadFileAfterConflict)
+    fun reloadFileAfterConflict() = editing(repository::reloadFileAfterConflict)
 
     fun confirmFileEditorLeave() = editing(repository::confirmFileEditorLeave)
 

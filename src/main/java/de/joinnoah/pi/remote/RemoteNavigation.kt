@@ -213,6 +213,10 @@ internal class RemoteNavigator(
     }
 
     fun reconcile(state: RemoteState) {
+        // A prompt is about the editor of the session it was asked in; another session ends it.
+        editorLeave?.let { held ->
+            if (held.routeId != state.selection.routeId || held.sessionId != state.selection.sessionId) hold(null)
+        }
         if (state.loading || activation?.isActive == true) return
         val current = stack.lastOrNull { it != RemoteNavKey.Settings } as? RemoteNavKey ?: return
         val keys = current.selection().keys()
@@ -234,9 +238,16 @@ internal class RemoteNavigator(
             activate(key, ActivationMode.USER_OPEN)
         }
 
-    /** The session's file pane shows the code editor, whose keys win over the layout's shortcuts. */
+    /** Where keyboard focus is relative to the code editor; the editor reports it. */
+    val editorFocus = EditorFocus()
+
+    /**
+     * Keyboard focus is in the session's code editor, whose keys then win over the layout's
+     * shortcuts. With focus elsewhere (the composer, the session list) the shortcuts work, and
+     * those that navigate ask before they drop an unsaved edit.
+     */
     val editing: Boolean
-        get() = repository.state.value.let { state ->
+        get() = editorFocus.focused && repository.state.value.let { state ->
             state.files?.takeIf { it.sessionId == state.selection.sessionId }?.editor != null
         }
 
@@ -247,6 +258,11 @@ internal class RemoteNavigator(
     var editorLeave: HeldNavigation? by mutableStateOf(null)
         private set
 
+    private fun hold(held: HeldNavigation?) {
+        editorLeave = held
+        editorFocus.asking = held != null
+    }
+
     /**
      * Runs [action] now, or holds it for the discard prompt when it moves to another session than
      * [target] while the editor has unsaved changes. Navigation nobody chose here (a
@@ -256,20 +272,27 @@ internal class RemoteNavigator(
         val state = repository.state.value
         val editor = state.files?.takeIf { it.sessionId == state.selection.sessionId }?.editor
         val leaves = target.routeId != state.selection.routeId || target.sessionId != state.selection.sessionId
-        if (editor != null && leaves && editor.changed) editorLeave = HeldNavigation(editor.path.substringAfterLast('/'), action)
+        if (editor != null && leaves && editor.changed)
+            hold(HeldNavigation(checkNotNull(state.selection.routeId), editor.path, state.selection.sessionId, action))
         else action()
     }
 
-    /** Discards the unsaved edit and runs the navigation that waited for it. */
+    /**
+     * Discards the unsaved edit and runs the navigation that waited for it. When the editor the
+     * prompt was about is no longer the one shown, nothing is discarded and the navigation is dropped.
+     */
     fun leaveEditor() {
         val held = editorLeave ?: return
-        editorLeave = null
+        hold(null)
+        val state = repository.state.value
+        val editor = state.files?.takeIf { it.sessionId == state.selection.sessionId }?.editor
+        if (state.selection.routeId != held.routeId || state.selection.sessionId != held.sessionId || editor?.path != held.path) return
         repository.discardFileEditor()
         held.action()
     }
 
     fun stayInEditor() {
-        editorLeave = null
+        hold(null)
     }
 
     /**
@@ -571,8 +594,25 @@ internal class RemoteNavigator(
     }
 }
 
-/** A navigation waiting for the discard prompt of the editor showing [fileName]. */
-internal class HeldNavigation(val fileName: String, val action: () -> Unit)
+/** A navigation waiting for the discard prompt of the editor of [path] in the session [sessionId]. */
+internal class HeldNavigation(val routeId: String, val path: String, val sessionId: String?, val action: () -> Unit) {
+    val fileName: String get() = path.substringAfterLast('/')
+}
+
+/**
+ * The code editor's side of the layout's keys and prompts: the editor reports whether keyboard
+ * focus is inside it, and learns whether the layout is asking to drop its edit.
+ */
+internal class EditorFocus {
+    /** Focus is on the editor's text, its find field or one of its buttons. */
+    var focused by mutableStateOf(false)
+
+    /** The layout's discard prompt for a held navigation shows ([RemoteNavigator.editorLeave]). */
+    var asking by mutableStateOf(false)
+}
+
+/** The layout's [EditorFocus]; null outside [RemoteNavigation], as in a pane shown on its own. */
+internal val LocalEditorFocus = staticCompositionLocalOf<EditorFocus?> { null }
 
 /** Most chats kept stacked on one back stack (a parent chain ending in the open child). */
 private const val MAX_STACKED_CHATS = 4
@@ -728,6 +768,7 @@ internal fun RemoteNavigation(
             LocalPaneLayout provides layout,
             LocalTwoPane provides twoPane.takeIf { layout.twoPane },
             LocalHardwareKeyboard provides hardwareKeyboard,
+            LocalEditorFocus provides navigator.editorFocus,
         ) {
             Box(
                 // While something in the layout has focus (the composer, the search field), the

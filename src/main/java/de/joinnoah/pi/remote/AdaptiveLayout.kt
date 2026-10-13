@@ -806,8 +806,8 @@ internal enum class KeyboardShortcut {
 /**
  * Ctrl+K or Ctrl+F search the sessions; Ctrl or Alt with Up/Down switch to the adjacent one; Ctrl+N
  * starts a new session in the project and Ctrl+B collapses or expands the session list.
- * Alt+Page Up/Page Down switch to the adjacent project. None of them while [editing]: the code
- * editor uses some of these keys itself, and the others would leave its file.
+ * Alt+Page Up/Page Down switch to the adjacent project. None of them while [editing], keyboard
+ * focus in the code editor: it uses some of these keys itself (Ctrl+F finds in the file).
  */
 internal fun keyboardShortcut(key: Key, ctrl: Boolean, alt: Boolean, shift: Boolean, editing: Boolean = false): KeyboardShortcut? {
     if (shift || editing) return null

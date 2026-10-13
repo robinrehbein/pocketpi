@@ -118,7 +118,8 @@ private class LayoutHolder {
  * The editor's text field, kept with its [FileEditor] in the loader's state rather than in the
  * composition: the text, cursor and undo history survive recomposition, the phone/tablet switch
  * and a session parked for later, and a save reads what is typed without waiting for a push. It
- * is transient UI state, so every buffer equals every other and none is ever saved.
+ * is transient UI state and never saved. A buffer equals only itself, so a new editor with the
+ * same text is still a new state and gets a fresh field.
  */
 class EditorBuffer {
     private var field: TextFieldState? = null
@@ -129,10 +130,6 @@ class EditorBuffer {
 
     /** The field's text, or null before the editor first showed. */
     internal fun text(): String? = field?.text?.toString()
-
-    override fun equals(other: Any?): Boolean = other is EditorBuffer
-
-    override fun hashCode(): Int = 0
 }
 
 /**
@@ -169,6 +166,7 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
     val findFocus = remember { FocusRequester() }
     val requester = remember { BringIntoViewRequester() }
     val layout = remember { LayoutHolder() }
+    val editorFocusState = LocalEditorFocus.current
 
     fun flush() = currentActions.onEditorText(textState.text.toString())
 
@@ -201,7 +199,8 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
             }
         }
     }
-    DisposableEffect(textState) { onDispose { flush() } }
+    // No hand-over when the field goes away: its buffer stays with its editor, which
+    // [FileEditor.latestText] reads, while a push here could land in the editor that replaced it.
     // Keeps the cursor visible while typing or moving it, once the new text is laid out. A new
     // editor starts at the top: only a cursor placed further in is scrolled to at first.
     LaunchedEffect(textState) {
@@ -218,6 +217,8 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
         }
     }
     LaunchedEffect(Unit) { editorFocus.requestFocus() }
+    // The layout's shortcuts stand back only while focus is in here.
+    DisposableEffect(editorFocusState) { onDispose { editorFocusState?.focused = false } }
 
     val matches by remember { derivedStateOf { if (findOpen) findMatches(textState.text, query) else emptyList() } }
     val currentMatch = matches.getOrNull(matchIndex)
@@ -236,7 +237,8 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
     fun changedNow() = !textState.text.contentEquals(current.original)
 
     fun save() {
-        if (!changedNow()) return
+        // Unchanged text has nothing to save, but a save still clears the failure of an earlier one.
+        if (!changedNow() && current.saveFailure == null) return
         flush()
         currentActions.onSaveEditor()
     }
@@ -350,7 +352,12 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
     val gutterWidth = maxOf(numberWidth, 32.dp) + 16.dp
     val maxWidth = with(LocalDensity.current) { MAX_CODE_CONTENT_WIDTH_PX.toDp() }
 
-    Column(modifier.fillMaxSize().onPreviewKeyEvent(::paneKey).testTag("filesEditor")) {
+    Column(
+        modifier.fillMaxSize()
+            .onPreviewKeyEvent(::paneKey)
+            .onFocusChanged { editorFocusState?.focused = it.hasFocus }
+            .testTag("filesEditor")
+    ) {
         EditorHeader(
             editor = editor,
             changed = changed,
@@ -438,7 +445,9 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
         editor.leaveRequest != null ->
             EditorDiscardDialog(fileName, onDiscard = currentActions.onConfirmLeave, onKeep = currentActions.onCancelLeave)
     }
-    if (editor.conflict && !editor.saving && !conflictDismissed && discard == null)
+    // One prompt at a time: a discard prompt, the editor's or the layout's, goes first.
+    val asking = discard != null || editor.leaveRequest != null || editorFocusState?.asking == true
+    if (editor.conflict && !editor.saving && !conflictDismissed && !asking)
         AlertDialog(
             onDismissRequest = { conflictDismissed = true },
             title = { Text(stringResource(R.string.remote_files_editor_conflict_title)) },

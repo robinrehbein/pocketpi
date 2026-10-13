@@ -76,8 +76,12 @@ class ProjectFilesLoaderTest {
 
         fun files() = sent.filter { it.text("type").startsWith("session.files.") }
 
+        /** The sessions of the project; the first is [sessionId]. */
+        var sessionIds = listOf(sessionId)
+
+        private fun session(id: String) = Wire.objectOf("id" to id, "origin" to "rpc", "status" to "idle", "projectId" to "project")
+
         private fun response(request: JsonObject): JsonObject? {
-            val session = Wire.objectOf("id" to sessionId, "origin" to "rpc", "status" to "idle", "projectId" to "project")
             return when (request.text("type")) {
                 "projects.list" ->
                     Wire.objectOf(
@@ -85,12 +89,12 @@ class ProjectFilesLoaderTest {
                         "items" to JsonArray(listOf(Wire.objectOf("id" to "project"))),
                         "capabilities" to JsonArray(advertised.map(::JsonPrimitive)),
                     )
-                "sessions.list" -> Wire.objectOf("kind" to "sessions", "items" to JsonArray(listOf(session)))
-                "sessions.open" -> Wire.objectOf("kind" to "session", "session" to session)
+                "sessions.list" -> Wire.objectOf("kind" to "sessions", "items" to JsonArray(sessionIds.map(::session)))
+                "sessions.open" -> Wire.objectOf("kind" to "session", "session" to session(request.text("sessionId")))
                 "session.snapshot" ->
                     Wire.objectOf(
                         "kind" to "snapshot",
-                        "sessionId" to sessionId,
+                        "sessionId" to (request["sessionId"]?.jsonPrimitive?.content ?: sessionId),
                         "revision" to 0,
                         "status" to "idle",
                         "messages" to JsonArray(emptyList()),
@@ -140,13 +144,20 @@ class ProjectFilesLoaderTest {
             }
         )
 
-    private fun page(request: JsonObject, content: String, size: Int, nextOffset: Int? = null, binary: Boolean = false): JsonObject =
+    private fun page(
+        request: JsonObject,
+        content: String,
+        size: Int,
+        nextOffset: Int? = null,
+        binary: Boolean = false,
+        fileVersion: String = version,
+    ): JsonObject =
         JsonObject(
             buildMap {
                 put("kind", JsonPrimitive("files.read"))
                 put("sessionId", JsonPrimitive(request.text("sessionId")))
                 put("path", JsonPrimitive(request.text("path")))
-                put("version", JsonPrimitive(version))
+                put("version", JsonPrimitive(fileVersion))
                 put("size", JsonPrimitive(size))
                 put("offset", JsonPrimitive(request["offset"]?.jsonPrimitive?.int ?: 0))
                 put("content", JsonPrimitive(content))
@@ -467,6 +478,17 @@ class ProjectFilesLoaderTest {
         return repository
     }
 
+    /** [actual] is [expected] apart from its text field, which belongs to each editor alone. */
+    private fun assertEditor(expected: FileEditor, actual: FileEditor?) =
+        assertEquals(expected, actual?.copy(buffer = expected.buffer))
+
+    @Test
+    fun aNewEditorNeverEqualsAnOldOne() {
+        val first = FileEditor("a.kt", version, "a\n")
+        assertEquals(first, first.copy(saving = false))
+        assertNotEquals(first, FileEditor("a.kt", version, "a\n"))
+    }
+
     private fun writes(transport: Transport) = transport.files().filter { it.text("type") == "session.files.write" }
 
     @Test
@@ -474,7 +496,7 @@ class ProjectFilesLoaderTest {
         val transport = editorTransport()
         val repository = editing(transport)
         var editor = checkNotNull(repository.state.value.files?.editor)
-        assertEquals(FileEditor("src/app/main.ts", version, "hello\n"), editor)
+        assertEditor(FileEditor("src/app/main.ts", version, "hello\n"), editor)
         assertFalse(editor.changed)
         repository.updateFileEditorText("hello\nworld\n")
         assertTrue(checkNotNull(repository.state.value.files?.editor).changed)
@@ -616,7 +638,7 @@ class ProjectFilesLoaderTest {
         transport.result(held.single(), written(held.single()))
         runCurrent()
         var files = checkNotNull(repository.state.value.files)
-        assertEquals(FileEditor("src/app/main.ts", version, "hello\n"), files.editor)
+        assertEditor(FileEditor("src/app/main.ts", version, "hello\n"), files.editor)
         assertEquals("hello\n", files.file?.content)
         assertEquals(version, files.file?.version)
 
@@ -634,7 +656,7 @@ class ProjectFilesLoaderTest {
         transport.result(held.single(), written(held.single()))
         runCurrent()
         files = checkNotNull(repository.state.value.files)
-        assertEquals(FileEditor("src/app/main.ts", version, "hello\n"), files.editor)
+        assertEditor(FileEditor("src/app/main.ts", version, "hello\n"), files.editor)
 
         // Leaving the file drops the editor.
         repository.openFilesFile(null)
@@ -705,6 +727,36 @@ class ProjectFilesLoaderTest {
         runCurrent()
         assertEquals(2, held.size)
         assertEquals(held[0].text("requestId"), held[1].text("requestId"))
+    }
+
+    @Test
+    fun theOldestOfTooManyParkedEditsIsDroppedWithAMessage() = runTest {
+        val transport = editorTransport()
+        val others = listOf("s2", "s3", "s4", "s5")
+        transport.sessionIds = listOf(sessionId) + others + "s6"
+        val repository = editing(transport)
+        repository.updateFileEditorText("edit $sessionId\n")
+        for (id in others) {
+            repository.activate(RemoteSelection("host", "project", id))
+            runCurrent()
+            assertNull(repository.state.value.error)
+            repository.openFiles()
+            runCurrent()
+            repository.openFilesFile("src/app/main.ts")
+            runCurrent()
+            repository.startFileEditing()
+            repository.updateFileEditorText("edit $id\n")
+        }
+        // The fifth parked edit pushes out the first one, and the user hears of it.
+        repository.activate(RemoteSelection("host", "project", "s6"))
+        runCurrent()
+        assertEquals(R.string.remote_files_editor_parked_dropped, repository.state.value.error)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        assertNull(repository.state.value.files)
+        repository.activate(RemoteSelection("host", "project", "s2"))
+        runCurrent()
+        assertEquals("edit s2\n", repository.state.value.files?.editor?.text)
     }
 
     @Test
@@ -789,6 +841,125 @@ class ProjectFilesLoaderTest {
         val conflicted = checkNotNull(repository.state.value.files?.editor)
         assertTrue(conflicted.conflict)
         assertEquals(FilesFailure.CONFLICT, conflicted.saveFailure)
+    }
+
+    @Test
+    fun moreTypingAfterALostReplySavesOnTopOfTheEarlierWrite() = runTest {
+        // A host that writes against the current version and refuses any other base.
+        var hostContent = "hello\n"
+        var hostVersion = version
+        val versions = ArrayDeque(listOf(newVersion, "VGhpcmRWZXJzaW9uQWJjMQ"))
+        val transport = Transport(writeCapabilities) { request ->
+            when (request.text("type")) {
+                "session.files.write" -> {
+                    hostContent = request.text("content")
+                    hostVersion = versions.removeFirst()
+                    null
+                }
+                "session.files.read" -> page(request, hostContent, hostContent.encodeToByteArray().size, fileVersion = hostVersion)
+                else -> listing(request, "main.ts")
+            }
+        }
+        val repository = editing(transport)
+        // C1 reaches the host, but its reply is lost.
+        repository.updateFileEditorText("one\n")
+        repository.saveFileEditor()
+        runCurrent()
+        repository.cancelSelection()
+        runCurrent()
+        assertEquals(FilesFailure.OFFLINE, repository.state.value.files?.editor?.saveFailure)
+
+        // More typing, then a save against the old base: the host has moved on to C1.
+        transport.failure = { request ->
+            if (request.text("type") == "session.files.write" && request.text("baseVersion") != hostVersion) "conflict" else null
+        }
+        val held = mutableListOf<JsonObject>()
+        transport.files = { request ->
+            when (request.text("type")) {
+                "session.files.write" -> {
+                    held += request
+                    hostContent = request.text("content")
+                    hostVersion = versions.removeFirst()
+                    written(request).let { JsonObject(it + ("version" to JsonPrimitive(hostVersion))) }
+                }
+                "session.files.read" -> page(request, hostContent, hostContent.encodeToByteArray().size, fileVersion = hostVersion)
+                else -> listing(request, "main.ts")
+            }
+        }
+        repository.updateFileEditorText("one\ntwo\n")
+        repository.saveFileEditor()
+        runCurrent()
+
+        val editor = checkNotNull(repository.state.value.files?.editor)
+        assertFalse(editor.conflict)
+        assertNull(editor.saveFailure)
+        assertFalse(editor.saving)
+        assertFalse(editor.changed)
+        assertEquals("one\ntwo\n", editor.original)
+        assertEquals("one\ntwo\n", hostContent)
+        assertEquals("VGhpcmRWZXJzaW9uQWJjMQ", editor.baseVersion)
+        assertNull(editor.unconfirmed)
+        assertTrue(editor.superseded.isEmpty())
+        // The resend went against C1's version, under a new request ID.
+        val resend = held.single()
+        assertEquals(newVersion, resend.text("baseVersion"))
+        val sent = writes(transport)
+        assertEquals(3, sent.size)
+        assertEquals(version, sent[1].text("baseVersion"))
+        assertNotEquals(sent[1].text("requestId"), resend.text("requestId"))
+        assertEquals("one\ntwo\n", repository.state.value.files?.file?.content)
+    }
+
+    @Test
+    fun aSecondConflictAfterTheResendIsAConflict() = runTest {
+        var hostContent = "hello\n"
+        var hostVersion = version
+        val transport = Transport(writeCapabilities) { request ->
+            when (request.text("type")) {
+                "session.files.write" -> {
+                    hostContent = request.text("content")
+                    hostVersion = newVersion
+                    null
+                }
+                "session.files.read" -> page(request, hostContent, hostContent.encodeToByteArray().size, fileVersion = hostVersion)
+                else -> listing(request, "main.ts")
+            }
+        }
+        val repository = editing(transport)
+        repository.updateFileEditorText("one\n")
+        repository.saveFileEditor()
+        runCurrent()
+        repository.cancelSelection()
+        runCurrent()
+        // Every later write conflicts, the resend on top of C1 included.
+        transport.failure = { request -> if (request.text("type") == "session.files.write") "conflict" else null }
+        repository.updateFileEditorText("one\ntwo\n")
+        repository.saveFileEditor()
+        runCurrent()
+        val editor = checkNotNull(repository.state.value.files?.editor)
+        assertTrue(editor.conflict)
+        assertEquals(FilesFailure.CONFLICT, editor.saveFailure)
+        // The base moved to C1, so Reload or a diff starts from what the host holds.
+        assertEquals(newVersion, editor.baseVersion)
+        assertEquals("one\n", editor.original)
+        assertEquals("one\ntwo\n", editor.text)
+        assertEquals(3, writes(transport).size)
+    }
+
+    @Test
+    fun saveOfUnchangedTextClearsAnOldFailure() = runTest {
+        val transport = editorTransport()
+        transport.failure = { request -> if (request.text("type") == "session.files.write") "busy" else null }
+        val repository = editing(transport)
+        repository.updateFileEditorText("mine\n")
+        repository.saveFileEditor()
+        runCurrent()
+        assertEquals(FilesFailure.BUSY, repository.state.value.files?.editor?.saveFailure)
+        repository.updateFileEditorText("hello\n")
+        repository.saveFileEditor()
+        runCurrent()
+        assertNull(repository.state.value.files?.editor?.saveFailure)
+        assertEquals(1, writes(transport).size)
     }
 
     @Test

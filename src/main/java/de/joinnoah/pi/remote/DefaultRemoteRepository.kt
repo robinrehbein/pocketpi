@@ -1357,6 +1357,7 @@ class DefaultRemoteRepository(
     /**
      * Unsaved edits of sessions left without the discard prompt (a notification tap, Back, a
      * restore), by session, oldest first. Not persisted; they come back when their session opens.
+     * Past [MAX_PARKED_EDITORS] the oldest is dropped with a message, and an unpaired host's go too.
      */
     private val parkedFiles = LinkedHashMap<DraftKey, FilesState>()
 
@@ -1372,7 +1373,11 @@ class DefaultRemoteRepository(
             val key = DraftKey(previousRoute, leaving.sessionId)
             parkedFiles.remove(key)
             parkedFiles[key] = leaving
-            while (parkedFiles.size > MAX_PARKED_EDITORS) parkedFiles.remove(parkedFiles.keys.first())
+            if (parkedFiles.size > MAX_PARKED_EDITORS) {
+                while (parkedFiles.size > MAX_PARKED_EDITORS) parkedFiles.remove(parkedFiles.keys.first())
+                // The oldest edit is gone for good: say so once instead of losing it silently.
+                reportError(R.string.remote_files_editor_parked_dropped)
+            }
         }
         val routeId = selection.routeId ?: return null
         val sessionId = selection.sessionId ?: return null
@@ -1941,6 +1946,7 @@ class DefaultRemoteRepository(
         ProjectImageBitmaps.clear()
         ArtifactThumbnails.clear()
         removedRoutes += routeId
+        parkedFiles.keys.removeAll { it.routeId == routeId }
         savedNavigation.remove(routeId)
         queueNavigationWrite(immediate = true)
         update { it.copy(hosts = it.hosts.filterNot { host -> host.routeId == routeId }) }

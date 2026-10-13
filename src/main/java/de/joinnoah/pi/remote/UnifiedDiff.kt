@@ -11,7 +11,7 @@ package de.joinnoah.pi.remote
  * memory grow with the square of this; a diff this long is far above [MAX_FILE_QUOTE_BYTES] for
  * any ordinary code.
  */
-internal const val MAX_DIFF_EDITS = 2_000
+internal const val MAX_DIFF_EDITS = 1_000
 
 /** What [boundedUnifiedDiff] found. */
 internal sealed interface LineDiff {
