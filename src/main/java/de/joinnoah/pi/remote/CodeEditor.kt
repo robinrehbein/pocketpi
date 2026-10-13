@@ -1,6 +1,5 @@
 package de.joinnoah.pi.remote
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -337,7 +336,7 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
         }
     }
 
-    BackHandler {
+    PaneBackHandler {
         if (findOpen) closeFind() else leaveEditor()
     }
     LaunchedEffect(query, findOpen) {

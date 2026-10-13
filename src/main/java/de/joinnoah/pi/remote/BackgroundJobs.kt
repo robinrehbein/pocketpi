@@ -1,6 +1,5 @@
 package de.joinnoah.pi.remote
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
@@ -899,7 +898,7 @@ private fun JobsTopBar(title: String, onBack: () -> Unit, actions: @Composable R
 @Composable
 internal fun BackgroundJobsScreen(state: JobsState, actions: JobsActions, modifier: Modifier = Modifier) {
     val view = state.view
-    BackHandler { if (view != null) actions.onCloseJob() else actions.onClose() }
+    PaneBackHandler { if (view != null) actions.onCloseJob() else actions.onClose() }
     Surface(modifier.fillMaxSize().testTag("jobsScreen")) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             if (view == null) JobList(state, actions) else key(view.jobId) { JobDetail(view, actions) }

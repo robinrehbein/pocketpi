@@ -3,7 +3,6 @@ package de.joinnoah.pi.remote
 import android.animation.ValueAnimator
 import android.text.format.DateFormat
 import android.text.format.DateUtils
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -487,7 +486,7 @@ internal fun ChatHistoryPane(
     modifier: Modifier = Modifier,
     initialIndex: Int = 0,
 ) {
-    BackHandler(onBack = onClose)
+    PaneBackHandler(onBack = onClose)
     Surface(modifier.fillMaxSize().testTag("chatHistoryPane")) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {

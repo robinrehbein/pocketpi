@@ -210,6 +210,9 @@ internal fun ConversationMessage(
     projectImages: ProjectImageSource? = null,
     /** Set only for the newest assistant bubble, like pi's `/copy`; others copy through accessibility. */
     copyButton: Boolean = false,
+    /** The keyboard asked for this bubble's rewind menu; [onForkMenuRequestHandled] takes the request. */
+    forkMenuRequested: Boolean = false,
+    onForkMenuRequestHandled: () -> Unit = {},
 ) {
     Box(Modifier.jumpHighlight(highlighted)) {
         ConversationMessageContent(
@@ -224,6 +227,8 @@ internal fun ConversationMessage(
             images,
             projectImages,
             copyButton,
+            forkMenuRequested,
+            onForkMenuRequestHandled,
         )
     }
 }
@@ -242,6 +247,8 @@ private fun ConversationMessageContent(
     images: SentImageSource?,
     projectImages: ProjectImageSource?,
     copyButton: Boolean,
+    forkMenuRequested: Boolean,
+    onForkMenuRequestHandled: () -> Unit,
 ) {
     val quoteLabel = stringResource(R.string.remote_quote)
     val forkLabel = stringResource(R.string.remote_fork_action)
@@ -256,6 +263,11 @@ private fun ConversationMessageContent(
             val copyToClipboard = rememberCopyToClipboard(copyLabel)
             var forkMenu by remember(item.id) { mutableStateOf(false) }
             var forkConfirming by remember(item.id) { mutableStateOf<ForkMode?>(null) }
+            if (forkMenuRequested)
+                LaunchedEffect(Unit) {
+                    if (forkShown) forkMenu = true
+                    onForkMenuRequestHandled()
+                }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val width = if (item.text.contains("```")) maxWidth else maxWidth * 0.88f
                 Column(

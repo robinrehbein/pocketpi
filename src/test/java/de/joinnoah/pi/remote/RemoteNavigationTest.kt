@@ -571,4 +571,41 @@ class RemoteNavigationTest {
         assertEquals(2, repository.createdSessions)
         assertEquals(RemoteNavKey.Chat("host", "project", "second"), stack.last())
     }
+
+    @Test
+    fun `a created session is fresh once and forks and reopened chats never are`() = runTest {
+        val repository = NavigationFakeRepository()
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        repository.create = { routeId, projectId -> RemoteSelection(routeId, projectId, "created") }
+        navigation.createSession("host", "project")
+        runCurrent()
+        val created = RemoteNavKey.Chat("host", "project", "created")
+        assertEquals(created, navigation.freshSession)
+        assertFalse(navigation.takeFreshSession(RemoteNavKey.Chat("host", "project", "other")))
+        assertTrue(navigation.takeFreshSession(created))
+        assertFalse(navigation.takeFreshSession(created))
+        assertNull(navigation.freshSession)
+        // Reopening the same chat later is not a new session.
+        navigation.open(RemoteNavKey.Sessions("host", "project"))
+        runCurrent()
+        navigation.open(created)
+        runCurrent()
+        assertNull(navigation.freshSession)
+        navigation.forkSession(created, "user-1", ForkMode.EDIT)
+        runCurrent()
+        assertEquals(RemoteNavKey.Chat("host", "project", "fork"), stack.last())
+        assertNull(navigation.freshSession)
+    }
+
+    @Test
+    fun `a create that lands without a session is not fresh`() = runTest {
+        val repository = NavigationFakeRepository()
+        repository.create = { routeId, projectId -> RemoteSelection(routeId, projectId) }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.createSession("host", "project")
+        runCurrent()
+        assertNull(navigation.freshSession)
+    }
 }

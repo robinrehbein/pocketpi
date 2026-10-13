@@ -1,7 +1,6 @@
 package de.joinnoah.pi.remote
 
 import android.content.Context
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -126,7 +125,7 @@ internal fun FilesPane(
             else -> actions.onClose()
         }
     }
-    BackHandler(onBack = back)
+    PaneBackHandler(onBack = back)
     // A failed prefill belongs to the file or folder it happened in.
     var prefillFailed by remember { mutableStateOf(false) }
     LaunchedEffect(state.file?.path, state.path) { prefillFailed = false }

@@ -52,6 +52,27 @@ class ComposerStateTest {
     private fun ComposerDraft.type(text: String) = edit(TextFieldValue(text, TextRange(text.length)))
 
     @Test
+    fun suggestionsEscClosedComeBackOnceTheTextChanges() {
+        val composer = draft()
+        composer.type("/")
+        composer.closeSuggestions()
+        assertTrue(composer.suggestionsClosed)
+        // Moving the cursor is no edit.
+        composer.edit(TextFieldValue("/", TextRange(0)))
+        assertTrue(composer.suggestionsClosed)
+        composer.type("")
+        assertFalse(composer.suggestionsClosed)
+        // The same text typed again shows the suggestions again.
+        composer.type("/")
+        assertFalse(composer.suggestionsClosed)
+        composer.closeSuggestions()
+        // A change from elsewhere (another device's draft) too.
+        composer.pushPending()
+        composer.sync("/n")
+        assertFalse(composer.suggestionsClosed)
+    }
+
+    @Test
     fun typingStaysLocalUntilThePauseAndThenPushesOnceForItsChat() {
         val pushes = Pushes()
         val composer = draft(pushes = pushes)
