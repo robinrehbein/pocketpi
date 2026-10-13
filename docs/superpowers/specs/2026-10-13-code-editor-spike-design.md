@@ -47,6 +47,14 @@ this document.
   file with `nlink === 1`, and a realpath below the folder. A write only replaces an existing
   readable text file. It never creates, deletes or renames a file, and it never writes a file whose
   current content is binary.
+- A write-only deny list also refuses files the Mac runs on its own: any path segment `.pi`,
+  `.claude`, `.husky`, `.githooks`, `.vscode` or `.idea`, and a final `.envrc`. These stay
+  readable, and the app hides Edit for them. `.github/workflows` stays writable because it runs on
+  GitHub behind review. Decided by Robin on 2026-10-13. Reason: a direct save skips the agent's
+  guards and the chat record, so a misused pairing could turn one save into code running on the
+  Mac. Cost if wrong: these files are edited through the agent instead.
+- Writes from one host are serialized, and a target must be owned by the host user and writable by
+  them, so a save never does more than an in-place edit could.
 - **Ruling:** Write a sibling temp file (`O_CREAT|O_EXCL`, the target's mode), fsync it, re-check
   the target's version, then `rename` it over the target. Reason: an agent or editor on the Mac
   never reads a half-written file. Cost if wrong: extended attributes or ACLs on the file are lost,
