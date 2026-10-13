@@ -295,76 +295,99 @@ internal fun quoteFromMessage(message: JsonObject): MessageQuote? {
 internal fun conversationItems(
     messages: List<JsonObject>,
     sessionActive: Boolean = false,
-): List<ConversationItem> {
-    val lastUser = messages.indexOfLast { it.text("role") == "user" }
-    val lastAssistant = messages.indexOfLast { it.text("role") == "assistant" }
-    val pendingAssistant =
-        if (sessionActive && lastAssistant > lastUser) messages.getOrNull(lastAssistant)?.text("id")
-        else null
-    val calls =
-        messages
-            .flatMap { it.parts() }
-            .filter { it.optionalText("type") == "toolCall" }
-            .map { it.text("id") }
-            .toSet()
-    val outputs =
-        messages
-            .filter { it.text("role") == "tool" && it.optionalText("toolCallId") != null }
-            .associateBy { it.text("toolCallId") }
-    return buildList {
-        for ((messageIndex, message) in messages.withIndex()) {
-            val id = message.text("id")
-            val role = message.text("role")
-            val truncated = message["truncated"]?.jsonPrimitive?.booleanOrNull == true
-            val timestamp = message.messageTimestamp()
-            if (role == "tool") {
-                if (message.optionalText("toolCallId") in calls) continue
-                if (message.optionalText("toolName") in SUBAGENT_TOOLS && message["subagentProgress"] != null) {
-                    val progress = subagentProgress(message)
-                    if (progress.agents.isNotEmpty()) {
-                        add(progress)
-                        continue
+): List<ConversationItem> = Diagnostics.trace("PocketPi.conversationItems") {
+        val lastUser = messages.indexOfLast { it.text("role") == "user" }
+        val lastAssistant = messages.indexOfLast { it.text("role") == "assistant" }
+        val pendingAssistant =
+            if (sessionActive && lastAssistant > lastUser) messages.getOrNull(lastAssistant)?.text("id")
+            else null
+        val calls =
+            messages
+                .flatMap { it.parts() }
+                .filter { it.optionalText("type") == "toolCall" }
+                .map { it.text("id") }
+                .toSet()
+        val outputs =
+            messages
+                .filter { it.text("role") == "tool" && it.optionalText("toolCallId") != null }
+                .associateBy { it.text("toolCallId") }
+        buildList {
+            for ((messageIndex, message) in messages.withIndex()) {
+                val id = message.text("id")
+                val role = message.text("role")
+                val truncated = message["truncated"]?.jsonPrimitive?.booleanOrNull == true
+                val timestamp = message.messageTimestamp()
+                if (role == "tool") {
+                    if (message.optionalText("toolCallId") in calls) continue
+                    if (message.optionalText("toolName") in SUBAGENT_TOOLS && message["subagentProgress"] != null) {
+                        val progress = subagentProgress(message)
+                        if (progress.agents.isNotEmpty()) {
+                            add(progress)
+                            continue
+                        }
                     }
-                }
-                add(
-                    ConversationItem.Activity(
-                        id,
-                        id,
-                        messageAuthor(message),
-                        null,
-                        message.text("text"),
-                        message.optionalText("state") ?: "complete",
-                        truncated,
-                        toolCallId = message.safeText("toolCallId"),
-                        outputMessageId = id,
-                        details = if (messageAuthor(message) == "edit") toolDetails(message) else null,
+                    add(
+                        ConversationItem.Activity(
+                            id,
+                            id,
+                            messageAuthor(message),
+                            null,
+                            message.text("text"),
+                            message.optionalText("state") ?: "complete",
+                            truncated,
+                            toolCallId = message.safeText("toolCallId"),
+                            outputMessageId = id,
+                            details = if (messageAuthor(message) == "edit") toolDetails(message) else null,
+                        )
                     )
-                )
-                continue
-            }
-            // Every bubble split off this message carries the same usage; only the last one keeps
-            // it so a multi-part reply does not repeat the token count on each of its bubbles.
-            val bubbleStart = size
-            val attached = AttachmentCodec.decode(message.text("text"))
-            val attachments =
-                (message["attachments"] as? JsonArray)?.mapNotNull {
-                    runCatching { remoteAttachment(it.jsonObject) }.getOrNull()
-                } ?: attached.attachments
-            val decoded = QuoteCodec.decode(attached.body)
-            val quote = (message["quote"] as? JsonObject)?.let(QuoteCodec::parse) ?: decoded.quote
-            val parts = message.parts()
-            val error = message.safeText("state") == "error"
-            val usage = messageUsage(message)
-            val streaming = message.optionalText("state") == "streaming"
-            if (parts.isEmpty()) {
-                if (decoded.body.isNotEmpty() || quote != null || attachments.isNotEmpty()) {
+                    continue
+                }
+                // Every bubble split off this message carries the same usage; only the last one keeps
+                // it so a multi-part reply does not repeat the token count on each of its bubbles.
+                val bubbleStart = size
+                val attached = AttachmentCodec.decode(message.text("text"))
+                val attachments =
+                    (message["attachments"] as? JsonArray)?.mapNotNull {
+                        runCatching { remoteAttachment(it.jsonObject) }.getOrNull()
+                    } ?: attached.attachments
+                val decoded = QuoteCodec.decode(attached.body)
+                val quote = (message["quote"] as? JsonObject)?.let(QuoteCodec::parse) ?: decoded.quote
+                val parts = message.parts()
+                val error = message.safeText("state") == "error"
+                val usage = messageUsage(message)
+                val streaming = message.optionalText("state") == "streaming"
+                if (parts.isEmpty()) {
+                    if (decoded.body.isNotEmpty() || quote != null || attachments.isNotEmpty()) {
+                        add(
+                            ConversationItem.Bubble(
+                                id,
+                                id,
+                                role,
+                                messageAuthor(message),
+                                decoded.body,
+                                quote,
+                                truncated,
+                                timestamp,
+                                attachments,
+                                error,
+                                usage,
+                                streaming,
+                            )
+                        )
+                    }
+                    continue
+                }
+                val lastMeaningfulPart = parts.indexOfLast {
+                    it.optionalText("type") == "toolCall" || !it.optionalText("text").isNullOrBlank()
+                }
+                if (parts.none { it.optionalText("type") == "text" } && attachments.isNotEmpty()) {
                     add(
                         ConversationItem.Bubble(
-                            id,
+                            "$id-attachments",
                             id,
                             role,
                             messageAuthor(message),
-                            decoded.body,
+                            "",
                             quote,
                             truncated,
                             timestamp,
@@ -375,115 +398,92 @@ internal fun conversationItems(
                         )
                     )
                 }
-                continue
-            }
-            val lastMeaningfulPart = parts.indexOfLast {
-                it.optionalText("type") == "toolCall" || !it.optionalText("text").isNullOrBlank()
-            }
-            if (parts.none { it.optionalText("type") == "text" } && attachments.isNotEmpty()) {
-                add(
-                    ConversationItem.Bubble(
-                        "$id-attachments",
-                        id,
-                        role,
-                        messageAuthor(message),
-                        "",
-                        quote,
-                        truncated,
-                        timestamp,
-                        attachments,
-                        error,
-                        usage,
-                        streaming,
-                    )
-                )
-            }
-            var quoteShown = false
-            for ((index, part) in parts.withIndex()) {
-                when (part.text("type")) {
-                    "text" -> {
-                        val text =
-                            QuoteCodec.decode(AttachmentCodec.decode(part.text("text")).body).body
-                        if (
-                            text.isNotEmpty() ||
-                                quote != null ||
-                                (!quoteShown && attachments.isNotEmpty())
-                        ) {
-                            add(
-                                ConversationItem.Bubble(
-                                    "$id-text-$index",
-                                    id,
-                                    role,
-                                    messageAuthor(message),
-                                    text,
-                                    if (!quoteShown) quote else null,
-                                    truncated,
-                                    timestamp,
-                                    if (!quoteShown) attachments else emptyList(),
-                                    error,
-                                    usage,
-                                    streaming,
-                                )
-                            )
-                        }
-                        quoteShown = true
-                    }
-                    "thinking" ->
-                        add(
-                            ConversationItem.Thinking(
-                                "$id-thinking-$index",
-                                id,
-                                part.text("text"),
-                                message.optionalText("state") == "streaming" &&
-                                    messageIndex == messages.lastIndex &&
-                                    index == lastMeaningfulPart,
-                            )
-                        )
-                    "toolCall" -> {
-                        val output = outputs[part.text("id")]
-                        if (part.text("name") in SUBAGENT_TOOLS && output?.get("subagentProgress") != null) {
-                            val progress = subagentProgress(output)
-                            if (progress.agents.isNotEmpty()) {
+                var quoteShown = false
+                for ((index, part) in parts.withIndex()) {
+                    when (part.text("type")) {
+                        "text" -> {
+                            val text =
+                                QuoteCodec.decode(AttachmentCodec.decode(part.text("text")).body).body
+                            if (
+                                text.isNotEmpty() ||
+                                    quote != null ||
+                                    (!quoteShown && attachments.isNotEmpty())
+                            ) {
                                 add(
-                                    progress.copy(
-                                        id = "$id-call-${part.text("id")}",
-                                        toolCallId = part.text("id"),
+                                    ConversationItem.Bubble(
+                                        "$id-text-$index",
+                                        id,
+                                        role,
+                                        messageAuthor(message),
+                                        text,
+                                        if (!quoteShown) quote else null,
+                                        truncated,
+                                        timestamp,
+                                        if (!quoteShown) attachments else emptyList(),
+                                        error,
+                                        usage,
+                                        streaming,
                                     )
                                 )
-                                continue
                             }
+                            quoteShown = true
                         }
-                        val arguments = part.text("arguments")
-                        add(
-                            ConversationItem.Activity(
-                                "$id-call-${part.text("id")}",
-                                output?.text("id") ?: id,
-                                part.text("name"),
-                                arguments,
-                                output?.text("text"),
-                                output?.optionalText("state")
-                                    ?: if (id == pendingAssistant) "streaming" else "unavailable",
-                                output?.get("truncated")?.jsonPrimitive?.booleanOrNull == true,
-                                toolCallId = part.text("id"),
-                                outputMessageId = output?.text("id"),
-                                argumentsTruncated = parsedToolArguments(arguments) == null,
-                                details =
-                                    output
-                                        ?.takeIf { part.text("name") == "edit" }
-                                        ?.let(::toolDetails),
+                        "thinking" ->
+                            add(
+                                ConversationItem.Thinking(
+                                    "$id-thinking-$index",
+                                    id,
+                                    part.text("text"),
+                                    message.optionalText("state") == "streaming" &&
+                                        messageIndex == messages.lastIndex &&
+                                        index == lastMeaningfulPart,
+                                )
                             )
-                        )
+                        "toolCall" -> {
+                            val output = outputs[part.text("id")]
+                            if (part.text("name") in SUBAGENT_TOOLS && output?.get("subagentProgress") != null) {
+                                val progress = subagentProgress(output)
+                                if (progress.agents.isNotEmpty()) {
+                                    add(
+                                        progress.copy(
+                                            id = "$id-call-${part.text("id")}",
+                                            toolCallId = part.text("id"),
+                                        )
+                                    )
+                                    continue
+                                }
+                            }
+                            val arguments = part.text("arguments")
+                            add(
+                                ConversationItem.Activity(
+                                    "$id-call-${part.text("id")}",
+                                    output?.text("id") ?: id,
+                                    part.text("name"),
+                                    arguments,
+                                    output?.text("text"),
+                                    output?.optionalText("state")
+                                        ?: if (id == pendingAssistant) "streaming" else "unavailable",
+                                    output?.get("truncated")?.jsonPrimitive?.booleanOrNull == true,
+                                    toolCallId = part.text("id"),
+                                    outputMessageId = output?.text("id"),
+                                    argumentsTruncated = parsedToolArguments(arguments) == null,
+                                    details =
+                                        output
+                                            ?.takeIf { part.text("name") == "edit" }
+                                            ?.let(::toolDetails),
+                                )
+                            )
+                        }
                     }
                 }
-            }
-            if (usage != null) {
-                val lastBubble = (bubbleStart until size).lastOrNull { this[it] is ConversationItem.Bubble }
-                for (i in bubbleStart until size) {
-                    val entry = this[i]
-                    if (i != lastBubble && entry is ConversationItem.Bubble && entry.usage != null)
-                        this[i] = entry.copy(usage = null)
+                if (usage != null) {
+                    val lastBubble = (bubbleStart until size).lastOrNull { this[it] is ConversationItem.Bubble }
+                    for (i in bubbleStart until size) {
+                        val entry = this[i]
+                        if (i != lastBubble && entry is ConversationItem.Bubble && entry.usage != null)
+                            this[i] = entry.copy(usage = null)
+                    }
                 }
             }
         }
-    }
 }

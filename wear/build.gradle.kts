@@ -69,6 +69,11 @@ android {
         }
     }
     testOptions { unitTests.isIncludeAndroidResources = true }
+    lint {
+        // Same policy as the phone app: lint reports only findings missing from this baseline.
+        baseline = file("lint-baseline.xml")
+        checkDependencies = true
+    }
 }
 
 kotlin {

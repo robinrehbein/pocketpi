@@ -157,6 +157,16 @@ class ArtifactSandboxTest {
         webRtcBlock: (WebView) -> Boolean = { true },
     ) = createArtifactWebView(context, page, callbacks, networkLock = lock, webRtcBlock = webRtcBlock)
 
+    @Test fun artifactsStayLightInADarkActivity() {
+        // From API 33 WebView takes prefers-color-scheme from the theme's isLightTheme.
+        val dark = android.view.ContextThemeWrapper(context, android.R.style.Theme_Material_NoActionBar)
+        fun isLight(theme: android.content.res.Resources.Theme) =
+            android.util.TypedValue().let { theme.resolveAttribute(android.R.attr.isLightTheme, it, true) && it.data != 0 }
+        assertFalse(isLight(dark.theme))
+        val view = createArtifactWebView(dark, ArtifactPage(ArtifactKind.Html, "<p>hi</p>"), ArtifactCallbacks(), networkLock = readyLock(), webRtcBlock = { true })
+        assertTrue(isLight(view.context.theme))
+    }
+
     @Test fun theProxyConfigSendsEverythingToTheDeadProxy() {
         val config = artifactProxyConfig()
         val rule = config.proxyRules.single()

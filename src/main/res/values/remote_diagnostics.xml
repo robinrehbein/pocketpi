@@ -1,0 +1,26 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <string name="remote_waiting_for_mac">Waiting for your Mac…</string>
+    <string name="remote_diagnostics_title">Diagnostics</string>
+    <string name="remote_diagnostics_help">Connection and request timings on this phone, kept in memory until the app closes. They contain no messages, IDs or keys.</string>
+    <string name="remote_diagnostics_open">Show diagnostics</string>
+    <string name="remote_diagnostics_empty">Nothing recorded yet.</string>
+    <string name="remote_diagnostics_requests">Requests</string>
+    <string name="remote_diagnostics_request_stats">%1$d× · p50 %2$d ms · p95 %3$d ms</string>
+    <string name="remote_diagnostics_request_problems">Timeouts: %1$d · failures: %2$d</string>
+    <string name="remote_diagnostics_connects">Recent connections</string>
+    <string name="remote_diagnostics_connect_pending">In progress</string>
+    <string name="remote_diagnostics_milliseconds">%1$d ms</string>
+    <string name="remote_diagnostics_phase_opening">Relay</string>
+    <string name="remote_diagnostics_phase_challenge">Mac answer</string>
+    <string name="remote_diagnostics_phase_ready">Encryption</string>
+    <string name="remote_diagnostics_phase_authenticating">Sign-in</string>
+    <string name="remote_diagnostics_phase_approval">Approval</string>
+    <string name="remote_diagnostics_phase_persisting">Saving keys</string>
+    <string name="remote_diagnostics_offline">Offline intervals</string>
+    <string name="remote_diagnostics_offline_row">Offline for %1$.1f s</string>
+    <string name="remote_diagnostics_frames">Received frames: %1$d · decrypt p50 %2$d µs · p95 %3$d µs</string>
+    <string name="remote_diagnostics_copy">Copy report</string>
+    <string name="remote_diagnostics_close">Close</string>
+    <string name="remote_diagnostics_clip_label">PocketPi diagnostics</string>
+</resources>

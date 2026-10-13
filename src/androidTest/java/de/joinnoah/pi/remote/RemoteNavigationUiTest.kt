@@ -187,6 +187,7 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    @LargeScreen
     fun followUpWarningsCanBeDismissedButPendingCannot() {
         openChat()
         val pending = PendingFollowUp(Wire.random(), "still queued")
@@ -414,6 +415,7 @@ class RemoteNavigationUiTest {
 
     @Test
     @Suppress("DEPRECATION")
+    @LargeScreen
     fun systemBarIconsFollowDeviceAppearanceForBothDesigns() {
         for (theme in listOf("system", "synthwave", "system")) {
             compose.runOnIdle { uiSettings.setTheme(theme) }
@@ -1737,6 +1739,7 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    @LargeScreen
     fun savedActivityStateAndFreshViewModelsRestoreIdsAndEncryptedDraftWithoutPromptReplay() {
         openChat()
         compose

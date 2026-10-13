@@ -16,8 +16,18 @@
         android:label="@string/remote_app_name" android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:localeConfig="@xml/locales_config" android:supportsRtl="true" android:usesCleartextTraffic="false"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
-        <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize" android:configChanges="keyboard|keyboardHidden">
+        android:theme="@style/Theme.PocketPi">
+        <!--
+            Rotation, a resized or moved window (split screen, DeX, an external monitor) and a dark
+            mode switch reach Compose as a configuration change instead of a new activity, so the
+            artifact preview, dictation and open pickers stay. A language change (locale) still
+            recreates the activity.
+        -->
+        <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|navigation">
+            <!-- A new free-form window opens wide enough for the inspector beside the chat. -->
+            <layout android:defaultWidth="1280dp" android:defaultHeight="800dp"
+                android:minWidth="360dp" android:minHeight="320dp" />
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -26,7 +36,9 @@
                 <data android:scheme="pocketpi" android:host="session" />
             </intent-filter>
         </activity>
-        <activity android:name=".WatchPairingActivity" android:exported="true">
+        <!-- Its Compose content is always light, so its window stays light too. -->
+        <activity android:name=".WatchPairingActivity" android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

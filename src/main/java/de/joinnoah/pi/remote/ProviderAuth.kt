@@ -595,11 +595,11 @@ internal fun ProviderAuthState.withList(list: ProviderList): ProviderAuthState {
 
 /** The message for an error code of a provider command. */
 internal fun providerErrorMessage(error: Throwable): Int =
-    when (error.message) {
+    if (error.isUnsupported) R.string.providers_error_unsupported
+    else when (error.hostCode) {
         "login_in_progress" -> R.string.providers_error_in_progress
         "rate_limited" -> R.string.providers_error_rate_limited
         "exists" -> R.string.providers_error_exists
-        "unsupported" -> R.string.providers_error_unsupported
         "not_found" -> R.string.providers_error_not_found
         "already_resolved" -> R.string.providers_error_resolved
         "forbidden" -> R.string.providers_error_forbidden

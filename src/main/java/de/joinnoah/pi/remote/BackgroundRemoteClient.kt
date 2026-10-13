@@ -39,7 +39,7 @@ internal fun interface RemoteCommands {
 internal class BackgroundRemoteClient(
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1),
     private val transportFactory: (CoroutineScope) -> RemoteTransport = {
-        SecureRemoteTransport(it, backgroundHttp)
+        SecureRemoteTransport(it, backgroundHttp, diagnosticsName = "background")
     },
 ) {
     suspend fun <T> use(host: PairedHost, block: suspend (RemoteCommands) -> T): T {
@@ -75,7 +75,8 @@ internal class BackgroundRemoteClient(
                             completion.completeExceptionally(
                                 RemoteCommandException(payload.obj("error").text("code"))
                             )
-                    } catch (_: Exception) {
+                    } catch (swallowed: Exception) {
+                        Diagnostics.caught("background.message", swallowed)
                         // Events and malformed frames are irrelevant to a one-shot command.
                     }
                 }
@@ -96,7 +97,8 @@ internal class BackgroundRemoteClient(
                             transport.send(
                                 Wire.objectOf("type" to type, "requestId" to id, *fields)
                             )
-                        } catch (_: Exception) {
+                        } catch (swallowed: Exception) {
+                            Diagnostics.caught("background.use", swallowed)
                             pending.remove(id)
                             completion.completeExceptionally(RemoteConnectionException())
                         }
@@ -154,7 +156,8 @@ internal suspend fun RemoteCommands.sessionLabel(
                     lastAssistantPreview(snapshotMessages(sessionId))
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: Exception) {
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("background.sessionLabel", swallowed)
                     null
                 }
             }

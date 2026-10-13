@@ -20,7 +20,8 @@ class RemoteMessagingService : FirebaseMessagingService() {
         val paired =
             try {
                 PairingStore(this).load().any { it.routeId == payload.routeId }
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("push.onMessageReceived", swallowed)
                 false
             }
         if (!paired) return
