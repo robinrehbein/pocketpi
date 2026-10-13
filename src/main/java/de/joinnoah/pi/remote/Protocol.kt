@@ -244,6 +244,7 @@ class SecureChannel(secret: String, private val context: JsonObject, client: Boo
 
     @Synchronized
     fun open(frame: JsonObject): JsonObject = guarded {
+        val started = System.nanoTime()
         Wire.keys(frame, setOf("v", "type", "connectionId", "seq", "ciphertext"))
         require(
             frame.long("v") == 1L &&
@@ -262,6 +263,8 @@ class SecureChannel(secret: String, private val context: JsonObject, client: Boo
         cipher.updateAAD(Wire.aad(context, receiveDirection, receiveSequence))
         val payload = Wire.parse(Wire.utf8(cipher.doFinal(bytes)), Wire.MAX_PLAINTEXT)
         receiveSequence++
+        // The outer frame was parsed by the caller; this times decrypting and parsing the payload.
+        Diagnostics.frame(System.nanoTime() - started, bytes.size - 16)
         payload
     }
 }

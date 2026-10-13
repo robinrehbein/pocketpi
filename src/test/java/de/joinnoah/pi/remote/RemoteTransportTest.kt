@@ -64,6 +64,11 @@ class RemoteTransportTest {
         var failed = false
         var failureCount = 0
         var capabilities: Set<String>? = null
+        val phases = mutableListOf<HandshakePhase>()
+
+        override fun progress(phase: HandshakePhase) {
+            phases += phase
+        }
 
         override fun ready(capabilities: Set<String>) {
             this.capabilities = capabilities
@@ -150,8 +155,7 @@ class RemoteTransportTest {
         return server
     }
 
-    private fun TestScope.authenticate(capabilities: List<String>): Listener {
-        val socket = Socket()
+    private fun TestScope.authenticate(capabilities: List<String>, socket: Socket = Socket()): Listener {
         val listener = Listener { }
         val transport = SecureRemoteTransport(backgroundScope, socket) { "Test device" }
             .also { it.listener = listener }
@@ -238,6 +242,192 @@ class RemoteTransportTest {
         advanceTimeBy(20001)
         runCurrent()
         assertEquals(listOf(true), listener.reconnects)
+    }
+
+    @Test
+    fun deviceHandshakeReportsEachPhaseInOrder() = runTest {
+        val listener = authenticate(listOf("session.feature"))
+
+        assertEquals(
+            listOf(
+                HandshakePhase.OPENING,
+                HandshakePhase.CHALLENGE,
+                HandshakePhase.READY,
+                HandshakePhase.AUTHENTICATING,
+                HandshakePhase.ACTIVE,
+            ),
+            listener.phases,
+        )
+    }
+
+    @Test
+    fun pairingReportsApprovalAndPersistencePhases() = runTest {
+        val socket = Socket()
+        val listener = Listener { }
+        val transport = SecureRemoteTransport(backgroundScope, socket) { "Test device" }
+            .also { it.listener = listener }
+
+        approve(transport, socket)
+
+        assertEquals(
+            listOf(
+                HandshakePhase.OPENING,
+                HandshakePhase.CHALLENGE,
+                HandshakePhase.READY,
+                HandshakePhase.APPROVAL,
+                HandshakePhase.PERSISTING,
+                HandshakePhase.PAIRED,
+            ),
+            listener.phases,
+        )
+    }
+
+    @Test
+    fun stalledHandshakeRecordsTheSilentPhaseAsItsCause() = runTest {
+        Diagnostics.clear()
+        Diagnostics.clock = { testScheduler.currentTime }
+        try {
+            val socket = Socket()
+            val listener = Listener { }
+            SecureRemoteTransport(backgroundScope, socket) { "Test device" }
+                .also { it.listener = listener }
+                .connect(PairedHost(Wire.random(), "https://relay.test", Wire.random(), Wire.random(32), "Host"))
+            advanceTimeBy(300)
+            socket.open()
+            runCurrent()
+            advanceTimeBy(HANDSHAKE_TIMEOUT_MILLIS)
+            runCurrent()
+
+            assertEquals(listOf(HandshakePhase.OPENING, HandshakePhase.CHALLENGE), listener.phases)
+            val connect = Diagnostics.report().connects.single()
+            assertEquals("timeout.challenge", connect.outcome)
+            assertEquals(HANDSHAKE_TIMEOUT_MILLIS, connect.durationMs)
+            assertEquals(
+                listOf(HandshakePhase.OPENING to 300L, HandshakePhase.CHALLENGE to HANDSHAKE_TIMEOUT_MILLIS - 300),
+                connect.breakdown(),
+            )
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun droppedEstablishedConnectionKeepsItsCloseCodeAndExceptionClass() = runTest {
+        Diagnostics.clear()
+        try {
+            val failing = Socket()
+            authenticate(emptyList(), failing)
+            failing.incoming.onFailure(failing, java.net.SocketException("reset by 10.0.0.2"), null)
+            runCurrent()
+            val closing = Socket()
+            authenticate(emptyList(), closing)
+            closing.incoming.onClosed(closing, 1012, "restart")
+            runCurrent()
+
+            val report = Diagnostics.report()
+            assertEquals(listOf("ok", "ok"), report.connects.map { it.outcome })
+            assertEquals(
+                listOf("closed.1012", "failure.SocketException"),
+                report.entries.filter { it.kind == Diagnostics.Kind.FAILURE }.map { it.outcome },
+            )
+            assertTrue(report.entries.none { "10.0.0.2" in it.outcome || "restart" in it.outcome })
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun waitingForTheMacShowsFiveSecondsAfterTheRelayAnswersAndClearsOnTheChallenge() = runTest {
+        val deviceKey = Wire.random(32)
+        val host = PairedHost(Wire.random(), "https://relay.test", Wire.random(), deviceKey, "Host")
+        val socket = Socket()
+        val repository =
+            DefaultRemoteRepository(
+                object : PairingStorage {
+                    override fun load() = listOf(host)
+
+                    override fun save(hosts: List<PairedHost>) {}
+                },
+                object : DraftStorage {
+                    override fun load() = emptyMap<DraftKey, StoredDraft>()
+
+                    override fun save(drafts: Map<DraftKey, StoredDraft>) {}
+                },
+                SecureRemoteTransport(backgroundScope, socket) { "Test device" },
+                backgroundScope,
+                StandardTestDispatcher(testScheduler),
+                now = { testScheduler.currentTime },
+            )
+        backgroundScope.launch { repository.activate(RemoteSelection(host.routeId)) }
+        runCurrent()
+        assertEquals(R.string.remote_connecting, repository.state.value.connection)
+
+        // Before the relay answers, a slow network is not the Mac's fault.
+        advanceTimeBy(HOST_WAIT_HINT_MILLIS + 1)
+        assertEquals(R.string.remote_connecting, repository.state.value.connection)
+
+        socket.open()
+        runCurrent()
+        advanceTimeBy(HOST_WAIT_HINT_MILLIS - 1)
+        runCurrent()
+        assertEquals(R.string.remote_connecting, repository.state.value.connection)
+        advanceTimeBy(2)
+        runCurrent()
+        assertEquals(R.string.remote_waiting_for_mac, repository.state.value.connection)
+
+        val hello = Wire.parse(socket.sent.single())
+        socket.receive(
+            Wire.objectOf(
+                "v" to 1,
+                "type" to "challenge",
+                "connectionId" to hello.text("connectionId"),
+                "serverNonce" to Wire.random(32),
+            )
+        )
+        runCurrent()
+        assertEquals(R.string.remote_connecting, repository.state.value.connection)
+        // Still inside the transport's 20 s handshake window.
+        advanceTimeBy(HOST_WAIT_HINT_MILLIS + 1)
+        runCurrent()
+        assertEquals(R.string.remote_connecting, repository.state.value.connection)
+    }
+
+    @Test
+    fun anotherActivationOnTheSameHostKeepsWaitingForTheMac() = runTest {
+        val host = PairedHost(Wire.random(), "https://relay.test", Wire.random(), Wire.random(32), "Host")
+        val socket = Socket()
+        val repository =
+            DefaultRemoteRepository(
+                object : PairingStorage {
+                    override fun load() = listOf(host)
+
+                    override fun save(hosts: List<PairedHost>) {}
+                },
+                object : DraftStorage {
+                    override fun load() = emptyMap<DraftKey, StoredDraft>()
+
+                    override fun save(drafts: Map<DraftKey, StoredDraft>) {}
+                },
+                SecureRemoteTransport(backgroundScope, socket) { "Test device" },
+                backgroundScope,
+                StandardTestDispatcher(testScheduler),
+                now = { testScheduler.currentTime },
+            )
+        backgroundScope.launch { repository.activate(RemoteSelection(host.routeId)) }
+        runCurrent()
+        socket.open()
+        runCurrent()
+        advanceTimeBy(HOST_WAIT_HINT_MILLIS + 1)
+        runCurrent()
+        assertEquals(R.string.remote_waiting_for_mac, repository.state.value.connection)
+
+        // Opening a session joins the attempt in flight, which reports no new phase.
+        backgroundScope.launch {
+            repository.activate(RemoteSelection(host.routeId, "project", "session"), ActivationMode.USER_OPEN)
+        }
+        runCurrent()
+        assertEquals(1, socket.sent.size)
+        assertEquals(R.string.remote_waiting_for_mac, repository.state.value.connection)
     }
 
     @Test

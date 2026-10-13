@@ -60,6 +60,10 @@ private const val RECONNECT_MAX_MILLIS = 30_000L
 private const val RECONNECT_JITTER = 0.2
 private const val UNREACHABLE_AFTER_FAILURES = 3
 private const val SERVICE_RESTART_CLOSE_CODE = 1012
+/** connect() outlasts the transport's own handshake timeout, so only one of them fires. */
+internal const val CONNECT_READY_WAIT_MILLIS = HANDSHAKE_TIMEOUT_MILLIS + 2_000L
+/** The relay answered but the Mac has not, after this long: say so instead of "Connecting…". */
+internal const val HOST_WAIT_HINT_MILLIS = 5_000L
 
 internal fun opaqueId(value: String): Boolean =
     value.isNotEmpty() &&
@@ -96,6 +100,14 @@ internal fun validatedToolOutputChunk(
     return ValidatedToolOutputChunk(total, bytes, data.flag("truncated"), data.flag("isError"))
 }
 
+/**
+ * The app's single connection to a paired Mac and the state the UI renders from it.
+ *
+ * Threading: all mutable state, [state] writes included, is confined to the main thread. The
+ * [scope] runs on `Dispatchers.Main.immediate` in the app, transport callbacks arrive on it, and
+ * only storage work hops to [io] and back. That is why `update {}` may read, modify and write
+ * without a lock; debug builds check it there (see [checkMainThread]).
+ */
 class DefaultRemoteRepository(
     private val pairings: PairingStorage,
     private val draftStorage: DraftStorage,
@@ -203,6 +215,11 @@ class DefaultRemoteRepository(
     private var reconnectAttempts = 0
     private var failureStreak = 0
     private var serviceRestart = false
+    /** When the connection was lost, for the offline interval Diagnostics records on ready(). */
+    private var offlineSince: Long? = null
+    private var hostWaitHint: Job? = null
+    /** Whether the current attempt reached the relay and the Mac has been silent for the hint delay. */
+    private var macSilent = false
     private var restartRetryUsed = false
     private var reconnectEnabled = true
     /** The selection the latest activation was opening, whether or not it got selected. */
@@ -293,7 +310,8 @@ class DefaultRemoteRepository(
             val hosts =
                 try {
                     withContext(io) { pairings.load() }.also { pairingsLoaded = true }
-                } catch (_: Exception) {
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("repo.loadPairings", swallowed)
                     reportError(R.string.remote_storage_error)
                     null
                 }
@@ -307,7 +325,8 @@ class DefaultRemoteRepository(
                                 .filterKeys { it in allowed && it !in removedRoutes }
                         )
                         navigationLoaded = true
-                    } catch (_: Exception) {
+                    } catch (swallowed: Exception) {
+                        Diagnostics.caught("repo.loadNavigation", swallowed)
                         reportError(R.string.remote_storage_error)
                     }
                 }
@@ -322,6 +341,7 @@ class DefaultRemoteRepository(
                 draftsAvailable = true
                 cleanupAttachments()
             } catch (e: Exception) {
+                Diagnostics.caught("repo.loadDrafts", e)
                 storageFailure = e
                 reportError(R.string.remote_storage_error)
             }
@@ -337,6 +357,7 @@ class DefaultRemoteRepository(
                     } else storageFailure?.let { throw it }
                     write.done.complete(Unit)
                 } catch (e: Exception) {
+                    Diagnostics.caught("repo.writeDrafts", e)
                     storageFailure = e
                     reportError(R.string.remote_storage_error)
                     write.done.completeExceptionally(e)
@@ -354,10 +375,13 @@ class DefaultRemoteRepository(
                                 write.version == navigationVersion
                         ) {
                             val snapshots = savedNavigation.toMap()
-                            withContext(io) { navigationStorage?.save(snapshots) }
+                            withContext(io) {
+                                Diagnostics.trace("PocketPi.nav.save") { navigationStorage?.save(snapshots) }
+                            }
                         }
                     }
-                } catch (_: Exception) {
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("repo.writeNavigation", swallowed)
                     reportError(R.string.remote_storage_error)
                 }
             }
@@ -368,7 +392,16 @@ class DefaultRemoteRepository(
                     serviceRestart = code == SERVICE_RESTART_CLOSE_CODE
                 }
 
+                override fun progress(phase: HandshakePhase) {
+                    handshakeProgress(phase)
+                }
+
                 override fun ready(capabilities: Set<String>) {
+                    cancelHostWaitHint()
+                    offlineSince?.let {
+                        Diagnostics.record(Diagnostics.Kind.OFFLINE, "reconnected", Diagnostics.now() - it)
+                    }
+                    offlineSince = null
                     resetReconnect()
                     capabilityRoute = CAPABILITIES_V2_ROUTE
                     update {
@@ -399,6 +432,7 @@ class DefaultRemoteRepository(
                     try {
                         withContext(io) { pairings.save(hosts) }
                     } catch (e: Exception) {
+                        Diagnostics.caught("repo.persistPairing", e)
                         reportError(R.string.remote_storage_error)
                         throw e
                     }
@@ -421,8 +455,41 @@ class DefaultRemoteRepository(
     }
 
     private fun update(block: (RemoteState) -> RemoteState) {
+        checkMainThread()
         mutable.value = block(mutable.value)
     }
+
+    /**
+     * Once the relay is reached and the Mac stays silent for [HOST_WAIT_HINT_MILLIS], the
+     * connection line says the app waits for the Mac; any later phase puts "Connecting…" back.
+     */
+    private fun handshakeProgress(phase: HandshakePhase) {
+        cancelHostWaitHint()
+        if (state.value.connection == R.string.remote_waiting_for_mac)
+            update { it.copy(connection = R.string.remote_connecting) }
+        if (phase != HandshakePhase.CHALLENGE) return
+        hostWaitHint = scope.launch {
+            delay(HOST_WAIT_HINT_MILLIS)
+            macSilent = true
+            if (!state.value.connected && state.value.connection == R.string.remote_connecting)
+                update { it.copy(connection = R.string.remote_waiting_for_mac) }
+        }
+    }
+
+    private fun cancelHostWaitHint() {
+        hostWaitHint?.cancel()
+        hostWaitHint = null
+        macSilent = false
+    }
+
+    /**
+     * The connection line while [host] is not connected: an activation that joins an attempt
+     * still waiting on a silent Mac keeps the hint, since no new phase will bring it back.
+     */
+    private fun connectingLine(host: PairedHost) =
+        if (macSilent && ready?.isActive == true && activeHost?.routeId == host.routeId)
+            R.string.remote_waiting_for_mac
+        else R.string.remote_connecting
 
     private fun clearNavigationCache() {
         cachedProjects = null
@@ -452,7 +519,8 @@ class DefaultRemoteRepository(
             while (savedNavigation.size > 8) savedNavigation.remove(savedNavigation.keys.first())
             navigationLoaded = true
             true
-        } catch (_: Exception) {
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("repo.ensureNavigationLoaded", swallowed)
             reportError(R.string.remote_storage_error)
             false
         }
@@ -585,7 +653,8 @@ class DefaultRemoteRepository(
                         }
                     } catch (e: CancellationException) {
                         throw e
-                    } catch (_: Exception) {
+                    } catch (swallowed: Exception) {
+                        Diagnostics.caught("repo.refreshProjectChats", swallowed)
                         // A failed project request leaves its cached rows offline.
                     }
                 }
@@ -708,7 +777,8 @@ class DefaultRemoteRepository(
                 }
             } catch (_: CancellationException) {
                 throw CancellationException()
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.closeSession", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
             } finally {
                 closingSessions -= sessionId
@@ -736,7 +806,8 @@ class DefaultRemoteRepository(
                 }
             } catch (_: CancellationException) {
                 throw CancellationException()
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.unshareProject", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
             } finally {
                 unsharingProjects -= projectId
@@ -858,6 +929,7 @@ class DefaultRemoteRepository(
                 persist().await()
             }
             if (previousRoute != host.routeId) {
+                offlineSince = null
                 resetReconnect()
                 clearNavigationCache()
                 attachmentBytes.clear()
@@ -923,7 +995,8 @@ class DefaultRemoteRepository(
             }
             transport.connect(host)
         }
-        if (withTimeoutOrNull(30000) { checkNotNull(ready).await() } == null) {
+        if (withTimeoutOrNull(CONNECT_READY_WAIT_MILLIS) { checkNotNull(ready).await() } == null) {
+            Diagnostics.record(Diagnostics.Kind.FAILURE, "connect.wait", CONNECT_READY_WAIT_MILLIS, outcome = "timeout")
             if (epoch == selectionEpoch) {
                 // Goes offline and schedules the next attempt like any transport failure.
                 failed(true, R.string.remote_connection_error)
@@ -963,18 +1036,30 @@ class DefaultRemoteRepository(
             ),
         )
         completions[id] = completion
+        val started = Diagnostics.now()
+        val traceName = "PocketPi.req.$type"
+        val cookie = Diagnostics.beginAsync(traceName)
+        var outcome = "failed"
+        var ended: Long? = null
         try {
             // Set before sending: a send that throws may still have reached the host.
             onSent?.invoke()
             transport.send(payload)
             val result =
                 withTimeoutOrNull(timeoutMillis) { completion.await() }
-                    ?: throw IllegalStateException("Request timed out")
+                    ?: run {
+                        outcome = "timeout"
+                        throw IllegalStateException("Request timed out")
+                    }
+            outcome = "ok"
             checkEpoch(epoch)
             if (type == "projects.list" && result.text("kind") == "projects") {
                 if (id.startsWith(CAPABILITIES_V2_ROUTE) && result["capabilities"] !is JsonArray) {
                     // A host that predates the v2 route treats the ID as opaque and sends no list.
                     capabilityRoute = CAPABILITIES_V1_ROUTE
+                    // The retry records its own round trip; this one ends here.
+                    outcome = "retry.v1"
+                    ended = Diagnostics.now()
                     return request(type, epoch, *fields, draft = draft, timeoutMillis = timeoutMillis)
                 }
                 val advertised = (result["capabilities"] as? JsonArray)
@@ -995,11 +1080,25 @@ class DefaultRemoteRepository(
                 if (PROVIDER_AUTH_CAPABILITY in merged) resumeProviderAuth()
             }
             return result
+        } catch (e: Throwable) {
+            if (outcome != "timeout") outcome = requestOutcome(e)
+            throw e
         } finally {
             requests.take(id, epoch)
             completions.remove(id)
+            Diagnostics.endAsync(traceName, cookie)
+            // The payload is ASCII JSON in all but rare cases, so its length stands for its size.
+            Diagnostics.request(type, (ended ?: Diagnostics.now()) - started, payload.toString().length.toLong(), outcome)
         }
     }
+
+    /** A request's outcome for Diagnostics: the host's error code, or what ended the wait. */
+    private fun requestOutcome(error: Throwable): String =
+        when (error) {
+            is RemoteRequestException -> "error." + error.code
+            is CancellationException -> "cancelled"
+            else -> if (error.message == "Connection lost") "lost" else error.javaClass.simpleName
+        }
 
     /** The error's `message`, shortened; only some callers read it. */
     private fun hostMessage(error: JsonObject): String? =
@@ -1113,7 +1212,8 @@ class DefaultRemoteRepository(
                     }
                 else -> error("Unknown payload")
             }
-        } catch (_: Exception) {
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("repo.receive", swallowed)
             failed(false, R.string.remote_connection_error)
         }
     }
@@ -1301,20 +1401,19 @@ class DefaultRemoteRepository(
             .map { withSessionTitle(withSessionStatus(it)) }
     }
 
-    private fun publishTimeline() {
-        timeline?.let { t ->
-            if (t.status != state.value.status) state.value.selection.sessionId?.let(::dropStaleChildControl)
-            update {
-                it.copy(
-                    messages = t.messages,
-                    questions = t.questions,
-                    status = t.status,
-                    nextCursor = t.nextCursor,
-                    compaction = t.compaction,
-                )
-            }
-            cacheCurrentScreen()
+    private fun publishTimeline(): Unit = Diagnostics.trace("PocketPi.publishTimeline") {
+        val t = timeline ?: return@trace
+        if (t.status != state.value.status) state.value.selection.sessionId?.let(::dropStaleChildControl)
+        update {
+            it.copy(
+                messages = t.messages,
+                questions = t.questions,
+                status = t.status,
+                nextCursor = t.nextCursor,
+                compaction = t.compaction,
+            )
         }
+        cacheCurrentScreen()
     }
 
     private suspend fun snapshot(epoch: Long, older: Boolean = false) {
@@ -1348,7 +1447,8 @@ class DefaultRemoteRepository(
         scope.launch {
             try {
                 snapshot(epoch, older)
-            } catch (_: CancellationException) {} catch (_: Exception) {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) {
+                Diagnostics.caught("repo.snapshotAsync", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
             }
         }
@@ -1519,19 +1619,39 @@ class DefaultRemoteRepository(
         stopReconnectTimer()
         requestedSelection = selection
         update { it.copy(loading = true, deniedRouteId = null) }
+        val started = Diagnostics.now()
+        val cookie = Diagnostics.beginAsync("PocketPi.activate")
+        var outcome = "failed"
+        var projectsCached = false
+        var sessionsCached = false
+        var chatCached = false
+        var cachedShown = false
         try {
             val host = state.value.hosts.find { it.routeId == selection.routeId }
             if (host == null) {
                 select(RemoteSelection(), null, emptyList())
+                outcome = "no_host"
                 return state.value.selection
+            }
+            fun showCached() {
+                showCachedSelection(selection, host)
+                if (!cachedShown && state.value.selection.routeId == host.routeId && state.value.projects.isNotEmpty()) {
+                    cachedShown = true
+                    Diagnostics.record(
+                        Diagnostics.Kind.ACTIVATE,
+                        "activate.cached",
+                        Diagnostics.now() - started,
+                    )
+                }
             }
             val alreadyConnected = state.value.connected && activeHost?.routeId == host.routeId
             if (!alreadyConnected) {
                 stopToolOutput()
+                val line = connectingLine(host)
                 update {
                     it.copy(
                         connected = false,
-                        connection = R.string.remote_connecting,
+                        connection = line,
                         compaction = null,
                         compactionRequesting = false,
                         toolOutput = null,
@@ -1553,14 +1673,15 @@ class DefaultRemoteRepository(
             }
             // Explicit opens can fork historical sessions: wait for canonical IDs before
             // changing selection, but retain cached content while the snapshot refreshes.
-            if (useCache && mode == ActivationMode.RESTORE) showCachedSelection(selection, host)
+            if (useCache && mode == ActivationMode.RESTORE) showCached()
             connect(host, epoch)
-            if (useCache && mode == ActivationMode.RESTORE) showCachedSelection(selection, host)
-            val projects =
+            if (useCache && mode == ActivationMode.RESTORE) showCached()
+            val reusedProjects =
                 cachedProjects
                     ?.takeIf { useCache && !force && alreadyConnected && it.first == host.routeId }
                     ?.second
-                    ?: request("projects.list", epoch).array("items")
+            projectsCached = reusedProjects != null
+            val projects = reusedProjects ?: request("projects.list", epoch).array("items")
             checkEpoch(epoch)
             cachedProjects = host.routeId to projects
             val project = projects.find { it.text("id") == selection.projectId }
@@ -1568,6 +1689,7 @@ class DefaultRemoteRepository(
             if (project == null) {
                 select(parent, host, projects)
                 refreshProjectChats(host.routeId, projects, epoch)
+                outcome = "parent"
                 return parent
             }
             val cached =
@@ -1583,6 +1705,7 @@ class DefaultRemoteRepository(
                         selection.sessionId != null &&
                         list.none { it.text("id") == selection.sessionId }
                 } ?: listSessions(project.text("id"), epoch).also { sessionsFetchedNow = true }
+            sessionsCached = !sessionsFetchedNow
             checkEpoch(epoch)
             cachedSessions = CachedSessions(host.routeId, project.text("id"), project, sessions)
             val session = sessions.find { it.text("id") == selection.sessionId }
@@ -1593,6 +1716,7 @@ class DefaultRemoteRepository(
                             session.text("status") == "offline"))
             ) {
                 select(parent, host, projects, project, sessions, sessionsFresh = sessionsFetchedNow)
+                outcome = "parent"
                 return parent
             }
             val chosen =
@@ -1604,10 +1728,12 @@ class DefaultRemoteRepository(
                 projects.find { it.text("id") == chosen.text("projectId") }
                     ?: run {
                         select(parent, host, projects, project, sessions, sessionsFresh = sessionsFetchedNow)
+                        outcome = "parent"
                         return parent
                     }
             val canonical =
                 RemoteSelection(host.routeId, canonicalProject.text("id"), chosen.text("id"))
+            chatCached = useCache && chatCache[canonical] != null
             select(
                 canonical,
                 host,
@@ -1622,30 +1748,44 @@ class DefaultRemoteRepository(
                 snapshot(epoch)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.activate.2", swallowed)
                 checkEpoch(epoch)
                 if (chatCache[canonical] != null) {
                     reportError(R.string.remote_request_error)
+                    outcome = "snapshot_failed"
                     return canonical
                 }
                 cachedChat = null
                 select(parent, host, projects, project, sessions, sessionsFresh = sessionsFetchedNow)
                 reportError(R.string.remote_request_error)
+                outcome = "snapshot_failed"
                 return parent
             }
             refreshConfiguration()
             refreshAdvisor()
             refreshCommands()
+            outcome = "ok"
             return canonical
         } catch (e: CancellationException) {
+            outcome = "cancelled"
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Diagnostics.caught("repo.activate", e)
             checkEpoch(epoch)
             // A lost connection already set its own, more specific error.
             if (state.value.error !in CONNECTION_ERRORS || state.value.connected)
                 reportError(R.string.remote_request_error)
             return if (mode == ActivationMode.USER_OPEN) previousSelection else state.value.selection
         } finally {
+            Diagnostics.endAsync("PocketPi.activate", cookie)
+            fun hit(cached: Boolean) = if (cached) "hit" else "miss"
+            Diagnostics.record(
+                Diagnostics.Kind.ACTIVATE,
+                "activate." + mode.name.lowercase() + if (force) ".force" else "",
+                Diagnostics.now() - started,
+                outcome = "$outcome:projects.${hit(projectsCached)}:sessions.${hit(sessionsCached)}:chat.${hit(chatCached)}",
+            )
             if (epoch == selectionEpoch) {
                 update { it.copy(loading = false) }
                 cacheCurrentScreen()
@@ -1682,7 +1822,8 @@ class DefaultRemoteRepository(
             return canonical
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("repo.createSession", swallowed)
             reportError(R.string.remote_request_error)
             return state.value.selection
         } finally {
@@ -1788,6 +1929,7 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            Diagnostics.caught("repo.forkFrom", e)
             failure = errorText((e as? RemoteRequestException)?.code)
         } finally {
             if (epoch == selectionEpoch) update { it.copy(loading = false) }
@@ -1834,14 +1976,16 @@ class DefaultRemoteRepository(
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("repo.openNotification", swallowed)
             if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
         }
         if (resolved != null) return activate(resolved, ActivationMode.USER_OPEN)
         if (epoch == selectionEpoch && previous.host != null && previous.host.routeId != routeId) {
             try {
                 connect(previous.host, epoch)
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.openNotification.2", swallowed)
                 reportError(R.string.remote_connection_error)
             }
             if (epoch == selectionEpoch) {
@@ -1868,7 +2012,8 @@ class DefaultRemoteRepository(
         val value =
             try {
                 Wire.pairing(text.trim())
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.pair", swallowed)
                 reportError(R.string.remote_invalid_qr)
                 return null
             }
@@ -1903,7 +2048,8 @@ class DefaultRemoteRepository(
             return activate(RemoteSelection(host.routeId))
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("repo.pair.2", swallowed)
             if (state.value.error == null) reportError(R.string.remote_connection_error)
             return null
         } finally {
@@ -1913,6 +2059,8 @@ class DefaultRemoteRepository(
 
     override fun disconnect() {
         reconnectEnabled = false
+        offlineSince = null
+        cancelHostWaitHint()
         cancelSelection()
         clearNavigationCache()
         projectImageBytes.clear()
@@ -1968,13 +2116,15 @@ class DefaultRemoteRepository(
                                 withContext(io) { navigationStorage?.save(snapshots) }
                             }
                         }
-                    } catch (_: Exception) {
+                    } catch (swallowed: Exception) {
+                        Diagnostics.caught("repo.remove", swallowed)
                         reportError(R.string.remote_storage_error)
                     }
                     if (activeHost?.routeId == routeId) disconnect()
                     update { it.copy(hosts = remaining) }
                 }
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.remove.2", swallowed)
                 reportError(R.string.remote_storage_error)
             } finally {
                 if (removalJobs[routeId] === coroutineContext[Job]) removalJobs.remove(routeId)
@@ -1985,6 +2135,13 @@ class DefaultRemoteRepository(
     }
 
     private fun failed(reconnect: Boolean, error: Int) {
+        Diagnostics.record(
+            Diagnostics.Kind.FAILURE,
+            "connection." + if (state.value.connected) "lost" else "attempt",
+            outcome = errorName(error) + if (reconnect) ".retry" else ".stop",
+        )
+        if (offlineSince == null && activeHost != null) offlineSince = Diagnostics.now()
+        cancelHostWaitHint()
         deferredRecovery = null
         generation++
         folderVersion++
@@ -2074,6 +2231,7 @@ class DefaultRemoteRepository(
                 reconnectAttempts = 0
             }
             val wait = reconnectDelay(reconnectAttempts++, immediate)
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "reconnect.backoff", wait, outcome = "attempt.$reconnectAttempts")
             retry?.cancel()
             update { it.copy(reconnectAt = now() + wait) }
             retry = scope.launch {
@@ -2087,6 +2245,18 @@ class DefaultRemoteRepository(
             }
         } else update { it.copy(reconnectAt = null) }
     }
+
+    /** A failure's message resource as a word for Diagnostics, never the text itself. */
+    private fun errorName(error: Int): String =
+        when (error) {
+            R.string.remote_connection_error -> "connection_error"
+            R.string.remote_unreachable -> "unreachable"
+            R.string.remote_device_revoked -> "revoked"
+            R.string.remote_device_paused -> "paused"
+            R.string.remote_denied -> "denied"
+            R.string.remote_storage_error -> "storage_error"
+            else -> "other"
+        }
 
     private fun reconnectDelay(attempt: Int, immediate: Boolean): Long {
         if (immediate) return 0
@@ -2158,7 +2328,8 @@ class DefaultRemoteRepository(
                 if (epoch == selectionEpoch)
                     updateSessionTitle(sessionId, confirmed.text("title"), originalTitle)
             } catch (_: CancellationException) {
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.renameSession", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
             } finally {
                 renamingIds.remove(sessionId)
@@ -2195,28 +2366,33 @@ class DefaultRemoteRepository(
     }
 
     private fun recover(signal: RemoteRecovery.Signal) {
-        if (!reconnectEnabled || !recovery.canRecover) return
-        if (pairing?.isActive == true || state.value.loading) return
+        fun note(outcome: String) =
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "recover." + signal.name.lowercase(), outcome = outcome)
+        if (!reconnectEnabled || !recovery.canRecover) return note("disabled")
+        if (pairing?.isActive == true || state.value.loading) return note("busy")
         if (signal == RemoteRecovery.Signal.NETWORK_REPLACED && activeHost != null) {
+            note("reconnect")
             failed(true, R.string.remote_connection_error)
             return
         }
         if (hasPendingRecoveryWork()) {
             deferredRecovery = signal
-            return
+            return note("deferred")
         }
         stopReconnectTimer()
-        if (recoveryJob?.isActive == true) return
+        if (recoveryJob?.isActive == true) return note("running")
         val selection = state.value.selection
         val epoch = selectionEpoch
-        if (selection.routeId == null || state.value.hosts.none { it.routeId == selection.routeId }) return
+        if (selection.routeId == null || state.value.hosts.none { it.routeId == selection.routeId }) return note("no_host")
+        note("activate")
         recoveryJob =
             scope.launch {
                 try {
                     if (epoch == selectionEpoch && recovery.canRecover && reconnectEnabled)
                         activate(selection, ActivationMode.RESTORE, force = true)
                 } catch (_: CancellationException) {
-                } catch (_: Exception) {
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("repo.recover", swallowed)
                     if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
                 }
             }
@@ -2247,6 +2423,7 @@ class DefaultRemoteRepository(
                     update { it.copy(configuration = confirmed) }
                 }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.refreshConfiguration", e)
                 if (epoch == selectionEpoch && version == configurationVersion) {
                     if (e.message == "unsupported")
                         update {
@@ -2286,6 +2463,7 @@ class DefaultRemoteRepository(
                     update { it.copy(contextUsage = usage) }
                 }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.refreshContextUsage", e)
                 if (epoch == selectionEpoch && version == contextVersion) {
                     if (e.message == "unsupported")
                         update { it.copy(
@@ -2318,6 +2496,7 @@ class DefaultRemoteRepository(
                 val result = request("session.compact", epoch, "sessionId" to sessionId)
                 require(result.text("kind") == "accepted" && result.text("sessionId") == sessionId)
             } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.compactContext", e)
                 if (epoch == selectionEpoch) {
                     if (e.message == "unsupported")
                         update { it.copy(unavailableCapabilities = it.unavailableCapabilities + COMPACT_CAPABILITY) }
@@ -2412,6 +2591,7 @@ class DefaultRemoteRepository(
                 if (epoch == selectionEpoch && version == configurationVersion)
                     update { it.copy(configuration = confirmed, contextUsage = null) }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.changeConfiguration", e)
                 failed = true
                 if (epoch == selectionEpoch && version == configurationVersion) {
                     configurationNeedsRefresh = true
@@ -2457,6 +2637,7 @@ class DefaultRemoteRepository(
                     update { it.copy(advisor = confirmed, advisorChanging = false,
                         unavailableCapabilities = it.unavailableCapabilities - ADVISOR_CAPABILITY) }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.refreshAdvisor", e)
                 if (epoch == selectionEpoch && version == advisorVersion) {
                     if (e.message == "unsupported")
                         update { it.copy(advisor = null,
@@ -2490,7 +2671,8 @@ class DefaultRemoteRepository(
                 delay(1200)
                 if (epoch == selectionEpoch && state.value.selection.sessionId == sessionId)
                     refreshAdvisor()
-            } catch (_: CancellationException) {} catch (_: Exception) {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) {
+                Diagnostics.caught("repo.setAdvisor", swallowed)
                 if (epoch == selectionEpoch && state.value.selection.sessionId == sessionId) {
                     update { it.copy(advisorChanging = false) }
                     reportError(R.string.remote_request_error)
@@ -2521,6 +2703,7 @@ class DefaultRemoteRepository(
                         it.copy(commands = catalog, commandsTruncated = result.flag("truncated"))
                     }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.refreshCommands", e)
                 if (epoch == selectionEpoch && version == commandsVersion) {
                     if (e.message == "unsupported")
                         update {
@@ -2672,6 +2855,7 @@ class DefaultRemoteRepository(
                             persist().await()
                             update { it.copy(attachments = attachments) }
                         } catch (e: Exception) {
+                            Diagnostics.caught("repo.importAttachments", e)
                             if (drafts[key]?.attachments?.any { it.id == imported.id } == true) {
                                 drafts[key] =
                                     (drafts[key] ?: latest).let {
@@ -2696,7 +2880,8 @@ class DefaultRemoteRepository(
                         }
                     }
                 }
-            } catch (_: CancellationException) {} catch (_: Exception) {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) {
+                Diagnostics.caught("repo.importAttachments.2", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_attachment_import_error)
             } finally {
                 if (epoch == selectionEpoch) update { it.copy(importingAttachments = false) }
@@ -2729,7 +2914,7 @@ class DefaultRemoteRepository(
                             persist().await()
                         }
                 }
-            } catch (_: CancellationException) {} catch (_: Exception) {} finally {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) { Diagnostics.caught("repo.removeAttachment", swallowed) } finally {
                 runCatching { cleanupAttachments() }
             }
         }
@@ -2754,7 +2939,7 @@ class DefaultRemoteRepository(
                             }
                         persist().await()
                     }
-                } catch (_: Exception) {}
+                } catch (swallowed: Exception) { Diagnostics.caught("repo.cancelAttachmentWork", swallowed) }
             }
         update { it.copy(importingAttachments = false, attachmentProgress = null) }
     }
@@ -2768,6 +2953,7 @@ class DefaultRemoteRepository(
                 "attachmentId" to remoteId,
             )
         } catch (e: Exception) {
+            Diagnostics.caught("repo.cancelUpload", e)
             if (e.message !in setOf("forbidden", "invalid_request")) throw e
         }
         checkEpoch(epoch)
@@ -2984,7 +3170,8 @@ class DefaultRemoteRepository(
         val encoded =
             try {
                 QuoteCodec.encode(current.draft, current.quote)
-            } catch (_: IllegalArgumentException) {
+            } catch (swallowed: IllegalArgumentException) {
+                Diagnostics.caught("repo.sendPrompt", swallowed)
                 reportError(R.string.remote_prompt_too_long)
                 return
             }
@@ -3089,6 +3276,7 @@ class DefaultRemoteRepository(
                     }
                 }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.sendPrompt.2", e)
                 if (
                     current.attachments.isNotEmpty() &&
                         e.message in setOf("invalid_request", "forbidden") &&
@@ -3168,7 +3356,8 @@ class DefaultRemoteRepository(
         scope.launch {
             try {
                 request("session.abort", epoch, "sessionId" to sessionId)
-            } catch (_: CancellationException) {} catch (_: Exception) {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) {
+                Diagnostics.caught("repo.abort", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
             }
         }
@@ -3181,7 +3370,8 @@ class DefaultRemoteRepository(
         scope.launch {
             try {
                 request("session.abort", epoch, "sessionId" to sessionId)
-            } catch (_: CancellationException) {} catch (_: Exception) {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) {
+                Diagnostics.caught("repo.abortSession", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
             }
         }
@@ -3263,6 +3453,7 @@ class DefaultRemoteRepository(
                     )
                     throw e
                 } catch (e: RemoteRequestException) {
+                    Diagnostics.caught("repo.stopChild", e)
                     when (e.code) {
                         // A plain abort would stop the run while the parent's manager, which is
                         // offline, may still restart the child: say so and leave the state.
@@ -3281,7 +3472,8 @@ class DefaultRemoteRepository(
                                 } catch (c: CancellationException) {
                                     setChildControl(sessionId, previous)
                                     throw c
-                                } catch (_: Exception) {
+                                } catch (swallowed: Exception) {
+                                    Diagnostics.caught("repo.stopChild.2", swallowed)
                                     false
                                 }
                             if (epoch == selectionEpoch)
@@ -3294,6 +3486,7 @@ class DefaultRemoteRepository(
                         else -> childControlFailure(e, previous, epoch, sent)
                     }
                 } catch (e: Exception) {
+                    Diagnostics.caught("repo.stopChild.3", e)
                     childControlFailure(e, previous, epoch, sent)
                 }
             setChildControl(sessionId, control)
@@ -3374,6 +3567,7 @@ class DefaultRemoteRepository(
                     )
                     throw e
                 } catch (e: Exception) {
+                    Diagnostics.caught("repo.resumeChild", e)
                     if ((e as? RemoteRequestException)?.code == "unsupported")
                         markChildControlUnsupported(sessionId)
                     childControlFailure(e, previous, epoch, sent)
@@ -3444,7 +3638,8 @@ class DefaultRemoteRepository(
                 }
                 update { it.copy(sessions = sessions, sessionsFresh = true) }
                 cacheCurrentScreen()
-            } catch (_: CancellationException) {} catch (_: Exception) {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) {
+                Diagnostics.caught("repo.refreshSessions", swallowed)
                 // The previous list stays; the next refresh or reconnect retries.
             }
         }
@@ -3532,6 +3727,7 @@ class DefaultRemoteRepository(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.loadToolOutput", e)
                 if (!active()) return@launch
                 val reason = when (e.message) {
                     "unsupported" -> ToolOutputFailure.UNSUPPORTED
@@ -3638,6 +3834,7 @@ class DefaultRemoteRepository(
                 if (version == folderVersion) updateFolders { it.copy(loading = false) }
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.browseFolder", e)
                 if (version == folderVersion)
                     updateFolders {
                         it.copy(loading = false, error = folderErrorMessage(e, FolderCommand.BROWSE))
@@ -3666,6 +3863,7 @@ class DefaultRemoteRepository(
                 folderWrite(routeId, session) { it.copy(working = false) }
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.createFolder", e)
                 folderWrite(routeId, session) {
                     it.copy(working = false, notice = folderErrorMessage(e, FolderCommand.MKDIR))
                 }
@@ -3708,6 +3906,7 @@ class DefaultRemoteRepository(
                 folderWrite(routeId, session) { it.copy(working = false) }
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.cloneRepository", e)
                 folderWrite(routeId, session) {
                     it.copy(working = false, notice = folderErrorMessage(e, FolderCommand.CLONE))
                 }
@@ -3768,6 +3967,7 @@ class DefaultRemoteRepository(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    Diagnostics.caught("repo.resumeClone", e)
                     if (e.message == "not_found") {
                         if (state.value.folders.clones[routeId]?.cloneId == clone.cloneId)
                             updateFolders {
@@ -3848,6 +4048,7 @@ class DefaultRemoteRepository(
                 if (version == providerVersion) updateProviders { it.copy(loading = false) }
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.refreshProviders", e)
                 if (version == providerVersion)
                     providerWrite(routeId, session) {
                         it.copy(loading = false, error = providerErrorMessage(e))
@@ -3891,6 +4092,7 @@ class DefaultRemoteRepository(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    Diagnostics.caught("repo.recoverLogin", e)
                     if (e.message == "not_found") {
                         providerWrite(routeId, session) { auth ->
                             if (auth.flow?.loginId != flow.loginId) auth
@@ -3913,7 +4115,8 @@ class DefaultRemoteRepository(
         val update =
             try {
                 providerAuthEvent(payload)
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.receiveProviderAuthEvent", swallowed)
                 if (state.value.providerAuth.flow?.finished == false) recoverLogin()
                 return
             }
@@ -3961,6 +4164,7 @@ class DefaultRemoteRepository(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.startLogin", e)
                 earlyProviderUpdates.clear()
                 providerWrite(routeId, session) {
                     it.copy(working = false, notice = ProviderNotice(providerErrorMessage(e)))
@@ -3996,6 +4200,7 @@ class DefaultRemoteRepository(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.answerLogin", e)
                 providerWrite(routeId, session) { auth ->
                     auth.copy(
                         flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.let { current ->
@@ -4027,6 +4232,7 @@ class DefaultRemoteRepository(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.cancelLogin", e)
                 providerWrite(routeId, session) { auth ->
                     auth.copy(
                         flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.copy(
@@ -4056,6 +4262,7 @@ class DefaultRemoteRepository(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.logoutProvider", e)
                 providerWrite(routeId, session) {
                     it.copy(working = false, notice = ProviderNotice(providerErrorMessage(e)))
                 }
@@ -4138,6 +4345,7 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            Diagnostics.caught("repo.openFolder", e)
             if (!current()) return null
             if (e.message == "trust_required") {
                 // A missing or malformed flag errs toward the warning.
@@ -4176,7 +4384,8 @@ class DefaultRemoteRepository(
         scope.launch {
             try {
                 request(type, epoch, *fields)
-            } catch (_: CancellationException) {} catch (_: Exception) {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) {
+                Diagnostics.caught("repo.action", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
             } finally {
                 if (epoch == selectionEpoch) {
@@ -4497,13 +4706,16 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: RemoteRequestException) {
+            Diagnostics.caught("repo.fetchAttachment", e)
             return when (e.code) {
                 "not_found", "forbidden", "invalid_request" -> AttachmentReadResult.Unavailable
                 else -> AttachmentReadResult.Failed
             }
         } catch (e: AttachmentProtocolException) {
+            Diagnostics.caught("repo.fetchAttachment.2", e)
             return AttachmentReadResult.Unavailable
         } catch (e: Exception) {
+            Diagnostics.caught("repo.fetchAttachment.3", e)
             return AttachmentReadResult.Failed
         }
         return AttachmentReadResult.Loaded(reassembler.bytes().also { attachmentBytes[key] = it })
@@ -4631,12 +4843,14 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: MediaException) {
+            Diagnostics.caught("repo.fetchProjectImage", e)
             when (e.failure) {
                 MediaFailure.UNAVAILABLE -> ProjectImageResult.Unavailable
                 MediaFailure.BUSY -> ProjectImageResult.Busy
                 MediaFailure.FAILED -> ProjectImageResult.Failed
             }
         } catch (e: Exception) {
+            Diagnostics.caught("repo.fetchProjectImage.2", e)
             ProjectImageResult.Failed
         }
     }
@@ -4735,12 +4949,14 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: MediaException) {
+            Diagnostics.caught("repo.fetchProjectArtifact", e)
             when (e.failure) {
                 MediaFailure.UNAVAILABLE -> ProjectArtifactResult.Unavailable
                 MediaFailure.BUSY -> ProjectArtifactResult.Busy
                 MediaFailure.FAILED -> ProjectArtifactResult.ConnectionFailure
             }
         } catch (e: Exception) {
+            Diagnostics.caught("repo.fetchProjectArtifact.2", e)
             ProjectArtifactResult.ConnectionFailure
         }
 
@@ -4774,6 +4990,7 @@ class DefaultRemoteRepository(
                 try {
                     parseArtifactsList(data, sessionId)
                 } catch (e: Exception) {
+                    Diagnostics.caught("repo.listSessionArtifacts", e)
                     return SessionArtifactListResult.Unavailable
                 }
             )
@@ -4782,11 +4999,13 @@ class DefaultRemoteRepository(
             currentCoroutineContext().ensureActive()
             SessionArtifactListResult.Failed
         } catch (e: RemoteRequestException) {
+            Diagnostics.caught("repo.listSessionArtifacts.2", e)
             when (e.code) {
                 "not_found", "forbidden", "invalid_request", "unsupported" -> SessionArtifactListResult.Unavailable
                 else -> SessionArtifactListResult.Failed
             }
         } catch (e: Exception) {
+            Diagnostics.caught("repo.listSessionArtifacts.3", e)
             SessionArtifactListResult.Failed
         }
     }
@@ -4892,12 +5111,14 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: MediaException) {
+            Diagnostics.caught("repo.fetchSessionArtifact", e)
             when (e.failure) {
                 MediaFailure.UNAVAILABLE -> SessionArtifactOpenResult.Unavailable
                 MediaFailure.BUSY -> SessionArtifactOpenResult.Busy
                 MediaFailure.FAILED -> SessionArtifactOpenResult.ConnectionFailure
             }
         } catch (e: Exception) {
+            Diagnostics.caught("repo.fetchSessionArtifact.2", e)
             SessionArtifactOpenResult.ConnectionFailure
         }
 
@@ -4923,8 +5144,10 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: ExportException) {
+            Diagnostics.caught("repo.exportSession", e)
             ExportResult.Failed(e.failure)
         } catch (e: Exception) {
+            Diagnostics.caught("repo.exportSession.2", e)
             ExportResult.Failed(ExportFailure.FAILED)
         }
     }
@@ -4956,6 +5179,7 @@ class DefaultRemoteRepository(
             currentCoroutineContext().ensureActive()
             ReloadResult.Failed(ReloadFailure.Unknown)
         } catch (e: Exception) {
+            Diagnostics.caught("repo.reloadSession", e)
             val failure = reloadFailure(e)
             if (reloadResultUnknown(failure)) refreshAfterReload(epoch)
             ReloadResult.Failed(failure)
@@ -5004,6 +5228,7 @@ class DefaultRemoteRepository(
             currentCoroutineContext().ensureActive()
             TreeLoadResult.Failed(TreeFailure.FAILED)
         } catch (e: Exception) {
+            Diagnostics.caught("repo.loadSessionTree", e)
             // A read has no result that could be unknown.
             val failure = treeFailure(e)
             TreeLoadResult.Failed(if (treeResultUnknown(failure)) TreeFailure.FAILED else failure)
@@ -5057,6 +5282,7 @@ class DefaultRemoteRepository(
             currentCoroutineContext().ensureActive()
             TreeNavigateResult.Failed(TreeFailure.UNKNOWN_RESULT)
         } catch (e: Exception) {
+            Diagnostics.caught("repo.navigateSessionTree", e)
             val failure = treeFailure(e, navigating = true)
             // The move may have happened; show what the host has now.
             if (treeResultUnknown(failure) && epoch == selectionEpoch && state.value.connected) snapshotAsync()

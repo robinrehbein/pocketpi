@@ -112,7 +112,8 @@ internal class LabelUpgrader(
                     }
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: Exception) {
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("completion.run", swallowed)
                     null
                 }
             }
@@ -209,7 +210,8 @@ class LabelUpgradeWorker(context: Context, parameters: WorkerParameters) :
         val paired = {
             try {
                 PairingStore(context).load().find { it.routeId == payload.routeId }
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("completion.doWork", swallowed)
                 null
             }
         }
@@ -237,7 +239,8 @@ class LabelUpgradeWorker(context: Context, parameters: WorkerParameters) :
                     .run(host, payload, wanted)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("completion.doWork.2", swallowed)
                 LabelResult.Unavailable
             }
         // Checked again right before posting: the lookup may have outlived the notification, and

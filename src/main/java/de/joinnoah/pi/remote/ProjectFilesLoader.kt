@@ -166,6 +166,7 @@ internal class ProjectFilesLoader(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
+                        Diagnostics.caught("files.startPreviews", e)
                         if (active()) {
                             write(sessionId) { state ->
                                 if (state.path != folder) state
@@ -227,6 +228,7 @@ internal class ProjectFilesLoader(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("files.showPeek", e)
                 if (active()) write(files.sessionId) { state ->
                     state.copy(peek = state.peek?.copy(loading = false, failure = failure(e)))
                 }
@@ -380,6 +382,7 @@ internal class ProjectFilesLoader(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("files.list", e)
                 if (!active()) return@launch
                 val reason = failure(e)
                 write(sessionId) {
@@ -443,6 +446,7 @@ internal class ProjectFilesLoader(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("files.read", e)
                 if (!active()) return@launch
                 val reason = failure(e)
                 if (offset > 0 && reason == FilesFailure.NOT_FOUND && reopen) {
@@ -562,6 +566,7 @@ internal class ProjectFilesLoader(
                         if (active()) saveFailed(sessionId, path, requestId, FilesFailure.OFFLINE, answered = false)
                         return@launch
                     } catch (e: Exception) {
+                        Diagnostics.caught("files.write", e)
                         if (!active()) return@launch
                         val reason = failure(e)
                         val host = if (reason == FilesFailure.CONFLICT) wholeFile(sessionId, path) else null
@@ -601,7 +606,8 @@ internal class ProjectFilesLoader(
             source.filesRead(sessionId, path, 0, null).takeIf { !it.binary && !it.tooLarge && it.nextOffset == null }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Diagnostics.caught("files.wholeFile", e)
             null
         }
 
