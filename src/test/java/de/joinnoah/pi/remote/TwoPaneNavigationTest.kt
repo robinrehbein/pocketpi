@@ -41,6 +41,9 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasScrollToKeyAction
+import androidx.compose.ui.test.performScrollToKey
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -210,6 +213,80 @@ class TwoPaneNavigationTest {
         compose.onNodeWithTag("composerField").performKeyInput { pressKey(Key.Enter) }
         compose.waitForIdle()
         assertEquals(0, repository.prompts)
+    }
+
+    /** The index-for-key lookup of the list page in view: the lazy list keyed with its page title. */
+    private fun pageIndexForKey(): (Any) -> Int =
+        compose.onAllNodes(hasScrollToKeyAction()).fetchSemanticsNodes()
+            .map { it.config[SemanticsProperties.IndexForKey] }
+            .single { it("page-title") >= 0 }
+
+    /** The chip is the list's first item and keyed, whether it says something or not. */
+    private fun assertConnectionChipLeads(text: String?) {
+        val indexForKey = pageIndexForKey()
+        assertEquals(0, indexForKey(CONNECTION_STATUS_KEY))
+        assertEquals(1, indexForKey("page-title"))
+        if (text == null) compose.onNodeWithTag("connectionStatusChip").assertDoesNotExist()
+        else compose.onNode(hasTestTag("connectionStatusChip") and hasText(text)).assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun everyListPageLeadsWithTheKeyedConnectionChipAndStaleRowsKeepTheirStatus() {
+        render()
+        back()
+        assertConnectionChipLeads(null)
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(connected = false, stale = true, connection = R.string.remote_reconnecting)
+        }
+        compose.waitForIdle()
+        val reconnecting = label(R.string.remote_reconnecting)
+        assertConnectionChipLeads(reconnecting)
+        // The rows keep the status the Mac last reported.
+        compose.onNodeWithText("Second session").assertIsDisplayed()
+        assertTrue(compose.onAllNodesWithText(label(R.string.remote_status_idle), substring = true).fetchSemanticsNodes().isNotEmpty())
+        assertTrue(compose.onAllNodesWithText(label(R.string.remote_status_offline), substring = true).fetchSemanticsNodes().isEmpty())
+        compose.onAllNodesWithContentDescription(label(R.string.remote_settings)).onFirst().performClick()
+        compose.waitForIdle()
+        assertConnectionChipLeads(reconnecting)
+        back()
+        back()
+        compose.onNodeWithText("pocketpi").assertIsDisplayed()
+        assertConnectionChipLeads(reconnecting)
+        back()
+        assertConnectionChipLeads(reconnecting)
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(connected = false, stale = false, connection = R.string.remote_offline)
+        }
+        compose.waitForIdle()
+        // No Mac chosen and nothing under way: nothing to say, and the title keeps its index.
+        assertConnectionChipLeads(null)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun theConnectionChipStaysBelowTheHeaderWhileTheListScrolls() {
+        val many = (1..40).map { session("many-$it", "Session %02d".format(it)) }
+        repository.state.value =
+            repository.state.value.copy(
+                sessions = many,
+                connected = false,
+                stale = true,
+                connection = R.string.remote_waiting_for_network,
+            )
+        render()
+        back()
+        val chip = compose.onNode(hasTestTag("connectionStatusChip") and hasText(label(R.string.remote_waiting_for_network)))
+        val atTop = chip.assertIsDisplayed().getUnclippedBoundsInRoot()
+        val header = compose.onNodeWithTag("navigationPill").getUnclippedBoundsInRoot()
+        assertTrue("The chip at ${atTop.top} starts under the header ending at ${header.bottom}", atTop.top >= header.bottom)
+        compose.onNode(hasScrollToKeyAction()).performScrollToKey("many-40")
+        compose.waitForIdle()
+        compose.onNodeWithText("Session 40").assertIsDisplayed()
+        val scrolled = chip.assertIsDisplayed().getUnclippedBoundsInRoot()
+        assertTrue("The scrolled chip at ${scrolled.top} slid under the header ending at ${header.bottom}", scrolled.top >= header.bottom)
     }
 
     // ---- Two panes -----------------------------------------------------------------------

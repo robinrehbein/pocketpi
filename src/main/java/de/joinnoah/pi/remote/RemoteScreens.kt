@@ -154,6 +154,9 @@ private fun ReconnectCountdown(reconnectAt: Long?, now: () -> Long = System::cur
 private fun reconnectSeconds(reconnectAt: Long, now: () -> Long): Int =
     ((reconnectAt - now() + 999) / 1000).toInt().coerceAtLeast(0)
 
+/** The space between the items of the chat and of the list pages. */
+private val LIST_ITEM_SPACING = 12.dp
+
 /** Keys of the chat list's own rows beside the messages, like "waiting-for-output". */
 internal const val CHAT_SKELETON_KEY = "chat-skeleton"
 internal const val LOAD_OLDER_KEY = "load-older"
@@ -224,13 +227,14 @@ internal fun RemoteScreen(
     var collapsedSessionIds by rememberSaveable(key) { mutableStateOf(arrayListOf<String>()) }
     val collapsedIds = collapsedSessionIds.toSet()
     val visibleSessions =
-        remember(state.sessions, state.connected, state.loading, hideOfflineSessions, collapsedIds) {
+        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
                 state.loading,
-                hideOfflineSessions && state.connected,
+                hidesOfflineSessions(hideOfflineSessions, state.connected, state.stale),
                 collapsedIds,
+                stale = state.stale,
             )
         }
     val listedSessions =
@@ -249,12 +253,13 @@ internal fun RemoteScreen(
             onDispose { shortcutTargets.unregisterRefresh(key, refresh) }
         }
     val sessionCount =
-        remember(state.sessions, state.connected, state.loading, hideOfflineSessions) {
+        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
                 state.loading,
-                hideOfflineSessions && state.connected,
+                hidesOfflineSessions(hideOfflineSessions, state.connected, state.stale),
+                stale = state.stale,
             ).size
         }
     val sessionActive =
@@ -322,9 +327,9 @@ internal fun RemoteScreen(
         }
     val errorCount = remember(conversation) { conversation.count(::isErrorItem) }
     val children =
-        remember(chatKey, state.sessions, state.connected, state.loading) {
+        remember(chatKey, state.sessions, state.connected, state.loading, state.stale) {
             if (chatKey == null) emptyList()
-            else sessionListItems(state.sessions, state.connected, state.loading)
+            else sessionListItems(state.sessions, state.connected, state.loading, state.stale)
         }
     val strip =
         remember(chatKey, conversation, children) {
@@ -1565,7 +1570,12 @@ internal fun RemoteScreen(
                     start = 20.dp + readingInset,
                     // Constant, so nothing rewraps while scrolling; the scrollbar lives in this lane.
                     end = CHAT_SCROLLBAR_LANE + laneInset,
-                    top = headerHeight + if (key is RemoteNavKey.Chat) 16.dp else 48.dp,
+                    // A list page's connection chip brings the header's height itself (see
+                    // connectionStatusItem); with the spacing after it the page title starts where
+                    // it would at headerHeight + 48dp.
+                    top =
+                        if (key is RemoteNavKey.Chat) headerHeight + 16.dp
+                        else 48.dp - LIST_ITEM_SPACING,
                     bottom =
                         if (
                             key is RemoteNavKey.Sessions || key is RemoteNavKey.Hosts ||
@@ -1574,11 +1584,13 @@ internal fun RemoteScreen(
                         else if (key is RemoteNavKey.Chat) composerHeight + 24.dp
                         else 24.dp,
                 ),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(LIST_ITEM_SPACING),
         ) {
             // Every item emitted before the conversation counts here, so a jump can turn an index
             // in shownItems into a list index.
             var leading = 0
+            // The chat shows the connection beside its composer instead.
+            if (key !is RemoteNavKey.Chat) connectionStatusItem(connectionStatusLine(state), headerHeight)
             if (key !is RemoteNavKey.Chat)
                 item(key = "page-title") {
                     Row(
@@ -1686,7 +1698,7 @@ internal fun RemoteScreen(
                 !projectSelected
             ) {
                 leading++
-                item {
+                item(key = "error-card") {
                     Card(
                         modifier = Modifier.fillMaxWidth().testTag("errorCard"),
                         colors =
@@ -1992,29 +2004,6 @@ internal fun RemoteScreen(
                     if (diagnosticsOpen) DiagnosticsDialog(onDismiss = { diagnosticsOpen = false })
                 }
             } else {
-                if (
-                    (state.host != null || state.connection != R.string.remote_offline) &&
-                        !(state.connected &&
-                            (key is RemoteNavKey.Sessions || key is RemoteNavKey.Chat))
-                ) {
-                    leading++
-                    item {
-                        Text(
-                            stringResource(state.connection),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                }
-                if (state.uncertain) {
-                    leading++
-                    item {
-                        Text(
-                            stringResource(R.string.remote_draft_uncertain),
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
                 when (key) {
                     RemoteNavKey.Settings -> Unit
                     is RemoteNavKey.FolderBrowser -> Unit
@@ -2148,7 +2137,7 @@ internal fun RemoteScreen(
                             if (state.loading) item { SessionListSkeleton() }
                             else item { Text(stringResource(R.string.remote_empty_sessions)) }
                         }
-                        else if (visibleSessions.isEmpty() && state.connected && !state.loading)
+                        else if (visibleSessions.isEmpty() && (state.connected || state.stale) && !state.loading)
                             item { Text(stringResource(R.string.remote_offline_sessions_hidden)) }
                         else if (listedSessions.isEmpty() && visibleSessions.isNotEmpty())
                             item { Text(stringResource(R.string.remote_session_search_empty)) }
@@ -2525,6 +2514,7 @@ internal fun RemoteScreen(
                             },
                             onDismiss = { artifactsSheetRequested = false },
                         )
+                    ChatComposerNotices(connectionStatusLine(state), state.uncertain)
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,

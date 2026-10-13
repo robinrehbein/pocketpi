@@ -47,13 +47,18 @@ internal fun sortedProjectChats(chats: List<ProjectChatSummary>): List<ProjectCh
         }.thenByDescending { it.session["updatedAt"]?.jsonPrimitive?.longOrNull ?: 0L }
     ).take(12)
 
+/**
+ * The row of [session]. [stale]: the connection is lost and the Mac reconnects (see
+ * [RemoteState.stale]); the row keeps the status the Mac last reported instead of going offline.
+ */
 internal fun sessionListItem(
     session: JsonObject,
     connected: Boolean,
     loading: Boolean,
+    stale: Boolean = false,
 ): SessionListItem {
     val availability =
-        if (!connected) SessionAvailability.OFFLINE
+        if (!connected && !stale) SessionAvailability.OFFLINE
         else
             when (session.text("status")) {
                 "idle" -> SessionAvailability.IDLE
@@ -77,14 +82,23 @@ internal fun sessionListItem(
     )
 }
 
+/**
+ * Whether the "hide offline sessions" [setting] filters the list. Without a connection every row
+ * is offline, so it would hide them all; while the Mac reconnects ([stale]) the rows keep their
+ * last-known status, and the filter applies to that.
+ */
+internal fun hidesOfflineSessions(setting: Boolean, connected: Boolean, stale: Boolean): Boolean =
+    setting && (connected || stale)
+
 internal fun visibleSessionListItems(
     sessions: List<JsonObject>,
     connected: Boolean,
     loading: Boolean,
     hideOffline: Boolean,
     collapsedIds: Set<String> = emptySet(),
+    stale: Boolean = false,
 ): List<SessionListItem> {
-    val items = sessions.map { sessionListItem(it, connected, loading) }
+    val items = sessions.map { sessionListItem(it, connected, loading, stale) }
     val itemsById = items.associateBy(SessionListItem::id)
 
     fun validParentId(item: SessionListItem): String? {

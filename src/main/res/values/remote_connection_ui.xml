@@ -1,0 +1,4 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <string name="remote_connection_status">Connection: %1$s</string>
+</resources>

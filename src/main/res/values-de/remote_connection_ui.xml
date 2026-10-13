@@ -1,0 +1,3 @@
+<resources>
+    <string name="remote_connection_status">Verbindung: %1$s</string>
+</resources>
