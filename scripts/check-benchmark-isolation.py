@@ -6,6 +6,7 @@ ANDROID = "{http://schemas.android.com/apk/res/android}"
 FIXTURES = {
     "de.joinnoah.pi.remote.PerformanceFixtureActivity",
     "de.joinnoah.pi.remote.FullChatFixtureActivity",
+    "de.joinnoah.pi.remote.ConnectedFlowActivity",
 }
 
 

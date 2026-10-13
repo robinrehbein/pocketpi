@@ -108,7 +108,7 @@ jobs:
       - name: Compile benchmark APKs and verify isolation
         run: |
           ./gradlew :processDebugManifest :assembleBenchmark :benchmarks:assembleBenchmark
-          ./gradlew :testBenchmarkUnitTest --tests '*FullChatFixtureRepositoryTest'
+          ./gradlew :testBenchmarkUnitTest --tests '*FullChatFixtureRepositoryTest' --tests '*FakeRelayTransportTest'
           python3 scripts/check-benchmark-isolation.py \
             build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml \
             build/intermediates/merged_manifests/benchmark/processBenchmarkManifest/AndroidManifest.xml

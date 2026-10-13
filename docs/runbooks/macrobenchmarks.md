@@ -10,9 +10,15 @@ but is debug-key signed. It needs no Play upload key or Firebase secrets. All fo
 BuildConfig fields are empty. Its application ID gives it separate pairings, drafts, files,
 notifications and preferences. It must never be uploaded to Play.
 
-`PerformanceFixtureActivity` and `FullChatFixtureActivity` exist only in `src/benchmark`: no fixture activity or profileable
-manifest addition is included in normal debug/release builds. CI checks merged-manifest isolation.
-The fixture labels have English and German resources.
+`PerformanceFixtureActivity`, `FullChatFixtureActivity` and `ConnectedFlowActivity` exist only in
+`src/benchmark`: no fixture activity or profileable manifest addition is included in normal
+debug/release builds. CI checks merged-manifest isolation. The fixture labels live in
+`src/benchmark/res` and are not translated.
+
+The benchmark build type also replaces the relay: `RemoteApplication` builds its transport through
+`remoteTransport(context, scope)`, which `src/debug` and `src/release` (and the wear module) define
+as `SecureRemoteTransport`, and `src/benchmark` as `FakeRelayTransport`. The benchmark APK therefore
+never opens a socket; debug and release APKs contain no fake relay or fixture.
 
 ### Workloads (ten iterations each)
 
@@ -24,10 +30,14 @@ The fixture labels have English and German resources.
 | `fullChatScroll` | Real chat screen with 48 turns/193 messages, four gestures toward history and four toward the tail | Frame CPU duration and frame overrun percentiles |
 | `fullChatStreamingAutoFollow` | Real Timeline and chat screen; 120 message upserts while following the tail | Frame CPU duration and frame overrun percentiles |
 | `fullChatStreamingAfterScrollUp` | Same stream while reading older turns; assert the completed tail stays offscreen | Frame CPU duration and frame overrun percentiles |
+| `coldStartToProjects` | Cold process on the fake relay, paired with the fixture Mac: launch, tap the Mac, wait for the projects | TTID (TTFD once the app reports it), `PocketPi.activate` sum |
+| `openUncachedChat` | Fresh process on the session list; tap a 48-turn chat never opened in this process, wait for its tail | `PocketPi.activate` (first), `PocketPi.publishTimeline` and `PocketPi.conversationItems` sums, frame timing |
+| `openCachedChat` | Same, after opening and leaving that chat once in the process, so the repository's chat cache holds it | Same as `openUncachedChat` |
 
 All tests use `CompilationMode.None()` so compilation policy is explicit and repeatable. This is
 not representative of an app already optimized by Play/baseline profiles; keep the same policy for
-before/after comparisons. Cold startup is first-screen display, **not** connected-data readiness.
+before/after comparisons. `coldStartup` is first-screen display, **not** connected-data readiness;
+`coldStartToProjects` waits for the projects of a paired Mac.
 
 The synthetic tests use the production `MarkdownText` renderer (including tables) in a simple lazy
 list. They deliberately exclude transport, repository/timeline projection, full chat navigation,
@@ -60,9 +70,89 @@ and restored per test; explicit settling waits remain.
 
 The full-chat driver publishes synthetic repository state, **not** the production repository:
 transport/decryption, navigation transitions, disk/cache writes, request handling, push, and latency
-until connected content are still excluded. The fixture includes no active attachment import,
-pending questions, subagents or real model configuration. The only normal-app code change is an
-inert `conversationList` test tag; resource-ID exposure is enabled only in the benchmark fixture.
+until connected content are still excluded (the connected-flow tests below cover most of them).
+The fixture includes no active attachment import, pending questions, subagents or real model
+configuration. Besides the transport factory, the only normal-app code change is an inert
+`conversationList` test tag; resource-ID exposure is enabled only in the benchmark fixtures.
+
+## Connected flows on the fake relay
+
+`ConnectedFlowBenchmarks` measures what the fixtures above leave out: connecting, requests,
+repository publication, navigation and the real screens. `ConnectedFlowActivity` hosts the normal
+`RemoteApp` with `RemoteApplication`'s own repository and settings, so the process gets the same
+`setForeground` and validated-network signals, push wiring (empty in this build) and stores as the
+app. Only the transport is a stand-in.
+
+`FakeRelayTransport` (in `src/benchmark`) answers `projects.list`, `sessions.list`, `sessions.open`
+and `session.snapshot` from `src/benchmark/assets/connected-flow.json`: one Mac, three projects and
+six sessions, two of them with 48 generated turns (user prompt, edit tool call with a diff, tool
+result, Markdown answer) plus a tail marker. Snapshots return the newest 100 messages with a cursor
+for older pages. Every other request type is refused as `unsupported` and logged once
+(`adb logcat -s FakeRelayTransport`); the fixture advertises no capabilities, so the repository
+asks for nothing else while connecting and opening chats. Each reply is encoded as text on a
+separate "host" thread and parsed on the app's main thread like a relay frame; decryption is the
+only part of the receive path that is missing.
+
+Replies wait one sampled round trip; connecting waits four (socket and TLS, hello/challenge,
+authentication). The profiles, with a fixed random seed per process:
+
+| Profile | Round trip | Stalls |
+| --- | --- | --- |
+| `lan` | 30 ms ± 5 ms | none |
+| `lte` (default) | 150 ms ± 50 ms | none |
+| `bad` | 400 ms ± 100 ms | 2 % of replies held another 5 s |
+
+The fake relay can also stream the fixture's scripted answer (120 `message.upsert` events, 50 ms
+apart, with `session.status` running/idle and consecutive revisions) and fail the socket with
+`failed(true)`, so the repository reconnects. `ConnectedFlowActivity` takes them as the `command`
+extra (`stream`, `drop`) for later flow benchmarks; the three tests here do not use them.
+
+Before its first iteration each test clears the app and starts `ConnectedFlowActivity` with the
+`prepare` extra. That pass pairs with the fixture Mac through `repository.pair()` (the real pairing
+path, with the fake relay approving), opens the cached chat, leaves a draft there and returns to the
+projects. The app's encrypted stores then hold a pairing, a draft and a navigation snapshot, as after
+a normal visit, and every cold start reads them back. The prepare pass is not measured.
+
+- `coldStartToProjects` presses Home and lets Macrobenchmark kill the process and drop caches, then
+  launches `ConnectedFlowActivity`. Today a cold start shows the Macs, so it taps the fixture Mac;
+  once a cold start opens the last Mac's projects directly, the tap is skipped. `PocketPi.activate`
+  then covers the restore activation plus the connect and `projects.list` behind the tap.
+- `openUncachedChat` and `openCachedChat` start a fresh process per iteration and navigate to the
+  session list outside the measurement. The cached variant opens and leaves the chat once first.
+  Both still wait for `sessions.open` and `session.snapshot`; the cached one shows the cached
+  messages while they are in flight. `PocketPi.activate` ends when the snapshot is published, so
+  the difference between the two shows mostly in frame timing and in when the tail appears, not in
+  the activate duration.
+
+The trace sections come from `Diagnostics.kt` (connection diagnostics, PR #78). `PocketPi.activate`
+is an async section and needs API 29 or newer, as the benchmark module does.
+
+Pass the latency profile as an instrumentation argument:
+
+```sh
+ANDROID_SERIAL=<serial> ./gradlew :benchmarks:connectedBenchmarkAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=de.robinrehbein.pocketpi.benchmarks.ConnectedFlowBenchmarks \
+  -Pandroid.testInstrumentationRunnerArguments.pocketpi.relayProfile=lan
+```
+
+What the fake relay does not model: TLS and encryption cost, the relay's and Mac's real
+processing time, frame chunking of large replies, the real host's page size, background and push
+paths, and anything behind a capability. Use the Diagnostics report on a real phone for those.
+
+## Comparing before and after
+
+1. Pick one device, one profile and the same `CompilationMode` for both runs.
+2. Check out the baseline commit, run the scenarios, and archive the output directory (see
+   [Results](#results)) together with the SHA.
+3. Check out the candidate and run the same command.
+4. Compare medians and the spread of `timeToInitialDisplayMs`, `PocketPi.activateSumMs` (cold
+   start), `PocketPi.activateFirstMs`, `PocketPi.publishTimelineSumMs`,
+   `PocketPi.conversationItemsSumMs` and the frame percentiles (chat opens). Ten iterations are a
+   small sample; repeat a run before trusting a difference of a few percent.
+5. When the change is about latency rather than CPU, compare under `lte` and `bad` as well: the
+   fake relay's delays are part of every activation.
+
+A baseline needs the trace sections, so it must be a commit that contains `Diagnostics.kt`.
 
 ## Build and correctness checks
 
@@ -70,7 +160,7 @@ inert `conversationList` test tag; resource-ID exposure is enabled only in the b
 python3 scripts/i18n-check.py .
 ./gradlew testDebugUnitTest assembleDebug lintDebug
 ./gradlew :assembleBenchmark :benchmarks:assembleBenchmark
-./gradlew :testBenchmarkUnitTest --tests '*FullChatFixtureRepositoryTest'
+./gradlew :testBenchmarkUnitTest --tests '*FullChatFixtureRepositoryTest' --tests '*FakeRelayTransportTest'
 python3 scripts/check-benchmark-isolation.py \
   build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml \
   build/intermediates/merged_manifests/benchmark/processBenchmarkManifest/AndroidManifest.xml
@@ -83,7 +173,8 @@ shared-runner/emulator timings. Existing debug instrumentation tests still run i
 
 Use a dedicated API 29+ device with USB debugging, a fixed refresh rate, stable temperature and
 battery conditions. Avoid background workloads. Connect only the intended test device, or set
-`ANDROID_SERIAL`. Do not pair the benchmark app with a host.
+`ANDROID_SERIAL`. Do not pair the benchmark app with a host; it cannot reach one anyway, since its
+transport is the fake relay.
 
 ```sh
 ANDROID_SERIAL=<serial> ./gradlew :benchmarks:connectedBenchmarkAndroidTest
@@ -124,7 +215,10 @@ Compose parsing/layout/drawing happen later and must be inspected separately.
 
 In `*-benchmarkData.json`:
 
-- `metrics.timeToInitialDisplayMs` contains startup median and all ten iteration values.
+- `metrics.timeToInitialDisplayMs` contains startup median and all ten iteration values;
+  `timeToFullDisplayMs` appears once the app reports itself fully drawn.
+- `metrics.PocketPi.activateFirstMs` / `SumMs` and the other `<section><Mode>Ms` entries come from
+  the connected-flow trace sections.
 - `PocketPi.fullChat.timelineEvent` trace sections cover real Timeline ingestion only; subsequent
   repository publication, conversation projection and Compose work are outside that section.
 - `sampledMetrics.frameDurationCpuMs` and `frameOverrunMs` contain P50/P90/P95/P99 and raw frame samples.
