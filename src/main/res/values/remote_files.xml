@@ -87,7 +87,7 @@
     <string name="remote_files_editor_outdent">Outdent</string>
     <string name="remote_files_editor_keys">Code keys</string>
     <string name="remote_files_save_failed_offline">You are offline. Your edit is kept; save again after reconnecting.</string>
-    <string name="remote_files_save_failed_unsupported">This computer does not accept saved files from the phone.</string>
+    <string name="remote_files_save_failed_unsupported">Saving files is turned off on this computer. Turn it on with \"pi-remote config file-writes on\", or send the change to the agent.</string>
     <string name="remote_files_save_failed_invalid_path">This file cannot be saved from pi Remote.</string>
     <string name="remote_files_save_failed_too_large">The file is now over 192 KB, too large to save from pi Remote. Shorten it, or make the change on the computer.</string>
     <string name="remote_files_save_failed">The file could not be saved. Your edit is kept.</string>

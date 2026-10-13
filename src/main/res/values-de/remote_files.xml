@@ -87,7 +87,7 @@
     <string name="remote_files_editor_outdent">Einzug verkleinern</string>
     <string name="remote_files_editor_keys">Code-Tasten</string>
     <string name="remote_files_save_failed_offline">Du bist offline. Deine Änderung bleibt erhalten; speichere nach dem Verbinden erneut.</string>
-    <string name="remote_files_save_failed_unsupported">Dieser Computer nimmt keine gespeicherten Dateien vom Handy an.</string>
+    <string name="remote_files_save_failed_unsupported">Speichern ist auf diesem Computer ausgeschaltet. Schalte es mit \"pi-remote config file-writes on\" ein oder sende die Änderung an den Agent.</string>
     <string name="remote_files_save_failed_invalid_path">Diese Datei kann nicht über pi Remote gespeichert werden.</string>
     <string name="remote_files_save_failed_too_large">Die Datei ist jetzt größer als 192 KB und lässt sich nicht über pi Remote speichern. Kürze sie oder ändere sie am Computer.</string>
     <string name="remote_files_save_failed">Die Datei konnte nicht gespeichert werden. Deine Änderung bleibt erhalten.</string>
