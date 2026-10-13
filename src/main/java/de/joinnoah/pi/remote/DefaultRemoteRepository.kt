@@ -410,6 +410,9 @@ class DefaultRemoteRepository(
     }
 
     private val paneMemos = NavigationMemoryCache<DraftKey, PaneMemo>(8)
+
+    /** The chat whose remembered pane [select] put on screen still unread; [refreshPanes] reads it. */
+    private var pendingPane: DraftKey? = null
     private val savedNavigation = linkedMapOf<String, NavigationSnapshot>()
     private data class NavigationWrite(
         val version: Long,
@@ -1874,19 +1877,26 @@ class DefaultRemoteRepository(
 
     /**
      * After the snapshot of the selected chat: a pane kept open by [select] reads again in place,
-     * and one the chat had open when it was last left opens again.
+     * and one it showed unread from the chat's last visit opens where it was (base or folder, and
+     * file, as on screen now). With [unreadOnly], only the latter: an activation that ended before
+     * the snapshot must not leave that pane loading for good.
      */
-    private fun refreshPanes() {
+    private fun refreshPanes(unreadOnly: Boolean = false) {
         val current = state.value
         val routeId = current.selection.routeId ?: return
         val sessionId = current.selection.sessionId ?: return
-        val memo = paneMemos.remove(DraftKey(routeId, sessionId))
+        val unread = pendingPane == DraftKey(routeId, sessionId)
+        pendingPane = null
+        val changes = current.changes?.takeIf { it.sessionId == sessionId }
+        val files = current.files?.takeIf { it.sessionId == sessionId }
         when {
-            current.changes?.sessionId == sessionId -> changesLoader.refresh()
-            current.files?.sessionId == sessionId -> filesLoader.refresh()
-            memo is PaneMemo.Changes ->
-                changesLoader.open(drafts[DraftKey(routeId, sessionId)]?.reviewComments.orEmpty(), memo.base, memo.file)
-            memo is PaneMemo.Files -> filesLoader.open(memo.dir, memo.file)
+            changes != null && unread && changes.status == null ->
+                changesLoader.open(changes.comments, changes.base, changes.file)
+            files != null && unread && files.listing == null && files.file?.version == null && files.editor == null ->
+                filesLoader.open(files.path, files.file?.path)
+            unreadOnly -> Unit
+            changes != null -> changesLoader.refresh()
+            files != null -> filesLoader.refresh()
         }
     }
 
@@ -1926,21 +1936,41 @@ class DefaultRemoteRepository(
             rememberSession(previous)
         }
         val resumedFiles = if (sameSession) null else switchParkedEditor(previous, selection)
-        val meta =
-            if (sameSession) null
-            else selection.sessionId?.let { sessionMeta[DraftKey(checkNotNull(selection.routeId), it)] }
+        val key = selection.sessionId?.let { DraftKey(checkNotNull(selection.routeId), it) }
+        val meta = if (sameSession) null else key?.let { sessionMeta[it] }
+        // The pane another chat had open shows from the first frame, loading, so it never opens over
+        // the composer later; its reads start after the snapshot. A parked edit wins over it.
+        val memo = if (sameSession) null else key?.let { paneMemos.remove(it) }?.takeIf { resumedFiles == null }
+        if (!sameSession) pendingPane = key?.takeIf { memo != null }
         update {
             it.copy(
                 selection = selection,
                 compaction = null,
                 compactionRequesting = false,
-                toolOutput = it.toolOutput?.takeIf { sameSession },
+                // Only a download that can still finish, or has, stays; a stopped one would spin.
+                toolOutput = it.toolOutput?.takeIf { output ->
+                    sameSession &&
+                        (output.text != null || output.failure != null || toolOutputJob?.isActive == true)
+                },
                 // The panes of the chat on screen stay open; the reads after the snapshot refresh
                 // them in place.
-                changes = it.changes?.takeIf { changes -> sameSession && changes.sessionId == selection.sessionId },
+                changes =
+                    if (sameSession) it.changes?.takeIf { changes -> changes.sessionId == selection.sessionId }
+                    else (memo as? PaneMemo.Changes)?.let { pane ->
+                        ChangesState(
+                            checkNotNull(selection.sessionId),
+                            base = pane.base,
+                            file = pane.file,
+                            diffLoading = pane.file != null,
+                            comments = stored.reviewComments,
+                        )
+                    },
                 // Another session brings back its own parked edit, if any.
                 files = resumedFiles
-                    ?: it.files?.takeIf { files -> sameSession && files.sessionId == selection.sessionId },
+                    ?: if (sameSession) it.files?.takeIf { files -> files.sessionId == selection.sessionId }
+                    else (memo as? PaneMemo.Files)?.let { pane ->
+                        FilesState(checkNotNull(selection.sessionId), path = pane.dir, file = pane.file?.let(::OpenFile))
+                    },
                 // A reconnect keeps the open jobs view; the refresh after it watches again.
                 jobs = it.jobs?.takeIf { jobs -> sameSession && jobs.sessionId == selection.sessionId },
                 host = host,
@@ -2085,8 +2115,24 @@ class DefaultRemoteRepository(
                     !(reconnecting && selection == state.value.selection)
             // The cache shown before connecting stays; only a miss tries again once connected.
             val shownBeforeConnect = showCache && showCached()
+            // connect() empties every cache when it changes the Mac, a cold start included; what
+            // was just shown goes back into them, so a failed snapshot keeps the chat on screen.
+            val shownProjects = cachedProjects?.takeIf { shownBeforeConnect && it.first == host.routeId }
+            val shownSessions =
+                selection.projectId?.takeIf { shownBeforeConnect }?.let { sessionCache[host.routeId to it] }
+            val shownChat = selection.sessionId?.takeIf { shownBeforeConnect }?.let { chatCache[selection] }
             connect(host, epoch)
-            if (showCache && !shownBeforeConnect) showCached()
+            if (showCache && shownBeforeConnect) {
+                restoreNavigation(host.routeId)
+                if (cachedProjects?.first != host.routeId) shownProjects?.let { cachedProjects = it }
+                shownSessions?.let { shown ->
+                    val key = shown.routeId to shown.projectId
+                    if (sessionCache[key] == null) sessionCache[key] = shown
+                }
+                shownChat?.let { if (chatCache[it.selection] == null) chatCache[it.selection] = it }
+            } else if (showCache) {
+                showCached()
+            }
             val reusedProjects =
                 cachedProjects
                     ?.takeIf { useCache && !force && alreadyConnected && it.first == host.routeId }
@@ -2206,6 +2252,7 @@ class DefaultRemoteRepository(
                     snapshotPending = null
                     if (pending.needsSnapshot && state.value.connected) snapshotAsync()
                 }
+                if (outcome != "ok") refreshPanes(unreadOnly = true)
                 update { it.copy(loading = false) }
                 if (outcome == "ok" || outcome == "parent" || outcome == "no_host") staleReplaced()
                 cacheCurrentScreen()

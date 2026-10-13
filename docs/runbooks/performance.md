@@ -9,9 +9,13 @@
   events during the fetch never blank the cached chat. A snapshot of the same session keeps the
   older pages it overlaps.
 - Selecting the chat on screen again (a reconnect, a resume, a restore) keeps its panes, tool
-  output, controls and notice; after the snapshot the panes read again in place. Another chat
-  shows the controls and reopens the Changes or Files pane it had when it was left (eight chats
-  each, in memory).
+  output, controls and notice; after the snapshot the panes read again in place, and a failed
+  read leaves what they show. Another chat shows the controls and the Changes or Files pane it had
+  when it was left (eight chats each, in memory). That pane is on screen from the first frame,
+  loading, so it never opens over a composer in use; its reads start after the snapshot, or at
+  once when the activation ends without one.
+- `connect()` empties every cache when the Mac changes, a cold start included; a restore puts
+  what it showed before connecting back, so a failed snapshot keeps the chat on screen.
 - Explicit opens still wait for `sessions.open`: historical sessions may fork and return different
   IDs. Never send mutations against a speculative selection.
 - Invalidation is per key: creating or forking a session drops only its project's session list,

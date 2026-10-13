@@ -644,6 +644,55 @@ class GitChangesTest {
     }
 
     @Test
+    fun aFailedReadAfterAReconnectLeavesTheDiffAndLogShown() = runTest {
+        var hold = false
+        val held = mutableListOf<JsonObject>()
+        val (transport, repository) = opened({ request ->
+            if (hold) {
+                held += request
+                null
+            } else sessionFixtures(request)
+        })
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        repository.openChanges()
+        runCurrent()
+        repository.openChangesFile("README.md")
+        runCurrent()
+        val shown = checkNotNull(repository.state.value.changes)
+        val diff = checkNotNull(shown.diff)
+        val log = checkNotNull(shown.log)
+
+        hold = true
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(5_000)
+        runCurrent()
+        val status = held.single { it.text("type") == "session.git.status" }
+        transport.result(status, sessionFixtures(status))
+        runCurrent()
+        // The host is busy for the diff and the log read after the fresh status.
+        held.filter { it.text("type") != "session.git.status" }.forEach { request ->
+            transport.listener.message(
+                Wire.objectOf(
+                    "type" to "result",
+                    "requestId" to request.text("requestId"),
+                    "ok" to false,
+                    "error" to Wire.objectOf("code" to "busy", "message" to "busy"),
+                )
+            )
+        }
+        runCurrent()
+        repository.state.value.changes.let { changes ->
+            assertEquals("README.md", changes?.file)
+            assertEquals(diff, changes?.diff)
+            assertNull(changes?.diffFailure)
+            assertEquals(log, changes?.log)
+            assertNull(changes?.logFailure)
+        }
+    }
+
+    @Test
     fun returningToAChatReopensTheChangesItHadOpen() = runTest {
         // The session start's files, compared against HEAD instead.
         fun headFixtures(request: JsonObject): JsonObject =

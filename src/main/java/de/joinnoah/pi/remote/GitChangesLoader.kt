@@ -291,7 +291,7 @@ internal class GitChangesLoader(
                 }
             val snapshotId = status.snapshotId ?: return
             changes()?.takeIf { it.fileSession == null }?.file?.let { path ->
-                loadDiff(sessionId, snapshotId, path, retry = false)
+                loadDiff(sessionId, snapshotId, path, retry = false, silent = silent)
             }
             if (!status.available || status.base == GitBase.HEAD) return
             try {
@@ -304,10 +304,13 @@ internal class GitChangesLoader(
                 if (!active()) return
                 if (failure(e) == ChangesFailure.NOT_FOUND && retry) {
                     // The snapshot expired between status and log: one fresh status repeats both.
-                    reload(retry = false)
+                    reload(retry = false, silent = silent)
                     return
                 }
-                write(sessionId) { it.copy(logLoading = false, logFailure = failure(e)) }
+                // A silent read that failed leaves the log shown.
+                write(sessionId) {
+                    it.copy(logLoading = false, logFailure = if (silent && it.log != null) null else failure(e))
+                }
             }
         }
     }
@@ -507,6 +510,7 @@ internal class GitChangesLoader(
         path: String,
         retry: Boolean,
         reader: String = sessionId,
+        silent: Boolean = false,
     ) {
         val subagent = reader.takeIf { it != sessionId }
         val version = ++diffVersion
@@ -534,7 +538,10 @@ internal class GitChangesLoader(
                     }
                     return@launch
                 }
-                write(sessionId) { it.copy(diffLoading = false, diffFailure = reason) }
+                // A silent read that failed leaves the diff shown.
+                write(sessionId) {
+                    it.copy(diffLoading = false, diffFailure = if (silent && it.diff?.path == path) null else reason)
+                }
             }
         }
     }
