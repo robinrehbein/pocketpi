@@ -174,6 +174,12 @@ android {
         }
     }
     bundle { language { enableSplit = false } }
+    lint {
+        // lint-baseline.xml records the known findings, so lint reports only new ones. Regenerate
+        // it with ./gradlew updateLintBaseline only after reviewing what the new baseline hides.
+        baseline = file("lint-baseline.xml")
+        checkDependencies = true
+    }
     defaultConfig {
         minSdk = 26
         targetSdk = 36

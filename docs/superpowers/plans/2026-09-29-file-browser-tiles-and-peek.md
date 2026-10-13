@@ -45,8 +45,8 @@
 - Produce `FilesPeek(path: String, type: FileEntryType, loading: Boolean = true, listing: FileListing? = null, failure: FilesFailure? = null)`.
 - Produce `FILE_TILE_PREVIEW_CHARS = 2048`, `MAX_CACHED_FILE_PREVIEWS = 24`, and `MAX_FILE_PEEK_NAMES = 8` as internal constants.
 
-- [ ] **Step 1: Add the contract exactly as specified.** Keep the models immutable data classes; no protocol parsing changes. This small declaration is exercised by the Task 1 and Task 2 behavior tests rather than a test that repeats its fields.
-- [ ] **Step 2: Run `./gradlew compileDebugKotlin`; expect PASS.** Commit only `FilePreviewModels.kt`.
+- [x] **Step 1: Add the contract exactly as specified.** Keep the models immutable data classes; no protocol parsing changes. This small declaration is exercised by the Task 1 and Task 2 behavior tests rather than a test that repeats its fields.
+- [x] **Step 2: Run `./gradlew compileDebugKotlin`; expect PASS.** Commit only `FilePreviewModels.kt`.
 
 ### Task 1: Bounded preview and folder-peek data (agent A, parallel)
 
@@ -64,11 +64,11 @@
 - Produce `ProjectFilesLoader.requestPreview(path: String)`, `showPeek(path: String, type: FileEntryType)`, and `dismissPeek()`; expose matching `RemoteRepository` and `ChatViewModel` methods named `requestFilesPreview`, `showFilesPeek`, and `dismissFilesPeek`.
 - `path` is relative to the session root; these methods do not modify `FilesState.path`, `listing`, or `file`.
 
-- [ ] **Step 1: Write failing coroutine tests** for two simultaneous preview reads with a third queued, cache cap/character cap, deduped requests, file peek reusing its preview, folder peek listing without navigation, and late replies discarded after close/folder change/reload/session change. Assert binary, too-large, empty, offline, and failure states directly in `FilesState`.
-- [ ] **Step 2: Run the new test; expect missing methods/fields.** `./gradlew testDebugUnitTest --tests de.joinnoah.pi.remote.ProjectFilesPreviewTest`
-- [ ] **Step 3: Implement preview requests using first-page `FileSource.filesRead(..., 0, null)` and folder Peek using first-page `filesList(..., null)`.** Limit active previews to two, cache current-folder results up to 24 entries and 2,048 characters, and stop/ignore stale jobs on lifecycle changes. Keep an open file Peek's preview in the cache until dismissal. Mark the `FilesPeek` complete when its file preview or folder listing arrives. Do not interfere with the existing `fileJob`/`listJob` for navigation.
-- [ ] **Step 4: Add repository and view-model forwarding methods and run the new test to PASS.** Then run `./gradlew testDebugUnitTest --tests de.joinnoah.pi.remote.ProjectFilesLoaderTest` to guard the current reader.
-- [ ] **Step 5: Return a file list and test output to the integrator.** Do not stage or commit while agents B and C run.
+- [x] **Step 1: Write failing coroutine tests** for two simultaneous preview reads with a third queued, cache cap/character cap, deduped requests, file peek reusing its preview, folder peek listing without navigation, and late replies discarded after close/folder change/reload/session change. Assert binary, too-large, empty, offline, and failure states directly in `FilesState`.
+- [x] **Step 2: Run the new test; expect missing methods/fields.** `./gradlew testDebugUnitTest --tests de.joinnoah.pi.remote.ProjectFilesPreviewTest`
+- [x] **Step 3: Implement preview requests using first-page `FileSource.filesRead(..., 0, null)` and folder Peek using first-page `filesList(..., null)`.** Limit active previews to two, cache current-folder results up to 24 entries and 2,048 characters, and stop/ignore stale jobs on lifecycle changes. Keep an open file Peek's preview in the cache until dismissal. Mark the `FilesPeek` complete when its file preview or folder listing arrives. Do not interfere with the existing `fileJob`/`listJob` for navigation.
+- [x] **Step 4: Add repository and view-model forwarding methods and run the new test to PASS.** Then run `./gradlew testDebugUnitTest --tests de.joinnoah.pi.remote.ProjectFilesLoaderTest` to guard the current reader.
+- [x] **Step 5: Return a file list and test output to the integrator.** Do not stage or commit while agents B and C run.
 
 ### Task 2: Standalone tiles and anchored Peek (agent B, parallel)
 
@@ -83,10 +83,10 @@
 - Produce `@Composable internal fun FileEntryTile(entry: FileEntry, preview: FileTilePreview?, onOpen: () -> Unit, onRequestPreview: () -> Unit, onPeek: (IntRect) -> Unit, modifier: Modifier = Modifier)`.
 - Produce `@Composable internal fun FilePeekPopup(peek: FilesPeek, preview: FileTilePreview?, anchorBounds: IntRect, onDismiss: () -> Unit)` and an internal `FilePeekPositionProvider` whose popup is above the anchor if it fits, otherwise below, with 16 dp horizontal screen margins.
 
-- [ ] **Step 1: Write failing Robolectric Compose tests** for a file tile's faint three-line preview beside its icon and above its name, placeholder states, a folder tile without a default excerpt, disabled symlink/submodule tiles, tap versus semantic long-click callbacks, 48 dp targets, and dismissible Peek. Add a pure position-provider test for anchors near top and both horizontal edges.
-- [ ] **Step 2: Run the tile tests; expect missing composables.** `./gradlew testDebugUnitTest --tests de.joinnoah.pi.remote.FileTilesUiTest`
-- [ ] **Step 3: Implement the tiles and popup.** Use `combinedClickable`, `LaunchedEffect` for visible file-tile preview requests, `MaterialTheme.colorScheme` surfaces, a clipped/faded monospace excerpt, `PopupProperties(focusable = true)`, and a folder preview with at most eight names and a `more` indication. Add concise EN/DE strings for preview states and accessibility actions. The peek stays read-only and provides no navigation action.
-- [ ] **Step 4: Run tile tests and `python3 scripts/i18n-check.py .`; expect PASS.** Return changed files and output without staging or committing.
+- [x] **Step 1: Write failing Robolectric Compose tests** for a file tile's faint three-line preview beside its icon and above its name, placeholder states, a folder tile without a default excerpt, disabled symlink/submodule tiles, tap versus semantic long-click callbacks, 48 dp targets, and dismissible Peek. Add a pure position-provider test for anchors near top and both horizontal edges.
+- [x] **Step 2: Run the tile tests; expect missing composables.** `./gradlew testDebugUnitTest --tests de.joinnoah.pi.remote.FileTilesUiTest`
+- [x] **Step 3: Implement the tiles and popup.** Use `combinedClickable`, `LaunchedEffect` for visible file-tile preview requests, `MaterialTheme.colorScheme` surfaces, a clipped/faded monospace excerpt, `PopupProperties(focusable = true)`, and a folder preview with at most eight names and a `more` indication. Add concise EN/DE strings for preview states and accessibility actions. The peek stays read-only and provides no navigation action.
+- [x] **Step 4: Run tile tests and `python3 scripts/i18n-check.py .`; expect PASS.** Return changed files and output without staging or committing.
 
 ### Task 3: Floating pill header (agent C, parallel)
 
@@ -99,10 +99,10 @@
 - Change `FilesPane` to accept `projectName: String? = null` after `modifier` so existing direct tests compile; the production call passes `state.project?.optionalText("name")?.takeIf(String::isNotBlank)`.
 - This task changes the header only; leave `FolderList` and `FilesActions` intact for Task 4.
 
-- [ ] **Step 1: Write failing header tests** for two separate pill surfaces, root `X` and project subtitle, nested Back plus Close, reload enabled/disabled, and ellipsized long paths on narrow widths.
-- [ ] **Step 2: Run `FilesPaneUiTest`; expect header assertions to fail.** `./gradlew testDebugUnitTest --tests de.joinnoah.pi.remote.FilesPaneUiTest`
-- [ ] **Step 3: Replace the flat top bar and divider with `FloatingSurface` pills.** Use `CircleShape`, the session header's 16 dp horizontal/8 dp vertical placement, left-pillar 8 dp start/20 dp end padding, a 48 dp icon target followed by 12 dp space, and a two-line title/subtitle column with 0 dp added vertical spacing. Keep the right reload bubble 48 dp. On nested views retain Back and Close in the left pill; ellipsize text before either action is clipped.
-- [ ] **Step 4: Run `FilesPaneUiTest`; expect PASS.** Return changed files and output without staging or committing.
+- [x] **Step 1: Write failing header tests** for two separate pill surfaces, root `X` and project subtitle, nested Back plus Close, reload enabled/disabled, and ellipsized long paths on narrow widths.
+- [x] **Step 2: Run `FilesPaneUiTest`; expect header assertions to fail.** `./gradlew testDebugUnitTest --tests de.joinnoah.pi.remote.FilesPaneUiTest`
+- [x] **Step 3: Replace the flat top bar and divider with `FloatingSurface` pills.** Use `CircleShape`, the session header's 16 dp horizontal/8 dp vertical placement, left-pillar 8 dp start/20 dp end padding, a 48 dp icon target followed by 12 dp space, and a two-line title/subtitle column with 0 dp added vertical spacing. Keep the right reload bubble 48 dp. On nested views retain Back and Close in the left pill; ellipsize text before either action is clipped.
+- [x] **Step 4: Run `FilesPaneUiTest`; expect PASS.** Return changed files and output without staging or committing.
 
 ### Task 4: Grid integration, full verification, and review (integrator, after A/B/C)
 
@@ -115,11 +115,11 @@
 - Add `FilesActions.onRequestPreview: (String) -> Unit`, `onShowPeek: (String, FileEntryType) -> Unit`, and `onDismissPeek: () -> Unit` and connect them to Task 1 view-model methods.
 - In `FolderList`, use one `LazyVerticalGrid`: breadcrumbs, loading/error/notices, section headings, and pagination are full-span items; entries use Task 2 tiles. Preserve `filesList` and `filesEntry:<name>` test tags.
 
-- [ ] **Step 1: Review each parallel result against the spec and contract.** Resolve any interface drift before integration; commit each reviewed agent's disjoint file set separately.
-- [ ] **Step 2: Write failing end-to-end pane tests** for grouped tiles, preview request on visible files, tap versus long press, popup dismissal on Back/scroll/navigation, paginated entries, and the tablet inspector. Keep the existing file/line-selection tests.
-- [ ] **Step 3: Wire `FileEntryTile` and `FilePeekPopup` into `FolderList` and connect actions through `filesActions`.** Use two columns below 600 dp and three at or above 600 dp. Capture the pressed tile's window bounds; clear its anchor when the path or visible listing changes. Avoid nesting a vertical grid inside `LazyColumn`.
-- [ ] **Step 4: Run focused tests to PASS, then the repository checks.** `./gradlew testDebugUnitTest --tests de.joinnoah.pi.remote.FilesPaneUiTest --tests de.joinnoah.pi.remote.FileTilesUiTest --tests de.joinnoah.pi.remote.ProjectFilesPreviewTest`; then `python3 scripts/i18n-check.py .` and `./gradlew testDebugUnitTest assembleDebug lintDebug`.
-- [ ] **Step 5: Inspect the diff, get one independent review, fix findings, and repeat affected checks.** Commit integration, push a single branch, open and attach a PR against `main`; wait for green CI and Robin's merge approval. Report the needed Samsung/narrow-phone/tablet device checks without claiming they ran locally.
+- [x] **Step 1: Review each parallel result against the spec and contract.** Resolve any interface drift before integration; commit each reviewed agent's disjoint file set separately.
+- [x] **Step 2: Write failing end-to-end pane tests** for grouped tiles, preview request on visible files, tap versus long press, popup dismissal on Back/scroll/navigation, paginated entries, and the tablet inspector. Keep the existing file/line-selection tests.
+- [x] **Step 3: Wire `FileEntryTile` and `FilePeekPopup` into `FolderList` and connect actions through `filesActions`.** Use two columns below 600 dp and three at or above 600 dp. Capture the pressed tile's window bounds; clear its anchor when the path or visible listing changes. Avoid nesting a vertical grid inside `LazyColumn`.
+- [x] **Step 4: Run focused tests to PASS, then the repository checks.** `./gradlew testDebugUnitTest --tests de.joinnoah.pi.remote.FilesPaneUiTest --tests de.joinnoah.pi.remote.FileTilesUiTest --tests de.joinnoah.pi.remote.ProjectFilesPreviewTest`; then `python3 scripts/i18n-check.py .` and `./gradlew testDebugUnitTest assembleDebug lintDebug`.
+- [x] **Step 5: Inspect the diff, get one independent review, fix findings, and repeat affected checks.** Commit integration, push a single branch, open and attach a PR against `main`; wait for green CI and Robin's merge approval. Report the needed Samsung/narrow-phone/tablet device checks without claiming they ran locally.
 
 ## Self-review record
 

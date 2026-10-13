@@ -1,0 +1,24 @@
+# Weekly update pull requests for the Gradle dependencies and plugins in gradle/libs.versions.toml
+# and for the SHA-pinned GitHub Actions. Minor and patch updates arrive grouped; major updates come
+# one pull request each, because they tend to need code or workflow changes.
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      gradle-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
