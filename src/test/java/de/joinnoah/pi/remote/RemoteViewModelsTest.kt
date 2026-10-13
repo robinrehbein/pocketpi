@@ -105,10 +105,18 @@ class RemoteViewModelsTest {
         firstModel.draft(first, "typed")
         assertEquals("typed", repository.state.value.draft)
         repository.state.value = RemoteState(selection = second, draft = "second draft")
+        // The flush on the way out runs after the selection moved on: it is filed under its chat.
         firstModel.draft(first, "late")
-        // The write names its chat, so even the shown destination does not take it.
-        secondModel.draft(first, "late")
+        assertEquals("late", repository.filedDrafts[first])
+        // The write names its chat, so another destination does not take it.
+        secondModel.draft(first, "other")
+        assertEquals("late", repository.filedDrafts[first])
         assertEquals("second draft", repository.state.value.draft)
+        // Nor is it held back while the chat loads.
+        repository.state.value = repository.state.value.copy(selection = first, loading = true)
+        firstModel.draft(first, "while loading")
+        assertEquals("while loading", repository.state.value.draft)
+        repository.state.value = RemoteState(selection = second, draft = "second draft")
         secondModel.draft(second, "new")
         assertEquals("new", repository.state.value.draft)
     }

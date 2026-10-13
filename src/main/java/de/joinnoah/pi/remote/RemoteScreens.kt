@@ -238,9 +238,18 @@ internal fun RemoteScreen(
     val chatKey = key as? RemoteNavKey.Chat
     val chatModel = model as? ChatViewModel
     // The composer's text lives here rather than in the state, so typing recomposes only the
-    // composer; this screen's own draft changes go through it or flush it first.
+    // composer; this screen's own draft changes go through it or flush it first. It belongs to
+    // this destination's chat from the start, so text typed before a load or a navigation lands
+    // there; while the chat loads it takes no edits.
     val composerDraft =
-        if (chatKey != null) rememberComposerDraft(state.selection, state.draft, model::draft) else null
+        if (chatKey != null)
+            rememberComposerDraft(
+                chatKey.selection(),
+                state.draft,
+                editable = !state.loading && state.selection == chatKey.selection(),
+                push = model::draft,
+            )
+        else null
     val jobsAvailable = canUseBackgroundJobs(state)
     val jobsLeasable = canLeaseJobsList(state)
     // A destination cannot refresh while loading. Retry when its snapshot is ready so the
@@ -2077,8 +2086,7 @@ internal fun RemoteScreen(
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,
-                        onDraft = model::draft,
-                        onDraftFor = model::draft,
+                        // Typed text goes through `composer`, which pushes it to model::draft.
                         draft = composer,
                         onSend = { if (!runLocalCommand()) model.prompt() },
                         onFollowUp = model::followUp,
@@ -2107,7 +2115,13 @@ internal fun RemoteScreen(
                                 model::setModel,
                                 model::setThinkingLevel,
                                 model::refreshCommands,
-                                model::selectCommand,
+                                { command ->
+                                    // The suggestions come from the text on screen, which can
+                                    // run ahead of the repository's draft.
+                                    val current = composer.text
+                                    if (command in state.commands && commandName(current) != null)
+                                        composer.replace(selectCommand(current, command))
+                                },
                                 localCommands =
                                     availableLocalCommands(state, key is RemoteNavKey.Chat, System.currentTimeMillis(), reloading),
                                 selectLocalCommand = { command ->

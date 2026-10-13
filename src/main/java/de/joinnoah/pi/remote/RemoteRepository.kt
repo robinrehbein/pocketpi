@@ -186,8 +186,9 @@ interface RemoteRepository {
 
     /**
      * Sets the draft typed in [selection]. A composer pushes its text late (after a pause, on
-     * stop, when the chat changes), so a write for a chat that is no longer selected is dropped
-     * instead of landing in the current one.
+     * stop, when the chat changes), so a write for a chat that is no longer selected never lands
+     * in the current one: a repository that keeps drafts per chat files it under [selection],
+     * and this default drops it.
      */
     fun draft(selection: RemoteSelection, text: String) {
         if (state.value.selection == selection) draft(text)

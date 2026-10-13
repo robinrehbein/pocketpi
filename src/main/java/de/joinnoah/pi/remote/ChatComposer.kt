@@ -56,7 +56,8 @@ private const val MAX_DRAFT_BYTES = 128 * 1024
  * pause ([pushPending]) or at once on [flush]: before a send, on stop and when the chat changes.
  * Draft changes made elsewhere (a quote prompt, a prefill, a restored uncertain draft, the clear
  * after a send) come back through [sync] and replace the text, unless the user typed something
- * the repository has not seen yet: that typing wins, and the next push carries it.
+ * the repository has not seen yet: that typing wins, and the next push carries it. While the chat
+ * loads the text is not [editable], so typing never lands on top of a draft not shown yet.
  */
 @Stable
 internal class ComposerDraft(
@@ -70,6 +71,9 @@ internal class ComposerDraft(
 
     val text: String get() = value.text
 
+    /** False while the chat loads: edits are refused, so typing never lands on a draft not shown yet. */
+    var editable = true
+
     /** The repository's draft as [sync] last saw it. */
     private var observed = initial
 
@@ -79,16 +83,19 @@ internal class ComposerDraft(
     /** Pushed texts whose echo has not come back through [sync] yet, oldest first. */
     private val echoes = ArrayDeque<String>()
 
-    /** A keyboard edit; a text over the draft limit is refused, as the repository would. */
-    fun edit(next: TextFieldValue) {
-        if (next.text != value.text && tooLong(next.text)) return
+    /**
+     * A keyboard edit; false when it is refused: while the chat is not [editable], or for a text
+     * over the draft limit, as the repository would refuse it. A selection-only change always applies.
+     */
+    fun edit(next: TextFieldValue): Boolean {
+        if (next.text != value.text && (!editable || tooLong(next.text))) return false
         value = next
+        return true
     }
 
     /** Replaces the text with the cursor at its end: an accepted prediction or a voice result. */
-    fun setText(text: String) {
-        if (text != value.text) edit(TextFieldValue(text, TextRange(text.length)))
-    }
+    fun setText(text: String): Boolean =
+        text == value.text || edit(TextFieldValue(text, TextRange(text.length)))
 
     /** Replaces the text and pushes it at once, for a change the chat makes (a picked command). */
     fun replace(text: String) {
@@ -145,17 +152,23 @@ internal class ComposerDraft(
 /**
  * The composer text of [selection], starting from the repository's [draft]. It follows later
  * changes of [draft], pushes typing through [push] after [COMPOSER_DRAFT_DEBOUNCE_MILLIS], and
- * flushes on stop and when [selection] changes or the composer leaves the screen.
+ * flushes on stop, when [selection] changes or the composer leaves the screen, and when it becomes
+ * [editable] again after the chat loaded. [push] must file a late write under the selection it
+ * names, also once that chat is no longer shown (see [RemoteRepository.draft]).
  */
 @Composable
 internal fun rememberComposerDraft(
     selection: RemoteSelection,
     draft: String,
+    editable: Boolean,
     push: (RemoteSelection, String) -> Unit,
 ): ComposerDraft {
     val latestPush by rememberUpdatedState(push)
     val composer = remember(selection) { ComposerDraft(selection, draft) { target, text -> latestPush(target, text) } }
+    SideEffect { composer.editable = editable }
     LaunchedEffect(composer, draft) { composer.sync(draft) }
+    // Text the repository does not hold yet (a push it could not take) goes again once it can.
+    LaunchedEffect(composer, editable) { if (editable) composer.flush() }
     LaunchedEffect(composer) {
         snapshotFlow { composer.text }.collectLatest {
             delay(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
@@ -210,7 +223,8 @@ internal fun QuotePreview(
 @Composable
 internal fun ChatComposer(
     state: RemoteState,
-    onDraft: (String) -> Unit,
+    /** Where typed text goes when the caller does not hoist [draft]. */
+    onDraft: (String) -> Unit = {},
     onSend: () -> Unit,
     onStop: () -> Unit,
     onRemoveQuote: () -> Unit,
@@ -237,7 +251,7 @@ internal fun ChatComposer(
     /** Where typed text goes, naming the chat it was typed in; see [RemoteRepository.draft]. */
     onDraftFor: (RemoteSelection, String) -> Unit = { _, text -> onDraft(text) },
     /** The text being typed; the chat hoists it so its own draft changes can flush it first. */
-    draft: ComposerDraft = rememberComposerDraft(state.selection, state.draft, onDraftFor),
+    draft: ComposerDraft = rememberComposerDraft(state.selection, state.draft, !state.loading, onDraftFor),
 ) {
     // Everything below reads the text on screen, which runs ahead of the repository's draft
     // while the user types.
@@ -321,7 +335,7 @@ internal fun ChatComposer(
     val stop: () -> Unit = if (childControls) ({ confirmChildStop = true }) else onStop
     val send: () -> Unit = if (childResume) onResumeChild else onSend
     val showBusyAction = busyAction != null && hasDraft
-    val voiceInput = rememberVoiceInputBinding(state.draft, draft::setText, voiceEngine)
+    val voiceInput = rememberVoiceInputBinding(state.draft, { draft.setText(it) }, voiceEngine)
     val shown = draft.value
     val prediction =
         rememberPromptPrediction(state).takeIf {
@@ -330,8 +344,7 @@ internal fun ChatComposer(
         }
     val acceptPrediction: () -> Unit = {
         if (prediction != null && state.draft.isEmpty()) {
-            voiceInput.userEdited(prediction)
-            draft.setText(prediction)
+            if (draft.setText(prediction)) voiceInput.userEdited(prediction)
         }
     }
     val latestAccept = rememberUpdatedState(acceptPrediction)
@@ -517,8 +530,8 @@ internal fun ChatComposer(
                 TextField(
                     value = shown,
                     onValueChange = {
-                        if (it.text != draft.text) voiceInput.userEdited(it.text)
-                        draft.edit(it)
+                        val typed = it.text != draft.text
+                        if (draft.edit(it) && typed) voiceInput.userEdited(it.text)
                     },
                     placeholder = {
                         Text(
@@ -568,8 +581,8 @@ internal fun ChatComposer(
                                         val text = shown.text
                                         val start = shown.selection.min
                                         val next = text.substring(0, start) + "\n" + text.substring(shown.selection.max)
-                                        voiceInput.userEdited(next)
-                                        draft.edit(TextFieldValue(next, TextRange(start + 1)))
+                                        if (draft.edit(TextFieldValue(next, TextRange(start + 1))))
+                                            voiceInput.userEdited(next)
                                         true
                                     }
                                 }

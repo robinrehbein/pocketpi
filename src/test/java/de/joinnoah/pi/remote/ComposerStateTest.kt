@@ -22,6 +22,7 @@ import androidx.lifecycle.Lifecycle
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.JsonArray
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -148,6 +149,54 @@ class ComposerStateTest {
     }
 
     @Test
+    fun whileTheChatLoadsEditsAreRefusedAndChangesMadeElsewhereStillShow() {
+        val pushes = Pushes()
+        val composer = draft("", pushes)
+        composer.editable = false
+        assertFalse(composer.edit(TextFieldValue("typed while loading", TextRange(19))))
+        assertFalse(composer.setText("voice while loading"))
+        assertEquals("", composer.text)
+        // The loaded chat's stored draft or a restored uncertain send replaces the text.
+        composer.sync("stored draft")
+        assertEquals("stored draft", composer.text)
+        composer.editable = true
+        composer.type("stored draft, more")
+        composer.pushPending()
+        assertEquals(listOf("stored draft, more"), pushes.texts)
+    }
+
+    @Test
+    fun typingFromBeforeALoadIsStillPushedAndWinsOverAChangeDuringIt() {
+        val pushes = Pushes()
+        val composer = draft("", pushes)
+        composer.type("typed before")
+        // The chat starts loading before the pause; an outside change arrives meanwhile.
+        composer.editable = false
+        composer.sync("from elsewhere")
+        assertEquals("typed before", composer.text)
+        composer.pushPending()
+        assertEquals(listOf("typed before"), pushes.texts)
+    }
+
+    @Test
+    fun aChangesPrefillOrReviewExtendsTheTypingNotTheLastPush() {
+        val repository = NavigationFakeRepository()
+        val selection = RemoteSelection("host", "project", "session")
+        repository.state.value = RemoteState(selection = selection, connected = true, draft = "Fix")
+        val model = ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "session"), FakeSettingsRepository())
+        val composer = ComposerDraft(selection, "Fix", model::draft)
+        val actions = changesActions(model, { composer.flush() }) {}
+        composer.type("Fix the login")
+        assertTrue(actions.onUseReview("Review: line 3"))
+        assertEquals("Fix the login\n\nReview: line 3", repository.state.value.draft)
+        composer.sync(repository.state.value.draft)
+        assertEquals(repository.state.value.draft, composer.text)
+        composer.type(composer.text + ".")
+        assertTrue(actions.onPrefill("Explain line 4"))
+        assertEquals("Fix the login\n\nReview: line 3.\n\nExplain line 4", repository.state.value.draft)
+    }
+
+    @Test
     fun anEditOverTheDraftLimitIsRefused() {
         val composer = draft("short")
         composer.type("x".repeat(128 * 1024 + 1))
@@ -247,6 +296,21 @@ class ComposerStateTest {
         // The harness drops it like the repository: the second chat keeps its own draft.
         assertEquals("Second draft", harness.state.draft)
         assertEquals("Second draft", shownText())
+    }
+
+    @Test
+    fun typingWhileTheChatLoadsIsRefusedAndTheLoadedDraftShows() {
+        val harness = show(RemoteState(loading = true, selection = first))
+        field().performTextInput("lost")
+        compose.waitForIdle()
+        assertEquals("", shownText())
+        assertTrue(harness.pushes.isEmpty())
+        compose.runOnIdle { harness.state = harness.state.copy(loading = false, connected = true, draft = "Stored") }
+        compose.waitForIdle()
+        assertEquals("Stored", shownText())
+        field().performTextInput(" more")
+        compose.waitForIdle()
+        assertEquals("Stored more", shownText())
     }
 
     @Test

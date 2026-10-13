@@ -96,8 +96,15 @@ internal open class DestinationViewModel(
 
     fun draft(text: String) = active { repository.draft(text) }
 
-    /** A composer's late write; see [RemoteRepository.draft]. */
-    fun draft(selection: RemoteSelection, text: String) = active { repository.draft(selection, text) }
+    /**
+     * A composer's write for this destination's chat; see [RemoteRepository.draft]. Unlike [draft]
+     * it is not held back while the chat loads or after the destination closed: a flush on the
+     * way out (Back, another chat, a notification) runs when the selection already moved on, and
+     * the repository files it under [selection]. A write naming another chat is dropped.
+     */
+    fun draft(selection: RemoteSelection, text: String) {
+        if (key is RemoteNavKey.Chat && selection == key.selection()) repository.draft(selection, text)
+    }
 
     fun quote(messageId: String?) = active { repository.quote(messageId) }
 
