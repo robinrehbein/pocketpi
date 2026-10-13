@@ -3950,6 +3950,35 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun aLateComposerWriteIsFiledUnderTheChatItWasTypedIn() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it, sessions = listOf(session(), session("other"))) }
+        val repository = repository(transport, drafts)
+        val first = RemoteSelection("host", "project", "session")
+        val second = first.copy(sessionId = "other")
+        repository.activate(first)
+        runCurrent()
+        repository.draft(first, "fix the tes")
+        assertEquals("fix the tes", repository.state.value.draft)
+        // Back or another chat ran before the composer's flush on the way out.
+        assertEquals(second, repository.activate(second))
+        runCurrent()
+        repository.draft(first, "fix the test")
+        assertEquals("", repository.state.value.draft)
+        repository.flush()
+        assertEquals("fix the test", drafts.values.getValue(DraftKey("host", "session")).text)
+        repository.draft(second, "second chat")
+        assertEquals("second chat", repository.state.value.draft)
+        repository.activate(first)
+        runCurrent()
+        assertEquals("fix the test", repository.state.value.draft)
+        // A chat of a host that is not paired keeps nothing.
+        repository.draft(RemoteSelection("gone", "project", "session"), "lost")
+        repository.flush()
+        assertFalse(drafts.values.containsKey(DraftKey("gone", "session")))
+    }
+
+    @Test
     fun unknownCrossHostNotificationRestoresOriginalTransportAndSelection() = runTest {
         val transport = Transport().also { configure(it) }
         val repository =

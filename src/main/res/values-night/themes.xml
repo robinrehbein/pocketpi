@@ -1,0 +1,7 @@
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="UnusedResources">
+    <style name="Theme.PocketPi" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/pocketpi_window_background</item>
+    </style>
+    <!-- remoteColorScheme's dark background. -->
+    <color name="pocketpi_window_background">#FF101114</color>
+</resources>

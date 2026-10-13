@@ -94,6 +94,34 @@ class RemoteViewModelsTest {
     }
 
     @Test
+    fun `a late composer write lands only in the chat it was typed in`() = runTest {
+        val repository = NavigationFakeRepository()
+        val first = RemoteSelection("host", "project", "first")
+        val second = first.copy(sessionId = "second")
+        repository.state.value = RemoteState(selection = first)
+        val firstModel = ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "first"), FakeSettingsRepository())
+        val secondModel =
+            ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "second"), FakeSettingsRepository())
+        firstModel.draft(first, "typed")
+        assertEquals("typed", repository.state.value.draft)
+        repository.state.value = RemoteState(selection = second, draft = "second draft")
+        // The flush on the way out runs after the selection moved on: it is filed under its chat.
+        firstModel.draft(first, "late")
+        assertEquals("late", repository.filedDrafts[first])
+        // The write names its chat, so another destination does not take it.
+        secondModel.draft(first, "other")
+        assertEquals("late", repository.filedDrafts[first])
+        assertEquals("second draft", repository.state.value.draft)
+        // Nor is it held back while the chat loads.
+        repository.state.value = repository.state.value.copy(selection = first, loading = true)
+        firstModel.draft(first, "while loading")
+        assertEquals("while loading", repository.state.value.draft)
+        repository.state.value = RemoteState(selection = second, draft = "second draft")
+        secondModel.draft(second, "new")
+        assertEquals("new", repository.state.value.draft)
+    }
+
+    @Test
     fun `non chat destination never exposes draft or transcript`() = runTest {
         val repository = NavigationFakeRepository()
         repository.state.value =

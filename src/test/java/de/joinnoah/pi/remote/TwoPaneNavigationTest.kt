@@ -720,6 +720,8 @@ class TwoPaneNavigationTest {
         focusComposerAndType("hello")
         compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.ShiftLeft) { pressKey(Key.Enter) } }
         compose.waitForIdle()
+        // Typed text reaches the repository after the composer's pause.
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
         assertEquals(0, repository.prompts)
         assertEquals("hello\n", repository.state.value.draft)
         compose.onNodeWithTag("composerField").performKeyInput { pressKey(Key.Enter) }
@@ -855,6 +857,8 @@ class TwoPaneNavigationTest {
         focusComposerAndType("hello")
         compose.onNodeWithTag("composerField").performKeyInput { pressKey(Key.Enter) }
         compose.waitForIdle()
+        // Typed text reaches the repository after the composer's pause.
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
         assertEquals(0, repository.prompts)
         assertEquals("hello\n", repository.state.value.draft)
         // Ctrl+Enter does not send on a phone either.
