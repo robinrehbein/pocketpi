@@ -288,9 +288,13 @@ private fun ProviderListScreen(
             Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            connectionStatusLine(connected, connection, hostChosen = true)?.let { line ->
+                ConnectionStatusChip(line)
+            }
             auth.notice?.let { NoticeCard(noticeText(it), onDismissNotice) }
             when {
-                !connected -> Message(stringResource(connection), "providersOffline")
+                // The connection chip above says why there is no list.
+                !connected -> Unit
                 !available -> Message(stringResource(R.string.providers_unavailable), "providersUnavailable")
                 auth.error != null && !auth.loaded ->
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -550,7 +554,9 @@ internal fun LoginFlowScreen(
                 .testTag("loginFlow"),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            if (!connected) Message(stringResource(connection), "loginOffline")
+            connectionStatusLine(connected, connection, hostChosen = true)?.let { line ->
+                ConnectionStatusChip(line)
+            }
             flow.notice?.let { NoticeCard(noticeText(it), null) }
             if (linkFailed) NoticeCard(stringResource(R.string.providers_no_browser), { linkFailed = false })
             if (flow.finished) LoginResult(flow, providerName, onDone)

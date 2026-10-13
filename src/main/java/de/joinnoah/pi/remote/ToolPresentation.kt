@@ -441,8 +441,13 @@ internal sealed interface ChildResolution {
 }
 
 /** Session rows that parse; a malformed row is dropped instead of failing the whole list. */
-internal fun sessionListItems(sessions: List<JsonObject>, connected: Boolean, loading: Boolean): List<SessionListItem> =
-    sessions.mapNotNull { runCatching { sessionListItem(it, connected, loading) }.getOrNull() }
+internal fun sessionListItems(
+    sessions: List<JsonObject>,
+    connected: Boolean,
+    loading: Boolean,
+    stale: Boolean = false,
+): List<SessionListItem> =
+    sessions.mapNotNull { runCatching { sessionListItem(it, connected, loading, stale) }.getOrNull() }
 
 internal fun SessionListItem.live(): Boolean =
     availability == SessionAvailability.RUNNING || availability == SessionAvailability.WAITING

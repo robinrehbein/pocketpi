@@ -1,5 +1,7 @@
 package de.joinnoah.pi.remote
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -133,7 +135,8 @@ class HomeSessionsTest {
 
     @Test
     fun widgetRowsFollowTheHeightAndWideWidgetsUseTwoColumns() {
-        assertEquals(40f, widgetRowDp(1f))
+        // A row is a 48 dp tap target at the default font size.
+        assertEquals(48f, widgetRowDp(1f))
         assertEquals(WidgetLayout(1, 1), widgetLayout(180f, 80f))
         assertEquals(WidgetLayout(1, 1), widgetLayout(180f, 120f))
         assertEquals(WidgetLayout(1, 2), widgetLayout(180f, 130f))
@@ -142,6 +145,18 @@ class HomeSessionsTest {
         assertEquals(WidgetLayout(2, 3), widgetLayout(520f, 600f))
         assertEquals(WidgetLayout(1, 1), widgetLayout(100f, 10f))
     }
+
+    @Test
+    fun theLargeTabletSizeUsesThreeColumnsOfUpToSixRows() {
+        assertEquals(WidgetLayout(3, 6), widgetLayout(600f, 400f))
+        assertEquals(WidgetLayout(3, 4), widgetLayout(600f, 240f))
+        assertEquals(WidgetLayout(3, 6), widgetLayout(800f, 900f))
+        assertEquals(WidgetLayout(2, 3), widgetLayout(599f, 400f))
+        assertEquals(18, widgetSessions(manyRunning(20), 3 * 6).size)
+    }
+
+    private fun manyRunning(count: Int) =
+        HomeSnapshot(true, (1..count).map { home("s$it", status = "running", updatedAt = it.toLong()) })
 
     @Test
     fun largerFontsFitFewerRows() {
@@ -232,6 +247,88 @@ class HomeSessionsTest {
     fun snapshotRoundTripsThroughJson() {
         val snapshot = HomeSnapshot(true, listOf(home("a", "waiting", 5, 7), home("b")))
         assertEquals(snapshot, homeSnapshot(Wire.parse(snapshot.json().toString())))
+        val refreshed = snapshot.copy(refreshedAt = 123_000)
+        assertEquals(refreshed, homeSnapshot(Wire.parse(refreshed.json().toString())))
+    }
+
+    @Test
+    fun aSnapshotStoredWithoutRefreshTimeStillLoads() {
+        // Written by a version before the freshness line.
+        val stored =
+            """{"version":1,"paired":true,"sessions":[{"routeId":"r","projectId":"p",
+            |"projectName":"Project","sessionId":"a","title":"Title a","status":"idle",
+            |"updatedAt":null,"openedAt":null}]}""".trimMargin().replace("\n", "")
+        val snapshot = homeSnapshot(Wire.parse(stored))
+        assertEquals(listOf(home("a")), snapshot.sessions)
+        assertNull(snapshot.refreshedAt)
+    }
+
+    @Test
+    fun aTrustedStateMarksTheRowsRefreshedAtAMinutesResolution() {
+        val previous = HomeSnapshot(true, listOf(home("a")))
+        val state = connected(sessions = listOf(session("a", "idle")), projectId = "p")
+        val first = mergeHomeSnapshot(previous, state, true, setOf("r"), now = 100_000)
+        assertEquals(100_000L, first.refreshedAt)
+        // Unchanged rows within the minute: the snapshot stays as it is and is not rewritten.
+        assertEquals(first, mergeHomeSnapshot(first, state, true, setOf("r"), now = 130_000))
+        assertEquals(160_000L, mergeHomeSnapshot(first, state, true, setOf("r"), now = 160_000).refreshedAt)
+        // Changed rows are new now, whatever the minute.
+        val running = connected(sessions = listOf(session("a", "running")), projectId = "p")
+        assertEquals(110_000L, mergeHomeSnapshot(first, running, true, setOf("r"), now = 110_000).refreshedAt)
+        // An offline app confirms nothing.
+        val offline = state.copy(connected = false)
+        assertEquals(100_000L, mergeHomeSnapshot(first, offline, true, setOf("r"), now = 500_000).refreshedAt)
+    }
+
+    @Test
+    fun aRefreshTimeFromAClockSetBackIsReplaced() {
+        // Stored while the clock was a day ahead: it would otherwise stay until the rows change.
+        val ahead = HomeSnapshot(true, listOf(home("a")), refreshedAt = 100_000 + 86_400_000)
+        val state = connected(sessions = listOf(session("a", "idle")), projectId = "p")
+        assertEquals(100_000L, mergeHomeSnapshot(ahead, state, true, setOf("r"), now = 100_000).refreshedAt)
+    }
+
+    @Test
+    fun homeInputsReuseTheListsOfTheLastStateWhenTheyAreTheSame() {
+        val state = connected(sessions = listOf(session("a", "running")), projectId = "p")
+        val first = homeInputs(state)
+        val delta = state.copy(draft = "d", status = "running")
+        val next = homeInputs(delta, state to first)
+        assertEquals(homeInputs(delta), next)
+        assertTrue(next.sessions === first.sessions)
+        assertTrue(next.project === first.project)
+        // A new list is stripped again.
+        val waiting = delta.copy(sessions = listOf(session("a", "waiting")))
+        assertEquals(homeInputs(waiting), homeInputs(waiting, delta to next))
+    }
+
+    @Test
+    fun aPushAboutAKnownSessionRefreshesTheRows() {
+        val snapshot = HomeSnapshot(true, listOf(home("a")), refreshedAt = 1L)
+        val next = snapshot.withPush("r", "a", "waiting", now = 9L)
+        assertEquals("waiting", next.sessions.single().status)
+        assertEquals(9L, next.refreshedAt)
+        assertEquals(snapshot, snapshot.withPush("r", "unknown", "waiting", now = 9L))
+    }
+
+    @Test
+    fun homeInputsKeepOnlyWhatTheMergeReads() {
+        val streaming =
+            connected(sessions = listOf(session("a", "running")), projectId = "p")
+                .copy(messages = listOf(Wire.objectOf("id" to "m", "text" to "Hel")), draft = "draft")
+        val later =
+            streaming.copy(
+                messages = listOf(Wire.objectOf("id" to "m", "text" to "Hello")),
+                sessions = listOf(JsonObject(session("a", "running") + ("preview" to JsonPrimitive("Hello")))),
+                status = "running",
+            )
+        assertEquals(homeInputs(streaming), homeInputs(later))
+        val waiting = later.copy(sessions = listOf(session("a", "waiting")))
+        assertFalse(homeInputs(later) == homeInputs(waiting))
+        assertEquals(
+            mergeHomeSnapshot(HomeSnapshot(), waiting, true, setOf("r"), 0),
+            mergeHomeSnapshot(HomeSnapshot(), homeInputs(waiting), true, setOf("r"), 0),
+        )
     }
 
     private fun session(id: String, status: String, origin: String = "rpc") =

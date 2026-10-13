@@ -310,4 +310,108 @@ class SessionListPresentationTest {
         assertEquals(mapOf("parent" to 2, "live" to 1, "grandchild" to 0, "gone" to 0), counts(false))
         assertEquals(mapOf("parent" to 1, "live" to 1, "grandchild" to 0), counts(true))
     }
+
+    @Test
+    fun staleRowsKeepTheirLastKnownStatusWhileTheMacReconnects() {
+        for ((status, availability) in
+            listOf(
+                "idle" to SessionAvailability.IDLE,
+                "running" to SessionAvailability.RUNNING,
+                "waiting" to SessionAvailability.WAITING,
+                "offline" to SessionAvailability.OFFLINE,
+            )) {
+            val session = Wire.objectOf("id" to "s", "title" to "Title", "origin" to "rpc", "status" to status)
+            assertEquals(
+                availability,
+                sessionListItem(session, connected = false, loading = false, stale = true).availability,
+            )
+            assertEquals(
+                availability,
+                sessionListItems(listOf(session), connected = false, loading = false, stale = true)
+                    .single().availability,
+            )
+            // Without a reconnect under way a lost connection still shows every row offline.
+            assertEquals(
+                SessionAvailability.OFFLINE,
+                sessionListItem(session, connected = false, loading = false, stale = false).availability,
+            )
+        }
+        // A last-known status offers nothing that needs the connection.
+        val stale =
+            sessionListItem(
+                Wire.objectOf("id" to "rpc", "title" to "RPC", "origin" to "rpc", "status" to "idle"),
+                connected = false,
+                loading = false,
+                stale = true,
+            )
+        assertFalse(canCloseSession(stale, false, false, setOf(SESSION_CLOSE_CAPABILITY)))
+    }
+
+    @Test
+    fun hideOfflineAppliesToTheLastKnownStatusWhileStaleAndIsOffWithoutAConnection() {
+        assertTrue(hidesOfflineSessions(setting = true, connected = true, stale = false))
+        assertTrue(hidesOfflineSessions(setting = true, connected = false, stale = true))
+        assertFalse(hidesOfflineSessions(setting = true, connected = false, stale = false))
+        assertFalse(hidesOfflineSessions(setting = false, connected = true, stale = false))
+        assertFalse(hidesOfflineSessions(setting = false, connected = false, stale = true))
+
+        val sessions =
+            listOf(
+                Wire.objectOf("id" to "gone", "title" to "Gone", "origin" to "rpc", "status" to "offline"),
+                Wire.objectOf("id" to "idle", "title" to "Idle", "origin" to "rpc", "status" to "idle"),
+                Wire.objectOf("id" to "running", "title" to "Running", "origin" to "rpc", "status" to "running"),
+            )
+        fun visible(connected: Boolean, stale: Boolean) =
+            visibleSessionListItems(
+                sessions,
+                connected = connected,
+                loading = false,
+                hideOffline = hidesOfflineSessions(true, connected, stale),
+                stale = stale,
+            ).map { it.id to it.availability }
+
+        // Connected: the real availability decides.
+        assertEquals(
+            listOf("idle" to SessionAvailability.IDLE, "running" to SessionAvailability.RUNNING),
+            visible(connected = true, stale = false),
+        )
+        // Reconnecting: the same rows, with the status they last had.
+        assertEquals(visible(connected = true, stale = false), visible(connected = false, stale = true))
+        // Offline with nothing kept (another Mac, a denied device, a fresh start): every row is
+        // offline, and the filter steps aside rather than hide them all.
+        assertEquals(
+            listOf(
+                "gone" to SessionAvailability.OFFLINE,
+                "idle" to SessionAvailability.OFFLINE,
+                "running" to SessionAvailability.OFFLINE,
+            ),
+            visible(connected = false, stale = false),
+        )
+    }
+
+    @Test
+    fun aLastKnownStatusIsMarkedAlsoOnceTheReconnectHasGivenUp() {
+        val running = Wire.objectOf("id" to "r", "title" to "Running", "origin" to "rpc", "status" to "running")
+        val gone = Wire.objectOf("id" to "g", "title" to "Gone", "origin" to "rpc", "status" to "offline")
+        // After a second transient failure, or once the reconnect stopped, the connection reads
+        // "Offline" while the state stays stale: the rows still carry the last-known status, marked.
+        val item = sessionListItem(running, connected = false, loading = false, stale = true)
+        assertEquals(SessionAvailability.RUNNING, item.availability)
+        assertTrue(item.lastKnown)
+        assertFalse(sessionListItem(gone, connected = false, loading = false, stale = true).lastKnown)
+        assertFalse(sessionListItem(running, connected = true, loading = false, stale = false).lastKnown)
+        assertFalse(sessionListItem(running, connected = false, loading = false, stale = false).lastKnown)
+        // Sorting and the live filter still go by the last-known status.
+        assertTrue(item.live())
+        assertEquals(
+            listOf("r" to true),
+            visibleSessionListItems(
+                listOf(gone, running),
+                connected = false,
+                loading = false,
+                hideOffline = hidesOfflineSessions(true, connected = false, stale = true),
+                stale = true,
+            ).map { it.id to it.lastKnown },
+        )
+    }
 }
