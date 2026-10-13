@@ -32,6 +32,9 @@ class RemoteApplication : Application() {
     internal lateinit var predictions: PromptPredictions
         private set
 
+    internal lateinit var appLock: AppLock
+        private set
+
     val pushConfigured: Boolean
         get() =
             listOf(
@@ -51,6 +54,7 @@ class RemoteApplication : Application() {
         // Opened or shared artifacts are copies of project files too.
         Thread { runCatching { ArtifactStorage.clear(cacheDir) } }.start()
         settings = DefaultSettingsRepository(this)
+        appLock = AppLock(AppLockStore(this), deviceSecure = { deviceSecure(this) })
         val attachments = AttachmentStore(this)
         val importer = AttachmentImporter(this, attachments)
         repository =

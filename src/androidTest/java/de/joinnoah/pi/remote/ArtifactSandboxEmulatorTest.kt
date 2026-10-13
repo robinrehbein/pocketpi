@@ -479,7 +479,7 @@ class ArtifactSandboxEmulatorTest {
             <script src="http://${probe.ip}:${probe.http}/script.js"></script>
             </head><body><script>
             var viaFetch = "none";
-            fetch("https://unpkg.com/lib/data.json").then(function (r) { return r.text(); }).then(function () { viaFetch = "fetch-ok"; }).catch(function () { viaFetch = "fetch-blocked"; });
+            fetch("https://unpkg.com/lib@1.0.0/data.json").then(function (r) { return r.text(); }).then(function () { viaFetch = "fetch-ok"; }).catch(function () { viaFetch = "fetch-blocked"; });
             fetch("https://evil.example/data.json", { mode: "no-cors" }).catch(function () {});
             setTimeout(function () { document.title = "cdn-done:" + window.cdnMarker + "|" + viaFetch; }, 3000);
             </script></body></html>
@@ -530,7 +530,7 @@ class ArtifactSandboxEmulatorTest {
         compose.setContent {
             AndroidView(
                 factory = { context ->
-                    createArtifactWebView(context, capture.page, capture.callbacks, Color.WHITE).also {
+                    createArtifactWebView(context, capture.page, capture.callbacks, Color.WHITE, thumbnail = true).also {
                         view = it
                         capture.view = it
                     }

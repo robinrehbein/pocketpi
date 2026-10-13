@@ -1814,6 +1814,7 @@ internal fun RemoteScreen(
                             Spacer(Modifier.width(ButtonDefaults.IconSpacing))
                             Text(stringResource(R.string.remote_settings_privacy_open))
                         }
+                        AppLockSettingRow()
                     }
                 }
                 item {
