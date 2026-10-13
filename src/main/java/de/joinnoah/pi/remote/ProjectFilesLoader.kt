@@ -566,6 +566,7 @@ internal class ProjectFilesLoader(
                         if (active()) saveFailed(sessionId, path, requestId, FilesFailure.OFFLINE, answered = false)
                         return@launch
                     } catch (e: Exception) {
+                        Diagnostics.caught("files.write", e)
                         if (!active()) return@launch
                         val reason = failure(e)
                         val host = if (reason == FilesFailure.CONFLICT) wholeFile(sessionId, path) else null
@@ -605,7 +606,8 @@ internal class ProjectFilesLoader(
             source.filesRead(sessionId, path, 0, null).takeIf { !it.binary && !it.tooLarge && it.nextOffset == null }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Diagnostics.caught("files.wholeFile", e)
             null
         }
 
