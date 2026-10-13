@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The inspector's tabs beside a chat (InspectorHost.kt). -->
+    <string name="remote_inspector_tab_changes">Changes</string>
+    <string name="remote_inspector_tab_files">Files</string>
+    <string name="remote_inspector_tab_jobs">Jobs</string>
+    <string name="remote_inspector_tab_tool">Tool</string>
+    <string name="remote_inspector_tab_history">History</string>
+    <string name="remote_inspector_tab_artifact">Artifact</string>
+    <!-- %1$s is a tab's name, such as Changes. -->
+    <string name="remote_inspector_tab_close">Close %1$s</string>
+    <string name="remote_inspector_widen">Widen side pane</string>
+    <string name="remote_inspector_narrow">Narrow side pane</string>
+    <!-- The strip a widened side pane leaves of the chat. -->
+    <string name="remote_chat_strip_show">Show the chat</string>
+    <!-- Background jobs: the popover's way to the full list, and quoting a job's output. -->
+    <string name="remote_jobs_open_all">Open background jobs</string>
+    <string name="remote_jobs_ask">Ask pi about this output</string>
+    <!-- Goes into the composer above the quoted output; %1$s is the job's command. -->
+    <string name="remote_jobs_ask_prompt">Here is the end of the output of `%1$s`:</string>
+</resources>

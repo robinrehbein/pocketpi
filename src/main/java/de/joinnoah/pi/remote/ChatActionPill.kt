@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,6 +41,7 @@ private fun ChatAction.icon(): ImageVector =
     when (this) {
         ChatAction.CHANGES -> Icons.Default.Difference
         ChatAction.FILES -> Icons.Default.FolderOpen
+        ChatAction.JOBS -> Icons.Outlined.Terminal
         ChatAction.RENAME -> Icons.Default.Edit
         ChatAction.REFRESH -> Icons.Default.Refresh
         ChatAction.SETTINGS -> Icons.Default.Settings
@@ -53,6 +55,7 @@ private fun ChatAction.shortcut(): Shortcut? =
     when (this) {
         ChatAction.CHANGES -> Shortcut.CHANGES
         ChatAction.FILES -> Shortcut.FILES
+        ChatAction.JOBS -> Shortcut.JOBS
         ChatAction.RENAME -> Shortcut.RENAME
         ChatAction.REFRESH -> Shortcut.REFRESH
         ChatAction.SETTINGS -> Shortcut.SETTINGS
@@ -65,6 +68,7 @@ private fun ChatAction.label(): Int =
     when (this) {
         ChatAction.CHANGES -> R.string.remote_changes_open
         ChatAction.FILES -> R.string.remote_files_open
+        ChatAction.JOBS -> R.string.remote_jobs_title
         ChatAction.RENAME -> R.string.remote_rename_session
         ChatAction.REFRESH -> R.string.remote_refresh
         ChatAction.SETTINGS -> R.string.remote_settings

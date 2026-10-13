@@ -32,6 +32,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
@@ -458,12 +459,12 @@ class FilesPaneUiTest {
 
     /*
      * On a phone either pane covers the chat header, so the other cannot be opened while it is
-     * shown; ProjectFilesLoaderTest covers the exclusion itself, whatever the layout. Beside the
-     * chat both stay reachable, so the inspector must show one at a time.
+     * shown; ProjectFilesLoaderTest covers the exclusion itself. Beside the chat both stay open,
+     * each as a tab of the inspector.
      */
     @Test
     @Config(qualifiers = "w1300dp-h800dp")
-    fun filesAndChangesReplaceEachOtherInTheInspector() {
+    fun filesAndChangesShareTheInspectorAsTabs() {
         chat(setOf(GIT_CAPABILITY, FILES_CAPABILITY))
         fun shown(tag: String) =
             compose.onNode(hasTestTag(tag) and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
@@ -476,10 +477,14 @@ class FilesPaneUiTest {
         compose.waitForIdle()
         shown("filesPane")
         compose.onNodeWithTag("changesPane").assertDoesNotExist()
+        // Changes again switches back to their tab; the files stay open behind it.
         compose.onNodeWithTag("chatAction_changes").performClick()
         compose.waitForIdle()
         shown("changesPane")
         compose.onNodeWithTag("filesPane").assertDoesNotExist()
-        assertNull(repository.state.value.files)
+        assertNotNull(repository.state.value.files)
+        compose.onNodeWithTag("inspectorTab_files").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+        compose.waitForIdle()
+        shown("filesPane")
     }
 }

@@ -45,6 +45,7 @@ import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -274,7 +275,7 @@ class TwoPaneNavigationTest {
     }
 
     @Test
-    @Config(qualifiers = "w900dp-h1200dp")
+    @Config(qualifiers = "w740dp-h1200dp")
     fun belowTheInspectorWidthToolDetailsCoverTheChatPane() {
         render()
         openTool()
@@ -352,6 +353,271 @@ class TwoPaneNavigationTest {
         compose.onNodeWithTag("toolDetail").assertDoesNotExist()
         compose.onNodeWithTag("inspectorPlaceholder").assertIsDisplayed()
         assertChatShown()
+    }
+
+    // ---- Inspector tabs ------------------------------------------------------------------
+
+    private fun click(tag: String) {
+        compose.onNodeWithTag(tag).performClick()
+        compose.waitForIdle()
+    }
+
+    /** Selects a tab; a tap on its centre would hit its close button. */
+    private fun selectTab(tab: String) {
+        compose.onNodeWithTag("inspectorTab_$tab").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+    }
+
+    private fun assertInInspector(tag: String) =
+        compose.onNode(hasTestTag(tag) and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
+
+    /** The chat's own width beside the inspector, which shares the chat's pane. */
+    private fun chatBesideInspector(): Dp = widthOf("chatPane") - widthOf("inspectorPane") - PANE_DIVIDER_WIDTH
+
+    /**
+     * Changes open beside the chat with the list out of the way, Files joins them as a second tab
+     * and the list comes back with the last one.
+     */
+    private fun changesAndFilesOpenBesideTheChat() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY, FILES_CAPABILITY))
+        render()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        click("chatAction_changes")
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        assertInInspector("changesPane")
+        assertChatShown()
+        assertTrue("chat ${chatBesideInspector()}", chatBesideInspector() >= CHAT_PANE_MIN_WIDTH)
+        assertTrue("inspector ${widthOf("inspectorPane")}", widthOf("inspectorPane") >= SIDE_INSPECTOR_MIN_WIDTH)
+        // Files open as a second tab and keep the changes.
+        click("chatActionsMore")
+        click("chatActionMenu_files")
+        assertInInspector("filesPane")
+        compose.onNodeWithTag("inspectorTab_files").assertIsSelected()
+        compose.onNodeWithTag("inspectorTab_changes").assertIsNotSelected()
+        compose.onNodeWithTag("changesPane").assertDoesNotExist()
+        assertTrue(repository.state.value.changes != null)
+        selectTab("changes")
+        assertInInspector("changesPane")
+        // Closing a tab shows the one before it; the last one takes the pane and brings the list back.
+        click("inspectorTabClose_changes")
+        assertInInspector("filesPane")
+        assertNull(repository.state.value.changes)
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        click("inspectorTabClose_files")
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        assertChatShown()
+    }
+
+    @Test
+    @Config(qualifiers = "w753dp-h1205dp")
+    fun aPortraitTabletOpensChangesBesideTheChat() = changesAndFilesOpenBesideTheChat()
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp")
+    fun aPortraitTabletAtTheSmallerZoomOpensChangesBesideTheChat() = changesAndFilesOpenBesideTheChat()
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun aLandscapeTabletOpensChangesBesideTheChat() = changesAndFilesOpenBesideTheChat()
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun aToolClickSwitchesToTheToolTabAndBackClosesIt() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        render()
+        click("chatAction_changes")
+        openTool()
+        compose.onNodeWithTag("inspectorTab_tool").assertIsSelected()
+        assertInInspector("toolDetail")
+        compose.onNodeWithTag("inspectorTab_changes").assertExists()
+        // Back (and Esc) closes the active tab, which hands the pane to the one before it.
+        back()
+        compose.onNodeWithTag("inspectorTab_tool").assertDoesNotExist()
+        assertInInspector("changesPane")
+        back()
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp")
+    fun jobsOpenInTheInspectorBesideTheChat() {
+        render()
+        compose.runOnIdle {
+            repository.state.value = repository.state.value.copy(jobs = JobsState("s1", loaded = true, listOpen = true))
+        }
+        compose.waitForIdle()
+        assertInInspector("jobsScreen")
+        compose.onNodeWithTag("inspectorTab_jobs").assertIsSelected()
+        // The chat stays usable beside the jobs, and the list made way for them.
+        assertChatShown()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        click("inspectorTabClose_jobs")
+        assertEquals(false, repository.state.value.jobs?.listOpen)
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun aListTheUserHidOnItsOwnStaysHiddenWhenTheInspectorCloses() {
+        render()
+        openTool()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        // Shown and hidden again by hand: the state is the user's now.
+        click("toggleSessionList")
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        assertInInspector("toolDetail")
+        click("toggleSessionList")
+        back()
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp")
+    fun aPortraitListShownByHandLetsTheInspectorCoverTheChat() {
+        render()
+        openTool()
+        assertInInspector("toolDetail")
+        // The list and the inspector do not fit beside the chat: the tool covers it, as on a phone.
+        click("toggleSessionList")
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNode(hasTestTag("toolDetail") and hasAnyAncestor(hasTestTag("chatPane"))).assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-keysexposed-qwerty")
+    fun keysOpenWidenAndHideTheInspector() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        render(hardwareKeyboard = true)
+        val shift = android.view.KeyEvent.META_SHIFT_ON or android.view.KeyEvent.META_SHIFT_LEFT_ON
+        windowKey(android.view.KeyEvent.KEYCODE_G, ctrlMeta or shift)
+        assertInInspector("changesPane")
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(400.dp)
+        // Ctrl+Shift+B widens it past its usual cap and leaves the chat its minimum.
+        windowKey(android.view.KeyEvent.KEYCODE_B, ctrlMeta or shift)
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(1280.dp - PROJECT_STRIP_RESERVE - CHAT_PANE_MIN_WIDTH - PANE_DIVIDER_WIDTH)
+        assertEquals(CHAT_PANE_MIN_WIDTH, chatBesideInspector())
+        compose.onNodeWithTag("chatStrip").assertDoesNotExist()
+        windowKey(android.view.KeyEvent.KEYCODE_B, ctrlMeta or shift)
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(400.dp)
+        // Ctrl+\ hides the pane and its tabs stay; the list comes back meanwhile.
+        windowKey(android.view.KeyEvent.KEYCODE_BACKSLASH, ctrlMeta)
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        assertTrue(repository.state.value.changes != null)
+        windowKey(android.view.KeyEvent.KEYCODE_BACKSLASH, ctrlMeta)
+        assertInInspector("changesPane")
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        // The shown tab's key closes it.
+        windowKey(android.view.KeyEvent.KEYCODE_G, ctrlMeta or shift)
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        assertNull(repository.state.value.changes)
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp")
+    fun aWidenedPortraitInspectorLeavesTheChatAStrip() {
+        render()
+        openTool()
+        click("inspectorExpand")
+        compose.onNodeWithTag("chatStrip").assertIsDisplayed()
+        compose.onNodeWithTag("chatStripStatus").assertExists()
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(800.dp - PROJECT_STRIP_RESERVE - CHAT_STRIP_WIDTH - PANE_DIVIDER_WIDTH)
+        // The chat behind the strip is out of TalkBack's reach.
+        compose.onNodeWithTag("composerField").assertDoesNotExist()
+        click("chatStripShow")
+        compose.onNodeWithTag("chatStrip").assertDoesNotExist()
+        assertChatShown()
+        assertInInspector("toolDetail")
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp-keysexposed-qwerty")
+    fun hiddenPortraitTabsStayOffTheChat() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        render(hardwareKeyboard = true)
+        val shift = android.view.KeyEvent.META_SHIFT_ON or android.view.KeyEvent.META_SHIFT_LEFT_ON
+        windowKey(android.view.KeyEvent.KEYCODE_G, ctrlMeta or shift)
+        windowKey(android.view.KeyEvent.KEYCODE_H, ctrlMeta)
+        compose.onNodeWithTag("inspectorTab_history").assertIsSelected()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        // Ctrl+\ hides the tabs and the list comes back; nothing of them covers the chat meanwhile.
+        windowKey(android.view.KeyEvent.KEYCODE_BACKSLASH, ctrlMeta)
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("changesPane").assertDoesNotExist()
+        compose.onNodeWithTag("chatHistorySheet").assertDoesNotExist()
+        compose.onNodeWithTag("chatHistoryPane").assertDoesNotExist()
+        assertChatShown()
+        assertTrue(repository.state.value.changes != null)
+        // A hidden tab's key shows it again instead of closing it, and the list makes way at once.
+        windowKey(android.view.KeyEvent.KEYCODE_G, ctrlMeta or shift)
+        assertInInspector("changesPane")
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        assertTrue(repository.state.value.changes != null)
+        compose.onNodeWithTag("inspectorTab_history").assertExists()
+        // Hidden and shown again with Ctrl+\, the active tab comes back beside the chat.
+        windowKey(android.view.KeyEvent.KEYCODE_BACKSLASH, ctrlMeta)
+        compose.onNodeWithTag("changesPane").assertDoesNotExist()
+        windowKey(android.view.KeyEvent.KEYCODE_BACKSLASH, ctrlMeta)
+        assertInInspector("changesPane")
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        assertChatShown()
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp")
+    fun theHistoryActionSwitchesToTheHistoryTabBehindAnother() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        render()
+        fun history() {
+            if (compose.onAllNodesWithTag("chatAction_history").fetchSemanticsNodes().isEmpty()) {
+                click("chatActionsMore")
+                click("chatActionMenu_history")
+            } else click("chatAction_history")
+        }
+        history()
+        assertInInspector("chatHistoryPane")
+        click("chatAction_changes")
+        assertInInspector("changesPane")
+        // History behind Changes: the action brings it to the front, and only then closes it.
+        history()
+        assertInInspector("chatHistoryPane")
+        history()
+        compose.onNodeWithTag("inspectorTab_history").assertDoesNotExist()
+        assertInInspector("changesPane")
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp")
+    fun askingAboutAJobBehindTheStripBringsTheChatBack() {
+        val job = BackgroundJob("one", "echo one", "/project", false, JobStatus.RUNNING, null, null, 1L, null, 0L, false)
+        render()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(
+                    jobs =
+                        JobsState(
+                            "s1", listOf(job), loaded = true,
+                            view = JobView("one", job, lines = listOf(JobOutputLine.Text("error: boom")), loaded = true),
+                        )
+                )
+        }
+        compose.waitForIdle()
+        assertInInspector("jobAsk")
+        click("inspectorExpand")
+        compose.onNodeWithTag("chatStrip").assertIsDisplayed()
+        click("jobAsk")
+        // The prompt went into the draft, and the chat that holds it shows again beside the jobs.
+        assertTrue(repository.state.value.draft, repository.state.value.draft.contains("error: boom"))
+        compose.onNodeWithTag("chatStrip").assertDoesNotExist()
+        assertChatShown()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        assertInInspector("jobAsk")
     }
 
     // ---- Projects column -----------------------------------------------------------------
@@ -659,7 +925,7 @@ class TwoPaneNavigationTest {
     }
 
     @Test
-    @Config(qualifiers = "w900dp-h1200dp")
+    @Config(qualifiers = "w740dp-h1200dp")
     fun aCollapsedListHasNoDivider() {
         render()
         compose.onNodeWithTag("toggleSessionList").performClick()
@@ -1526,7 +1792,7 @@ class TwoPaneNavigationTest {
         render(hardwareKeyboard = true)
         openTool()
         compose.onNode(hasTestTag("toolDetail") and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
-        // The jobs cover the chat beside the inspector, then close again.
+        // The jobs join the inspector as a tab of their own, then close again.
         compose.runOnIdle {
             repository.state.value = repository.state.value.copy(jobs = JobsState("s1", loaded = true, listOpen = true))
         }
@@ -1571,7 +1837,7 @@ class TwoPaneNavigationTest {
     }
 
     @Test
-    @Config(qualifiers = "w900dp-h1200dp")
+    @Config(qualifiers = "w740dp-h1200dp")
     fun anOpenEditorKeepsTheShortcutKeys() {
         render(hardwareKeyboard = true)
         openEditor("hello\n")
@@ -1596,7 +1862,7 @@ class TwoPaneNavigationTest {
     }
 
     @Test
-    @Config(qualifiers = "w900dp-h1200dp")
+    @Config(qualifiers = "w740dp-h1200dp")
     fun aShortcutOutsideTheEditorAsksBeforeItDropsAnUnsavedEdit() {
         render(hardwareKeyboard = true)
         openEditor("changed\n")
@@ -1610,7 +1876,7 @@ class TwoPaneNavigationTest {
     }
 
     @Test
-    @Config(qualifiers = "w900dp-h1200dp")
+    @Config(qualifiers = "w740dp-h1200dp")
     fun aDiscardPromptOnlyDropsTheEditItAskedAbout() {
         render(hardwareKeyboard = true)
         openEditor("changed\n")
@@ -1640,7 +1906,7 @@ class TwoPaneNavigationTest {
     }
 
     @Test
-    @Config(qualifiers = "w900dp-h1200dp")
+    @Config(qualifiers = "w740dp-h1200dp")
     fun anotherSessionAsksBeforeItDropsAnUnsavedEdit() {
         render(hardwareKeyboard = true)
         openEditor("changed\n")
@@ -1651,6 +1917,35 @@ class TwoPaneNavigationTest {
         compose.onNodeWithTag("filesEditorKeep").performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("filesEditorDiscard").assertDoesNotExist()
+        assertEquals(count, repository.activations.size)
+        assertEquals("changed\n", repository.state.value.files?.editor?.text)
+        compose.onNodeWithText("Second session").performClick()
+        compose.onNodeWithTag("filesEditorDiscard").performClick()
+        compose.waitForIdle()
+        assertEquals(RemoteSelection("host", "project", "s2"), repository.activations.last().first)
+        assertNull(repository.state.value.files?.editor)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-keysexposed-qwerty")
+    fun anUnsavedEditBehindAnotherTabStillAsksBeforeAnotherSession() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY, FILES_CAPABILITY))
+        render(hardwareKeyboard = true)
+        openEditor("changed\n")
+        assertInInspector("filesPane")
+        click("chatAction_changes")
+        assertInInspector("changesPane")
+        compose.onNodeWithTag("inspectorTab_files").assertIsNotSelected()
+        // The list shown by hand fits beside the chat and the inspector here.
+        click("toggleSessionList")
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        assertInInspector("changesPane")
+        val count = repository.activations.size
+        compose.onNodeWithText("Second session").performClick()
+        compose.waitForIdle()
+        assertEquals(count, repository.activations.size)
+        compose.onNodeWithTag("filesEditorKeep").performClick()
+        compose.waitForIdle()
         assertEquals(count, repository.activations.size)
         assertEquals("changed\n", repository.state.value.files?.editor?.text)
         compose.onNodeWithText("Second session").performClick()

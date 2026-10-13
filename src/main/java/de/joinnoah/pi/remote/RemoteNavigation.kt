@@ -611,6 +611,8 @@ internal class RemoteNavigator(
             Shortcut.FILES,
             Shortcut.JOBS,
             Shortcut.HISTORY,
+            Shortcut.EXPAND_INSPECTOR,
+            Shortcut.TOGGLE_INSPECTOR,
             Shortcut.RENAME,
             Shortcut.FORK -> {
                 val target = (top as? RemoteNavKey.Chat)?.let(targets::chat) ?: return false
@@ -619,12 +621,9 @@ internal class RemoteNavigator(
                 target.stopNow()
                 return true
             }
-            // Esc runs in the key handlers, Alt+Enter in the composer; the inspector keys have
-            // no action yet.
+            // Esc runs in the key handlers, Alt+Enter in the composer.
             Shortcut.ESCAPE,
-            Shortcut.OTHER_BUSY_ACTION,
-            Shortcut.EXPAND_INSPECTOR,
-            Shortcut.TOGGLE_INSPECTOR -> return false
+            Shortcut.OTHER_BUSY_ACTION -> return false
             else -> Unit
         }
         val panes = columnPanes(stack.toList()) ?: return false

@@ -305,6 +305,12 @@ interface RemoteRepository {
     /** Opens [RemoteState.changes] for the selected session, starting at session start. */
     fun openChanges() {}
 
+    /**
+     * Like [openChanges]; with [exclusive] false the files stay open beside the changes, as tabs
+     * of a side inspector do. Exclusive, as the phone shows one at a time, it closes them.
+     */
+    fun openChanges(exclusive: Boolean) = openChanges()
+
     fun closeChanges() {}
 
     fun selectChangesBase(base: GitBase) {}
@@ -417,6 +423,9 @@ interface RemoteRepository {
 
     /** Opens [RemoteState.files] for the selected session at its folder. */
     fun openFiles() {}
+
+    /** Like [openFiles]; with [exclusive] false the changes stay open beside the files. */
+    fun openFiles(exclusive: Boolean) = openFiles()
 
     fun closeFiles() {}
 
