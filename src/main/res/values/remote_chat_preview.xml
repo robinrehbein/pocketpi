@@ -1,4 +1,4 @@
 <resources>
     <!-- English fallback for all unsupported locales. -->
-    <string name="remote_chat_preview_copy_hint">Continues as a copy when you send. The original stays unchanged.</string>
+    <string name="remote_chat_preview_copy_hint">Opens as a new copy. The original stays unchanged.</string>
 </resources>

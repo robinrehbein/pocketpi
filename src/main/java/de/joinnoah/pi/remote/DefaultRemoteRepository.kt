@@ -1912,7 +1912,19 @@ class DefaultRemoteRepository(
         if (snapshotPending === current) snapshotPending = null
         try {
             val data =
-                if (held != null && cursor == null) held.await().getOrThrow()
+                if (held != null && cursor == null)
+                    held.await().getOrElse { failed ->
+                        // It was read before the lists or the open confirmed the chat, so a host
+                        // error may not hold any more: it is asked once again. A reply that never
+                        // came fails as any other would.
+                        if (failed.requestKind != RemoteRequestException.Kind.HOST_ERROR) throw failed
+                        request(
+                            "session.snapshot",
+                            epoch,
+                            "sessionId" to current.sessionId,
+                            timeoutMillis = timeoutMillis,
+                        )
+                    }
                 else if (cursor == null)
                     request(
                         "session.snapshot",
@@ -2353,7 +2365,11 @@ class DefaultRemoteRepository(
                         sessionCache[host.routeId to restoredProjectId]
                             ?.sessions
                             ?.find { it.text("id") == sessionId }
-                            .let { row -> row == null || row.optionalText("origin") in setOf("rpc", "tui") }
+                            .let { row ->
+                                row == null ||
+                                    (row.optionalText("origin") in setOf("rpc", "tui") &&
+                                        row.optionalText("status") != "offline")
+                            }
                 }
             if (restoredSessionId != null && restoredProjectId != null) {
                 held = beside.holdSnapshot(restoredSessionId, epoch)
@@ -2444,6 +2460,21 @@ class DefaultRemoteRepository(
                 checkEpoch(epoch)
                 // The reconnect after a lost connection opens the chat again.
                 if (chatCache[canonical] != null || lostWithConnection(swallowed)) {
+                    if (swallowed.requestKind == RemoteRequestException.Kind.HOST_ERROR) {
+                        // The host refused the chat, so its controls' reads, started before the
+                        // snapshot, would only add their own errors to this one.
+                        configurationVersion++
+                        advisorVersion++
+                        commandsVersion++
+                        update {
+                            it.copy(
+                                configurationLoading = false,
+                                advisorLoading = false,
+                                advisorChanging = false,
+                                commandsLoading = false,
+                            )
+                        }
+                    }
                     reportReadError(swallowed)
                     outcome = "snapshot_failed"
                     return canonical

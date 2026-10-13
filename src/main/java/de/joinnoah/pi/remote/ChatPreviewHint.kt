@@ -17,13 +17,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 
-/** Whether the chat on screen is a preview of a history session, which an open continues as a copy. */
+/** Whether the chat on screen is a preview of a history session, which its open copies. */
 internal fun previewContinuesAsCopy(state: RemoteState): Boolean =
     state.preview && state.session?.optionalText("origin") == "history"
 
 /**
  * Above the composer while a history session opens from its preview: what is shown is the
- * original, and the chat goes on in a copy of it.
+ * original, and `sessions.open` makes a new copy of it that the chat then shows.
  */
 @Composable
 internal fun ChatPreviewHint(state: RemoteState, modifier: Modifier = Modifier) {

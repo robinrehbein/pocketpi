@@ -20,7 +20,11 @@
   and return different IDs. Never send mutations against a speculative selection. An open of a live
   rpc/tui chat sends `session.snapshot` right behind `sessions.open` without waiting for its reply,
   and takes that snapshot only when the open keeps the ID; a history session's snapshot waits for
-  the fork's ID.
+  the fork's ID. This relies on the host sending every session's events to the connection, not only
+  those of the last `sessions.open`: with open-scoped delivery, events between that snapshot and the
+  open would be missed, and a revision gap notices that only when a later event arrives.
+  A held snapshot the host refused is asked for once more after the open or the lists, since it was
+  read before they confirmed the chat.
 - A restore of a chat sends its `session.snapshot` and `sessions.list` together with
   `projects.list`, and the configuration, advisor and commands reads before the snapshot's reply.
   The held snapshot is applied only once the lists confirm the chat (live, not offline), after the
@@ -30,7 +34,7 @@
 - While an open runs, the chat destination shows a read-only preview from the chat cache
   (`peekCachedChat`) with its stored draft, never as the repository's selection: the composer
   takes no edits and every action waits for the selection. A history session's preview says it
-  continues as a copy.
+  opens as a new copy: `sessions.open` forks it, before anything can be sent.
 - Invalidation is per key: creating or forking a session drops only its project's session list,
   closing one also drops its chat. Setting the current cache pointer to null leaves the LRU alone.
   Unpairing, pairing, switching hosts and cache bypass (`clearNavigationCache()`) still discard all
