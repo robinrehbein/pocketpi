@@ -55,6 +55,8 @@ private val DENIED_DEVICE_ERRORS =
     setOf(R.string.remote_device_revoked, R.string.remote_device_paused)
 private val CONNECTION_ERRORS =
     setOf(R.string.remote_connection_error, R.string.remote_unreachable) + DENIED_DEVICE_ERRORS
+/** The connection lines of an attempt that is under way and has not heard from the Mac yet. */
+private val ATTEMPT_LINES = setOf(R.string.remote_connecting, R.string.remote_reconnecting)
 private const val RECONNECT_BASE_MILLIS = 1_000L
 private const val RECONNECT_MAX_MILLIS = 30_000L
 private const val RECONNECT_JITTER = 0.2
@@ -82,6 +84,46 @@ private const val SERVICE_RESTART_CLOSE_CODE = 1012
 internal const val CONNECT_READY_WAIT_MILLIS = HANDSHAKE_TIMEOUT_MILLIS + 2_000L
 /** The relay answered but the Mac has not, after this long: say so instead of "Connecting…". */
 internal const val HOST_WAIT_HINT_MILLIS = 5_000L
+
+/**
+ * The first failure of a streak reconnects quietly; the error card follows only if the Mac is
+ * still unreachable this long after it, or at once on the next failure.
+ */
+internal const val QUIET_RECONNECT_MILLIS = 5_000L
+
+/** The default wait for a request's reply. */
+internal const val REQUEST_TIMEOUT_MILLIS = 30_000L
+
+/**
+ * Idempotent reads that tell whether the socket is alive: one that times out with no frame since
+ * it was sent ends the connection. Tool output, media, attachment and export reads queue behind
+ * each other on the host and may stay silent for long, so their timeouts never do.
+ */
+private val LIVENESS_READS =
+    setOf(
+        "projects.list",
+        "sessions.list",
+        "session.snapshot",
+        "session.configuration.get",
+        "session.commands.get",
+        "session.advisor.get",
+        "session.context.get",
+    )
+
+/** Why the connection ended, which decides how soon and how quietly it comes back. */
+private enum class FailureCause {
+    /** The transport failed or the relay closed the socket. */
+    LOST,
+
+    /** A liveness read timed out with no frame since it was sent: the socket is dead. */
+    STALE,
+
+    /** Android moved to another network, so the old socket is gone. */
+    NETWORK_REPLACED,
+
+    /** The handshake did not finish in time. */
+    HANDSHAKE_TIMEOUT,
+}
 
 internal fun opaqueId(value: String): Boolean =
     value.isNotEmpty() &&
@@ -251,6 +293,20 @@ class DefaultRemoteRepository(
     private var serviceRestart = false
     /** When the connection was lost, for the offline interval Diagnostics records on ready(). */
     private var offlineSince: Long? = null
+    /**
+     * Counts the frames that arrived, so a read can tell whether any came after it was sent. A
+     * counter, not a clock: a read sent in the same millisecond as a frame must not count it.
+     */
+    private var inboundFrames = 0L
+    /** When the app last went to the background, by [now]; null while it never did. */
+    private var backgroundedAt: Long? = null
+    /** Raises the error card once a quiet reconnect has taken [QUIET_RECONNECT_MILLIS]. */
+    private var quietReconnect: Job? = null
+    /**
+     * The Mac whose handshake timed out, which clears [activeHost]: its retry is a reconnect to the
+     * same Mac, not a switch that resets the failure streak and the quiet-reconnect timer.
+     */
+    private var timedOutRoute: String? = null
     private var hostWaitHint: Job? = null
     /** Whether the current attempt reached the relay and the Mac has been silent for the hint delay. */
     private var macSilent = false
@@ -439,7 +495,9 @@ class DefaultRemoteRepository(
                 }
 
                 override fun ready(capabilities: Set<String>) {
+                    inboundFrames++
                     cancelHostWaitHint()
+                    cancelQuietReconnect()
                     offlineSince?.let {
                         Diagnostics.record(Diagnostics.Kind.OFFLINE, "reconnected", Diagnostics.now() - it)
                     }
@@ -504,6 +562,7 @@ class DefaultRemoteRepository(
                 }
 
                 override fun message(payload: JsonObject) {
+                    inboundFrames++
                     receive(payload)
                 }
 
@@ -527,12 +586,12 @@ class DefaultRemoteRepository(
     private fun handshakeProgress(phase: HandshakePhase) {
         cancelHostWaitHint()
         if (state.value.connection == R.string.remote_waiting_for_mac)
-            update { it.copy(connection = R.string.remote_connecting) }
+            update { it.copy(connection = attemptLine()) }
         if (phase != HandshakePhase.CHALLENGE) return
         hostWaitHint = scope.launch {
             delay(HOST_WAIT_HINT_MILLIS)
             macSilent = true
-            if (!state.value.connected && state.value.connection == R.string.remote_connecting)
+            if (!state.value.connected && state.value.connection in ATTEMPT_LINES)
                 update { it.copy(connection = R.string.remote_waiting_for_mac) }
         }
     }
@@ -550,7 +609,37 @@ class DefaultRemoteRepository(
     private fun connectingLine(host: PairedHost) =
         if (macSilent && ready?.isActive == true && activeHost?.routeId == host.routeId)
             R.string.remote_waiting_for_mac
-        else R.string.remote_connecting
+        else attemptLine()
+
+    /** "Reconnecting…" while the last-known state stays on screen, "Connecting…" otherwise. */
+    private fun attemptLine() =
+        if (state.value.stale) R.string.remote_reconnecting else R.string.remote_connecting
+
+    /** Whether the state on screen belongs to [routeId], so a reconnect to it may keep it. */
+    private fun showsRoute(routeId: String?) = routeId != null && state.value.host?.routeId == routeId
+
+    /**
+     * [state] without what the last connection reported about its sessions: for another Mac, or
+     * when a lost connection's state is not the one on screen.
+     */
+    private fun lastKnownCleared(state: RemoteState) =
+        state.copy(
+            stale = false,
+            staleSince = null,
+            questions = emptyList(),
+            capabilities = emptySet(),
+            capabilitiesKnown = false,
+            unavailableCapabilities = emptySet(),
+            childControlUnsupported = emptySet(),
+            configuration = null,
+            contextUsage = null,
+            contextLoading = false,
+            advisor = null,
+            advisorLoading = false,
+            advisorChanging = false,
+            commands = emptyList(),
+            status = "offline",
+        )
 
     private fun clearNavigationCache() {
         cachedProjects = null
@@ -915,6 +1004,24 @@ class DefaultRemoteRepository(
 
     override fun reportError(resource: Int) = update { it.copy(error = resource) }
 
+    /** The connection is down and the connection line or card says so, or will shortly. */
+    private fun connectionDown(): Boolean =
+        state.value.let { !it.connected && (it.error == null || it.error in CONNECTION_ERRORS) }
+
+    /**
+     * Reports [resource] for a read that failed, unless it got no reply because the connection
+     * went down: the reconnect reads it again, and the error card is the connection's to raise.
+     */
+    private fun reportReadError(error: Throwable, resource: Int = R.string.remote_request_error) {
+        if (!lostWithConnection(error)) reportError(resource)
+    }
+
+    /** [error] ended a request that got no reply because the connection went down. */
+    private fun lostWithConnection(error: Throwable): Boolean =
+        (error.requestKind == RemoteRequestException.Kind.TIMEOUT ||
+            error.requestKind == RemoteRequestException.Kind.CONNECTION_LOST) &&
+            connectionDown()
+
     private fun checkEpoch(epoch: Long) {
         if (epoch != selectionEpoch) throw CancellationException("Selection changed")
     }
@@ -957,7 +1064,8 @@ class DefaultRemoteRepository(
                 contextLoading = false,
                 compactionRequesting = false,
                 commandsLoading = false,
-                toolOutput = null,
+                // A reconnect re-activates the chat on screen, and select() decides what stays.
+                toolOutput = it.toolOutput?.takeIf { output -> it.stale && output.text != null },
             )
         }
     }
@@ -985,12 +1093,14 @@ class DefaultRemoteRepository(
     private suspend fun connect(host: PairedHost, epoch: Long) {
         if (activeHost?.routeId == host.routeId && state.value.connected) return
         if (activeHost?.routeId != host.routeId || ready?.isActive != true) {
-            val previousRoute = activeHost?.routeId
+            val previousRoute = activeHost?.routeId ?: timedOutRoute
+            timedOutRoute = null
             if (previousRoute != host.routeId && markPendingFollowUpsUncertain(previousRoute)) {
                 persist().await()
             }
             if (previousRoute != host.routeId) {
                 offlineSince = null
+                cancelQuietReconnect()
                 resetReconnect()
                 clearNavigationCache()
                 attachmentBytes.clear()
@@ -1021,27 +1131,21 @@ class DefaultRemoteRepository(
             sessionTitleRevisions.clear()
             sessionTitleOverrides.clear()
             ready?.cancel()
+            // A reconnect to the Mac on screen keeps its last-known state; another Mac starts empty.
+            val keep = state.value.stale && showsRoute(host.routeId)
+            val line = if (keep) R.string.remote_reconnecting else R.string.remote_connecting
             activeHost = host
             ready = CompletableDeferred()
             stopToolOutput()
             update {
-                it.copy(
+                val shown = if (keep) it else lastKnownCleared(it)
+                shown.copy(
                     connected = false,
-                    connection = R.string.remote_connecting,
+                    connection = line,
                     compaction = null,
                     compactionRequesting = false,
-                    toolOutput = null,
-                    questions = emptyList(),
-                    capabilities = emptySet(),
-                    capabilitiesKnown = false,
-                    unavailableCapabilities = emptySet(),
-                    childControlUnsupported = emptySet(),
-                    configuration = null,
-                    advisor = null,
-                    advisorLoading = false,
-                    advisorChanging = false,
-                    commands = emptyList(),
-                    status = "offline",
+                    // A finished download stays readable; a running one stopped above.
+                    toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },
                     // A login goes on on the Mac; the same host recovers it once it is reachable.
                     providerAuth =
                         if (previousRoute != host.routeId) ProviderAuthState()
@@ -1062,9 +1166,10 @@ class DefaultRemoteRepository(
             Diagnostics.record(Diagnostics.Kind.FAILURE, "connect.wait", CONNECT_READY_WAIT_MILLIS, outcome = "timeout")
             if (epoch == selectionEpoch) {
                 // Goes offline and schedules the next attempt like any transport failure.
-                failed(true, R.string.remote_connection_error)
+                failed(true, R.string.remote_connection_error, cause = FailureCause.HANDSHAKE_TIMEOUT)
                 ready?.cancel()
                 ready = null
+                timedOutRoute = activeHost?.routeId
                 activeHost = null
             }
             throw IllegalStateException("Connection timed out")
@@ -1079,7 +1184,7 @@ class DefaultRemoteRepository(
         draft: String? = null,
         requestId: String = Wire.random(),
         onSent: (() -> Unit)? = null,
-        timeoutMillis: Long = 30000,
+        timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
     ): JsonObject {
         checkEpoch(epoch)
         check(state.value.connected)
@@ -1104,6 +1209,8 @@ class DefaultRemoteRepository(
         val cookie = Diagnostics.beginAsync(traceName)
         var outcome = "failed"
         var ended: Long? = null
+        val connection = generation
+        val inboundAtSend = inboundFrames
         try {
             // Set before sending: a send that throws may still have reached the host.
             onSent?.invoke()
@@ -1112,6 +1219,14 @@ class DefaultRemoteRepository(
                 withTimeoutOrNull(timeoutMillis) { completion.await() }
                     ?: run {
                         outcome = "timeout"
+                        // Not a frame since the read went out: the socket is dead, not the host slow.
+                        if (
+                            type in LIVENESS_READS &&
+                                inboundFrames == inboundAtSend &&
+                                state.value.connected &&
+                                connection == generation
+                        )
+                            connectionStale(type)
                         throw RemoteRequestException.timeout()
                     }
             outcome = "ok"
@@ -1548,26 +1663,40 @@ class DefaultRemoteRepository(
         cacheCurrentScreen()
     }
 
-    private suspend fun snapshot(epoch: Long, older: Boolean = false) {
+    /** [timeoutMillis] lets a probe give up sooner; a timeout with no frame meanwhile reconnects. */
+    private suspend fun snapshot(
+        epoch: Long,
+        older: Boolean = false,
+        timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
+    ) {
         val current = timeline ?: return
         val cursor = if (older) current.nextCursor ?: return else null
         resynchronizing = true
         try {
             val data =
                 if (cursor == null)
-                    request("session.snapshot", epoch, "sessionId" to current.sessionId)
+                    request(
+                        "session.snapshot",
+                        epoch,
+                        "sessionId" to current.sessionId,
+                        timeoutMillis = timeoutMillis,
+                    )
                 else
                     request(
                         "session.snapshot",
                         epoch,
                         "sessionId" to current.sessionId,
                         "cursor" to cursor,
+                        timeoutMillis = timeoutMillis,
                     )
             checkEpoch(epoch)
             if (current !== timeline) return
             current.snapshot(data, older)
             current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
             publishTimeline()
+            // The chat on screen is read again, also when the activation after a reconnect failed
+            // to read it and a later refresh did.
+            if (!older && state.value.connected) staleReplaced()
             resyncAfterUnknownEvents(current)
         } finally {
             if (epoch == selectionEpoch) resynchronizing = false
@@ -1582,7 +1711,7 @@ class DefaultRemoteRepository(
                 snapshot(epoch, older)
             } catch (_: CancellationException) {} catch (swallowed: Exception) {
                 Diagnostics.caught("repo.snapshotAsync", swallowed)
-                if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
+                if (epoch == selectionEpoch) reportReadError(swallowed)
             }
         }
     }
@@ -1656,12 +1785,15 @@ class DefaultRemoteRepository(
             selection.sessionId == previous.sessionId
         if (!sameSession) jobsController.stop()
         val resumedFiles = if (sameSession) null else switchParkedEditor(previous, selection)
+        // A reconnect selects the chat on screen again: what it last showed stays until the
+        // snapshot and the reads after it replace it.
+        val keep = sameSession && state.value.stale
         update {
             it.copy(
                 selection = selection,
                 compaction = null,
                 compactionRequesting = false,
-                toolOutput = null,
+                toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },
                 changes = null,
                 // A reconnect keeps an open editor, so its unsaved text survives; another session
                 // brings back its own parked edit, if any. Anything else closes the file browser.
@@ -1678,8 +1810,8 @@ class DefaultRemoteRepository(
                 sessions = sessions.map { withSessionTitle(withSessionStatus(it)) },
                 sessionsFresh = sessionsFresh,
                 session = session?.let(::withSessionTitle),
-                messages = cachedChat?.messages ?: emptyList(),
-                questions = emptyList(),
+                messages = cachedChat?.messages ?: if (keep) it.messages else emptyList(),
+                questions = if (keep) it.questions else emptyList(),
                 draft = stored.text,
                 quote = stored.quote,
                 attachments = stored.attachments,
@@ -1693,20 +1825,22 @@ class DefaultRemoteRepository(
                     if (state.value.connected && activeHost?.routeId == selection.routeId)
                         cachedChat?.status ?: session?.text("status") ?: "offline"
                     else "offline",
-                nextCursor = cachedChat?.nextCursor,
-                configuration = null,
-                contextUsage = null,
-                advisor = null,
+                nextCursor = if (cachedChat != null) cachedChat.nextCursor else if (keep) it.nextCursor else null,
+                configuration = if (keep) it.configuration else null,
+                contextUsage = if (keep) it.contextUsage else null,
+                advisor = if (keep) it.advisor else null,
                 advisorLoading = false,
                 advisorChanging = false,
                 contextLoading = false,
+                // Learned again by the reads after the selection, also after a reconnect: the host
+                // may have been updated meanwhile.
                 unavailableCapabilities = emptySet(),
                 childControlUnsupported = emptySet(),
                 configurationLoading = false,
                 configurationChanging = false,
-                commands = emptyList(),
+                commands = if (keep) it.commands else emptyList(),
                 commandsLoading = false,
-                commandsTruncated = false,
+                commandsTruncated = keep && it.commandsTruncated,
                 commandNotice = null,
                 notice = null,
             )
@@ -1778,8 +1912,11 @@ class DefaultRemoteRepository(
                 }
             }
             val alreadyConnected = state.value.connected && activeHost?.routeId == host.routeId
+            // A reconnect to the Mac on screen keeps its last-known state until it is read again.
+            val reconnecting = !alreadyConnected && state.value.stale && showsRoute(host.routeId)
             if (!alreadyConnected) {
                 stopToolOutput()
+                if (!reconnecting) update(::lastKnownCleared)
                 val line = connectingLine(host)
                 update {
                     it.copy(
@@ -1787,28 +1924,20 @@ class DefaultRemoteRepository(
                         connection = line,
                         compaction = null,
                         compactionRequesting = false,
-                        toolOutput = null,
-                        questions = emptyList(),
-                        capabilities = emptySet(),
-                        capabilitiesKnown = false,
-                        unavailableCapabilities = emptySet(),
-                        childControlUnsupported = emptySet(),
-                        configuration = null,
-                        contextUsage = null,
-                        advisor = null,
-                        advisorLoading = false,
-                        advisorChanging = false,
-                        contextLoading = false,
-                        commands = emptyList(),
-                        status = "offline",
+                        // A finished download stays readable; a running one stopped above.
+                        toolOutput = it.toolOutput?.takeIf { output -> reconnecting && output.text != null },
                     )
                 }
             }
             // Explicit opens can fork historical sessions: wait for canonical IDs before
-            // changing selection, but retain cached content while the snapshot refreshes.
-            if (useCache && mode == ActivationMode.RESTORE) showCached()
+            // changing selection, but retain cached content while the snapshot refreshes. A
+            // reconnect already shows this selection, fresher than the cache.
+            val showCache =
+                useCache && mode == ActivationMode.RESTORE &&
+                    !(reconnecting && selection == state.value.selection)
+            if (showCache) showCached()
             connect(host, epoch)
-            if (useCache && mode == ActivationMode.RESTORE) showCached()
+            if (showCache) showCached()
             val reusedProjects =
                 cachedProjects
                     ?.takeIf { useCache && !force && alreadyConnected && it.first == host.routeId }
@@ -1884,8 +2013,9 @@ class DefaultRemoteRepository(
             } catch (swallowed: Exception) {
                 Diagnostics.caught("repo.activate.2", swallowed)
                 checkEpoch(epoch)
-                if (chatCache[canonical] != null) {
-                    reportError(R.string.remote_request_error)
+                // The reconnect after a lost connection opens the chat again.
+                if (chatCache[canonical] != null || lostWithConnection(swallowed)) {
+                    reportReadError(swallowed)
                     outcome = "snapshot_failed"
                     return canonical
                 }
@@ -1906,9 +2036,8 @@ class DefaultRemoteRepository(
         } catch (e: Exception) {
             Diagnostics.caught("repo.activate", e)
             checkEpoch(epoch)
-            // A lost connection already set its own, more specific error.
-            if (state.value.error !in CONNECTION_ERRORS || state.value.connected)
-                reportError(R.string.remote_request_error)
+            // A lost connection already set its own, more specific error, or reconnects quietly.
+            if (!connectionDown()) reportError(R.string.remote_request_error)
             return if (mode == ActivationMode.USER_OPEN) previousSelection else state.value.selection
         } finally {
             Diagnostics.endAsync("PocketPi.activate", cookie)
@@ -1921,6 +2050,7 @@ class DefaultRemoteRepository(
             )
             if (epoch == selectionEpoch) {
                 update { it.copy(loading = false) }
+                if (outcome == "ok" || outcome == "parent" || outcome == "no_host") staleReplaced()
                 cacheCurrentScreen()
             }
         }
@@ -2012,9 +2142,11 @@ class DefaultRemoteRepository(
         val projectId = source.projectId ?: return source
         val sourceId = source.sessionId ?: return source
         val current = state.value
-        // Older hosts close the connection on unknown commands.
+        // Older hosts close the connection on unknown commands. A quiet reconnect keeps the
+        // capabilities on screen, and cancelling the selection would stop its activation.
         if (
-            capability !in current.capabilities ||
+            !current.connected ||
+                capability !in current.capabilities ||
                 current.selection != source ||
                 current.session?.optionalText("id") != sourceId
         )
@@ -2171,6 +2303,8 @@ class DefaultRemoteRepository(
         // cancelPairing() or a newer pair() during the write gave this pairing up already.
         if (!deferred.isActive || pairing !== deferred) return null
         activeHost = null
+        timedOutRoute = null
+        cancelQuietReconnect()
         update {
             it.copy(loading = true, connected = false, connection = R.string.remote_connecting, pairingDeadline = null)
         }
@@ -2223,6 +2357,7 @@ class DefaultRemoteRepository(
         reconnectEnabled = false
         offlineSince = null
         cancelHostWaitHint()
+        cancelQuietReconnect()
         cancelSelection()
         clearNavigationCache()
         projectImageBytes.clear()
@@ -2237,6 +2372,7 @@ class DefaultRemoteRepository(
         pairing?.cancel()
         if (markPendingFollowUpsUncertain(activeHost?.routeId)) persist()
         activeHost = null
+        timedOutRoute = null
         timeline = null
         stopToolOutput()
         update { RemoteState(hosts = it.hosts) }
@@ -2250,6 +2386,7 @@ class DefaultRemoteRepository(
         ) clearNavigationCache()
         if (activeHost?.routeId == routeId) reconnectEnabled = false
         if (activeHost?.routeId == routeId) disconnect()
+        if (timedOutRoute == routeId) timedOutRoute = null
         attachmentBytes.clear()
         SentImageThumbnails.clear()
         projectImageBytes.clear()
@@ -2297,12 +2434,25 @@ class DefaultRemoteRepository(
         removal.start()
     }
 
-    /** [broken]: an unreadable frame ended the connection, see [brokenConnections]. */
-    private fun failed(reconnect: Boolean, error: Int, broken: Boolean = false) {
+    /**
+     * Ends the current connection. [broken]: an unreadable frame ended it, see [brokenConnections].
+     * [cause]: a dead socket or a replaced network reconnects at once.
+     *
+     * A transient failure ([R.string.remote_connection_error] with [reconnect]) keeps the
+     * last-known state of the Mac on screen as [RemoteState.stale]. The first one of a streak
+     * reconnects quietly: no error, and the error card follows only if the Mac is still unreachable
+     * [QUIET_RECONNECT_MILLIS] later or the next attempt fails too.
+     */
+    private fun failed(
+        reconnect: Boolean,
+        error: Int,
+        broken: Boolean = false,
+        cause: FailureCause = FailureCause.LOST,
+    ) {
         Diagnostics.record(
             Diagnostics.Kind.FAILURE,
             "connection." + if (state.value.connected) "lost" else "attempt",
-            outcome = errorName(error) + if (reconnect) ".retry" else ".stop",
+            outcome = errorName(error) + "." + cause.name.lowercase() + if (reconnect) ".retry" else ".stop",
         )
         if (offlineSince == null && activeHost != null) offlineSince = Diagnostics.now()
         // A connection that came up and failed before proving itself counts like a failed attempt;
@@ -2345,31 +2495,50 @@ class DefaultRemoteRepository(
         } }
         stopToolOutput()
         sessionRefreshJob?.cancel()
+        val host = activeHost
+        if (error == R.string.remote_denied || error in DENIED_DEVICE_ERRORS) reconnectEnabled = false
+        val restart = serviceRestart
+        serviceRestart = false
+        val transient = reconnect && error == R.string.remote_connection_error
+        if (transient) failureStreak++
+        val retrying = reconnect && reconnectEnabled && recovery.canRecover && host != null
+        // The Mac accepts connections and drops them at once, or breaks each one with a frame
+        // this app cannot read: stop retrying on a timer. Retry, the next foreground and a
+        // network change still try again (they reset the counts).
+        val stopped =
+            retrying &&
+                (shortLivedConnections >= MAX_SHORT_LIVED_CONNECTIONS ||
+                    brokenConnections >= MAX_BROKEN_CONNECTIONS)
+        val quiet = transient && failureStreak < 2 && !stopped
+        // What the Mac on screen last reported stays while it reconnects; anything else goes.
+        val keep = transient && showsRoute(host?.routeId)
+        val shownError =
+            when {
+                stopped || (transient && failureStreak >= UNREACHABLE_AFTER_FAILURES) -> R.string.remote_unreachable
+                quiet -> null
+                else -> error
+            }
         update {
-            it.copy(
+            val shown =
+                if (keep) it.copy(stale = true, staleSince = it.staleSince ?: now())
+                else lastKnownCleared(it)
+            shown.copy(
                 connected = false,
                 compaction = null,
                 compactionRequesting = false,
-                toolOutput = null,
+                // A finished download stays readable; a running one stopped above.
+                toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },
                 projectChats = it.projectChats.map { chat -> chat.copy(verified = false) },
                 followUps = currentDraftKey()?.let { key -> drafts[key]?.followUps }.orEmpty(),
-                connection = R.string.remote_offline,
-                error = error,
+                connection =
+                    if (quiet && retrying) R.string.remote_reconnecting else R.string.remote_offline,
+                error = shownError,
                 loading = false,
                 pairingDeadline = null,
                 sending = false,
                 answering = emptySet(),
-                questions = emptyList(),
-                capabilities = emptySet(),
-                capabilitiesKnown = false,
-                unavailableCapabilities = emptySet(),
-                childControlUnsupported = emptySet(),
-                configuration = null,
-                advisor = null,
                 advisorLoading = false,
                 advisorChanging = false,
-                commands = emptyList(),
-                status = "offline",
                 providerAuth = it.providerAuth.offline(),
                 // A listing lost with the connection loads again after the reconnect.
                 folders = it.folders.copy(
@@ -2380,30 +2549,12 @@ class DefaultRemoteRepository(
                     trust = null,
                     notice = null,
                 ),
+                // The host this denial belongs to, for the error card's actions.
+                deniedRouteId = if (error in DENIED_DEVICE_ERRORS) host?.routeId else null,
             )
         }
-        val host = activeHost
-        if (error == R.string.remote_denied || error in DENIED_DEVICE_ERRORS) reconnectEnabled = false
-        // The host this denial belongs to, for the error card's actions.
-        update { it.copy(deniedRouteId = if (error in DENIED_DEVICE_ERRORS) host?.routeId else null) }
-        val restart = serviceRestart
-        serviceRestart = false
-        if (reconnect && error == R.string.remote_connection_error) {
-            failureStreak++
-            if (failureStreak >= UNREACHABLE_AFTER_FAILURES)
-                update { it.copy(error = R.string.remote_unreachable) }
-        }
-        if (
-            reconnect &&
-                reconnectEnabled &&
-                recovery.canRecover &&
-                host != null &&
-                (shortLivedConnections >= MAX_SHORT_LIVED_CONNECTIONS ||
-                    brokenConnections >= MAX_BROKEN_CONNECTIONS)
-        ) {
-            // The Mac accepts connections and drops them at once, or breaks each one with a frame
-            // this app cannot read: stop retrying on a timer. Retry, the next foreground and a
-            // network change still try again (they reset the counts).
+        if (quiet) startQuietReconnect() else cancelQuietReconnect()
+        if (stopped) {
             Diagnostics.record(
                 Diagnostics.Kind.RECOVERY,
                 "reconnect.stopped",
@@ -2413,20 +2564,18 @@ class DefaultRemoteRepository(
             )
             retry?.cancel()
             retry = null
-            update { it.copy(error = R.string.remote_unreachable, reconnectAt = null) }
-        } else if (
-            reconnect &&
-                reconnectEnabled &&
-                recovery.canRecover &&
-                host != null
-        ) {
+            update { it.copy(reconnectAt = null) }
+        } else if (retrying) {
             val generationAtFailure = generation
             // The relay announced a restart, so one retry per failure streak does not wait.
-            val immediate = restart && !restartRetryUsed && !broken
-            if (immediate) {
+            val restartRetry = restart && !restartRetryUsed && !broken
+            if (restartRetry) {
                 restartRetryUsed = true
                 reconnectAttempts = 0
             }
+            // A dead socket or a replaced network says nothing about the Mac: try again at once.
+            val immediate =
+                restartRetry || cause == FailureCause.STALE || cause == FailureCause.NETWORK_REPLACED
             val wait = reconnectDelay(reconnectAttempts++, immediate)
             Diagnostics.record(Diagnostics.Kind.RECOVERY, "reconnect.backoff", wait, outcome = "attempt.$reconnectAttempts")
             retry?.cancel()
@@ -2441,6 +2590,40 @@ class DefaultRemoteRepository(
                 }
             }
         } else update { it.copy(reconnectAt = null) }
+    }
+
+    /** A liveness read got no reply and no frame arrived meanwhile: reconnect at once, quietly. */
+    private fun connectionStale(type: String) {
+        Diagnostics.record(Diagnostics.Kind.FAILURE, "connection.stale", outcome = type)
+        failed(true, R.string.remote_connection_error, cause = FailureCause.STALE)
+    }
+
+    /** Raises the error card if the quiet reconnect that starts now has not succeeded in time. */
+    private fun startQuietReconnect() {
+        if (quietReconnect?.isActive == true) return
+        quietReconnect = scope.launch {
+            delay(QUIET_RECONNECT_MILLIS)
+            quietReconnect = null
+            if (!state.value.connected && state.value.error == null && reconnectEnabled) {
+                Diagnostics.record(Diagnostics.Kind.RECOVERY, "reconnect.slow", QUIET_RECONNECT_MILLIS)
+                update { it.copy(error = R.string.remote_connection_error) }
+            }
+        }
+    }
+
+    private fun cancelQuietReconnect() {
+        quietReconnect?.cancel()
+        quietReconnect = null
+    }
+
+    /**
+     * The activation after a reconnect has read the chat and lists again, so what is on screen is
+     * no longer only last-known; the reads it started refresh the rest in place.
+     */
+    private fun staleReplaced() {
+        val since = state.value.staleSince ?: return
+        Diagnostics.record(Diagnostics.Kind.OFFLINE, "stale", (now() - since).coerceAtLeast(0))
+        update { it.copy(stale = false, staleSince = null) }
     }
 
     /** A failure's message resource as a word for Diagnostics, never the text itself. */
@@ -2587,12 +2770,17 @@ class DefaultRemoteRepository(
         jobsController.setForeground(foreground)
         val signal = recovery.foreground(foreground)
         if (!foreground) {
+            backgroundedAt = now()
             queueNavigationWrite(immediate = true)
             stopReconnectTimer()
             cancelRecovery()
             return
         }
         signal ?: return
+        // How long the app was away, for the resume that follows.
+        backgroundedAt?.let {
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "foreground", (now() - it).coerceAtLeast(0))
+        }
         onRecoverySignal(signal)
         resetReconnect()
         recover(signal)
@@ -2618,7 +2806,7 @@ class DefaultRemoteRepository(
         if (pairing?.isActive == true || state.value.loading) return note("busy")
         if (signal == RemoteRecovery.Signal.NETWORK_REPLACED && activeHost != null) {
             note("reconnect")
-            failed(true, R.string.remote_connection_error)
+            failed(true, R.string.remote_connection_error, cause = FailureCause.NETWORK_REPLACED)
             return
         }
         if (hasPendingRecoveryWork()) {
@@ -2679,7 +2867,7 @@ class DefaultRemoteRepository(
                                     it.unavailableCapabilities + CONFIGURATION_CAPABILITY,
                             )
                         }
-                    else reportError(R.string.remote_configuration_error)
+                    else reportReadError(e, R.string.remote_configuration_error)
                 }
             } finally {
                 if (epoch == selectionEpoch && version == configurationVersion)
@@ -2716,7 +2904,8 @@ class DefaultRemoteRepository(
                             contextUsage = null,
                             unavailableCapabilities = it.unavailableCapabilities + CONTEXT_CAPABILITY,
                         ) }
-                    else update { it.copy(contextUsage = null) }
+                    // A reply lost with the connection keeps the last-known usage for the reconnect.
+                    else if (!lostWithConnection(e)) update { it.copy(contextUsage = null) }
                 }
             } finally {
                 if (epoch == selectionEpoch && version == contextVersion)
@@ -2888,7 +3077,7 @@ class DefaultRemoteRepository(
                     if (e.isUnsupported)
                         update { it.copy(advisor = null,
                             unavailableCapabilities = it.unavailableCapabilities + ADVISOR_CAPABILITY) }
-                    else reportError(R.string.remote_request_error)
+                    else reportReadError(e)
                 }
             } finally {
                 if (epoch == selectionEpoch && version == advisorVersion)
@@ -2959,7 +3148,7 @@ class DefaultRemoteRepository(
                                     it.unavailableCapabilities + COMMANDS_CAPABILITY,
                             )
                         }
-                    else reportError(R.string.remote_commands_error)
+                    else reportReadError(e, R.string.remote_commands_error)
                 }
             } finally {
                 if (epoch == selectionEpoch && version == commandsVersion)
@@ -3753,7 +3942,8 @@ class DefaultRemoteRepository(
 
     override fun resumeChild(message: String) {
         val current = state.value
-        if (offersChildResume(current)) {
+        // Offline, the capabilities kept by a quiet reconnect do not make the resume possible.
+        if (current.connected && offersChildResume(current)) {
             val refusal =
                 when {
                     current.attachments.isNotEmpty() -> R.string.remote_child_attachments_unsupported
@@ -3920,9 +4110,13 @@ class DefaultRemoteRepository(
         fun failure(reason: ToolOutputFailure) = ToolOutputDownload(
             toolCallId, 0, null, null, truncated = false, isError = false, failure = reason,
         )
+        // A quiet reconnect keeps the capabilities on screen: offline is no missing capability.
+        if (sessionId != null && !current.connected) {
+            update { it.copy(toolOutput = failure(ToolOutputFailure.OFFLINE)) }
+            return
+        }
         if (
             sessionId == null ||
-                !current.connected ||
                 TOOL_OUTPUT_CAPABILITY !in current.capabilities ||
                 TOOL_OUTPUT_CAPABILITY in current.unavailableCapabilities
         ) {
