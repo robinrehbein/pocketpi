@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -38,5 +39,18 @@ class ConnectionStatusChipTest {
             ),
         )
         assertNull(connectionStatusLine(RemoteState()))
+    }
+
+    @Test
+    fun onlyAnAttemptUnderWaySpinsAndAWaitGetsAStillIcon() {
+        for (line in listOf(R.string.remote_connecting, R.string.remote_reconnecting, R.string.remote_checking_connection))
+            assertNull(connectionStatusIcon(line))
+        for (line in listOf(
+            R.string.remote_waiting_for_network,
+            R.string.remote_waiting_for_mac,
+            R.string.remote_approval,
+            R.string.remote_offline,
+        ))
+            assertNotNull(connectionStatusIcon(line))
     }
 }

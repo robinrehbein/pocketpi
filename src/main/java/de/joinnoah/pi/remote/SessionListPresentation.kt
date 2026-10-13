@@ -26,6 +26,11 @@ internal data class SessionListItem(
     val daemonOwned: Boolean,
     val liveMacTui: Boolean,
     val childCount: Int = 0,
+    /**
+     * [availability] is the status the Mac last reported before the connection was lost (see
+     * [RemoteState.stale]), not a live one: the row shows it muted and says so.
+     */
+    val lastKnown: Boolean = false,
 )
 
 data class ProjectChatSummary(
@@ -48,8 +53,10 @@ internal fun sortedProjectChats(chats: List<ProjectChatSummary>): List<ProjectCh
     ).take(12)
 
 /**
- * The row of [session]. [stale]: the connection is lost and the Mac reconnects (see
- * [RemoteState.stale]); the row keeps the status the Mac last reported instead of going offline.
+ * The row of [session]. [stale]: the connection is lost while the state on screen is kept (see
+ * [RemoteState.stale]); the row keeps the status the Mac last reported instead of going offline,
+ * marked [SessionListItem.lastKnown]. That lasts as long as [stale] does, also once the reconnect
+ * has given up and the connection reads "Offline".
  */
 internal fun sessionListItem(
     session: JsonObject,
@@ -79,6 +86,7 @@ internal fun sessionListItem(
         daemonOwned = session.text("origin") == "rpc",
         liveMacTui = session.text("origin") == "tui" &&
             availability != SessionAvailability.OFFLINE && !loading,
+        lastKnown = !connected && availability != SessionAvailability.OFFLINE,
     )
 }
 

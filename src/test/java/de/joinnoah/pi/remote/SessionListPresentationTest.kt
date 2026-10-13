@@ -377,7 +377,8 @@ class SessionListPresentationTest {
         )
         // Reconnecting: the same rows, with the status they last had.
         assertEquals(visible(connected = true, stale = false), visible(connected = false, stale = true))
-        // Offline for good: every row is offline, and the filter steps aside rather than hide them all.
+        // Offline with nothing kept (another Mac, a denied device, a fresh start): every row is
+        // offline, and the filter steps aside rather than hide them all.
         assertEquals(
             listOf(
                 "gone" to SessionAvailability.OFFLINE,
@@ -385,6 +386,32 @@ class SessionListPresentationTest {
                 "running" to SessionAvailability.OFFLINE,
             ),
             visible(connected = false, stale = false),
+        )
+    }
+
+    @Test
+    fun aLastKnownStatusIsMarkedAlsoOnceTheReconnectHasGivenUp() {
+        val running = Wire.objectOf("id" to "r", "title" to "Running", "origin" to "rpc", "status" to "running")
+        val gone = Wire.objectOf("id" to "g", "title" to "Gone", "origin" to "rpc", "status" to "offline")
+        // After a second transient failure, or once the reconnect stopped, the connection reads
+        // "Offline" while the state stays stale: the rows still carry the last-known status, marked.
+        val item = sessionListItem(running, connected = false, loading = false, stale = true)
+        assertEquals(SessionAvailability.RUNNING, item.availability)
+        assertTrue(item.lastKnown)
+        assertFalse(sessionListItem(gone, connected = false, loading = false, stale = true).lastKnown)
+        assertFalse(sessionListItem(running, connected = true, loading = false, stale = false).lastKnown)
+        assertFalse(sessionListItem(running, connected = false, loading = false, stale = false).lastKnown)
+        // Sorting and the live filter still go by the last-known status.
+        assertTrue(item.live())
+        assertEquals(
+            listOf("r" to true),
+            visibleSessionListItems(
+                listOf(gone, running),
+                connected = false,
+                loading = false,
+                hideOffline = hidesOfflineSessions(true, connected = false, stale = true),
+                stale = true,
+            ).map { it.id to it.lastKnown },
         )
     }
 }

@@ -59,7 +59,7 @@ internal fun SessionListRow(
     val startToEnd = available(swipe.second)
     val title = item.title.ifBlank { stringResource(R.string.remote_new_session) }
     val subagentLabel = stringResource(R.string.remote_subagent)
-    val status =
+    val reported =
         stringResource(
             when (item.availability) {
                 SessionAvailability.IDLE -> R.string.remote_status_idle
@@ -68,7 +68,10 @@ internal fun SessionListRow(
                 SessionAvailability.OFFLINE -> R.string.remote_status_offline
             }
         )
-    val statusColor = sessionStatusColor(item.availability)
+    // A last-known status is shown muted and named as such: nothing on it is live.
+    val status = if (item.lastKnown) stringResource(R.string.remote_status_last_known, reported) else reported
+    val statusColor =
+        if (item.lastKnown) MaterialTheme.colorScheme.outline else sessionStatusColor(item.availability)
     val copyExplanation = stringResource(R.string.remote_history_note)
     val closeLabel = stringResource(R.string.remote_session_close)
     val renameLabel = stringResource(R.string.remote_rename_session)
@@ -218,7 +221,11 @@ internal fun SessionListRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        SessionStatusLabel(status, item.availability, statusColor)
+                        SessionStatusLabel(
+                            status,
+                            if (item.lastKnown) SessionAvailability.OFFLINE else item.availability,
+                            statusColor,
+                        )
                         if (metaLabels.isNotEmpty())
                             Text(
                                 metaLabels.joinToString(separator = " · ", prefix = "· "),

@@ -42,6 +42,7 @@ import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasScrollToKeyAction
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.isSelected
@@ -243,8 +244,13 @@ class TwoPaneNavigationTest {
         compose.waitForIdle()
         val reconnecting = label(R.string.remote_reconnecting)
         assertConnectionChipLeads(reconnecting)
-        // The rows keep the status the Mac last reported.
+        // The rows keep the status the Mac last reported, and say it is the last-known one.
         compose.onNodeWithText("Second session").assertIsDisplayed()
+        assertTrue(
+            compose.onAllNodesWithText(
+                compose.activity.getString(R.string.remote_status_last_known, label(R.string.remote_status_idle))
+            ).fetchSemanticsNodes().isNotEmpty()
+        )
         assertTrue(compose.onAllNodesWithText(label(R.string.remote_status_idle), substring = true).fetchSemanticsNodes().isNotEmpty())
         assertTrue(compose.onAllNodesWithText(label(R.string.remote_status_offline), substring = true).fetchSemanticsNodes().isEmpty())
         compose.onAllNodesWithContentDescription(label(R.string.remote_settings)).onFirst().performClick()
@@ -289,7 +295,58 @@ class TwoPaneNavigationTest {
         assertTrue("The scrolled chip at ${scrolled.top} slid under the header ending at ${header.bottom}", scrolled.top >= header.bottom)
     }
 
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun aScrolledListKeepsItsPlaceWhileTheConnectionChipComesAndGoes() {
+        val many = (1..40).map { session("many-$it", "Session %02d".format(it)) }
+        repository.state.value = repository.state.value.copy(sessions = many)
+        render()
+        back()
+        compose.onNode(hasScrollToKeyAction()).performScrollToKey("many-20")
+        compose.waitForIdle()
+        fun top() = compose.onNodeWithText("Session 20").assertIsDisplayed().getUnclippedBoundsInRoot().top
+        val before = top()
+        for (line in listOf(R.string.remote_reconnecting, R.string.remote_offline, R.string.remote_connected)) {
+            compose.runOnIdle {
+                repository.state.value =
+                    repository.state.value.copy(
+                        connected = line == R.string.remote_connected,
+                        stale = line != R.string.remote_connected,
+                        connection = line,
+                    )
+            }
+            compose.waitForIdle()
+            // The sticky chip changes only its own height; the rows in view stay where they were.
+            assertEquals("Session 20 moved with ${label(line)}", before.value, top().value, 0.5f)
+        }
+    }
+
     // ---- Two panes -----------------------------------------------------------------------
+
+    /** The connection chips on screen; [pane] names the pane the only one is in. */
+    private fun assertOneConnectionChipIn(pane: String) {
+        compose.onAllNodesWithTag("connectionStatusChip").assertCountEquals(1)
+        compose.onNode(hasTestTag("connectionStatusChip") and hasAnyAncestor(hasTestTag(pane))).assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun onlyOnePaneShowsTheConnection() {
+        render()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(connected = false, stale = true, connection = R.string.remote_reconnecting)
+        }
+        compose.waitForIdle()
+        // The chat beside the list says it above its composer; the list stays quiet.
+        assertOneConnectionChipIn("chatPane")
+        back()
+        // The projects column beside a project's sessions: the sessions say it.
+        compose.onNodeWithTag("projectsPane").assertIsDisplayed()
+        assertOneConnectionChipIn("sessionListPane")
+        back()
+        assertOneConnectionChipIn("projectsPane")
+    }
 
     @Test
     @Config(qualifiers = "w900dp-h1200dp")

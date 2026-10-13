@@ -9,11 +9,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -21,13 +22,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -52,7 +53,9 @@ internal fun connectionStatusLine(state: RemoteState): Int? =
 
 /**
  * The connection state as a small pill: "Reconnecting…", "Waiting for network…", "Offline" and
- * the like. A spinner marks a state that is still under way.
+ * the like. A spinner marks an attempt under way; a state that waits on something else (the
+ * network, the Mac, a confirmation on the Mac) or has stopped gets a still icon, so a long wait
+ * draws no frames. The text wraps rather than cut off a long state at a large font size.
  */
 @Composable
 internal fun ConnectionStatusChip(@StringRes connection: Int, modifier: Modifier = Modifier) {
@@ -63,31 +66,37 @@ internal fun ConnectionStatusChip(@StringRes connection: Int, modifier: Modifier
             contentDescription = description
             liveRegion = LiveRegionMode.Polite
         },
-        shape = CircleShape,
+        // Round on one line, and still a pill rather than an oval once the text wraps.
+        shape = RoundedCornerShape(20.dp),
     ) {
         Row(
             Modifier.padding(start = 12.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (connection == R.string.remote_offline)
+            val icon = connectionStatusIcon(connection)
+            if (icon != null)
                 Icon(
-                    Icons.Default.CloudOff,
+                    icon,
                     contentDescription = null,
                     modifier = Modifier.size(16.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             else
                 CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-            Text(
-                text,
-                style = MaterialTheme.typography.labelLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Text(text, style = MaterialTheme.typography.labelLarge)
         }
     }
 }
+
+/** The still icon of [connection], or null for an attempt under way, which spins instead. */
+internal fun connectionStatusIcon(@StringRes connection: Int): ImageVector? =
+    when (connection) {
+        R.string.remote_connecting, R.string.remote_reconnecting, R.string.remote_checking_connection -> null
+        R.string.remote_waiting_for_network -> Icons.Default.WifiOff
+        R.string.remote_offline -> Icons.Default.CloudOff
+        else -> Icons.Default.HourglassEmpty
+    }
 
 /**
  * The connection chip as a list's first item, sticky, so it stays in view while the list scrolls.

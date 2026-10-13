@@ -1,4 +1,6 @@
 <resources>
     <!-- English fallback for all unsupported locales. -->
     <string name="remote_connection_status">Connection: %1$s</string>
+    <!-- A session's status the Mac reported before the connection was lost, e.g. "Last known: Running". -->
+    <string name="remote_status_last_known">Last known: %1$s</string>
 </resources>

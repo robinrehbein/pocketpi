@@ -1589,8 +1589,14 @@ internal fun RemoteScreen(
             // Every item emitted before the conversation counts here, so a jump can turn an index
             // in shownItems into a list index.
             var leading = 0
-            // The chat shows the connection beside its composer instead.
-            if (key !is RemoteNavKey.Chat) connectionStatusItem(connectionStatusLine(state), headerHeight)
+            // The chat shows the connection beside its composer instead. Beside an open chat or a
+            // project's sessions, that pane speaks for the connection (as with the error card
+            // below); the item stays, empty, so the indices after it do not move.
+            if (key !is RemoteNavKey.Chat)
+                connectionStatusItem(
+                    connectionStatusLine(state).takeIf { listPane?.selectedSessionId == null && !projectSelected },
+                    headerHeight,
+                )
             if (key !is RemoteNavKey.Chat)
                 item(key = "page-title") {
                     Row(
