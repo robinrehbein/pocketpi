@@ -123,6 +123,22 @@ saved conversation retains the reference after expiry, but the temporary file ma
 The phone keeps local copies while an encrypted draft or an uncertain send still references them.
 Disconnecting does not automatically resubmit a prompt.
 
+## Editing project files
+
+The file browser opens text files in an editor when the Mac's pi Remote host offers
+`session.files.write.v1`. Hosts offer it by default; it can be turned off on the Mac. The editor has
+line numbers, syntax colours, find, undo and redo, and Tab or Shift+Tab indenting. With a hardware
+keyboard, Ctrl+S saves, Ctrl+Z and Ctrl+Shift+Z or Ctrl+Y undo and redo, Ctrl+F finds and Esc closes
+find. While the editor has focus, the app's own shortcuts are off. Without a hardware keyboard, a
+row above the keyboard offers Tab, Shift+Tab and common code characters.
+
+Save replaces the file on the Mac only if it has not changed since it was opened; otherwise the app
+offers to reload it or to send the edit to the agent as a diff. Send to agent puts the unified diff
+of the unsaved edit into the composer. Only text files that fit in one read page (192 KiB) can be
+edited. Files the Mac runs by itself, such as `.pi`, `.claude`, `.husky`, `.vscode` or `.mcp.json`,
+stay read-only and are changed through the agent. Leaving the editor with unsaved changes asks
+first; a switch the app did not ask about keeps the edit with its session in memory.
+
 ## Firebase
 
 Push remains disabled when Firebase settings are absent. Configure a separate Firebase Android app

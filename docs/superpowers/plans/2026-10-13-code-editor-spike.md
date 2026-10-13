@@ -6,7 +6,7 @@
 **Goal:** Hand-edit and save project files from PocketPi (tablet first), with a version-checked
 `session.files.write` on the pi Remote host, and hand an edit to the agent as a diff.
 
-**Spec:** `docs/superpowers/specs/2026-10-13-code-editor-spike-design.md`.
+**Spec:** `docs/superpowers/specs/2026-10-13-code-editor-design.md`.
 **Tracker:** DEV-1417 "Spike: session.files.write for hand edits from PocketPi".
 
 **Branches (spike, not merged):**

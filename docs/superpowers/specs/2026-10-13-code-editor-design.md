@@ -1,19 +1,17 @@
-# Code Editor Spike Design
+# Code Editor Design
 
 ## Goal
 
 Let Robin fix code by hand from PocketPi on a Galaxy Tab S11 with a hardware keyboard when he is away
 from his Mac. Agents still write most code; the editor covers the small edits that are quicker to
-type than to prompt. The spike runs end to end: a direct save to the Mac through a new host command,
-and an editor in the app's existing file browser. It answers two questions:
+type than to prompt. It works end to end: a direct save to the Mac through a new host command, and
+an editor in the app's existing file browser.
 
-1. Does a Compose-native editor feel fluent with a hardware keyboard on files up to about 190 KiB?
-2. Is a direct, version-checked save over pi Remote safe and simple enough to ship?
+This started as a spike that asked whether a Compose-native editor feels fluent with a hardware
+keyboard and whether a direct, version-checked save over pi Remote is safe and simple enough to
+ship. Robin approved it on 2026-10-13 and asked to take it to the product; see Findings.
 
-Spike branches are not merged. A follow-up decides what ships, based on the findings at the end of
-this document.
-
-## Decisions so far
+## Decisions
 
 - **Engine:** Compose `BasicTextField(TextFieldState)` with the existing `SyntaxHighlight.kt`. No
   new dependency. If typing lags at the size limit, that is the evidence for Sora or CodeMirror
@@ -29,10 +27,9 @@ this document.
 
 - Capability `session.files.write.v1`, appended to the `capabilities.v2:` list. The client sends the
   command only when the host advertises it.
-- **Ruling:** The host advertises and accepts it only when started with `PI_REMOTE_FILE_WRITES=1`.
-  Reason: it is the first command that changes project files from a phone, and a spike branch
-  should not turn it on for every host. Cost if wrong: one environment variable to set while
-  testing.
+- Saving is a persistent host setting, on by default, that Robin can turn off on the Mac (decided
+  by Robin on 2026-10-13, replacing the spike's `PI_REMOTE_FILE_WRITES=1`). With it off the host
+  does not advertise the capability and refuses the command with `unsupported`.
 - Request: `{type: "session.files.write", requestId, sessionId, path, baseVersion, content}`.
   `baseVersion` has the same shape as `version` and is required. `content` is the full new file as
   a UTF-8 JSON string, at most `MAX_FILES_CONTENT_JSON_BYTES` (192 KiB, JSON-encoded), so one frame
@@ -64,7 +61,7 @@ this document.
   exactly as edited.
 - Writes share the files gate and the per-device limit with reads, and authorization is re-checked
   before the result is sent.
-- The agent is not told that a file changed. **Ruling:** Leave that out of the spike. Reason: pi
+- The agent is not told that a file changed. **Ruling:** Leave that out for now. Reason: pi
   re-reads files before it edits them. Cost if wrong: an agent edit made from stale context fails or
   overwrites Robin's save. The findings section records whether this happens.
 - A new `files-write-v1.json` fixture covers valid and invalid commands, results and errors. It is
@@ -152,5 +149,10 @@ autocomplete, folding, multi-cursor; persisted drafts; telling the agent about a
 
 ## Findings
 
-To be filled in after the device test: typing latency, highlighting cost, keyboard quirks, whether
-agent edits collided with saves, and a recommendation on what to ship.
+- 2026-10-13: Robin approved the spike ("Der Spike ist wunderbar") and asked to take it to the
+  product. The Compose engine stays; no switch to Sora or CodeMirror.
+- Taken into the product before merge: the opt-out host setting, per-device idempotency ledger
+  (DEV-1420), deny-list checks on the real path for reads and writes (DEV-1421), and the
+  project-root and realpath'd `core.hooksPath` cases (DEV-1422).
+- Still to watch in daily use: typing latency on large files, IME behaviour with Samsung Keyboard,
+  and whether agent edits collide with saves.
