@@ -63,6 +63,14 @@ data class RemoteState(
     val loading: Boolean = false,
     val connection: Int = R.string.remote_offline,
     val connected: Boolean = false,
+    /**
+     * The shown questions, configuration, advisor, commands, status and capabilities are the
+     * last-known ones of a lost connection: kept on screen while the same Mac reconnects, until
+     * the activation after the reconnect has read them again. Actions stay gated on [connected].
+     */
+    val stale: Boolean = false,
+    /** Epoch millis of the loss that made the state [stale]; null while it is not. */
+    val staleSince: Long? = null,
     val error: Int? = null,
     /** Epoch millis of the next automatic reconnect attempt, or null when none is scheduled. */
     val reconnectAt: Long? = null,
