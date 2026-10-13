@@ -97,6 +97,26 @@ class ProjectFilesWriteTest {
         assertFalse(canEditFile(state(text.copy(nextOffset = 2))))
     }
 
+    @Test
+    fun autoExecutedConfigIsNotEditable() {
+        for (path in listOf(".pi/settings.json", ".claude/settings.json", ".husky/pre-commit", ".githooks/pre-push",
+            ".idea/workspace.xml", "packages/x/.vscode/tasks.json", ".Claude/settings.json", ".VSCODE/launch.json",
+            ".envrc", "apps/web/.envrc", ".mcp.json", "packages/x/.MCP.json", ".cursor/rules/a.mdc", ".lefthook/pre-commit/a.sh",
+            "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml", ".pre-commit-config.yaml"))
+            assertTrue(path, writeDeniedPath(path))
+        for (path in listOf(".github/workflows/ci.yml", "notes.pi", "docs/.envrc.md", "src/claude/a.kt", "README.md", "mcp.json", "docs/.mcp.json.md"))
+            assertFalse(path, writeDeniedPath(path))
+        val file = OpenFile(".claude/settings.json", loading = false, version = "RmlsZVZlcnNpb25BYmMxMg", size = 2, content = "{}")
+        val state =
+            RemoteState(
+                selection = RemoteSelection("host", "project", sessionId),
+                capabilities = setOf(FILES_CAPABILITY, FILES_WRITE_CAPABILITY),
+                files = FilesState(sessionId, loading = false, file = file),
+            )
+        assertFalse(canEditFile(state))
+        assertTrue(canEditFile(state.copy(files = state.files?.copy(file = file.copy(path = ".github/workflows/ci.yml")))))
+    }
+
     // ---- Prompt ---------------------------------------------------------------------------
 
     @Test

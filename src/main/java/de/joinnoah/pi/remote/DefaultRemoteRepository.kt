@@ -1382,7 +1382,9 @@ class DefaultRemoteRepository(
                 compactionRequesting = false,
                 toolOutput = null,
                 changes = null,
-                files = null,
+                // A reconnect keeps an open editor, so its unsaved text survives; any other
+                // activation closes the file browser.
+                files = it.files?.takeIf { files -> sameSession && files.sessionId == selection.sessionId && files.editor != null },
                 // A reconnect keeps the open jobs view; the refresh after it watches again.
                 jobs = it.jobs?.takeIf { jobs -> sameSession && jobs.sessionId == selection.sessionId },
                 host = host,

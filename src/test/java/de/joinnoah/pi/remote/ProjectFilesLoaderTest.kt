@@ -642,6 +642,43 @@ class ProjectFilesLoaderTest {
     }
 
     @Test
+    fun aReconnectToTheSameSessionKeepsTheEditor() = runTest {
+        val transport = editorTransport()
+        val repository = editing(transport)
+        repository.updateFileEditorText("unsaved\n")
+        transport.listener.failed(false, R.string.remote_connection_error)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        val editor = checkNotNull(repository.state.value.files?.editor)
+        assertEquals("unsaved\n", editor.text)
+        assertTrue(editor.changed)
+        // The kept editor still saves.
+        repository.saveFileEditor()
+        runCurrent()
+        assertEquals("unsaved\n", writes(transport).single().text("content"))
+        assertFalse(checkNotNull(repository.state.value.files?.editor).changed)
+    }
+
+    @Test
+    fun anotherSessionOrABrowserWithoutEditorIsClosedOnActivation() = runTest {
+        val transport = editorTransport()
+        val repository = editing(transport)
+        repository.updateFileEditorText("unsaved\n")
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertNull(repository.state.value.files)
+
+        val browsingTransport = editorTransport()
+        val browsing = opened(browsingTransport)
+        assertNotNull(browsing.state.value.files)
+        browsingTransport.listener.failed(false, R.string.remote_connection_error)
+        browsing.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        assertNull(browsing.state.value.files)
+    }
+
+    @Test
     fun promptIsNullUntilTheTextChanges() = runTest {
         val repository = editing(editorTransport())
         assertNull(repository.fileEditorPrompt())

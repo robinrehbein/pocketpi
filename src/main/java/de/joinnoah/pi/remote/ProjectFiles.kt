@@ -1,5 +1,7 @@
 package de.joinnoah.pi.remote
 
+import java.text.Normalizer
+import java.util.Locale
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -180,7 +182,25 @@ internal fun canWriteFiles(state: RemoteState): Boolean =
 internal fun canEditFile(state: RemoteState): Boolean {
     val file = state.files?.file ?: return false
     return canWriteFiles(state) && !file.loading && file.failure == null && file.version != null &&
-        !file.binary && !file.tooLarge && file.nextOffset == null
+        !file.binary && !file.tooLarge && file.nextOffset == null && !writeDeniedPath(file.path)
+}
+
+/** Folders whose files a tool runs on its own; the host refuses to write anywhere below them. */
+private val WRITE_DENIED_SEGMENTS = setOf(".pi", ".claude", ".cursor", ".husky", ".githooks", ".lefthook", ".vscode", ".idea")
+
+/** Files a tool runs or loads on its own, wherever they are. */
+private val WRITE_DENIED_NAMES =
+    setOf(".envrc", ".mcp.json", "lefthook.yml", "lefthook.yaml", ".lefthook.yml", ".lefthook.yaml", ".pre-commit-config.yaml")
+
+/**
+ * Whether the host refuses to save [path] as auto-executed configuration: any segment is one of
+ * [WRITE_DENIED_SEGMENTS], or the file name is one of [WRITE_DENIED_NAMES]. Segments compare
+ * NFC-normalised and lower-cased, as the host does. The host also refuses paths the app cannot
+ * judge (such as git's `core.hooksPath`); this list only hides Edit.
+ */
+internal fun writeDeniedPath(path: String): Boolean {
+    val segments = path.split('/').map { Normalizer.normalize(it, Normalizer.Form.NFC).lowercase(Locale.ROOT) }
+    return segments.any { it in WRITE_DENIED_SEGMENTS } || segments.lastOrNull() in WRITE_DENIED_NAMES
 }
 
 /** The folder above [path]; `""` for a top-level entry. */
