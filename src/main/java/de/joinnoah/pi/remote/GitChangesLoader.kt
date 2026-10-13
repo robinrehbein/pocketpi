@@ -53,11 +53,11 @@ internal class GitChangesLoader(
         }
 
     private fun failure(e: Exception): ChangesFailure =
-        when ((e as? RemoteRequestException)?.code) {
+        if (e.isUnsupported) ChangesFailure.UNSUPPORTED
+        else when (e.hostCode) {
             "not_found" -> ChangesFailure.NOT_FOUND
             "forbidden" -> ChangesFailure.FORBIDDEN
             "busy" -> ChangesFailure.BUSY
-            "unsupported" -> ChangesFailure.UNSUPPORTED
             "offline" -> ChangesFailure.OFFLINE
             else -> if (!current().connected) ChangesFailure.OFFLINE else ChangesFailure.FAILED
         }
@@ -245,6 +245,7 @@ internal class GitChangesLoader(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    Diagnostics.caught("git.loadStatusAndLog", e)
                     if (active()) write(sessionId) { it.copy(loading = false, failure = failure(e)) }
                     return
                 }
@@ -259,6 +260,7 @@ internal class GitChangesLoader(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("git.loadStatusAndLog.2", e)
                 if (!active()) return
                 if (failure(e) == ChangesFailure.NOT_FOUND && retry) {
                     // The snapshot expired between status and log: one fresh status repeats both.
@@ -311,6 +313,7 @@ internal class GitChangesLoader(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("git.requestPreview", e)
                 if (active()) write(changes.sessionId) {
                     it.copy(previews = it.previews + (path to FileTilePreview(
                         loading = false,
@@ -433,6 +436,7 @@ internal class GitChangesLoader(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
+                        Diagnostics.caught("git.loadSubagents", e)
                         null
                     }
                 if (version != subagentVersion) return@launch
@@ -477,6 +481,7 @@ internal class GitChangesLoader(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("git.loadDiff", e)
                 if (!active()) return@launch
                 val reason = failure(e)
                 if (reason == ChangesFailure.NOT_FOUND && retry) {

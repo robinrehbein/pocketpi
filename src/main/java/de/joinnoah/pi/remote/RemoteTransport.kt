@@ -6,6 +6,29 @@ import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import okhttp3.*
 
+/** The transport gives up on a handshake that has not authenticated after this long. */
+internal const val HANDSHAKE_TIMEOUT_MILLIS = 20_000L
+
+/** A pairing the user has not approved on the Mac this long after it started fails. */
+internal const val PAIRING_TIMEOUT_MILLIS = 120_000L
+
+/**
+ * Where a connection's handshake stands. Each value names what the transport is waiting for:
+ * [OPENING] the socket to the relay, [CHALLENGE] the Mac's answer to the hello, [READY] the Mac's
+ * encrypted ready, [AUTHENTICATING] the device's sign-in, and for a pairing [APPROVAL] the user on
+ * the Mac and [PERSISTING] the new keys on this device. [PAIRED] and [ACTIVE] are the ends.
+ */
+enum class HandshakePhase {
+    OPENING,
+    CHALLENGE,
+    READY,
+    AUTHENTICATING,
+    APPROVAL,
+    PERSISTING,
+    PAIRED,
+    ACTIVE,
+}
+
 interface RemoteTransport {
     interface Listener {
         fun ready(capabilities: Set<String> = emptySet())
@@ -22,6 +45,15 @@ interface RemoteTransport {
 
         /** The relay closed the socket with [code]; delivered just before [failed]. */
         fun closed(code: Int) {}
+
+        /**
+         * A frame this app cannot read (undecryptable, out of sequence, too large or malformed)
+         * ended the connection; delivered just before [failed].
+         */
+        fun broken() {}
+
+        /** The handshake reached [phase]: the transport now waits for what the phase names. */
+        fun progress(phase: HandshakePhase) {}
     }
 
     var listener: Listener
@@ -39,6 +71,8 @@ class SecureRemoteTransport(
     private val scope: CoroutineScope,
     private val http: WebSocket.Factory =
         OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build(),
+    /** Names this transport's connections in [Diagnostics], such as `foreground` or `background`. */
+    private val diagnosticsName: String = "foreground",
     private val deviceName: () -> String = { (Build.MANUFACTURER + " " + Build.MODEL).take(100) },
 ) : RemoteTransport {
     override lateinit var listener: RemoteTransport.Listener
@@ -47,6 +81,7 @@ class SecureRemoteTransport(
     private var generation = 0L
     private var handshakeTimeout: Job? = null
     private var pairingTimeout: Job? = null
+    private var connectTrace: Diagnostics.ConnectTrace? = null
 
     override fun connect(host: PairedHost) {
         close()
@@ -65,6 +100,9 @@ class SecureRemoteTransport(
     }
 
     override fun close() {
+        // A replaced or abandoned attempt ends here; one that already failed keeps its cause.
+        connectTrace?.finish("closed.local")
+        connectTrace = null
         generation++
         handshakeTimeout?.cancel()
         pairingTimeout?.cancel()
@@ -97,15 +135,26 @@ class SecureRemoteTransport(
                 "connectionId" to Wire.random(),
                 "clientNonce" to Wire.random(32),
             )
-        var phase = "challenge"
+        val trace = Diagnostics.connectStarted(diagnosticsName + "." + hello.text("mode"))
+        connectTrace = trace
+        var phase = HandshakePhase.OPENING
+        fun advance(next: HandshakePhase) {
+            phase = next
+            trace.phase(next)
+            listener.progress(next)
+        }
+        advance(HandshakePhase.OPENING)
         var approvedHost: PairedHost? = null
+        // Set once the Mac denied this device, even with a reply this app cannot read.
+        var denied = false
         val request =
             Request.Builder()
                 .url(relay.replaceFirst("https://", "wss://") + "/v1/peer/" + routeId)
                 .build()
         handshakeTimeout = scope.launch {
-            delay(20000)
+            delay(HANDSHAKE_TIMEOUT_MILLIS)
             if (epoch == generation) {
+                trace.finish("timeout." + phase.name.lowercase())
                 close()
                 // A paired device retries, since a sleeping Mac never answers the hello; a
                 // pairing code is single-use, so a stalled pairing stops.
@@ -114,10 +163,11 @@ class SecureRemoteTransport(
         }
         if (pairing != null) {
             pairingTimeout = scope.launch {
-                delay(120000)
+                delay(PAIRING_TIMEOUT_MILLIS)
                 if (epoch == generation) {
+                    trace.finish("pairing.timeout")
                     close()
-                    listener.failed(false, R.string.remote_denied)
+                    listener.failed(false, R.string.remote_pairing_timeout)
                 }
             }
         }
@@ -128,6 +178,8 @@ class SecureRemoteTransport(
                     override fun onOpen(webSocket: WebSocket, response: Response) {
                         scope.launch {
                             if (epoch != generation) return@launch
+                            // The relay is reached; from here on only the Mac can answer.
+                            advance(HandshakePhase.CHALLENGE)
                             webSocket.send(hello.toString())
                         }
                     }
@@ -137,7 +189,7 @@ class SecureRemoteTransport(
                             if (epoch != generation) return@launch
                             try {
                                 val frame = Wire.parse(text)
-                                if (phase == "challenge") {
+                                if (phase == HandshakePhase.CHALLENGE || phase == HandshakePhase.OPENING) {
                                     Wire.keys(
                                         frame,
                                         setOf("v", "type", "connectionId", "serverNonce"),
@@ -155,12 +207,12 @@ class SecureRemoteTransport(
                                                     ("serverNonce" to frame.getValue("serverNonce"))
                                             ),
                                         )
-                                    phase = "ready"
+                                    advance(HandshakePhase.READY)
                                     return@launch
                                 }
                                 val payload = checkNotNull(channel).open(frame)
                                 when (phase) {
-                                    "ready" -> {
+                                    HandshakePhase.READY -> {
                                         require(
                                             payload.text("type") == "ready" &&
                                                 payload.text("mode") == hello.text("mode")
@@ -173,15 +225,16 @@ class SecureRemoteTransport(
                                                     "deviceName" to deviceName(),
                                                 )
                                             )
-                                            phase = "approval"
+                                            advance(HandshakePhase.APPROVAL)
                                             listener.approval()
                                         } else {
                                             send(Wire.objectOf("type" to "device.authenticate"))
-                                            phase = "authentication"
+                                            advance(HandshakePhase.AUTHENTICATING)
                                         }
                                     }
-                                    "approval" -> {
+                                    HandshakePhase.APPROVAL -> {
                                         if (payload.text("type") == "pair.denied") {
+                                            trace.finish("pair.denied")
                                             close()
                                             listener.failed(false, R.string.remote_denied)
                                             return@launch
@@ -197,18 +250,20 @@ class SecureRemoteTransport(
                                                 payload.text("deviceSecret"),
                                                 payload.text("hostName"),
                                             )
-                                        phase = "persisting"
+                                        advance(HandshakePhase.PERSISTING)
                                         listener.persistPairing(host)
                                         if (epoch != generation) return@launch
                                         send(Wire.objectOf("type" to "pair.ack"))
                                         approvedHost = host
-                                        phase = "paired"
+                                        advance(HandshakePhase.PAIRED)
+                                        trace.finish("paired")
                                         handshakeTimeout?.cancel()
                                         pairingTimeout?.cancel()
                                         webSocket.close(1000, "paired")
                                     }
-                                    "authentication" -> {
+                                    HandshakePhase.AUTHENTICATING -> {
                                         if (payload.text("type") == "device.denied") {
+                                            denied = true
                                             // Strict: exactly `type` and a known `reason`; anything
                                             // else throws into the generic connection error.
                                             Wire.keys(payload, setOf("type", "reason"))
@@ -218,13 +273,15 @@ class SecureRemoteTransport(
                                                     "paused" -> R.string.remote_device_paused
                                                     else -> error("Unknown denial reason")
                                                 }
+                                            trace.finish("denied." + payload.text("reason"))
                                             close()
                                             // No automatic reconnect: the user has to act first.
                                             listener.failed(false, message)
                                             return@launch
                                         }
                                         require(payload.text("type") == "device.authenticated")
-                                        phase = "active"
+                                        advance(HandshakePhase.ACTIVE)
+                                        trace.finish("ok")
                                         handshakeTimeout?.cancel()
                                         listener.ready(
                                             (payload["capabilities"] as? JsonArray)
@@ -237,17 +294,24 @@ class SecureRemoteTransport(
                                                 ?.toSet() ?: emptySet()
                                         )
                                     }
-                                    "active" -> listener.message(payload)
+                                    HandshakePhase.ACTIVE -> listener.message(payload)
                                     else -> error("Unexpected handshake")
                                 }
-                            } catch (_: Exception) {
+                            } catch (e: Exception) {
+                                Diagnostics.caught("transport.message", e)
                                 if (epoch == generation) {
+                                    trace.end("protocol." + phase.name.lowercase())
                                     val error =
-                                        if (phase == "persisting") R.string.remote_storage_error
+                                        if (phase == HandshakePhase.PERSISTING) R.string.remote_storage_error
                                         else R.string.remote_connection_error
                                     close()
+                                    listener.broken()
+                                    // A frame that fails to decrypt, arrives out of sequence or breaks
+                                    // the handshake ends this connection, and a paired device tries
+                                    // again. A pairing code is single-use, a storage error needs the
+                                    // user, and a denial stays one.
                                     listener.failed(
-                                        false,
+                                        pairing == null && !denied && phase != HandshakePhase.PERSISTING,
                                         error,
                                     )
                                 }
@@ -263,6 +327,7 @@ class SecureRemoteTransport(
                         scope.launch {
                             if (epoch == generation) {
                                 val approved = approvedHost
+                                if (approved == null) trace.end("closed.$code")
                                 close()
                                 if (approved != null) listener.paired(approved)
                                 else {
@@ -284,6 +349,7 @@ class SecureRemoteTransport(
                         scope.launch {
                             if (epoch == generation) {
                                 val approved = approvedHost
+                                if (approved == null) trace.end("failure." + t.javaClass.simpleName.ifEmpty { "Throwable" })
                                 close()
                                 if (approved != null) listener.paired(approved)
                                 else

@@ -223,7 +223,19 @@ class ExportContentTest {
         assertEquals(ExportFailure.FAILED, code("internal"))
         assertEquals(
             ExportFailure.TIMED_OUT,
-            failure { downloadExport(sessionId, { throw IllegalStateException("Request timed out") }, { _, o -> chunk(o) }) },
+            failure { downloadExport(sessionId, { throw RemoteRequestException.timeout() }, { _, o -> chunk(o) }) },
+        )
+        assertEquals(
+            ExportFailure.TIMED_OUT,
+            failure { downloadExport(sessionId, { meta() }, { _, _ -> throw RemoteRequestException.timeout() }) },
+        )
+        assertEquals(
+            ExportFailure.FAILED,
+            failure { downloadExport(sessionId, { throw RemoteRequestException.connectionLost() }, { _, o -> chunk(o) }) },
+        )
+        assertEquals(
+            ExportFailure.UNSUPPORTED,
+            failure { downloadExport(sessionId, { throw RemoteRequestException.unsupported() }, { _, o -> chunk(o) }) },
         )
         assertEquals(
             ExportFailure.FAILED,

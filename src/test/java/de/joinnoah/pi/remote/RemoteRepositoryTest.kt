@@ -18,10 +18,14 @@ class RemoteRepositoryTest {
     ) = Wire.objectOf("id" to id, "origin" to origin, "status" to status, "projectId" to projectId)
 
     private class Pairings(var hosts: List<PairedHost>) : PairingStorage {
+        /** Runs once after the next save, as if during the write. */
+        var afterSave: (() -> Unit)? = null
+
         override fun load() = hosts
 
         override fun save(hosts: List<PairedHost>) {
             this.hosts = hosts
+            afterSave?.also { afterSave = null }?.invoke()
         }
     }
 
@@ -58,7 +62,11 @@ class RemoteRepositoryTest {
             else if (readyOnConnect) listener.ready(capabilities)
         }
 
-        override fun pair(value: JsonObject) {}
+        var pairing: JsonObject? = null
+
+        override fun pair(value: JsonObject) {
+            pairing = value
+        }
 
         override fun close() {
             closes++
@@ -126,10 +134,11 @@ class RemoteRepositoryTest {
         drafts: Drafts = Drafts(),
         attachmentStorage: AttachmentStorage? = null,
         hosts: List<PairedHost> = listOf(host),
+        pairings: Pairings = Pairings(hosts),
         attachmentImporter: (suspend (String, Boolean) -> LocalAttachment)? = null,
     ) =
         DefaultRemoteRepository(
-            Pairings(hosts),
+            pairings,
             drafts,
             transport,
             backgroundScope,
@@ -2124,7 +2133,9 @@ class RemoteRepositoryTest {
         val transport = Transport().also { configure(it) }
         val repository = offlineRepository(transport)
         transport.listener.failed(true, R.string.remote_connection_error)
-        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+        // The first failure of a streak reconnects quietly; the second one raises the card.
+        assertNull(repository.state.value.error)
+        assertEquals(R.string.remote_reconnecting, repository.state.value.connection)
         advanceTimeBy(1_000)
         runCurrent()
         assertEquals(R.string.remote_connection_error, repository.state.value.error)
@@ -2198,7 +2209,7 @@ class RemoteRepositoryTest {
         repository.setForeground(true)
         repository.setValidatedNetwork("wifi")
         val activation = async { repository.activate(RemoteSelection("host", "project", "session")) }
-        advanceTimeBy(30_001)
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS + 1)
         runCurrent()
         activation.await()
         assertFalse(repository.state.value.connected)
@@ -2300,6 +2311,543 @@ class RemoteRepositoryTest {
                 it.text("type") == "session.snapshot" && it.text("sessionId") == "first"
             },
         )
+    }
+
+    @Test
+    fun connectGivesUpJustAfterTheTransportHandshakeTimeout() = runTest {
+        val transport = Transport().also { configure(it) }
+        transport.readyOnConnect = false
+        val repository = repository(transport)
+        val selection = RemoteSelection("host", "project", "session")
+
+        val stalled = async { repository.activate(selection) }
+        runCurrent()
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS - 1)
+        runCurrent()
+        assertFalse(stalled.isCompleted)
+        assertTrue(repository.state.value.loading)
+
+        advanceTimeBy(1)
+        runCurrent()
+        assertTrue(stalled.isCompleted)
+        assertFalse(repository.state.value.connected)
+        // Well before the 30 s the wait used to be, and only just after the transport's 20 s.
+        assertEquals(HANDSHAKE_TIMEOUT_MILLIS + 2_000, currentTime)
+        // The first failure is quiet; the card follows while the Mac stays unreachable.
+        assertNull(repository.state.value.error)
+        advanceTimeBy(QUIET_RECONNECT_MILLIS)
+        runCurrent()
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+    }
+
+    /** A connected repository on the projects list, recoverable, one second after connecting. */
+    private suspend fun TestScope.listingRepository(transport: Transport): DefaultRemoteRepository {
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        // Every frame so far arrived before the next request goes out.
+        advanceTimeBy(1_000)
+        return repository
+    }
+
+    @Test
+    fun aListReadWithNoReplyAndNoFrameReconnectsAtOnceAndQuietly() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = listingRepository(transport)
+        val answered = transport.response
+        transport.response = { if (it.text("type") == "sessions.list") null else answered(it) }
+        val closes = transport.closes
+        val connects = transport.connects
+        val opening = async { repository.activate(RemoteSelection("host", "project")) }
+        runCurrent()
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS - 1)
+        runCurrent()
+        assertEquals(closes, transport.closes)
+        assertTrue(repository.state.value.connected)
+
+        transport.response = answered
+        advanceTimeBy(1)
+        runCurrent()
+        opening.await()
+        // The dead socket is closed and replaced without a backoff and without an error card.
+        assertEquals(closes + 1, transport.closes)
+        assertEquals(connects + 1, transport.connects)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun theFirstReadAfterAReconnectDetectsADeadSocket() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        val answered = transport.response
+        transport.response = { if (it.text("type") == "projects.list") null else answered(it) }
+        val connects = transport.connects
+        transport.listener.failed(true, R.string.remote_connection_error)
+        // The list goes out in the same instant as the handshake's last frame.
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        assertTrue(repository.state.value.connected)
+
+        transport.response = answered
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS)
+        runCurrent()
+        assertEquals(connects + 2, transport.connects)
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun aListReadThatTimesOutAfterAFrameOnlyReportsARequestError() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = listingRepository(transport)
+        val answered = transport.response
+        transport.response = { if (it.text("type") == "sessions.list") null else answered(it) }
+        val closes = transport.closes
+        val connects = transport.connects
+        val opening = async { repository.activate(RemoteSelection("host", "project")) }
+        runCurrent()
+        advanceTimeBy(10_000)
+        // Any frame proves the socket alive: the host is slow, not gone.
+        transport.listener.message(Wire.objectOf("type" to "relay.notice"))
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS)
+        runCurrent()
+        opening.await()
+        assertEquals(closes, transport.closes)
+        assertEquals(connects, transport.connects)
+        assertTrue(repository.state.value.connected)
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+    }
+
+    @Test
+    fun aToolOutputReadThatTimesOutNeverEndsTheConnection() = runTest {
+        val (transport, repository) = toolOutputRepository { null }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        advanceTimeBy(1_000)
+        val closes = transport.closes
+        repository.loadToolOutput("call")
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS)
+        runCurrent()
+        // It may queue behind other reads on the host, so its silence says nothing about the socket.
+        assertEquals(closes, transport.closes)
+        assertTrue(repository.state.value.connected)
+        assertEquals(ToolOutputFailure.FAILED, repository.state.value.toolOutput?.failure)
+    }
+
+    @Test
+    fun aReplacedNetworkReconnectsAtOnceWithoutAnError() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        transport.failureOnConnect = null
+        val connects = transport.connects
+        repository.setValidatedNetwork("cellular")
+        assertFalse(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertEquals(R.string.remote_reconnecting, repository.state.value.connection)
+        assertEquals(testScheduler.currentTime, repository.state.value.reconnectAt)
+        assertTrue(repository.state.value.stale)
+
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertFalse(repository.state.value.stale)
+        assertNull(repository.state.value.staleSince)
+    }
+
+    private val pendingQuestion = Wire.objectOf("id" to "question", "kind" to "input", "title" to "Answer")
+
+    /**
+     * A chat with a pending question, configuration, commands, advisor and a finished tool output,
+     * connected and recoverable.
+     */
+    private suspend fun TestScope.lastKnownRepository(
+        transport: Transport,
+        hosts: List<PairedHost> = listOf(host),
+        extraCapabilities: List<String> = emptyList(),
+    ): DefaultRemoteRepository {
+        configure(transport)
+        advertising(transport, JsonArray(fixtureCapabilities.jsonArray + extraCapabilities.map(::JsonPrimitive)))
+        transport.capabilities = setOf(CONFIGURATION_CAPABILITY, COMMANDS_CAPABILITY, ADVISOR_CAPABILITY)
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.snapshot" ->
+                    JsonObject(original(request)!! + ("pendingQuestions" to JsonArray(listOf(pendingQuestion))))
+                "session.configuration.get" -> configurationData(request.text("sessionId"))
+                "session.commands.get" -> commandData(request.text("sessionId"))
+                "session.advisor.get" -> advisorData()
+                "session.tool_output.get" -> toolOutputData(0, 2, "ok".encodeToByteArray())
+                else -> original(request)
+            }
+        }
+        val repository = repository(transport, hosts = hosts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        repository.loadToolOutput("call")
+        runCurrent()
+        val state = repository.state.value
+        assertEquals(listOf(pendingQuestion), state.questions)
+        assertNotNull(state.configuration)
+        assertNotNull(state.advisor)
+        assertEquals(1, state.commands.size)
+        assertEquals("ok", state.toolOutput?.text)
+        assertTrue(TOOL_OUTPUT_CAPABILITY in state.capabilities)
+        return repository
+    }
+
+    @Test
+    fun aDropKeepsTheLastKnownChatStateUntilTheReconnectReadsItAgain() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        val before = repository.state.value
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+
+        val offline = repository.state.value
+        assertFalse(offline.connected)
+        assertTrue(offline.stale)
+        assertEquals(testScheduler.currentTime, offline.staleSince)
+        assertEquals(R.string.remote_reconnecting, offline.connection)
+        assertNull(offline.error)
+        assertEquals(before.questions, offline.questions)
+        assertEquals(before.configuration, offline.configuration)
+        assertEquals(before.advisor, offline.advisor)
+        assertEquals(before.commands, offline.commands)
+        assertEquals(before.status, offline.status)
+        assertEquals(before.capabilities, offline.capabilities)
+        assertTrue(offline.capabilitiesKnown)
+        assertEquals("ok", offline.toolOutput?.text)
+        assertEquals(before.messages, offline.messages)
+
+        // The reconnect attempt fails too: now the card shows, and the chat still stays.
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+        assertTrue(repository.state.value.stale)
+        assertEquals(before.questions, repository.state.value.questions)
+        assertEquals(before.configuration, repository.state.value.configuration)
+        assertEquals(offline.staleSince, repository.state.value.staleSince)
+
+        transport.failureOnConnect = null
+        advanceTimeBy(2_000)
+        runCurrent()
+        val back = repository.state.value
+        assertTrue(back.connected)
+        assertFalse(back.stale)
+        assertNull(back.staleSince)
+        assertNull(back.error)
+        assertEquals(RemoteSelection("host", "project", "session"), back.selection)
+        assertEquals(before.questions, back.questions)
+        assertEquals(before.configuration, back.configuration)
+        assertEquals("ok", back.toolOutput?.text)
+    }
+
+    @Test
+    fun aRunningToolOutputDownloadStopsWithTheConnection() = runTest {
+        val (transport, repository) = toolOutputRepository { null }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.loadToolOutput("call")
+        runCurrent()
+        assertNotNull(repository.state.value.toolOutput)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNull(repository.state.value.toolOutput)
+    }
+
+    @Test
+    fun theErrorCardFollowsAQuietReconnectThatTakesTooLong() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        // The next attempt reaches nobody and hangs in the handshake.
+        transport.readyOnConnect = false
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(QUIET_RECONNECT_MILLIS - 1)
+        runCurrent()
+        assertNull(repository.state.value.error)
+        assertEquals(R.string.remote_reconnecting, repository.state.value.connection)
+
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+        assertTrue(repository.state.value.stale)
+        assertEquals(listOf(pendingQuestion), repository.state.value.questions)
+    }
+
+    @Test
+    fun aQuietReconnectThatSucceedsInTimeNeverRaisesTheCard() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        advanceTimeBy(QUIET_RECONNECT_MILLIS)
+        runCurrent()
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun switchingToAnotherMacClearsTheLastKnownState() = runTest {
+        val other = PairedHost("other", "https://relay.test", "device", "secret", "Other")
+        val transport = Transport()
+        val repository = lastKnownRepository(transport, hosts = listOf(host, other))
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertTrue(repository.state.value.stale)
+
+        transport.failureOnConnect = null
+        transport.readyOnConnect = false
+        val switching = async { repository.activate(RemoteSelection("other"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        val state = repository.state.value
+        assertEquals("other", transport.route)
+        assertFalse(state.stale)
+        assertNull(state.staleSince)
+        assertEquals(R.string.remote_connecting, state.connection)
+        assertTrue(state.capabilities.isEmpty())
+        assertFalse(state.capabilitiesKnown)
+        assertTrue(state.questions.isEmpty())
+        assertNull(state.configuration)
+        assertNull(state.advisor)
+        assertTrue(state.commands.isEmpty())
+        assertNull(state.toolOutput)
+        switching.cancel()
+    }
+
+    @Test
+    fun aFailureThatStopsReconnectingClearsTheLastKnownState() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        transport.listener.failed(false, R.string.remote_device_revoked)
+        val state = repository.state.value
+        assertEquals(R.string.remote_device_revoked, state.error)
+        assertFalse(state.stale)
+        assertTrue(state.capabilities.isEmpty())
+        assertTrue(state.questions.isEmpty())
+        assertNull(state.configuration)
+    }
+
+    @Test
+    fun mutationsAreRefusedWhileDisconnected() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        repository.draft("hello")
+        runCurrent()
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertTrue(repository.state.value.stale)
+        val sent = transport.sent.size
+
+        repository.prompt()
+        repository.followUp()
+        repository.steer()
+        repository.answer("question", Wire.objectOf("value" to "yes"))
+        repository.abort()
+        repository.setModel("provider", "other")
+        repository.setThinkingLevel("max")
+        repository.changeSettings(autoCompaction = false, steeringMode = null, followUpMode = null)
+        repository.setAdvisor("provider", "model", "high")
+        repository.compactContext()
+        repository.refreshCommands()
+        repository.refreshConfiguration()
+        repository.refreshAdvisor()
+        runCurrent()
+
+        assertEquals(sent, transport.sent.size)
+        assertEquals("hello", repository.state.value.draft)
+        assertFalse(repository.state.value.sending)
+        assertTrue(repository.state.value.answering.isEmpty())
+        assertFalse(repository.state.value.configurationChanging)
+        assertFalse(repository.state.value.advisorChanging)
+
+        // The same answer goes out once the Mac is back.
+        transport.failureOnConnect = null
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        repository.answer("question", Wire.objectOf("value" to "yes"))
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test
+    fun aReconnectWhoseHandshakeKeepsHangingKeepsTheCardAndEscalates() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        // The relay answers, the Mac never completes the handshake (asleep).
+        transport.readyOnConnect = false
+        val connects = transport.connects
+        transport.listener.failed(true, R.string.remote_connection_error)
+        val errors = mutableListOf<Int?>()
+        repeat(200) {
+            advanceTimeBy(1_000)
+            runCurrent()
+            errors += repository.state.value.error
+        }
+        // Quiet for the first seconds, then the card stays up across every timed-out retry.
+        assertTrue(errors.take(4).all { it == null })
+        assertTrue(errors.drop(4).all { it != null })
+        assertTrue(transport.connects >= connects + 3)
+        // The third failure in a row says the Mac is unreachable.
+        assertEquals(R.string.remote_unreachable, repository.state.value.error)
+        assertTrue(repository.state.value.stale)
+        assertEquals(listOf(pendingQuestion), repository.state.value.questions)
+    }
+
+    @Test
+    fun disconnectingStopsTheQuietReconnectTimer() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        transport.readyOnConnect = false
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNull(repository.state.value.error)
+        repository.disconnect()
+        advanceTimeBy(QUIET_RECONNECT_MILLIS * 2)
+        runCurrent()
+        assertNull(repository.state.value.error)
+    }
+
+    @Test
+    fun aSecondFailureOfAnUnprovenConnectionShowsTheCardAtOnce() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertNull(repository.state.value.error)
+        // The reconnect comes up, and its socket dies before any reply proved it.
+        transport.readyOnConnect = false
+        advanceTimeBy(2_000)
+        runCurrent()
+        transport.listener.ready(transport.capabilities)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+        assertTrue(repository.state.value.stale)
+    }
+
+    @Test
+    fun fullToolOutputWhileReconnectingSaysOffline() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertTrue(TOOL_OUTPUT_CAPABILITY in repository.state.value.capabilities)
+        val sent = transport.sent.size
+
+        repository.loadToolOutput("call")
+        // Offline offers a retry; the host is not too old for it.
+        assertEquals(ToolOutputFailure.OFFLINE, repository.state.value.toolOutput?.failure)
+        assertEquals(sent, transport.sent.size)
+    }
+
+    @Test
+    fun forkingWhileReconnectingKeepsTheSourceAndTheReconnect() = runTest {
+        val transport = Transport()
+        val repository =
+            lastKnownRepository(
+                transport,
+                extraCapabilities = listOf(SESSION_FORK_CAPABILITY, SESSION_TREE_CAPABILITY),
+            )
+        val source = RemoteSelection("host", "project", "session")
+        transport.readyOnConnect = false
+        val connects = transport.connects
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertTrue(SESSION_FORK_CAPABILITY in repository.state.value.capabilities)
+        // The reconnect's activation waits for the handshake.
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+
+        assertEquals(source, repository.forkSession(source, "user-1", ForkMode.RETRY))
+        assertEquals(source, repository.forkSessionAtNode(source, "node"))
+        assertTrue(transport.sent.none { it.text("type") in setOf("session.fork", "session.tree.fork") })
+
+        // The activation was left running and reads the chat once the Mac answers.
+        transport.listener.ready(transport.capabilities)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertFalse(repository.state.value.stale)
+        assertEquals(source, repository.state.value.selection)
+    }
+
+    @Test
+    fun aRefreshThatReadsTheChatEndsTheStaleStateOfAReconnect() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport)
+        transport.failure = { if (it.text("type") == "session.snapshot") "internal" else null }
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(2_000)
+        runCurrent()
+        // Connected again, but the chat on screen could not be read.
+        assertTrue(repository.state.value.connected)
+        assertTrue(repository.state.value.stale)
+
+        transport.failure = { null }
+        repository.refresh()
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertFalse(repository.state.value.stale)
+        assertNull(repository.state.value.staleSince)
+    }
+
+    @Test
+    fun requestsRecordTypeDurationSizeAndTimeout() = runTest {
+        Diagnostics.clear()
+        Diagnostics.clock = { testScheduler.currentTime }
+        try {
+            val transport = Transport().also { configure(it) }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", "session"))
+            val normal = transport.response
+            transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+            repository.draft("keep this")
+            repository.prompt()
+            runCurrent()
+            advanceTimeBy(30_000)
+            runCurrent()
+
+            val requests = Diagnostics.report().entries.filter { it.kind == Diagnostics.Kind.REQUEST }
+            val prompt = requests.single { it.label == "session.prompt" }
+            assertEquals("timeout", prompt.outcome)
+            assertEquals(30_000L, prompt.durationMs)
+            assertTrue(prompt.bytes > 0)
+            val listed = requests.single { it.label == "sessions.list" }
+            assertEquals("ok", listed.outcome)
+            assertEquals(0L, listed.durationMs)
+            val stats = Diagnostics.report().requests.single { it.type == "session.prompt" }
+            assertEquals(1, stats.timeouts)
+            // Labels are protocol words only; the draft text never reaches the record.
+            assertFalse(Diagnostics.export().contains("keep this"))
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun requestFailuresRecordTheHostErrorCode() = runTest {
+        Diagnostics.clear()
+        try {
+            val transport = Transport().also { configure(it) }
+            transport.failure = { if (it.text("type") == "sessions.list") "not_found" else null }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", "session"))
+
+            val listed = Diagnostics.report().entries.first { it.label == "sessions.list" }
+            assertEquals("error.not_found", listed.outcome)
+            assertTrue(Diagnostics.report().activations.any { it.label == "activate.restore" })
+        } finally {
+            Diagnostics.clear()
+        }
     }
 
     @Test
@@ -5052,5 +5600,521 @@ class RemoteRepositoryTest {
         repository.resumeChild("Continue again")
         runCurrent()
         assertEquals("agent-2", transport.sent.last { it.text("type") == "session.subagent.resume" }.text("agentId"))
+    }
+
+    // ---- Forward compatibility, typed errors, proven-connection backoff, pairing timeout ----
+
+    private suspend fun TestScope.chatRepository(transport: Transport): DefaultRemoteRepository {
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        return repository
+    }
+
+    private fun event(revision: Int, kind: String, vararg fields: Pair<String, Any?>) =
+        Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to revision, "kind" to kind, *fields)
+
+    private fun Transport.snapshotRequests() = sent.count { it.text("type") == "session.snapshot" }
+
+    @Test
+    fun unknownPayloadTypeAndEventKindKeepTheConnectionAndResyncAtMostEveryTenSeconds() = runTest {
+        val transport = Transport().also { configure(it) }
+        val snapshotTimes = mutableListOf<Long>()
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") snapshotTimes += testScheduler.currentTime
+            original(request)
+        }
+        val repository = chatRepository(transport)
+        val closes = transport.closes
+        snapshotTimes.clear()
+
+        transport.listener.message(Wire.objectOf("type" to "host.future", "anything" to 1))
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+
+        // A newer host sends a kind this app does not know, once a second for 25 s.
+        val start = testScheduler.currentTime
+        for (revision in 1..25) {
+            transport.listener.message(event(revision, "future.kind"))
+            runCurrent()
+            advanceTimeBy(1_000)
+        }
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertEquals(closes, transport.closes)
+        assertNull(repository.state.value.error)
+        // One snapshot right away, then one at the end of each ten-second window.
+        assertEquals(listOf(start, start + 10_000, start + 20_000), snapshotTimes)
+
+        // The revision stayed in step, so the next known event applies without a snapshot.
+        transport.listener.message(event(26, "session.status", "status" to "running"))
+        runCurrent()
+        assertEquals("running", repository.state.value.status)
+        assertEquals(3, snapshotTimes.size)
+    }
+
+    @Test
+    fun malformedTimelineEventRequestsASnapshotInsteadOfGoingOffline() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val snapshots = transport.snapshotRequests()
+
+        // An upsert without its message.
+        transport.listener.message(event(1, "message.upsert"))
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertNull(repository.state.value.reconnectAt)
+        assertEquals(snapshots + 1, transport.snapshotRequests())
+    }
+
+    @Test
+    fun unknownSessionStatusKeepsTheLastStatusAndRequestsOneSnapshot() = runTest {
+        val transport = Transport().also { configure(it) }
+        val original = transport.response
+        val repository = chatRepository(transport)
+        transport.listener.message(event(1, "session.status", "status" to "running"))
+        runCurrent()
+        assertEquals("running", repository.state.value.status)
+        // The resync stays unanswered, so the state shows what the event left behind.
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else original(request) }
+        val snapshots = transport.snapshotRequests()
+
+        transport.listener.message(event(2, "session.status", "status" to "retrying"))
+        runCurrent()
+
+        assertEquals("running", repository.state.value.status)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertEquals(snapshots + 1, transport.snapshotRequests())
+    }
+
+    @Test
+    fun advisorStatusWithTheTimelineRevisionCostsNoSnapshot() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val snapshots = transport.snapshotRequests()
+
+        transport.listener.message(event(1, "advisor.status", "advisor" to Wire.objectOf()))
+        runCurrent()
+        transport.listener.message(event(2, "session.status", "status" to "running"))
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertEquals("running", repository.state.value.status)
+        assertEquals(snapshots, transport.snapshotRequests())
+    }
+
+    @Test
+    fun malformedFollowUpReceiptIsDroppedAndTheTimelineStaysInStep() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val snapshots = transport.snapshotRequests()
+
+        transport.listener.message(event(1, "follow_up.status", "requestId" to "request", "status" to "bogus"))
+        runCurrent()
+        transport.listener.message(event(2, "session.status", "status" to "running"))
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertEquals("running", repository.state.value.status)
+        assertEquals(snapshots, transport.snapshotRequests())
+    }
+
+    @Test
+    fun malformedResultFailsOnlyItsRequest() = runTest {
+        val titled = JsonObject(session() + ("title" to JsonPrimitive("Old")))
+        val transport = Transport().also { configure(it, sessions = listOf(titled), opened = titled) }
+        transport.capabilities = setOf(RENAME_CAPABILITY)
+        val repository = chatRepository(transport)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.rename") {
+                transport.listener.message(
+                    Wire.objectOf("type" to "result", "requestId" to request.text("requestId"), "ok" to "yes")
+                )
+                null
+            } else normal(request)
+        }
+
+        repository.renameSession("session", "Renamed")
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+    }
+
+    @Test
+    fun unreadableFrameReconnectsLikeALostConnection() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+
+        transport.listener.message(Wire.objectOf("requestId" to "no type"))
+
+        assertFalse(repository.state.value.connected)
+        assertNotNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun requestErrorsAreTypedByKind() = runTest {
+        val transport = Transport()
+        reloading(transport)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+
+        // No reply: the reload may have run.
+        val timedOut = async { repository.reloadSession("session") }
+        advanceTimeBy(60_001)
+        runCurrent()
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unknown), timedOut.await())
+
+        val lost = async { repository.reloadSession("session") }
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertEquals(ReloadResult.Failed(ReloadFailure.ConnectionFailure), lost.await())
+    }
+
+    @Test
+    fun connectionsDroppedRightAfterReadyGrowTheBackoffAndStopAfterFive() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val working = transport.response
+        // The Mac accepts each connection and drops it before answering anything.
+        transport.response = { null }
+        transport.listener.failed(true, R.string.remote_connection_error)
+
+        val waits = mutableListOf<Long>()
+        repeat(MAX_SHORT_LIVED_CONNECTIONS) {
+            val wait = repository.state.value.reconnectAt!! - testScheduler.currentTime
+            waits += wait
+            val connects = transport.connects
+            advanceTimeBy(wait)
+            runCurrent()
+            assertEquals(connects + 1, transport.connects)
+            assertTrue(repository.state.value.connected)
+            advanceTimeBy(500)
+            transport.listener.failed(true, R.string.remote_connection_error)
+        }
+
+        // The ready connections did not reset the backoff.
+        assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L), waits)
+        assertNull(repository.state.value.reconnectAt)
+        assertEquals(R.string.remote_unreachable, repository.state.value.error)
+        val connects = transport.connects
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        // Retry still connects, and the first answered request resets the backoff.
+        transport.response = working
+        repository.refresh()
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+    }
+
+    @Test
+    fun stoppedReconnectsResumeOnTheNextForegroundOrNetworkSignal() = runTest {
+        for (signal in listOf("foreground", "network")) {
+            val transport = Transport().also { configure(it) }
+            val repository = chatRepository(transport)
+            transport.response = { null }
+            transport.listener.failed(true, R.string.remote_connection_error)
+            repeat(MAX_SHORT_LIVED_CONNECTIONS) {
+                advanceTimeBy(repository.state.value.reconnectAt!! - testScheduler.currentTime)
+                runCurrent()
+                transport.listener.failed(true, R.string.remote_connection_error)
+            }
+            assertNull(signal, repository.state.value.reconnectAt)
+            val connects = transport.connects
+
+            if (signal == "foreground") {
+                repository.setForeground(false)
+                repository.setForeground(true)
+            } else repository.setValidatedNetwork("cellular")
+            // A network change reconnects after the first, reset step of the backoff.
+            advanceTimeBy(1_000)
+            runCurrent()
+
+            assertEquals(signal, connects + 1, transport.connects)
+            assertTrue(signal, repository.state.value.connected)
+        }
+    }
+
+    @Test
+    fun connectionsBrokenAfterTheirFirstAnswerGrowTheBackoffAndStopAfterFive() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        assertTrue(repository.state.value.connected)
+
+        // Every connection answers its requests and then gets a frame this app cannot read.
+        fun breakConnection() {
+            transport.listener.broken()
+            transport.listener.failed(true, R.string.remote_connection_error)
+        }
+        breakConnection()
+        val waits = mutableListOf<Long>()
+        repeat(MAX_BROKEN_CONNECTIONS - 1) {
+            val wait = repository.state.value.reconnectAt!! - testScheduler.currentTime
+            waits += wait
+            val connects = transport.connects
+            val sent = transport.sent.size
+            advanceTimeBy(wait)
+            runCurrent()
+            assertEquals(connects + 1, transport.connects)
+            assertTrue(repository.state.value.connected)
+            // The reconnect answered requests, which proves it, but it breaks again.
+            assertTrue(transport.sent.size > sent)
+            advanceTimeBy(500)
+            breakConnection()
+        }
+
+        // The answered requests did not reset the backoff of the broken connections.
+        assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L), waits)
+        assertNull(repository.state.value.reconnectAt)
+        assertEquals(R.string.remote_unreachable, repository.state.value.error)
+        val connects = transport.connects
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        // Retry still connects; a connection that stays up ends the run of broken ones.
+        repository.refresh()
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        advanceTimeBy(CONNECTION_PROVEN_MILLIS)
+        runCurrent()
+        breakConnection()
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        breakConnection()
+        assertEquals(2_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+
+        // A plain drop after an answer still starts the backoff from the beginning.
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+    }
+
+    @Test
+    fun backoffResetsOnlyAfterAnAnsweredRequestOrThirtySecondsUp() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val working = transport.response
+        transport.response = { null }
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+
+        // Up for six seconds without an answer: no longer short-lived, but not proven either.
+        advanceTimeBy(1_000)
+        runCurrent()
+        advanceTimeBy(6_000)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(2_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+
+        // Up for thirty seconds proves the connection even without an answer.
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        // A frame after the reads went out: they are slow, not on a dead socket.
+        transport.listener.message(Wire.objectOf("type" to "relay.notice"))
+        advanceTimeBy(CONNECTION_PROVEN_MILLIS)
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+
+        // An answered request proves it at once, even if the connection drops right after.
+        advanceTimeBy(1_000)
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(2_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+        transport.response = working
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        assertEquals(1_000L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+    }
+
+    private fun pairingCode() =
+        "pi-remote://pair#" + Wire.encode(
+            Wire.objectOf(
+                "v" to 1,
+                "relay" to "https://relay.test",
+                "routeId" to Wire.random(),
+                "pairId" to Wire.random(),
+                "secret" to Wire.random(32),
+                "expiresAt" to 1,
+            ).toString().toByteArray()
+        )
+
+    private suspend fun TestScope.pairingRepository(
+        transport: Transport,
+        pairings: Pairings = Pairings(emptyList()),
+    ): DefaultRemoteRepository {
+        Diagnostics.clear()
+        Diagnostics.clock = { testScheduler.currentTime }
+        val repository = repository(transport, hosts = emptyList(), pairings = pairings)
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        return repository
+    }
+
+    @Test
+    fun pairingNotApprovedInTimeSaysSoAndClearsTheDeadline() = runTest {
+        try {
+            val transport = Transport().also { configure(it) }
+            val repository = pairingRepository(transport)
+            val started = testScheduler.currentTime
+            val pairing = async { repository.pair(pairingCode()) }
+            runCurrent()
+            assertTrue(repository.state.value.loading)
+            assertNull(repository.state.value.pairingDeadline)
+
+            advanceTimeBy(2_000)
+            transport.listener.approval()
+            assertEquals(R.string.remote_approval, repository.state.value.connection)
+            assertEquals(started + PAIRING_TIMEOUT_MILLIS, repository.state.value.pairingDeadline)
+
+            advanceTimeBy(PAIRING_TIMEOUT_MILLIS)
+            runCurrent()
+            assertNull(pairing.await())
+            assertEquals(R.string.remote_pairing_timeout, repository.state.value.error)
+            assertNull(repository.state.value.pairingDeadline)
+            assertFalse(repository.state.value.loading)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun pairingTimeoutReportedByTheTransportKeepsItsText() = runTest {
+        try {
+            val transport = Transport().also { configure(it) }
+            val repository = pairingRepository(transport)
+            val pairing = async { repository.pair(pairingCode()) }
+            runCurrent()
+            transport.listener.approval()
+            transport.listener.failed(false, R.string.remote_pairing_timeout)
+            runCurrent()
+            assertNull(pairing.await())
+            assertEquals(R.string.remote_pairing_timeout, repository.state.value.error)
+            assertNull(repository.state.value.pairingDeadline)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun approvedPairingClearsTheDeadline() = runTest {
+        try {
+            val transport = Transport().also { configure(it) }
+            val repository = pairingRepository(transport)
+            val pairing = async { repository.pair(pairingCode()) }
+            runCurrent()
+            transport.listener.approval()
+            assertNotNull(repository.state.value.pairingDeadline)
+
+            val paired = PairedHost(transport.pairing!!.text("routeId"), "https://relay.test", "device", "secret", "Mac")
+            transport.listener.persistPairing(paired)
+            transport.listener.paired(paired)
+            runCurrent()
+
+            assertEquals(RemoteSelection(paired.routeId), pairing.await())
+            assertNull(repository.state.value.pairingDeadline)
+            assertTrue(repository.state.value.connected)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun cancelPairingEndsThePairingWithoutAnError() = runTest {
+        try {
+            val transport = Transport().also { configure(it) }
+            val repository = pairingRepository(transport)
+            val pairing = async { repository.pair(pairingCode()) }
+            runCurrent()
+            transport.listener.approval()
+            val closes = transport.closes
+
+            repository.cancelPairing()
+            runCurrent()
+
+            assertNull(pairing.await())
+            assertTrue(transport.closes > closes)
+            assertFalse(repository.state.value.loading)
+            assertNull(repository.state.value.pairingDeadline)
+            assertNull(repository.state.value.error)
+            assertEquals(R.string.remote_offline, repository.state.value.connection)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun pairingCancelledDuringItsWriteDoesNotStayPaired() = runTest {
+        try {
+            val transport = Transport().also { configure(it) }
+            val pairings = Pairings(emptyList())
+            val repository = pairingRepository(transport, pairings)
+            val pairing = async { repository.pair(pairingCode()) }
+            runCurrent()
+            transport.listener.approval()
+            val paired = PairedHost(transport.pairing!!.text("routeId"), "https://relay.test", "device", "secret", "Mac")
+            pairings.afterSave = { repository.cancelPairing() }
+
+            // The transport then never acknowledges the pairing to the Mac.
+            assertTrue(runCatching { transport.listener.persistPairing(paired) }.isFailure)
+            runCurrent()
+
+            assertNull(pairing.await())
+            assertEquals(emptyList<PairedHost>(), pairings.hosts)
+            assertEquals(emptyList<PairedHost>(), repository.state.value.hosts)
+            assertFalse(repository.state.value.loading)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun failedPairingsNeverReconnectAutomatically() = runTest {
+        try {
+            for (error in listOf(R.string.remote_connection_error, R.string.remote_storage_error, R.string.remote_denied)) {
+                val transport = Transport().also { configure(it) }
+                val repository = pairingRepository(transport)
+                val pairing = async { repository.pair(pairingCode()) }
+                runCurrent()
+                transport.listener.approval()
+                // Even when asked to reconnect, a failed pairing has no host to return to.
+                transport.listener.failed(true, error)
+                runCurrent()
+                assertNull(pairing.await())
+                assertEquals(error, repository.state.value.error)
+                assertNull(repository.state.value.reconnectAt)
+                assertNull(repository.state.value.pairingDeadline)
+                val connects = transport.connects
+                advanceTimeBy(120_000)
+                runCurrent()
+                assertEquals(connects, transport.connects)
+            }
+        } finally {
+            Diagnostics.clear()
+        }
     }
 }

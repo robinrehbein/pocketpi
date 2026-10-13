@@ -2,7 +2,6 @@ package de.joinnoah.pi.remote
 
 import android.Manifest
 import android.animation.ValueAnimator
-import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
 import android.os.Build
 import android.widget.Toast
@@ -47,6 +46,7 @@ import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.LaptopMac
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -1803,7 +1803,8 @@ internal fun RemoteScreen(
                             onClick = {
                                 try {
                                     uriHandler.openUri(PRIVACY_POLICY_URL)
-                                } catch (_: ActivityNotFoundException) {
+                                } catch (_: IllegalArgumentException) {
+                                    // No app opens the link; the URI handler wraps ActivityNotFoundException.
                                     Toast.makeText(context, unavailable, Toast.LENGTH_SHORT).show()
                                 }
                             },
@@ -1813,6 +1814,25 @@ internal fun RemoteScreen(
                             Text(stringResource(R.string.remote_settings_privacy_open))
                         }
                     }
+                }
+                item {
+                    var diagnosticsOpen by rememberSaveable { mutableStateOf(false) }
+                    Section(stringResource(R.string.remote_diagnostics_title)) {
+                        Text(
+                            stringResource(R.string.remote_diagnostics_help),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TextButton(
+                            onClick = { diagnosticsOpen = true },
+                            modifier = Modifier.testTag("openDiagnostics"),
+                        ) {
+                            Icon(Icons.Default.Speed, contentDescription = null)
+                            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                            Text(stringResource(R.string.remote_diagnostics_open))
+                        }
+                    }
+                    if (diagnosticsOpen) DiagnosticsDialog(onDismiss = { diagnosticsOpen = false })
                 }
             } else {
                 if (

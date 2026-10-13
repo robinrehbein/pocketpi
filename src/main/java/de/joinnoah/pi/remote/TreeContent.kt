@@ -253,26 +253,27 @@ internal fun treeFailure(e: Exception, navigating: Boolean = false): TreeFailure
     when (e) {
         is TreeException -> e.failure
         is RemoteRequestException ->
-            when (e.code) {
-                "busy" -> TreeFailure.BUSY
-                "cancelled" -> TreeFailure.CANCELLED
-                "unsupported" -> TreeFailure.UNSUPPORTED
-                "not_found" -> TreeFailure.NOT_FOUND
-                "invalid_request" -> TreeFailure.INVALID
-                "offline" -> TreeFailure.OFFLINE
-                "timeout" -> TreeFailure.UNKNOWN_RESULT
-                // Other internal errors (no model for a summary, ...) are clean failures.
-                "internal" ->
-                    if (e.hostMessage?.startsWith(NAVIGATION_UNKNOWN_PREFIX) == true) TreeFailure.UNKNOWN_RESULT
-                    else TreeFailure.FAILED
-                else -> TreeFailure.FAILED
-            }
-        is IllegalStateException ->
-            when {
-                e.message == "Request timed out" -> TreeFailure.UNKNOWN_RESULT
+            when (e.kind) {
+                RemoteRequestException.Kind.UNSUPPORTED -> TreeFailure.UNSUPPORTED
+                // The request may have reached the host without its reply reaching the phone.
+                RemoteRequestException.Kind.TIMEOUT -> TreeFailure.UNKNOWN_RESULT
                 // The reply of a move may have been lost with the connection.
-                navigating && e.message == "Connection lost" -> TreeFailure.UNKNOWN_RESULT
-                else -> TreeFailure.FAILED
+                RemoteRequestException.Kind.CONNECTION_LOST ->
+                    if (navigating) TreeFailure.UNKNOWN_RESULT else TreeFailure.FAILED
+                RemoteRequestException.Kind.HOST_ERROR ->
+                    when (e.code) {
+                        "busy" -> TreeFailure.BUSY
+                        "cancelled" -> TreeFailure.CANCELLED
+                        "not_found" -> TreeFailure.NOT_FOUND
+                        "invalid_request" -> TreeFailure.INVALID
+                        "offline" -> TreeFailure.OFFLINE
+                        "timeout" -> TreeFailure.UNKNOWN_RESULT
+                        // Other internal errors (no model for a summary, ...) are clean failures.
+                        "internal" ->
+                            if (e.hostMessage?.startsWith(NAVIGATION_UNKNOWN_PREFIX) == true) TreeFailure.UNKNOWN_RESULT
+                            else TreeFailure.FAILED
+                        else -> TreeFailure.FAILED
+                    }
             }
         else -> TreeFailure.FAILED
     }
@@ -298,13 +299,14 @@ internal fun treeFailureText(failure: TreeFailure): Int =
         TreeFailure.PROTOCOL, TreeFailure.FAILED -> R.string.remote_tree_failed
     }
 
-/** The error shown when the host refuses a fork from a tree node with [code]. */
+/** The error shown when a fork from a tree node fails with [e]. */
 @StringRes
-internal fun treeForkError(code: String?): Int =
-    when (code) {
-        "busy" -> R.string.remote_fork_busy
-        "unsupported" -> R.string.remote_tree_unsupported
-        "not_found" -> R.string.remote_tree_fork_not_found
-        "invalid_request" -> R.string.remote_tree_fork_invalid
-        else -> R.string.remote_request_error
-    }
+internal fun treeForkError(e: Exception): Int =
+    if (e.isUnsupported) R.string.remote_tree_unsupported
+    else
+        when (e.hostCode) {
+            "busy" -> R.string.remote_fork_busy
+            "not_found" -> R.string.remote_tree_fork_not_found
+            "invalid_request" -> R.string.remote_tree_fork_invalid
+            else -> R.string.remote_request_error
+        }

@@ -49,8 +49,10 @@ class ReloadContentTest {
         assertEquals(ReloadFailure.Failed(null), failure("internal", " "))
         assertEquals(ReloadFailure.Failed(null), failure("internal", "Reload failed"))
         assertEquals(ReloadFailure.Failed(null), failure("forbidden"))
-        assertEquals(ReloadFailure.Unknown, reloadFailure(IllegalStateException("Request timed out")))
-        assertEquals(ReloadFailure.ConnectionFailure, reloadFailure(IllegalStateException("Connection lost")))
+        assertEquals(ReloadFailure.Unknown, reloadFailure(RemoteRequestException.timeout()))
+        assertEquals(ReloadFailure.ConnectionFailure, reloadFailure(RemoteRequestException.connectionLost()))
+        assertEquals(ReloadFailure.Unsupported, reloadFailure(RemoteRequestException.unsupported()))
+        assertEquals(ReloadFailure.ConnectionFailure, reloadFailure(IllegalStateException("Request timed out")))
         assertTrue(reloadResultUnknown(ReloadFailure.Unknown))
         assertFalse(reloadResultUnknown(ReloadFailure.Busy))
     }

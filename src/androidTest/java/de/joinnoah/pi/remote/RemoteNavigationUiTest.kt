@@ -62,14 +62,24 @@ class RemoteNavigationUiTest {
                             val settings = UiSettingsRepository().also { uiSettings = it }
                             val content: @Composable () -> Unit = {
                                 val base = androidx.compose.ui.platform.LocalConfiguration.current
-                                // A Book Cover Keyboard for the tests that ask for one, whatever the emulator has.
+                                // A Book Cover Keyboard for the tests that ask for one and none for the
+                                // others, whatever the emulator has. The managed emulators report a
+                                // QWERTY keyboard, and with one a chat opens with the composer focused,
+                                // which there also brings up the on-screen keyboard: the touch tests
+                                // would then run with the IME open and Back closing it first.
+                                val keyboard = hardwareKeyboard.value
                                 val configuration =
-                                    if (!hardwareKeyboard.value) base
-                                    else
+                                    remember(base, keyboard) {
                                         android.content.res.Configuration(base).apply {
-                                            keyboard = android.content.res.Configuration.KEYBOARD_QWERTY
-                                            hardKeyboardHidden = android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
+                                            if (keyboard) {
+                                                this.keyboard = android.content.res.Configuration.KEYBOARD_QWERTY
+                                                hardKeyboardHidden = android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
+                                            } else {
+                                                this.keyboard = android.content.res.Configuration.KEYBOARD_NOKEYS
+                                                hardKeyboardHidden = android.content.res.Configuration.HARDKEYBOARDHIDDEN_YES
+                                            }
                                         }
+                                    }
                                 CompositionLocalProvider(androidx.compose.ui.platform.LocalConfiguration provides configuration) {
                                     RemoteApp(
                                         fresh,
@@ -229,6 +239,7 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    @LargeScreen
     fun followUpWarningsCanBeDismissedButPendingCannot() {
         openChat()
         val pending = PendingFollowUp(Wire.random(), "still queued")
@@ -456,6 +467,7 @@ class RemoteNavigationUiTest {
 
     @Test
     @Suppress("DEPRECATION")
+    @LargeScreen
     fun systemBarIconsFollowDeviceAppearanceForBothDesigns() {
         for (theme in listOf("system", "synthwave", "system")) {
             compose.runOnIdle { uiSettings.setTheme(theme) }
@@ -1779,6 +1791,7 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    @LargeScreen
     fun savedActivityStateAndFreshViewModelsRestoreIdsAndEncryptedDraftWithoutPromptReplay() {
         openChat()
         compose

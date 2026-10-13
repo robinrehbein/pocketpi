@@ -312,9 +312,14 @@ class TreeContentTest {
             TreeFailure.FAILED,
             treeFailure(RemoteRequestException("internal", hostMessage = "No model available for summarization")),
         )
-        assertEquals(TreeFailure.UNKNOWN_RESULT, treeFailure(IllegalStateException("Request timed out")))
-        assertEquals(TreeFailure.UNKNOWN_RESULT, treeFailure(IllegalStateException("Connection lost"), navigating = true))
-        assertEquals(TreeFailure.FAILED, treeFailure(IllegalStateException("Connection lost")))
+        // A timed-out fork or move may have happened; a lost reply only matters for a move.
+        assertEquals(TreeFailure.UNKNOWN_RESULT, treeFailure(RemoteRequestException.timeout()))
+        assertEquals(TreeFailure.UNKNOWN_RESULT, treeFailure(RemoteRequestException.timeout(), navigating = true))
+        assertEquals(TreeFailure.UNKNOWN_RESULT, treeFailure(RemoteRequestException.connectionLost(), navigating = true))
+        assertEquals(TreeFailure.FAILED, treeFailure(RemoteRequestException.connectionLost()))
+        assertEquals(TreeFailure.UNSUPPORTED, treeFailure(RemoteRequestException.unsupported()))
+        // Only the typed kinds count; a plain exception with the same message is a clean failure.
+        assertEquals(TreeFailure.FAILED, treeFailure(IllegalStateException("Request timed out")))
         assertEquals(R.string.remote_tree_load_not_found, treeLoadFailureText(TreeFailure.NOT_FOUND))
         assertEquals(R.string.remote_tree_busy, treeLoadFailureText(TreeFailure.BUSY))
         assertEquals(TreeFailure.FAILED, treeFailure(IllegalStateException("other")))
@@ -327,11 +332,13 @@ class TreeContentTest {
 
     @Test
     fun forkFromANodeHasItsOwnErrors() {
-        assertEquals(R.string.remote_fork_busy, treeForkError("busy"))
-        assertEquals(R.string.remote_tree_unsupported, treeForkError("unsupported"))
-        assertEquals(R.string.remote_tree_fork_not_found, treeForkError("not_found"))
-        assertEquals(R.string.remote_tree_fork_invalid, treeForkError("invalid_request"))
-        assertEquals(R.string.remote_request_error, treeForkError("internal"))
-        assertEquals(R.string.remote_request_error, treeForkError(null))
+        assertEquals(R.string.remote_fork_busy, treeForkError(RemoteRequestException("busy")))
+        assertEquals(R.string.remote_tree_unsupported, treeForkError(RemoteRequestException("unsupported")))
+        assertEquals(R.string.remote_tree_unsupported, treeForkError(RemoteRequestException.unsupported()))
+        assertEquals(R.string.remote_tree_fork_not_found, treeForkError(RemoteRequestException("not_found")))
+        assertEquals(R.string.remote_tree_fork_invalid, treeForkError(RemoteRequestException("invalid_request")))
+        assertEquals(R.string.remote_request_error, treeForkError(RemoteRequestException("internal")))
+        assertEquals(R.string.remote_request_error, treeForkError(RemoteRequestException.timeout()))
+        assertEquals(R.string.remote_request_error, treeForkError(IllegalStateException()))
     }
 }

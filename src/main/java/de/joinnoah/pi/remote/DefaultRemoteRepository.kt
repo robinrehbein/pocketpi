@@ -55,11 +55,75 @@ private val DENIED_DEVICE_ERRORS =
     setOf(R.string.remote_device_revoked, R.string.remote_device_paused)
 private val CONNECTION_ERRORS =
     setOf(R.string.remote_connection_error, R.string.remote_unreachable) + DENIED_DEVICE_ERRORS
+/** The connection lines of an attempt that is under way and has not heard from the Mac yet. */
+private val ATTEMPT_LINES = setOf(R.string.remote_connecting, R.string.remote_reconnecting)
 private const val RECONNECT_BASE_MILLIS = 1_000L
 private const val RECONNECT_MAX_MILLIS = 30_000L
 private const val RECONNECT_JITTER = 0.2
 private const val UNREACHABLE_AFTER_FAILURES = 3
+
+/** A connection is proven by its first successful request, or by staying up this long. */
+internal const val CONNECTION_PROVEN_MILLIS = 30_000L
+
+/** An unproven connection that fails sooner than this after ready counts as short-lived. */
+internal const val SHORT_LIVED_CONNECTION_MILLIS = 5_000L
+
+/** Automatic reconnects stop after this many short-lived connections in a row. */
+internal const val MAX_SHORT_LIVED_CONNECTIONS = 5
+
+/**
+ * Automatic reconnects stop after this many connections in a row that an unreadable frame ended
+ * before they stayed up for [CONNECTION_PROVEN_MILLIS].
+ */
+internal const val MAX_BROKEN_CONNECTIONS = 5
+
+/** At most one snapshot per this interval for events of unknown kinds or malformed ones. */
+internal const val RESYNC_INTERVAL_MILLIS = 10_000L
 private const val SERVICE_RESTART_CLOSE_CODE = 1012
+/** connect() outlasts the transport's own handshake timeout, so only one of them fires. */
+internal const val CONNECT_READY_WAIT_MILLIS = HANDSHAKE_TIMEOUT_MILLIS + 2_000L
+/** The relay answered but the Mac has not, after this long: say so instead of "Connecting…". */
+internal const val HOST_WAIT_HINT_MILLIS = 5_000L
+
+/**
+ * The first failure of a streak reconnects quietly; the error card follows only if the Mac is
+ * still unreachable this long after it, or at once on the next failure.
+ */
+internal const val QUIET_RECONNECT_MILLIS = 5_000L
+
+/** The default wait for a request's reply. */
+internal const val REQUEST_TIMEOUT_MILLIS = 30_000L
+
+/**
+ * Idempotent reads that tell whether the socket is alive: one that times out with no frame since
+ * it was sent ends the connection. Tool output, media, attachment and export reads queue behind
+ * each other on the host and may stay silent for long, so their timeouts never do.
+ */
+private val LIVENESS_READS =
+    setOf(
+        "projects.list",
+        "sessions.list",
+        "session.snapshot",
+        "session.configuration.get",
+        "session.commands.get",
+        "session.advisor.get",
+        "session.context.get",
+    )
+
+/** Why the connection ended, which decides how soon and how quietly it comes back. */
+private enum class FailureCause {
+    /** The transport failed or the relay closed the socket. */
+    LOST,
+
+    /** A liveness read timed out with no frame since it was sent: the socket is dead. */
+    STALE,
+
+    /** Android moved to another network, so the old socket is gone. */
+    NETWORK_REPLACED,
+
+    /** The handshake did not finish in time. */
+    HANDSHAKE_TIMEOUT,
+}
 
 internal fun opaqueId(value: String): Boolean =
     value.isNotEmpty() &&
@@ -96,6 +160,14 @@ internal fun validatedToolOutputChunk(
     return ValidatedToolOutputChunk(total, bytes, data.flag("truncated"), data.flag("isError"))
 }
 
+/**
+ * The app's single connection to a paired Mac and the state the UI renders from it.
+ *
+ * Threading: all mutable state, [state] writes included, is confined to the main thread. The
+ * [scope] runs on `Dispatchers.Main.immediate` in the app, transport callbacks arrive on it, and
+ * only storage work hops to [io] and back. That is why `update {}` may read, modify and write
+ * without a lock; debug builds check it there (see [checkMainThread]).
+ */
 class DefaultRemoteRepository(
     private val pairings: PairingStorage,
     private val draftStorage: DraftStorage,
@@ -197,18 +269,57 @@ class DefaultRemoteRepository(
     private var activeHost: PairedHost? = null
     private var ready: CompletableDeferred<Unit>? = null
     private var pairing: CompletableDeferred<PairedHost>? = null
+    /** When the running pairing started, by [Diagnostics.now]; its deadline counts from here. */
+    private var pairingStartedAt: Long? = null
     private var retry: Job? = null
     private var recoveryJob: Job? = null
     private var deferredRecovery: RemoteRecovery.Signal? = null
     private var reconnectAttempts = 0
     private var failureStreak = 0
+    /** When the current connection became ready, by [now]; null while there is none. */
+    private var readyAt: Long? = null
+    /** The current connection answered a request or stayed up; only that resets the backoff. */
+    private var connectionProven = false
+    private var provenTimer: Job? = null
+    /** Connections in a row that failed within [SHORT_LIVED_CONNECTION_MILLIS] of ready. */
+    private var shortLivedConnections = 0
+    /**
+     * Connections in a row that an unreadable frame ended. A reply does not reset this, since a
+     * host can answer once and then break every connection the same way; staying up does.
+     */
+    private var brokenConnections = 0
+    /** The transport reported that an unreadable frame ends the current connection. */
+    private var brokenTeardown = false
     private var serviceRestart = false
+    /** When the connection was lost, for the offline interval Diagnostics records on ready(). */
+    private var offlineSince: Long? = null
+    /**
+     * Counts the frames that arrived, so a read can tell whether any came after it was sent. A
+     * counter, not a clock: a read sent in the same millisecond as a frame must not count it.
+     */
+    private var inboundFrames = 0L
+    /** When the app last went to the background, by [now]; null while it never did. */
+    private var backgroundedAt: Long? = null
+    /** Raises the error card once a quiet reconnect has taken [QUIET_RECONNECT_MILLIS]. */
+    private var quietReconnect: Job? = null
+    /**
+     * The Mac whose handshake timed out, which clears [activeHost]: its retry is a reconnect to the
+     * same Mac, not a switch that resets the failure streak and the quiet-reconnect timer.
+     */
+    private var timedOutRoute: String? = null
+    private var hostWaitHint: Job? = null
+    /** Whether the current attempt reached the relay and the Mac has been silent for the hint delay. */
+    private var macSilent = false
     private var restartRetryUsed = false
     private var reconnectEnabled = true
     /** The selection the latest activation was opening, whether or not it got selected. */
     private var requestedSelection: RemoteSelection? = null
     private val recovery = RemoteRecovery()
     private var timeline: Timeline? = null
+    /** When the latest snapshot for an unknown or malformed event started, by [now]. */
+    private var lastResyncAt: Long? = null
+    private var resyncJob: Job? = null
+    private var resyncEpoch = -1L
     private var noticeCount = 0L
     private data class CachedSessions(
         val routeId: String,
@@ -293,7 +404,8 @@ class DefaultRemoteRepository(
             val hosts =
                 try {
                     withContext(io) { pairings.load() }.also { pairingsLoaded = true }
-                } catch (_: Exception) {
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("repo.loadPairings", swallowed)
                     reportError(R.string.remote_storage_error)
                     null
                 }
@@ -307,7 +419,8 @@ class DefaultRemoteRepository(
                                 .filterKeys { it in allowed && it !in removedRoutes }
                         )
                         navigationLoaded = true
-                    } catch (_: Exception) {
+                    } catch (swallowed: Exception) {
+                        Diagnostics.caught("repo.loadNavigation", swallowed)
                         reportError(R.string.remote_storage_error)
                     }
                 }
@@ -322,6 +435,7 @@ class DefaultRemoteRepository(
                 draftsAvailable = true
                 cleanupAttachments()
             } catch (e: Exception) {
+                Diagnostics.caught("repo.loadDrafts", e)
                 storageFailure = e
                 reportError(R.string.remote_storage_error)
             }
@@ -337,6 +451,7 @@ class DefaultRemoteRepository(
                     } else storageFailure?.let { throw it }
                     write.done.complete(Unit)
                 } catch (e: Exception) {
+                    Diagnostics.caught("repo.writeDrafts", e)
                     storageFailure = e
                     reportError(R.string.remote_storage_error)
                     write.done.completeExceptionally(e)
@@ -354,10 +469,13 @@ class DefaultRemoteRepository(
                                 write.version == navigationVersion
                         ) {
                             val snapshots = savedNavigation.toMap()
-                            withContext(io) { navigationStorage?.save(snapshots) }
+                            withContext(io) {
+                                Diagnostics.trace("PocketPi.nav.save") { navigationStorage?.save(snapshots) }
+                            }
                         }
                     }
-                } catch (_: Exception) {
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("repo.writeNavigation", swallowed)
                     reportError(R.string.remote_storage_error)
                 }
             }
@@ -368,8 +486,25 @@ class DefaultRemoteRepository(
                     serviceRestart = code == SERVICE_RESTART_CLOSE_CODE
                 }
 
+                override fun broken() {
+                    brokenTeardown = true
+                }
+
+                override fun progress(phase: HandshakePhase) {
+                    handshakeProgress(phase)
+                }
+
                 override fun ready(capabilities: Set<String>) {
-                    resetReconnect()
+                    inboundFrames++
+                    cancelHostWaitHint()
+                    cancelQuietReconnect()
+                    offlineSince?.let {
+                        Diagnostics.record(Diagnostics.Kind.OFFLINE, "reconnected", Diagnostics.now() - it)
+                    }
+                    offlineSince = null
+                    // The backoff resets only once this connection proves itself, so a host that
+                    // accepts and then drops connections at once does not cause a tight loop.
+                    connectionReady()
                     capabilityRoute = CAPABILITIES_V2_ROUTE
                     update {
                         it.copy(
@@ -386,7 +521,12 @@ class DefaultRemoteRepository(
                 }
 
                 override fun approval() {
-                    update { it.copy(connection = R.string.remote_approval) }
+                    update {
+                        it.copy(
+                            connection = R.string.remote_approval,
+                            pairingDeadline = pairingStartedAt?.let { started -> started + PAIRING_TIMEOUT_MILLIS },
+                        )
+                    }
                 }
 
                 override suspend fun persistPairing(host: PairedHost) = pairingWrites.withLock {
@@ -399,8 +539,19 @@ class DefaultRemoteRepository(
                     try {
                         withContext(io) { pairings.save(hosts) }
                     } catch (e: Exception) {
+                        Diagnostics.caught("repo.persistPairing", e)
                         reportError(R.string.remote_storage_error)
                         throw e
+                    }
+                    if (pairing?.isActive != true) {
+                        // Cancelled during the write: the Mac never gets pair.ack, so the host
+                        // must not stay paired here either.
+                        try {
+                            withContext(io) { pairings.save(state.value.hosts) }
+                        } catch (e: Exception) {
+                            Diagnostics.caught("repo.persistPairing.rollback", e)
+                        }
+                        error("Pairing cancelled")
                     }
                     checkEpoch(epoch)
                     update { it.copy(hosts = hosts) }
@@ -411,18 +562,84 @@ class DefaultRemoteRepository(
                 }
 
                 override fun message(payload: JsonObject) {
+                    inboundFrames++
                     receive(payload)
                 }
 
                 override fun failed(reconnect: Boolean, error: Int) {
-                    this@DefaultRemoteRepository.failed(reconnect, error)
+                    val broken = brokenTeardown
+                    brokenTeardown = false
+                    this@DefaultRemoteRepository.failed(reconnect, error, broken)
                 }
             }
     }
 
     private fun update(block: (RemoteState) -> RemoteState) {
+        checkMainThread()
         mutable.value = block(mutable.value)
     }
+
+    /**
+     * Once the relay is reached and the Mac stays silent for [HOST_WAIT_HINT_MILLIS], the
+     * connection line says the app waits for the Mac; any later phase puts "Connecting…" back.
+     */
+    private fun handshakeProgress(phase: HandshakePhase) {
+        cancelHostWaitHint()
+        if (state.value.connection == R.string.remote_waiting_for_mac)
+            update { it.copy(connection = attemptLine()) }
+        if (phase != HandshakePhase.CHALLENGE) return
+        hostWaitHint = scope.launch {
+            delay(HOST_WAIT_HINT_MILLIS)
+            macSilent = true
+            if (!state.value.connected && state.value.connection in ATTEMPT_LINES)
+                update { it.copy(connection = R.string.remote_waiting_for_mac) }
+        }
+    }
+
+    private fun cancelHostWaitHint() {
+        hostWaitHint?.cancel()
+        hostWaitHint = null
+        macSilent = false
+    }
+
+    /**
+     * The connection line while [host] is not connected: an activation that joins an attempt
+     * still waiting on a silent Mac keeps the hint, since no new phase will bring it back.
+     */
+    private fun connectingLine(host: PairedHost) =
+        if (macSilent && ready?.isActive == true && activeHost?.routeId == host.routeId)
+            R.string.remote_waiting_for_mac
+        else attemptLine()
+
+    /** "Reconnecting…" while the last-known state stays on screen, "Connecting…" otherwise. */
+    private fun attemptLine() =
+        if (state.value.stale) R.string.remote_reconnecting else R.string.remote_connecting
+
+    /** Whether the state on screen belongs to [routeId], so a reconnect to it may keep it. */
+    private fun showsRoute(routeId: String?) = routeId != null && state.value.host?.routeId == routeId
+
+    /**
+     * [state] without what the last connection reported about its sessions: for another Mac, or
+     * when a lost connection's state is not the one on screen.
+     */
+    private fun lastKnownCleared(state: RemoteState) =
+        state.copy(
+            stale = false,
+            staleSince = null,
+            questions = emptyList(),
+            capabilities = emptySet(),
+            capabilitiesKnown = false,
+            unavailableCapabilities = emptySet(),
+            childControlUnsupported = emptySet(),
+            configuration = null,
+            contextUsage = null,
+            contextLoading = false,
+            advisor = null,
+            advisorLoading = false,
+            advisorChanging = false,
+            commands = emptyList(),
+            status = "offline",
+        )
 
     private fun clearNavigationCache() {
         cachedProjects = null
@@ -452,7 +669,8 @@ class DefaultRemoteRepository(
             while (savedNavigation.size > 8) savedNavigation.remove(savedNavigation.keys.first())
             navigationLoaded = true
             true
-        } catch (_: Exception) {
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("repo.ensureNavigationLoaded", swallowed)
             reportError(R.string.remote_storage_error)
             false
         }
@@ -585,7 +803,8 @@ class DefaultRemoteRepository(
                         }
                     } catch (e: CancellationException) {
                         throw e
-                    } catch (_: Exception) {
+                    } catch (swallowed: Exception) {
+                        Diagnostics.caught("repo.refreshProjectChats", swallowed)
                         // A failed project request leaves its cached rows offline.
                     }
                 }
@@ -708,7 +927,8 @@ class DefaultRemoteRepository(
                 }
             } catch (_: CancellationException) {
                 throw CancellationException()
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.closeSession", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
             } finally {
                 closingSessions -= sessionId
@@ -736,7 +956,8 @@ class DefaultRemoteRepository(
                 }
             } catch (_: CancellationException) {
                 throw CancellationException()
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.unshareProject", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
             } finally {
                 unsharingProjects -= projectId
@@ -783,6 +1004,24 @@ class DefaultRemoteRepository(
 
     override fun reportError(resource: Int) = update { it.copy(error = resource) }
 
+    /** The connection is down and the connection line or card says so, or will shortly. */
+    private fun connectionDown(): Boolean =
+        state.value.let { !it.connected && (it.error == null || it.error in CONNECTION_ERRORS) }
+
+    /**
+     * Reports [resource] for a read that failed, unless it got no reply because the connection
+     * went down: the reconnect reads it again, and the error card is the connection's to raise.
+     */
+    private fun reportReadError(error: Throwable, resource: Int = R.string.remote_request_error) {
+        if (!lostWithConnection(error)) reportError(resource)
+    }
+
+    /** [error] ended a request that got no reply because the connection went down. */
+    private fun lostWithConnection(error: Throwable): Boolean =
+        (error.requestKind == RemoteRequestException.Kind.TIMEOUT ||
+            error.requestKind == RemoteRequestException.Kind.CONNECTION_LOST) &&
+            connectionDown()
+
     private fun checkEpoch(epoch: Long) {
         if (epoch != selectionEpoch) throw CancellationException("Selection changed")
     }
@@ -825,7 +1064,8 @@ class DefaultRemoteRepository(
                 contextLoading = false,
                 compactionRequesting = false,
                 commandsLoading = false,
-                toolOutput = null,
+                // A reconnect re-activates the chat on screen, and select() decides what stays.
+                toolOutput = it.toolOutput?.takeIf { output -> it.stale && output.text != null },
             )
         }
     }
@@ -853,11 +1093,14 @@ class DefaultRemoteRepository(
     private suspend fun connect(host: PairedHost, epoch: Long) {
         if (activeHost?.routeId == host.routeId && state.value.connected) return
         if (activeHost?.routeId != host.routeId || ready?.isActive != true) {
-            val previousRoute = activeHost?.routeId
+            val previousRoute = activeHost?.routeId ?: timedOutRoute
+            timedOutRoute = null
             if (previousRoute != host.routeId && markPendingFollowUpsUncertain(previousRoute)) {
                 persist().await()
             }
             if (previousRoute != host.routeId) {
+                offlineSince = null
+                cancelQuietReconnect()
                 resetReconnect()
                 clearNavigationCache()
                 attachmentBytes.clear()
@@ -872,6 +1115,8 @@ class DefaultRemoteRepository(
             projectChatCandidates.replaceAll { _, chats ->
                 chats.map { it.copy(verified = false) }
             }
+            // A connection replaced on purpose is no failure.
+            connectionEnded()
             generation++
             failFolderRequests()
             cloneStatusJob?.cancel()
@@ -886,27 +1131,21 @@ class DefaultRemoteRepository(
             sessionTitleRevisions.clear()
             sessionTitleOverrides.clear()
             ready?.cancel()
+            // A reconnect to the Mac on screen keeps its last-known state; another Mac starts empty.
+            val keep = state.value.stale && showsRoute(host.routeId)
+            val line = if (keep) R.string.remote_reconnecting else R.string.remote_connecting
             activeHost = host
             ready = CompletableDeferred()
             stopToolOutput()
             update {
-                it.copy(
+                val shown = if (keep) it else lastKnownCleared(it)
+                shown.copy(
                     connected = false,
-                    connection = R.string.remote_connecting,
+                    connection = line,
                     compaction = null,
                     compactionRequesting = false,
-                    toolOutput = null,
-                    questions = emptyList(),
-                    capabilities = emptySet(),
-                    capabilitiesKnown = false,
-                    unavailableCapabilities = emptySet(),
-                    childControlUnsupported = emptySet(),
-                    configuration = null,
-                    advisor = null,
-                    advisorLoading = false,
-                    advisorChanging = false,
-                    commands = emptyList(),
-                    status = "offline",
+                    // A finished download stays readable; a running one stopped above.
+                    toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },
                     // A login goes on on the Mac; the same host recovers it once it is reachable.
                     providerAuth =
                         if (previousRoute != host.routeId) ProviderAuthState()
@@ -923,12 +1162,14 @@ class DefaultRemoteRepository(
             }
             transport.connect(host)
         }
-        if (withTimeoutOrNull(30000) { checkNotNull(ready).await() } == null) {
+        if (withTimeoutOrNull(CONNECT_READY_WAIT_MILLIS) { checkNotNull(ready).await() } == null) {
+            Diagnostics.record(Diagnostics.Kind.FAILURE, "connect.wait", CONNECT_READY_WAIT_MILLIS, outcome = "timeout")
             if (epoch == selectionEpoch) {
                 // Goes offline and schedules the next attempt like any transport failure.
-                failed(true, R.string.remote_connection_error)
+                failed(true, R.string.remote_connection_error, cause = FailureCause.HANDSHAKE_TIMEOUT)
                 ready?.cancel()
                 ready = null
+                timedOutRoute = activeHost?.routeId
                 activeHost = null
             }
             throw IllegalStateException("Connection timed out")
@@ -943,7 +1184,7 @@ class DefaultRemoteRepository(
         draft: String? = null,
         requestId: String = Wire.random(),
         onSent: (() -> Unit)? = null,
-        timeoutMillis: Long = 30000,
+        timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
     ): JsonObject {
         checkEpoch(epoch)
         check(state.value.connected)
@@ -963,18 +1204,41 @@ class DefaultRemoteRepository(
             ),
         )
         completions[id] = completion
+        val started = Diagnostics.now()
+        val traceName = "PocketPi.req.$type"
+        val cookie = Diagnostics.beginAsync(traceName)
+        var outcome = "failed"
+        var ended: Long? = null
+        val connection = generation
+        val inboundAtSend = inboundFrames
         try {
             // Set before sending: a send that throws may still have reached the host.
             onSent?.invoke()
             transport.send(payload)
             val result =
                 withTimeoutOrNull(timeoutMillis) { completion.await() }
-                    ?: throw IllegalStateException("Request timed out")
+                    ?: run {
+                        outcome = "timeout"
+                        // Not a frame since the read went out: the socket is dead, not the host slow.
+                        if (
+                            type in LIVENESS_READS &&
+                                inboundFrames == inboundAtSend &&
+                                state.value.connected &&
+                                connection == generation
+                        )
+                            connectionStale(type)
+                        throw RemoteRequestException.timeout()
+                    }
+            outcome = "ok"
+            connectionProven()
             checkEpoch(epoch)
             if (type == "projects.list" && result.text("kind") == "projects") {
                 if (id.startsWith(CAPABILITIES_V2_ROUTE) && result["capabilities"] !is JsonArray) {
                     // A host that predates the v2 route treats the ID as opaque and sends no list.
                     capabilityRoute = CAPABILITIES_V1_ROUTE
+                    // The retry records its own round trip; this one ends here.
+                    outcome = "retry.v1"
+                    ended = Diagnostics.now()
                     return request(type, epoch, *fields, draft = draft, timeoutMillis = timeoutMillis)
                 }
                 val advertised = (result["capabilities"] as? JsonArray)
@@ -995,126 +1259,209 @@ class DefaultRemoteRepository(
                 if (PROVIDER_AUTH_CAPABILITY in merged) resumeProviderAuth()
             }
             return result
+        } catch (e: Throwable) {
+            if (outcome != "timeout") outcome = requestOutcome(e)
+            throw e
         } finally {
             requests.take(id, epoch)
             completions.remove(id)
+            Diagnostics.endAsync(traceName, cookie)
+            // The payload is ASCII JSON in all but rare cases, so its length stands for its size.
+            Diagnostics.request(type, (ended ?: Diagnostics.now()) - started, payload.toString().length.toLong(), outcome)
         }
     }
+
+    /** A request's outcome for Diagnostics: the host's error code, or what ended the wait. */
+    private fun requestOutcome(error: Throwable): String =
+        when (error) {
+            is RemoteRequestException ->
+                when (error.kind) {
+                    RemoteRequestException.Kind.TIMEOUT -> "timeout"
+                    RemoteRequestException.Kind.CONNECTION_LOST -> "lost"
+                    else -> "error." + error.code
+                }
+            is CancellationException -> "cancelled"
+            else -> error.javaClass.simpleName
+        }
 
     /** The error's `message`, shortened; only some callers read it. */
     private fun hostMessage(error: JsonObject): String? =
         (error["message"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.take(256)
 
+    /**
+     * Handles one decrypted payload. A newer host may send payload types and event kinds this app
+     * does not know: they are ignored, and a malformed event is dropped (a timeline event asks for
+     * a snapshot instead), so neither costs the connection. Only a frame without a readable type
+     * or request ID tears it down, and the reconnect follows as for any lost connection.
+     */
     private fun receive(payload: JsonObject) {
         try {
             when (payload.text("type")) {
-                "result" -> {
-                    val id = payload.text("requestId")
-                    folderCompletions.remove(id)?.let { completion ->
-                        if (payload.flag("ok")) completion.complete(payload.obj("data"))
-                        else
-                            payload.obj("error").let { error ->
-                                completion.completeExceptionally(
-                                    RemoteRequestException(error.text("code"), error["details"] as? JsonObject, hostMessage(error))
-                                )
-                            }
-                        return
-                    }
-                    requests.take(id, selectionEpoch) ?: return
-                    val completion = completions.remove(id) ?: return
-                    if (payload.flag("ok")) completion.complete(payload.obj("data"))
-                    else
-                        payload.obj("error").let { error ->
-                            completion.completeExceptionally(
-                                RemoteRequestException(error.text("code"), error["details"] as? JsonObject, hostMessage(error))
-                            )
-                        }
-                }
-                "event" -> {
-                    if (payload.text("kind") == "session.status") updateSessionStatus(payload)
-                    if (payload.text("kind") == "message.upsert" &&
-                        payload.text("sessionId") == state.value.selection.sessionId &&
-                        // A held list lease already gets session.jobs.changed for this; older hosts need the hint.
-                        !canLeaseJobsList(state.value) &&
-                        (payload["message"] as? JsonObject)?.let {
-                            it.optionalText("role") == "tool" && it.optionalText("toolName") in setOf("bash_bg", "bash_kill")
-                        } == true
-                    ) jobsController.refreshSoon()
-                    if (payload.text("kind") == "advisor.status") {
-                        val sessionId = payload.text("sessionId")
-                        if (sessionId == state.value.selection.sessionId) {
-                            // A live event is newer than any snapshot requested before it.
-                            // Invalidate that request before it can overwrite this status.
-                            advisorVersion++
-                            val status = payload.obj("advisor")
-                            val previous = state.value.advisor
-                            if (previous == null) {
-                                update { it.copy(advisorLoading = false, advisorChanging = false) }
-                                refreshAdvisor()
-                            }
-                            else {
-                                val merged = JsonObject(
-                                    status + mapOf(
-                                        "kind" to JsonPrimitive("advisor"),
-                                        "choices" to JsonArray(previous.choices.map { choice ->
-                                            buildJsonObject {
-                                                put("provider", choice.provider)
-                                                put("id", choice.id)
-                                                put("name", choice.name)
-                                                put("levels", JsonArray(choice.levels.map(::JsonPrimitive)))
-                                            }
-                                        }),
-                                    )
-                                )
-                                update { it.copy(advisor = advisor(merged, sessionId),
-                                    advisorLoading = false, advisorChanging = false) }
-                            }
-                        }
-                    }
-                    if (payload.text("kind") == "session.title") {
-                        val title = payload.text("title")
-                        val id = payload.text("sessionId")
-                        val revision = payload.long("revision")
-                        require(revision >= 0 && title.encodeToByteArray().size <= 4096)
-                        if (revision > (sessionTitleRevisions[id] ?: -1L)) {
-                            sessionTitleRevisions[id] = revision
-                            sessionTitleOverrides[id] = title
-                            if (sessionTitleRevisions.size > 4096) {
-                                val oldest = sessionTitleRevisions.keys.first()
-                                sessionTitleRevisions.remove(oldest)
-                                sessionTitleOverrides.remove(oldest)
-                            }
-                            updateSessionTitle(id, title)
-                        }
-                    }
-                    if (payload.text("kind") == "message.upsert") {
-                        messageDeliveryReceipt(payload.text("sessionId"), payload.obj("message"))
-                    }
-                    if (payload.text("kind") == "command.status") commandReceipt(payload)
-                    if (payload.text("kind") in setOf("follow_up.status", "steer.status")) followUpReceipt(payload)
-                    val timelineEvent = if (payload.text("kind") in setOf("follow_up.status", "steer.status"))
-                        JsonObject(payload + ("kind" to JsonPrimitive("command.status"))) else payload
-                    if (payload.text("kind") == "session.notice") sessionNotice(payload)
-                    if (timeline?.event(timelineEvent) == true && !resynchronizing) snapshotAsync()
-                    publishTimeline()
-                    if (payload.text("kind") == "session.compaction" &&
-                        payload.text("sessionId") == state.value.selection.sessionId &&
-                        payload.text("state") == "done") {
-                        update { it.copy(contextUsage = null) }
-                        refreshContextUsage()
-                    }
-                }
+                "result" -> receiveResult(payload)
+                "event" -> receiveEvent(payload)
                 "host.event" ->
-                    if (payload.optionalText("kind")?.startsWith("provider.auth.") == true) {
-                        receiveProviderAuthEvent(payload)
-                    } else {
-                        cloneEvent(payload)?.let(::applyCloneUpdate)
-                            ?: jobEvent(payload)?.let(jobsController::onEvent)
+                    try {
+                        if (payload.optionalText("kind")?.startsWith("provider.auth.") == true) {
+                            receiveProviderAuthEvent(payload)
+                        } else {
+                            cloneEvent(payload)?.let(::applyCloneUpdate)
+                                ?: jobEvent(payload)?.let(jobsController::onEvent)
+                        }
+                    } catch (dropped: Exception) {
+                        Diagnostics.caught("repo.receive.hostEvent", dropped)
                     }
-                else -> error("Unknown payload")
+                // A payload type from a newer host.
+                else -> Unit
             }
-        } catch (_: Exception) {
-            failed(false, R.string.remote_connection_error)
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("repo.receive", swallowed)
+            failed(true, R.string.remote_connection_error, broken = true)
+        }
+    }
+
+    private fun receiveResult(payload: JsonObject) {
+        val id = payload.text("requestId")
+        val completion =
+            folderCompletions.remove(id)
+                ?: run {
+                    requests.take(id, selectionEpoch) ?: return
+                    completions.remove(id) ?: return
+                }
+        try {
+            if (payload.flag("ok")) completion.complete(payload.obj("data"))
+            else
+                payload.obj("error").let { error ->
+                    completion.completeExceptionally(
+                        RemoteRequestException(error.text("code"), error["details"] as? JsonObject, hostMessage(error))
+                    )
+                }
+        } catch (malformed: Exception) {
+            // The request fails now instead of waiting for its timeout; the connection stays.
+            Diagnostics.caught("repo.receive.result", malformed)
+            completion.completeExceptionally(malformed)
+        }
+    }
+
+    private fun receiveEvent(payload: JsonObject) {
+        try {
+            eventEffects(payload)
+        } catch (dropped: Exception) {
+            // A malformed status, title, receipt or notice is dropped; the timeline still sees the
+            // event, so its revision stays in step.
+            Diagnostics.caught("repo.receive.event", dropped)
+        }
+        timeline?.let { current ->
+            try {
+                val timelineEvent =
+                    if (payload.optionalText("kind") in setOf("follow_up.status", "steer.status"))
+                        JsonObject(payload + ("kind" to JsonPrimitive("command.status")))
+                    else payload
+                if (current.event(timelineEvent) && !resynchronizing) snapshotAsync()
+            } catch (malformed: Exception) {
+                Diagnostics.caught("repo.receive.timeline", malformed)
+                current.unknownKindSeen = true
+            }
+            resyncAfterUnknownEvents(current)
+        }
+        publishTimeline()
+        try {
+            if (payload.optionalText("kind") == "session.compaction" &&
+                payload.optionalText("sessionId") == state.value.selection.sessionId &&
+                payload.optionalText("state") == "done") {
+                update { it.copy(contextUsage = null) }
+                refreshContextUsage()
+            }
+        } catch (dropped: Exception) {
+            Diagnostics.caught("repo.receive.compaction", dropped)
+        }
+    }
+
+    /** The parts of an event outside the timeline: statuses, titles, receipts and notices. */
+    private fun eventEffects(payload: JsonObject) {
+        if (payload.text("kind") == "session.status") updateSessionStatus(payload)
+        if (payload.text("kind") == "message.upsert" &&
+            payload.text("sessionId") == state.value.selection.sessionId &&
+            // A held list lease already gets session.jobs.changed for this; older hosts need the hint.
+            !canLeaseJobsList(state.value) &&
+            (payload["message"] as? JsonObject)?.let {
+                it.optionalText("role") == "tool" && it.optionalText("toolName") in setOf("bash_bg", "bash_kill")
+            } == true
+        ) jobsController.refreshSoon()
+        if (payload.text("kind") == "advisor.status") {
+            val sessionId = payload.text("sessionId")
+            if (sessionId == state.value.selection.sessionId) {
+                // A live event is newer than any snapshot requested before it.
+                // Invalidate that request before it can overwrite this status.
+                advisorVersion++
+                val status = payload.obj("advisor")
+                val previous = state.value.advisor
+                if (previous == null) {
+                    update { it.copy(advisorLoading = false, advisorChanging = false) }
+                    refreshAdvisor()
+                }
+                else {
+                    val merged = JsonObject(
+                        status + mapOf(
+                            "kind" to JsonPrimitive("advisor"),
+                            "choices" to JsonArray(previous.choices.map { choice ->
+                                buildJsonObject {
+                                    put("provider", choice.provider)
+                                    put("id", choice.id)
+                                    put("name", choice.name)
+                                    put("levels", JsonArray(choice.levels.map(::JsonPrimitive)))
+                                }
+                            }),
+                        )
+                    )
+                    update { it.copy(advisor = advisor(merged, sessionId),
+                        advisorLoading = false, advisorChanging = false) }
+                }
+            }
+        }
+        if (payload.text("kind") == "session.title") {
+            val title = payload.text("title")
+            val id = payload.text("sessionId")
+            val revision = payload.long("revision")
+            require(revision >= 0 && title.encodeToByteArray().size <= 4096)
+            if (revision > (sessionTitleRevisions[id] ?: -1L)) {
+                sessionTitleRevisions[id] = revision
+                sessionTitleOverrides[id] = title
+                if (sessionTitleRevisions.size > 4096) {
+                    val oldest = sessionTitleRevisions.keys.first()
+                    sessionTitleRevisions.remove(oldest)
+                    sessionTitleOverrides.remove(oldest)
+                }
+                updateSessionTitle(id, title)
+            }
+        }
+        if (payload.text("kind") == "message.upsert") {
+            messageDeliveryReceipt(payload.text("sessionId"), payload.obj("message"))
+        }
+        if (payload.text("kind") == "command.status") commandReceipt(payload)
+        if (payload.text("kind") in setOf("follow_up.status", "steer.status")) followUpReceipt(payload)
+        if (payload.text("kind") == "session.notice") sessionNotice(payload)
+    }
+
+    /**
+     * After an event of an unknown kind or a malformed one, the chat may miss what it changed, so
+     * a snapshot follows: at once, or at the end of the current [RESYNC_INTERVAL_MILLIS] window, so
+     * a host that keeps sending such events causes at most one snapshot per window.
+     */
+    private fun resyncAfterUnknownEvents(current: Timeline) {
+        if (!current.unknownKindSeen) return
+        current.unknownKindSeen = false
+        val epoch = selectionEpoch
+        if (resyncJob?.isActive == true && resyncEpoch == epoch) return
+        resyncJob?.cancel()
+        val wait =
+            lastResyncAt?.let { RESYNC_INTERVAL_MILLIS - (now() - it) }?.coerceIn(0, RESYNC_INTERVAL_MILLIS) ?: 0
+        resyncEpoch = epoch
+        resyncJob = scope.launch {
+            delay(wait)
+            if (epoch != selectionEpoch || !state.value.connected || timeline !== current) return@launch
+            lastResyncAt = now()
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "resync.unknown", wait)
+            snapshotAsync()
         }
     }
 
@@ -1240,7 +1587,7 @@ class DefaultRemoteRepository(
         val id = event.text("sessionId")
         val revision = event.long("revision")
         val status = event.text("status")
-        require(revision >= 0 && status in setOf("idle", "running", "waiting", "offline"))
+        require(revision >= 0 && status in SESSION_STATUSES)
         if (revision <= (sessionStatusRevisions[id] ?: -1L)) return
         val known =
             sessionStatusOverrides[id]
@@ -1301,42 +1648,56 @@ class DefaultRemoteRepository(
             .map { withSessionTitle(withSessionStatus(it)) }
     }
 
-    private fun publishTimeline() {
-        timeline?.let { t ->
-            if (t.status != state.value.status) state.value.selection.sessionId?.let(::dropStaleChildControl)
-            update {
-                it.copy(
-                    messages = t.messages,
-                    questions = t.questions,
-                    status = t.status,
-                    nextCursor = t.nextCursor,
-                    compaction = t.compaction,
-                )
-            }
-            cacheCurrentScreen()
+    private fun publishTimeline(): Unit = Diagnostics.trace("PocketPi.publishTimeline") {
+        val t = timeline ?: return@trace
+        if (t.status != state.value.status) state.value.selection.sessionId?.let(::dropStaleChildControl)
+        update {
+            it.copy(
+                messages = t.messages,
+                questions = t.questions,
+                status = t.status,
+                nextCursor = t.nextCursor,
+                compaction = t.compaction,
+            )
         }
+        cacheCurrentScreen()
     }
 
-    private suspend fun snapshot(epoch: Long, older: Boolean = false) {
+    /** [timeoutMillis] lets a probe give up sooner; a timeout with no frame meanwhile reconnects. */
+    private suspend fun snapshot(
+        epoch: Long,
+        older: Boolean = false,
+        timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
+    ) {
         val current = timeline ?: return
         val cursor = if (older) current.nextCursor ?: return else null
         resynchronizing = true
         try {
             val data =
                 if (cursor == null)
-                    request("session.snapshot", epoch, "sessionId" to current.sessionId)
+                    request(
+                        "session.snapshot",
+                        epoch,
+                        "sessionId" to current.sessionId,
+                        timeoutMillis = timeoutMillis,
+                    )
                 else
                     request(
                         "session.snapshot",
                         epoch,
                         "sessionId" to current.sessionId,
                         "cursor" to cursor,
+                        timeoutMillis = timeoutMillis,
                     )
             checkEpoch(epoch)
             if (current !== timeline) return
             current.snapshot(data, older)
             current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
             publishTimeline()
+            // The chat on screen is read again, also when the activation after a reconnect failed
+            // to read it and a later refresh did.
+            if (!older && state.value.connected) staleReplaced()
+            resyncAfterUnknownEvents(current)
         } finally {
             if (epoch == selectionEpoch) resynchronizing = false
         }
@@ -1348,8 +1709,9 @@ class DefaultRemoteRepository(
         scope.launch {
             try {
                 snapshot(epoch, older)
-            } catch (_: CancellationException) {} catch (_: Exception) {
-                if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
+            } catch (_: CancellationException) {} catch (swallowed: Exception) {
+                Diagnostics.caught("repo.snapshotAsync", swallowed)
+                if (epoch == selectionEpoch) reportReadError(swallowed)
             }
         }
     }
@@ -1423,12 +1785,15 @@ class DefaultRemoteRepository(
             selection.sessionId == previous.sessionId
         if (!sameSession) jobsController.stop()
         val resumedFiles = if (sameSession) null else switchParkedEditor(previous, selection)
+        // A reconnect selects the chat on screen again: what it last showed stays until the
+        // snapshot and the reads after it replace it.
+        val keep = sameSession && state.value.stale
         update {
             it.copy(
                 selection = selection,
                 compaction = null,
                 compactionRequesting = false,
-                toolOutput = null,
+                toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },
                 changes = null,
                 // A reconnect keeps an open editor, so its unsaved text survives; another session
                 // brings back its own parked edit, if any. Anything else closes the file browser.
@@ -1445,8 +1810,8 @@ class DefaultRemoteRepository(
                 sessions = sessions.map { withSessionTitle(withSessionStatus(it)) },
                 sessionsFresh = sessionsFresh,
                 session = session?.let(::withSessionTitle),
-                messages = cachedChat?.messages ?: emptyList(),
-                questions = emptyList(),
+                messages = cachedChat?.messages ?: if (keep) it.messages else emptyList(),
+                questions = if (keep) it.questions else emptyList(),
                 draft = stored.text,
                 quote = stored.quote,
                 attachments = stored.attachments,
@@ -1460,20 +1825,22 @@ class DefaultRemoteRepository(
                     if (state.value.connected && activeHost?.routeId == selection.routeId)
                         cachedChat?.status ?: session?.text("status") ?: "offline"
                     else "offline",
-                nextCursor = cachedChat?.nextCursor,
-                configuration = null,
-                contextUsage = null,
-                advisor = null,
+                nextCursor = if (cachedChat != null) cachedChat.nextCursor else if (keep) it.nextCursor else null,
+                configuration = if (keep) it.configuration else null,
+                contextUsage = if (keep) it.contextUsage else null,
+                advisor = if (keep) it.advisor else null,
                 advisorLoading = false,
                 advisorChanging = false,
                 contextLoading = false,
+                // Learned again by the reads after the selection, also after a reconnect: the host
+                // may have been updated meanwhile.
                 unavailableCapabilities = emptySet(),
                 childControlUnsupported = emptySet(),
                 configurationLoading = false,
                 configurationChanging = false,
-                commands = emptyList(),
+                commands = if (keep) it.commands else emptyList(),
                 commandsLoading = false,
-                commandsTruncated = false,
+                commandsTruncated = keep && it.commandsTruncated,
                 commandNotice = null,
                 notice = null,
             )
@@ -1519,48 +1886,64 @@ class DefaultRemoteRepository(
         stopReconnectTimer()
         requestedSelection = selection
         update { it.copy(loading = true, deniedRouteId = null) }
+        val started = Diagnostics.now()
+        val cookie = Diagnostics.beginAsync("PocketPi.activate")
+        var outcome = "failed"
+        var projectsCached = false
+        var sessionsCached = false
+        var chatCached = false
+        var cachedShown = false
         try {
             val host = state.value.hosts.find { it.routeId == selection.routeId }
             if (host == null) {
                 select(RemoteSelection(), null, emptyList())
+                outcome = "no_host"
                 return state.value.selection
             }
+            fun showCached() {
+                showCachedSelection(selection, host)
+                if (!cachedShown && state.value.selection.routeId == host.routeId && state.value.projects.isNotEmpty()) {
+                    cachedShown = true
+                    Diagnostics.record(
+                        Diagnostics.Kind.ACTIVATE,
+                        "activate.cached",
+                        Diagnostics.now() - started,
+                    )
+                }
+            }
             val alreadyConnected = state.value.connected && activeHost?.routeId == host.routeId
+            // A reconnect to the Mac on screen keeps its last-known state until it is read again.
+            val reconnecting = !alreadyConnected && state.value.stale && showsRoute(host.routeId)
             if (!alreadyConnected) {
                 stopToolOutput()
+                if (!reconnecting) update(::lastKnownCleared)
+                val line = connectingLine(host)
                 update {
                     it.copy(
                         connected = false,
-                        connection = R.string.remote_connecting,
+                        connection = line,
                         compaction = null,
                         compactionRequesting = false,
-                        toolOutput = null,
-                        questions = emptyList(),
-                        capabilities = emptySet(),
-                        capabilitiesKnown = false,
-                        unavailableCapabilities = emptySet(),
-                        childControlUnsupported = emptySet(),
-                        configuration = null,
-                        contextUsage = null,
-                        advisor = null,
-                        advisorLoading = false,
-                        advisorChanging = false,
-                        contextLoading = false,
-                        commands = emptyList(),
-                        status = "offline",
+                        // A finished download stays readable; a running one stopped above.
+                        toolOutput = it.toolOutput?.takeIf { output -> reconnecting && output.text != null },
                     )
                 }
             }
             // Explicit opens can fork historical sessions: wait for canonical IDs before
-            // changing selection, but retain cached content while the snapshot refreshes.
-            if (useCache && mode == ActivationMode.RESTORE) showCachedSelection(selection, host)
+            // changing selection, but retain cached content while the snapshot refreshes. A
+            // reconnect already shows this selection, fresher than the cache.
+            val showCache =
+                useCache && mode == ActivationMode.RESTORE &&
+                    !(reconnecting && selection == state.value.selection)
+            if (showCache) showCached()
             connect(host, epoch)
-            if (useCache && mode == ActivationMode.RESTORE) showCachedSelection(selection, host)
-            val projects =
+            if (showCache) showCached()
+            val reusedProjects =
                 cachedProjects
                     ?.takeIf { useCache && !force && alreadyConnected && it.first == host.routeId }
                     ?.second
-                    ?: request("projects.list", epoch).array("items")
+            projectsCached = reusedProjects != null
+            val projects = reusedProjects ?: request("projects.list", epoch).array("items")
             checkEpoch(epoch)
             cachedProjects = host.routeId to projects
             val project = projects.find { it.text("id") == selection.projectId }
@@ -1568,6 +1951,7 @@ class DefaultRemoteRepository(
             if (project == null) {
                 select(parent, host, projects)
                 refreshProjectChats(host.routeId, projects, epoch)
+                outcome = "parent"
                 return parent
             }
             val cached =
@@ -1583,6 +1967,7 @@ class DefaultRemoteRepository(
                         selection.sessionId != null &&
                         list.none { it.text("id") == selection.sessionId }
                 } ?: listSessions(project.text("id"), epoch).also { sessionsFetchedNow = true }
+            sessionsCached = !sessionsFetchedNow
             checkEpoch(epoch)
             cachedSessions = CachedSessions(host.routeId, project.text("id"), project, sessions)
             val session = sessions.find { it.text("id") == selection.sessionId }
@@ -1593,6 +1978,7 @@ class DefaultRemoteRepository(
                             session.text("status") == "offline"))
             ) {
                 select(parent, host, projects, project, sessions, sessionsFresh = sessionsFetchedNow)
+                outcome = "parent"
                 return parent
             }
             val chosen =
@@ -1604,10 +1990,12 @@ class DefaultRemoteRepository(
                 projects.find { it.text("id") == chosen.text("projectId") }
                     ?: run {
                         select(parent, host, projects, project, sessions, sessionsFresh = sessionsFetchedNow)
+                        outcome = "parent"
                         return parent
                     }
             val canonical =
                 RemoteSelection(host.routeId, canonicalProject.text("id"), chosen.text("id"))
+            chatCached = useCache && chatCache[canonical] != null
             select(
                 canonical,
                 host,
@@ -1622,32 +2010,47 @@ class DefaultRemoteRepository(
                 snapshot(epoch)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.activate.2", swallowed)
                 checkEpoch(epoch)
-                if (chatCache[canonical] != null) {
-                    reportError(R.string.remote_request_error)
+                // The reconnect after a lost connection opens the chat again.
+                if (chatCache[canonical] != null || lostWithConnection(swallowed)) {
+                    reportReadError(swallowed)
+                    outcome = "snapshot_failed"
                     return canonical
                 }
                 cachedChat = null
                 select(parent, host, projects, project, sessions, sessionsFresh = sessionsFetchedNow)
                 reportError(R.string.remote_request_error)
+                outcome = "snapshot_failed"
                 return parent
             }
             refreshConfiguration()
             refreshAdvisor()
             refreshCommands()
+            outcome = "ok"
             return canonical
         } catch (e: CancellationException) {
+            outcome = "cancelled"
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Diagnostics.caught("repo.activate", e)
             checkEpoch(epoch)
-            // A lost connection already set its own, more specific error.
-            if (state.value.error !in CONNECTION_ERRORS || state.value.connected)
-                reportError(R.string.remote_request_error)
+            // A lost connection already set its own, more specific error, or reconnects quietly.
+            if (!connectionDown()) reportError(R.string.remote_request_error)
             return if (mode == ActivationMode.USER_OPEN) previousSelection else state.value.selection
         } finally {
+            Diagnostics.endAsync("PocketPi.activate", cookie)
+            fun hit(cached: Boolean) = if (cached) "hit" else "miss"
+            Diagnostics.record(
+                Diagnostics.Kind.ACTIVATE,
+                "activate." + mode.name.lowercase() + if (force) ".force" else "",
+                Diagnostics.now() - started,
+                outcome = "$outcome:projects.${hit(projectsCached)}:sessions.${hit(sessionsCached)}:chat.${hit(chatCached)}",
+            )
             if (epoch == selectionEpoch) {
                 update { it.copy(loading = false) }
+                if (outcome == "ok" || outcome == "parent" || outcome == "no_host") staleReplaced()
                 cacheCurrentScreen()
             }
         }
@@ -1682,7 +2085,8 @@ class DefaultRemoteRepository(
             return canonical
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("repo.createSession", swallowed)
             reportError(R.string.remote_request_error)
             return state.value.selection
         } finally {
@@ -1701,7 +2105,7 @@ class DefaultRemoteRepository(
             "session.fork",
             { sourceId -> arrayOf("sessionId" to sourceId, "messageId" to messageId, "mode" to mode.wire) },
             setOf(mode.wire),
-            ::forkError,
+            { forkError(it.hostCode) },
         )
 
     override suspend fun forkSessionAtNode(source: RemoteSelection, nodeId: String): RemoteSelection =
@@ -1732,15 +2136,17 @@ class DefaultRemoteRepository(
         type: String,
         fields: (sourceId: String) -> Array<Pair<String, Any?>>,
         modes: Set<String>,
-        errorText: (code: String?) -> Int,
+        errorText: (Exception) -> Int,
     ): RemoteSelection {
         val routeId = source.routeId ?: return source
         val projectId = source.projectId ?: return source
         val sourceId = source.sessionId ?: return source
         val current = state.value
-        // Older hosts close the connection on unknown commands.
+        // Older hosts close the connection on unknown commands. A quiet reconnect keeps the
+        // capabilities on screen, and cancelling the selection would stop its activation.
         if (
-            capability !in current.capabilities ||
+            !current.connected ||
+                capability !in current.capabilities ||
                 current.selection != source ||
                 current.session?.optionalText("id") != sourceId
         )
@@ -1788,7 +2194,8 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            failure = errorText((e as? RemoteRequestException)?.code)
+            Diagnostics.caught("repo.forkFrom", e)
+            failure = errorText(e)
         } finally {
             if (epoch == selectionEpoch) update { it.copy(loading = false) }
         }
@@ -1834,14 +2241,16 @@ class DefaultRemoteRepository(
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("repo.openNotification", swallowed)
             if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
         }
         if (resolved != null) return activate(resolved, ActivationMode.USER_OPEN)
         if (epoch == selectionEpoch && previous.host != null && previous.host.routeId != routeId) {
             try {
                 connect(previous.host, epoch)
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.openNotification.2", swallowed)
                 reportError(R.string.remote_connection_error)
             }
             if (epoch == selectionEpoch) {
@@ -1868,7 +2277,8 @@ class DefaultRemoteRepository(
         val value =
             try {
                 Wire.pairing(text.trim())
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.pair", swallowed)
                 reportError(R.string.remote_invalid_qr)
                 return null
             }
@@ -1886,33 +2296,68 @@ class DefaultRemoteRepository(
         retry?.cancel()
         val epoch = selectionEpoch
         pairing?.cancel()
-        pairing = CompletableDeferred()
+        val deferred = CompletableDeferred<PairedHost>()
+        pairing = deferred
         pairingEpoch = epoch
         if (markPendingFollowUpsUncertain(activeHost?.routeId)) persist().await()
+        // cancelPairing() or a newer pair() during the write gave this pairing up already.
+        if (!deferred.isActive || pairing !== deferred) return null
         activeHost = null
+        timedOutRoute = null
+        cancelQuietReconnect()
         update {
-            it.copy(loading = true, connected = false, connection = R.string.remote_connecting)
+            it.copy(loading = true, connected = false, connection = R.string.remote_connecting, pairingDeadline = null)
         }
         try {
+            // The transport's own pairing timer starts with the attempt, and so does the deadline.
+            pairingStartedAt = Diagnostics.now()
             transport.pair(value)
             val host =
-                withTimeoutOrNull(120000) { checkNotNull(pairing).await() }
-                    ?: throw IllegalStateException("Pairing timed out")
+                withTimeoutOrNull(PAIRING_TIMEOUT_MILLIS) { deferred.await() }
+                    ?: run {
+                        // The code expired unapproved; this is no network problem. The transport's
+                        // own timer usually reports this first, through failed().
+                        deferred.cancel()
+                        if (pairing === deferred) transport.close()
+                        update { it.copy(connection = R.string.remote_offline, error = R.string.remote_pairing_timeout) }
+                        return null
+                    }
             checkEpoch(epoch)
             update { it.copy(loading = false) }
             return activate(RemoteSelection(host.routeId))
         } catch (e: CancellationException) {
+            // cancelPairing() or a new selection gave the pairing up: it ends without a host.
+            if (deferred.isCancelled && currentCoroutineContext().isActive) return null
             throw e
-        } catch (_: Exception) {
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("repo.pair.2", swallowed)
             if (state.value.error == null) reportError(R.string.remote_connection_error)
             return null
         } finally {
+            if (pairing === deferred) {
+                pairingStartedAt = null
+                update { it.copy(pairingDeadline = null) }
+            }
             if (epoch == selectionEpoch) update { it.copy(loading = false) }
+        }
+    }
+
+    override fun cancelPairing() {
+        val deferred = pairing?.takeIf { it.isActive } ?: return
+        Diagnostics.record(Diagnostics.Kind.FAILURE, "pairing", outcome = "cancelled")
+        deferred.cancel()
+        transport.close()
+        pairingStartedAt = null
+        update {
+            it.copy(loading = false, connection = R.string.remote_offline, pairingDeadline = null)
         }
     }
 
     override fun disconnect() {
         reconnectEnabled = false
+        offlineSince = null
+        cancelHostWaitHint()
+        cancelQuietReconnect()
         cancelSelection()
         clearNavigationCache()
         projectImageBytes.clear()
@@ -1920,12 +2365,14 @@ class DefaultRemoteRepository(
         ProjectImageBitmaps.clear()
         ArtifactThumbnails.clear()
         retry?.cancel()
+        connectionEnded()
         generation++
         transport.close()
         ready?.cancel()
         pairing?.cancel()
         if (markPendingFollowUpsUncertain(activeHost?.routeId)) persist()
         activeHost = null
+        timedOutRoute = null
         timeline = null
         stopToolOutput()
         update { RemoteState(hosts = it.hosts) }
@@ -1939,6 +2386,7 @@ class DefaultRemoteRepository(
         ) clearNavigationCache()
         if (activeHost?.routeId == routeId) reconnectEnabled = false
         if (activeHost?.routeId == routeId) disconnect()
+        if (timedOutRoute == routeId) timedOutRoute = null
         attachmentBytes.clear()
         SentImageThumbnails.clear()
         projectImageBytes.clear()
@@ -1968,13 +2416,15 @@ class DefaultRemoteRepository(
                                 withContext(io) { navigationStorage?.save(snapshots) }
                             }
                         }
-                    } catch (_: Exception) {
+                    } catch (swallowed: Exception) {
+                        Diagnostics.caught("repo.remove", swallowed)
                         reportError(R.string.remote_storage_error)
                     }
                     if (activeHost?.routeId == routeId) disconnect()
                     update { it.copy(hosts = remaining) }
                 }
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.remove.2", swallowed)
                 reportError(R.string.remote_storage_error)
             } finally {
                 if (removalJobs[routeId] === coroutineContext[Job]) removalJobs.remove(routeId)
@@ -1984,7 +2434,39 @@ class DefaultRemoteRepository(
         removal.start()
     }
 
-    private fun failed(reconnect: Boolean, error: Int) {
+    /**
+     * Ends the current connection. [broken]: an unreadable frame ended it, see [brokenConnections].
+     * [cause]: a dead socket or a replaced network reconnects at once.
+     *
+     * A transient failure ([R.string.remote_connection_error] with [reconnect]) keeps the
+     * last-known state of the Mac on screen as [RemoteState.stale]. The first one of a streak
+     * reconnects quietly: no error, and the error card follows only if the Mac is still unreachable
+     * [QUIET_RECONNECT_MILLIS] later or the next attempt fails too.
+     */
+    private fun failed(
+        reconnect: Boolean,
+        error: Int,
+        broken: Boolean = false,
+        cause: FailureCause = FailureCause.LOST,
+    ) {
+        Diagnostics.record(
+            Diagnostics.Kind.FAILURE,
+            "connection." + if (state.value.connected) "lost" else "attempt",
+            outcome = errorName(error) + "." + cause.name.lowercase() + if (reconnect) ".retry" else ".stop",
+        )
+        if (offlineSince == null && activeHost != null) offlineSince = Diagnostics.now()
+        // A connection that came up and failed before proving itself counts like a failed attempt;
+        // one that lived longer ends a run of short-lived ones.
+        val hadConnection = readyAt != null
+        val shortLived = connectionEnded()
+        if (shortLived) shortLivedConnections++ else if (hadConnection) shortLivedConnections = 0
+        if (broken) {
+            brokenConnections++
+            // Each broken connection waits longer than the one before, even after a reply reset
+            // the backoff, so a host that breaks every connection after its first answer backs off.
+            reconnectAttempts = maxOf(reconnectAttempts, brokenConnections - 1)
+        }
+        cancelHostWaitHint()
         deferredRecovery = null
         generation++
         folderVersion++
@@ -1998,7 +2480,7 @@ class DefaultRemoteRepository(
         transport.close()
         ready?.completeExceptionally(IllegalStateException("Disconnected"))
         pairing?.completeExceptionally(IllegalStateException("Pairing failed"))
-        invalidateRequests(IllegalStateException("Connection lost"))
+        invalidateRequests(RemoteRequestException.connectionLost())
         drafts.replaceAll { _, draft -> draft.copy(followUps = draft.followUps.map { entry ->
             if (entry.status in setOf("pending", "accepted")) entry.copy(status = "uncertain") else entry
         }) }
@@ -2013,30 +2495,50 @@ class DefaultRemoteRepository(
         } }
         stopToolOutput()
         sessionRefreshJob?.cancel()
+        val host = activeHost
+        if (error == R.string.remote_denied || error in DENIED_DEVICE_ERRORS) reconnectEnabled = false
+        val restart = serviceRestart
+        serviceRestart = false
+        val transient = reconnect && error == R.string.remote_connection_error
+        if (transient) failureStreak++
+        val retrying = reconnect && reconnectEnabled && recovery.canRecover && host != null
+        // The Mac accepts connections and drops them at once, or breaks each one with a frame
+        // this app cannot read: stop retrying on a timer. Retry, the next foreground and a
+        // network change still try again (they reset the counts).
+        val stopped =
+            retrying &&
+                (shortLivedConnections >= MAX_SHORT_LIVED_CONNECTIONS ||
+                    brokenConnections >= MAX_BROKEN_CONNECTIONS)
+        val quiet = transient && failureStreak < 2 && !stopped
+        // What the Mac on screen last reported stays while it reconnects; anything else goes.
+        val keep = transient && showsRoute(host?.routeId)
+        val shownError =
+            when {
+                stopped || (transient && failureStreak >= UNREACHABLE_AFTER_FAILURES) -> R.string.remote_unreachable
+                quiet -> null
+                else -> error
+            }
         update {
-            it.copy(
+            val shown =
+                if (keep) it.copy(stale = true, staleSince = it.staleSince ?: now())
+                else lastKnownCleared(it)
+            shown.copy(
                 connected = false,
                 compaction = null,
                 compactionRequesting = false,
-                toolOutput = null,
+                // A finished download stays readable; a running one stopped above.
+                toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },
                 projectChats = it.projectChats.map { chat -> chat.copy(verified = false) },
                 followUps = currentDraftKey()?.let { key -> drafts[key]?.followUps }.orEmpty(),
-                connection = R.string.remote_offline,
-                error = error,
+                connection =
+                    if (quiet && retrying) R.string.remote_reconnecting else R.string.remote_offline,
+                error = shownError,
                 loading = false,
+                pairingDeadline = null,
                 sending = false,
                 answering = emptySet(),
-                questions = emptyList(),
-                capabilities = emptySet(),
-                capabilitiesKnown = false,
-                unavailableCapabilities = emptySet(),
-                childControlUnsupported = emptySet(),
-                configuration = null,
-                advisor = null,
                 advisorLoading = false,
                 advisorChanging = false,
-                commands = emptyList(),
-                status = "offline",
                 providerAuth = it.providerAuth.offline(),
                 // A listing lost with the connection loads again after the reconnect.
                 folders = it.folders.copy(
@@ -2047,33 +2549,35 @@ class DefaultRemoteRepository(
                     trust = null,
                     notice = null,
                 ),
+                // The host this denial belongs to, for the error card's actions.
+                deniedRouteId = if (error in DENIED_DEVICE_ERRORS) host?.routeId else null,
             )
         }
-        val host = activeHost
-        if (error == R.string.remote_denied || error in DENIED_DEVICE_ERRORS) reconnectEnabled = false
-        // The host this denial belongs to, for the error card's actions.
-        update { it.copy(deniedRouteId = if (error in DENIED_DEVICE_ERRORS) host?.routeId else null) }
-        val restart = serviceRestart
-        serviceRestart = false
-        if (reconnect && error == R.string.remote_connection_error) {
-            failureStreak++
-            if (failureStreak >= UNREACHABLE_AFTER_FAILURES)
-                update { it.copy(error = R.string.remote_unreachable) }
-        }
-        if (
-            reconnect &&
-                reconnectEnabled &&
-                recovery.canRecover &&
-                host != null
-        ) {
+        if (quiet) startQuietReconnect() else cancelQuietReconnect()
+        if (stopped) {
+            Diagnostics.record(
+                Diagnostics.Kind.RECOVERY,
+                "reconnect.stopped",
+                outcome =
+                    if (brokenConnections >= MAX_BROKEN_CONNECTIONS) "broken.$brokenConnections"
+                    else "short_lived.$shortLivedConnections",
+            )
+            retry?.cancel()
+            retry = null
+            update { it.copy(reconnectAt = null) }
+        } else if (retrying) {
             val generationAtFailure = generation
             // The relay announced a restart, so one retry per failure streak does not wait.
-            val immediate = restart && !restartRetryUsed
-            if (immediate) {
+            val restartRetry = restart && !restartRetryUsed && !broken
+            if (restartRetry) {
                 restartRetryUsed = true
                 reconnectAttempts = 0
             }
+            // A dead socket or a replaced network says nothing about the Mac: try again at once.
+            val immediate =
+                restartRetry || cause == FailureCause.STALE || cause == FailureCause.NETWORK_REPLACED
             val wait = reconnectDelay(reconnectAttempts++, immediate)
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "reconnect.backoff", wait, outcome = "attempt.$reconnectAttempts")
             retry?.cancel()
             update { it.copy(reconnectAt = now() + wait) }
             retry = scope.launch {
@@ -2088,6 +2592,53 @@ class DefaultRemoteRepository(
         } else update { it.copy(reconnectAt = null) }
     }
 
+    /** A liveness read got no reply and no frame arrived meanwhile: reconnect at once, quietly. */
+    private fun connectionStale(type: String) {
+        Diagnostics.record(Diagnostics.Kind.FAILURE, "connection.stale", outcome = type)
+        failed(true, R.string.remote_connection_error, cause = FailureCause.STALE)
+    }
+
+    /** Raises the error card if the quiet reconnect that starts now has not succeeded in time. */
+    private fun startQuietReconnect() {
+        if (quietReconnect?.isActive == true) return
+        quietReconnect = scope.launch {
+            delay(QUIET_RECONNECT_MILLIS)
+            quietReconnect = null
+            if (!state.value.connected && state.value.error == null && reconnectEnabled) {
+                Diagnostics.record(Diagnostics.Kind.RECOVERY, "reconnect.slow", QUIET_RECONNECT_MILLIS)
+                update { it.copy(error = R.string.remote_connection_error) }
+            }
+        }
+    }
+
+    private fun cancelQuietReconnect() {
+        quietReconnect?.cancel()
+        quietReconnect = null
+    }
+
+    /**
+     * The activation after a reconnect has read the chat and lists again, so what is on screen is
+     * no longer only last-known; the reads it started refresh the rest in place.
+     */
+    private fun staleReplaced() {
+        val since = state.value.staleSince ?: return
+        Diagnostics.record(Diagnostics.Kind.OFFLINE, "stale", (now() - since).coerceAtLeast(0))
+        update { it.copy(stale = false, staleSince = null) }
+    }
+
+    /** A failure's message resource as a word for Diagnostics, never the text itself. */
+    private fun errorName(error: Int): String =
+        when (error) {
+            R.string.remote_connection_error -> "connection_error"
+            R.string.remote_unreachable -> "unreachable"
+            R.string.remote_device_revoked -> "revoked"
+            R.string.remote_device_paused -> "paused"
+            R.string.remote_denied -> "denied"
+            R.string.remote_storage_error -> "storage_error"
+            R.string.remote_pairing_timeout -> "pairing_timeout"
+            else -> "other"
+        }
+
     private fun reconnectDelay(attempt: Int, immediate: Boolean): Long {
         if (immediate) return 0
         val base = RECONNECT_BASE_MILLIS shl attempt.coerceAtMost(6)
@@ -2100,9 +2651,57 @@ class DefaultRemoteRepository(
     }
 
     private fun resetReconnect() {
+        resetBackoff()
+        brokenConnections = 0
+    }
+
+    /** Resets the backoff but keeps the count of [brokenConnections]. */
+    private fun resetBackoff() {
         reconnectAttempts = 0
         failureStreak = 0
         restartRetryUsed = false
+        shortLivedConnections = 0
+    }
+
+    /** The transport is ready: the connection proves itself by a reply or by staying up. */
+    private fun connectionReady() {
+        readyAt = now()
+        connectionProven = false
+        provenTimer?.cancel()
+        val connection = generation
+        provenTimer = scope.launch {
+            delay(CONNECTION_PROVEN_MILLIS)
+            if (connection == generation && state.value.connected) {
+                // Staying up also ends a run of connections broken by unreadable frames.
+                brokenConnections = 0
+                connectionProven()
+            }
+        }
+    }
+
+    /**
+     * The current connection works, so the next failure starts the backoff from the beginning,
+     * unless an unreadable frame ends it again (see [brokenConnections]).
+     */
+    private fun connectionProven() {
+        if (connectionProven || readyAt == null) return
+        connectionProven = true
+        // The timer keeps running: only staying up resets [brokenConnections].
+        resetBackoff()
+    }
+
+    /**
+     * Ends the bookkeeping of the current connection. Returns whether it was short-lived: ready,
+     * never proven, and lost within [SHORT_LIVED_CONNECTION_MILLIS].
+     */
+    private fun connectionEnded(): Boolean {
+        val lived = readyAt?.let { now() - it }
+        val shortLived = lived != null && !connectionProven && lived < SHORT_LIVED_CONNECTION_MILLIS
+        readyAt = null
+        connectionProven = false
+        provenTimer?.cancel()
+        provenTimer = null
+        return shortLived
     }
 
     private fun stopReconnectTimer() {
@@ -2158,7 +2757,8 @@ class DefaultRemoteRepository(
                 if (epoch == selectionEpoch)
                     updateSessionTitle(sessionId, confirmed.text("title"), originalTitle)
             } catch (_: CancellationException) {
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.renameSession", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
             } finally {
                 renamingIds.remove(sessionId)
@@ -2170,12 +2770,17 @@ class DefaultRemoteRepository(
         jobsController.setForeground(foreground)
         val signal = recovery.foreground(foreground)
         if (!foreground) {
+            backgroundedAt = now()
             queueNavigationWrite(immediate = true)
             stopReconnectTimer()
             cancelRecovery()
             return
         }
         signal ?: return
+        // How long the app was away, for the resume that follows.
+        backgroundedAt?.let {
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "foreground", (now() - it).coerceAtLeast(0))
+        }
         onRecoverySignal(signal)
         resetReconnect()
         recover(signal)
@@ -2195,28 +2800,33 @@ class DefaultRemoteRepository(
     }
 
     private fun recover(signal: RemoteRecovery.Signal) {
-        if (!reconnectEnabled || !recovery.canRecover) return
-        if (pairing?.isActive == true || state.value.loading) return
+        fun note(outcome: String) =
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "recover." + signal.name.lowercase(), outcome = outcome)
+        if (!reconnectEnabled || !recovery.canRecover) return note("disabled")
+        if (pairing?.isActive == true || state.value.loading) return note("busy")
         if (signal == RemoteRecovery.Signal.NETWORK_REPLACED && activeHost != null) {
-            failed(true, R.string.remote_connection_error)
+            note("reconnect")
+            failed(true, R.string.remote_connection_error, cause = FailureCause.NETWORK_REPLACED)
             return
         }
         if (hasPendingRecoveryWork()) {
             deferredRecovery = signal
-            return
+            return note("deferred")
         }
         stopReconnectTimer()
-        if (recoveryJob?.isActive == true) return
+        if (recoveryJob?.isActive == true) return note("running")
         val selection = state.value.selection
         val epoch = selectionEpoch
-        if (selection.routeId == null || state.value.hosts.none { it.routeId == selection.routeId }) return
+        if (selection.routeId == null || state.value.hosts.none { it.routeId == selection.routeId }) return note("no_host")
+        note("activate")
         recoveryJob =
             scope.launch {
                 try {
                     if (epoch == selectionEpoch && recovery.canRecover && reconnectEnabled)
                         activate(selection, ActivationMode.RESTORE, force = true)
                 } catch (_: CancellationException) {
-                } catch (_: Exception) {
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("repo.recover", swallowed)
                     if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
                 }
             }
@@ -2247,8 +2857,9 @@ class DefaultRemoteRepository(
                     update { it.copy(configuration = confirmed) }
                 }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.refreshConfiguration", e)
                 if (epoch == selectionEpoch && version == configurationVersion) {
-                    if (e.message == "unsupported")
+                    if (e.isUnsupported)
                         update {
                             it.copy(
                                 configuration = null,
@@ -2256,7 +2867,7 @@ class DefaultRemoteRepository(
                                     it.unavailableCapabilities + CONFIGURATION_CAPABILITY,
                             )
                         }
-                    else reportError(R.string.remote_configuration_error)
+                    else reportReadError(e, R.string.remote_configuration_error)
                 }
             } finally {
                 if (epoch == selectionEpoch && version == configurationVersion)
@@ -2286,13 +2897,15 @@ class DefaultRemoteRepository(
                     update { it.copy(contextUsage = usage) }
                 }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.refreshContextUsage", e)
                 if (epoch == selectionEpoch && version == contextVersion) {
-                    if (e.message == "unsupported")
+                    if (e.isUnsupported)
                         update { it.copy(
                             contextUsage = null,
                             unavailableCapabilities = it.unavailableCapabilities + CONTEXT_CAPABILITY,
                         ) }
-                    else update { it.copy(contextUsage = null) }
+                    // A reply lost with the connection keeps the last-known usage for the reconnect.
+                    else if (!lostWithConnection(e)) update { it.copy(contextUsage = null) }
                 }
             } finally {
                 if (epoch == selectionEpoch && version == contextVersion)
@@ -2318,8 +2931,9 @@ class DefaultRemoteRepository(
                 val result = request("session.compact", epoch, "sessionId" to sessionId)
                 require(result.text("kind") == "accepted" && result.text("sessionId") == sessionId)
             } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.compactContext", e)
                 if (epoch == selectionEpoch) {
-                    if (e.message == "unsupported")
+                    if (e.isUnsupported)
                         update { it.copy(unavailableCapabilities = it.unavailableCapabilities + COMPACT_CAPABILITY) }
                     reportError(R.string.remote_compact_error)
                 }
@@ -2412,14 +3026,15 @@ class DefaultRemoteRepository(
                 if (epoch == selectionEpoch && version == configurationVersion)
                     update { it.copy(configuration = confirmed, contextUsage = null) }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.changeConfiguration", e)
                 failed = true
                 if (epoch == selectionEpoch && version == configurationVersion) {
                     configurationNeedsRefresh = true
-                    if (e.message == "unsupported" && rereadOnError) {
+                    if (e.isUnsupported && rereadOnError) {
                         // Only the settings change is unsupported; model and thinking still work.
                         update { it.copy(unavailableCapabilities = it.unavailableCapabilities + SETTINGS_CAPABILITY) }
                         reportError(R.string.remote_configuration_error)
-                    } else if (e.message == "unsupported")
+                    } else if (e.isUnsupported)
                         update {
                             it.copy(
                                 configuration = null,
@@ -2457,11 +3072,12 @@ class DefaultRemoteRepository(
                     update { it.copy(advisor = confirmed, advisorChanging = false,
                         unavailableCapabilities = it.unavailableCapabilities - ADVISOR_CAPABILITY) }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.refreshAdvisor", e)
                 if (epoch == selectionEpoch && version == advisorVersion) {
-                    if (e.message == "unsupported")
+                    if (e.isUnsupported)
                         update { it.copy(advisor = null,
                             unavailableCapabilities = it.unavailableCapabilities + ADVISOR_CAPABILITY) }
-                    else reportError(R.string.remote_request_error)
+                    else reportReadError(e)
                 }
             } finally {
                 if (epoch == selectionEpoch && version == advisorVersion)
@@ -2490,7 +3106,8 @@ class DefaultRemoteRepository(
                 delay(1200)
                 if (epoch == selectionEpoch && state.value.selection.sessionId == sessionId)
                     refreshAdvisor()
-            } catch (_: CancellationException) {} catch (_: Exception) {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) {
+                Diagnostics.caught("repo.setAdvisor", swallowed)
                 if (epoch == selectionEpoch && state.value.selection.sessionId == sessionId) {
                     update { it.copy(advisorChanging = false) }
                     reportError(R.string.remote_request_error)
@@ -2521,8 +3138,9 @@ class DefaultRemoteRepository(
                         it.copy(commands = catalog, commandsTruncated = result.flag("truncated"))
                     }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.refreshCommands", e)
                 if (epoch == selectionEpoch && version == commandsVersion) {
-                    if (e.message == "unsupported")
+                    if (e.isUnsupported)
                         update {
                             it.copy(
                                 commands = emptyList(),
@@ -2530,7 +3148,7 @@ class DefaultRemoteRepository(
                                     it.unavailableCapabilities + COMMANDS_CAPABILITY,
                             )
                         }
-                    else reportError(R.string.remote_commands_error)
+                    else reportReadError(e, R.string.remote_commands_error)
                 }
             } finally {
                 if (epoch == selectionEpoch && version == commandsVersion)
@@ -2686,6 +3304,7 @@ class DefaultRemoteRepository(
                             persist().await()
                             update { it.copy(attachments = attachments) }
                         } catch (e: Exception) {
+                            Diagnostics.caught("repo.importAttachments", e)
                             if (drafts[key]?.attachments?.any { it.id == imported.id } == true) {
                                 drafts[key] =
                                     (drafts[key] ?: latest).let {
@@ -2710,7 +3329,8 @@ class DefaultRemoteRepository(
                         }
                     }
                 }
-            } catch (_: CancellationException) {} catch (_: Exception) {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) {
+                Diagnostics.caught("repo.importAttachments.2", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_attachment_import_error)
             } finally {
                 if (epoch == selectionEpoch) update { it.copy(importingAttachments = false) }
@@ -2743,7 +3363,7 @@ class DefaultRemoteRepository(
                             persist().await()
                         }
                 }
-            } catch (_: CancellationException) {} catch (_: Exception) {} finally {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) { Diagnostics.caught("repo.removeAttachment", swallowed) } finally {
                 runCatching { cleanupAttachments() }
             }
         }
@@ -2768,7 +3388,7 @@ class DefaultRemoteRepository(
                             }
                         persist().await()
                     }
-                } catch (_: Exception) {}
+                } catch (swallowed: Exception) { Diagnostics.caught("repo.cancelAttachmentWork", swallowed) }
             }
         update { it.copy(importingAttachments = false, attachmentProgress = null) }
     }
@@ -2782,6 +3402,7 @@ class DefaultRemoteRepository(
                 "attachmentId" to remoteId,
             )
         } catch (e: Exception) {
+            Diagnostics.caught("repo.cancelUpload", e)
             if (e.message !in setOf("forbidden", "invalid_request")) throw e
         }
         checkEpoch(epoch)
@@ -2998,7 +3619,8 @@ class DefaultRemoteRepository(
         val encoded =
             try {
                 QuoteCodec.encode(current.draft, current.quote)
-            } catch (_: IllegalArgumentException) {
+            } catch (swallowed: IllegalArgumentException) {
+                Diagnostics.caught("repo.sendPrompt", swallowed)
                 reportError(R.string.remote_prompt_too_long)
                 return
             }
@@ -3103,6 +3725,7 @@ class DefaultRemoteRepository(
                     }
                 }
             } catch (_: CancellationException) {} catch (e: Exception) {
+                Diagnostics.caught("repo.sendPrompt.2", e)
                 if (
                     current.attachments.isNotEmpty() &&
                         e.message in setOf("invalid_request", "forbidden") &&
@@ -3144,22 +3767,20 @@ class DefaultRemoteRepository(
                     setChildControl(key.sessionId, ChildControl(ChildControlPhase.NOT_RUNNING))
                     update { it.copy(uncertain = false) }
                 } else if (epoch == selectionEpoch && storageFailure == null) {
-                    val childCode =
-                        (e as? RemoteRequestException)?.code?.takeIf {
-                            queued && childControlsAvailable(current) && it in setOf("unsupported", "offline")
-                        }
-                    if (childCode == "unsupported") markChildControlUnsupported(key.sessionId)
+                    val childError =
+                        queued && childControlsAvailable(current) && (e.isUnsupported || e.hostCode == "offline")
+                    if (childError && e.isUnsupported) markChildControlUnsupported(key.sessionId)
                     reportError(
-                        if (childCode != null) childControlError(childCode)
+                        if (childError) childControlError(e)
                         else if (current.attachments.isEmpty()) R.string.remote_request_error
                         else if (
-                            e.message == "unsupported" &&
+                            e.isUnsupported &&
                                 current.attachments.any { it.kind == "image" }
                         )
                             R.string.remote_attachment_model_error
                         else R.string.remote_attachment_send_error
                     )
-                    if (current.attachments.isNotEmpty() && e.message == "unsupported")
+                    if (current.attachments.isNotEmpty() && e.isUnsupported)
                         refreshConfiguration()
                     if (command != null)
                         update { it.copy(commandNotice = R.string.remote_command_uncertain) }
@@ -3182,7 +3803,8 @@ class DefaultRemoteRepository(
         scope.launch {
             try {
                 request("session.abort", epoch, "sessionId" to sessionId)
-            } catch (_: CancellationException) {} catch (_: Exception) {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) {
+                Diagnostics.caught("repo.abort", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
             }
         }
@@ -3195,7 +3817,8 @@ class DefaultRemoteRepository(
         scope.launch {
             try {
                 request("session.abort", epoch, "sessionId" to sessionId)
-            } catch (_: CancellationException) {} catch (_: Exception) {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) {
+                Diagnostics.caught("repo.abortSession", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
             }
         }
@@ -3277,16 +3900,17 @@ class DefaultRemoteRepository(
                     )
                     throw e
                 } catch (e: RemoteRequestException) {
-                    when (e.code) {
+                    Diagnostics.caught("repo.stopChild", e)
+                    when {
                         // A plain abort would stop the run while the parent's manager, which is
                         // offline, may still restart the child: say so and leave the state.
-                        "offline" -> {
+                        e.hostCode == "offline" -> {
                             if (epoch == selectionEpoch) reportError(R.string.remote_child_stop_parent_offline)
                             previous
                         }
                         // An old parent cannot stop the child; the child's own abort still stops
                         // this run, but the parent may restart the subagent.
-                        "unsupported" -> {
+                        e.isUnsupported -> {
                             markChildControlUnsupported(sessionId)
                             val aborted =
                                 try {
@@ -3295,19 +3919,21 @@ class DefaultRemoteRepository(
                                 } catch (c: CancellationException) {
                                     setChildControl(sessionId, previous)
                                     throw c
-                                } catch (_: Exception) {
+                                } catch (swallowed: Exception) {
+                                    Diagnostics.caught("repo.stopChild.2", swallowed)
                                     false
                                 }
                             if (epoch == selectionEpoch)
                                 reportError(
                                     if (aborted) R.string.remote_child_stopped_run_only
-                                    else childControlError(e.code)
+                                    else childControlError(e)
                                 )
                             previous
                         }
                         else -> childControlFailure(e, previous, epoch, sent)
                     }
                 } catch (e: Exception) {
+                    Diagnostics.caught("repo.stopChild.3", e)
                     childControlFailure(e, previous, epoch, sent)
                 }
             setChildControl(sessionId, control)
@@ -3316,7 +3942,8 @@ class DefaultRemoteRepository(
 
     override fun resumeChild(message: String) {
         val current = state.value
-        if (offersChildResume(current)) {
+        // Offline, the capabilities kept by a quiet reconnect do not make the resume possible.
+        if (current.connected && offersChildResume(current)) {
             val refusal =
                 when {
                     current.attachments.isNotEmpty() -> R.string.remote_child_attachments_unsupported
@@ -3388,8 +4015,8 @@ class DefaultRemoteRepository(
                     )
                     throw e
                 } catch (e: Exception) {
-                    if ((e as? RemoteRequestException)?.code == "unsupported")
-                        markChildControlUnsupported(sessionId)
+                    Diagnostics.caught("repo.resumeChild", e)
+                    if (e.isUnsupported) markChildControlUnsupported(sessionId)
                     childControlFailure(e, previous, epoch, sent)
                 }
             setChildControl(sessionId, control)
@@ -3400,10 +4027,10 @@ class DefaultRemoteRepository(
         it.copy(childControlUnsupported = it.childControlUnsupported + sessionId)
     }
 
-    private fun childControlError(code: String?): Int =
-        when (code) {
-            "unsupported" -> R.string.remote_child_unsupported
-            "offline" -> R.string.remote_child_parent_offline
+    private fun childControlError(e: Exception): Int =
+        when {
+            e.isUnsupported -> R.string.remote_child_unsupported
+            e.hostCode == "offline" -> R.string.remote_child_parent_offline
             else -> R.string.remote_request_error
         }
 
@@ -3424,12 +4051,12 @@ class DefaultRemoteRepository(
         epoch: Long,
         sent: Boolean,
     ): ChildControl? {
-        val code = (e as? RemoteRequestException)?.code
+        val code = e.hostCode
         return when {
             code == "internal" || (code == null && sent) -> uncertainChildControl(previous?.agentId)
             code == "not_found" -> ChildControl(ChildControlPhase.NOT_FOUND)
             else -> {
-                if (epoch == selectionEpoch) reportError(childControlError(code))
+                if (epoch == selectionEpoch) reportError(childControlError(e))
                 previous
             }
         }
@@ -3458,7 +4085,8 @@ class DefaultRemoteRepository(
                 }
                 update { it.copy(sessions = sessions, sessionsFresh = true) }
                 cacheCurrentScreen()
-            } catch (_: CancellationException) {} catch (_: Exception) {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) {
+                Diagnostics.caught("repo.refreshSessions", swallowed)
                 // The previous list stays; the next refresh or reconnect retries.
             }
         }
@@ -3482,9 +4110,13 @@ class DefaultRemoteRepository(
         fun failure(reason: ToolOutputFailure) = ToolOutputDownload(
             toolCallId, 0, null, null, truncated = false, isError = false, failure = reason,
         )
+        // A quiet reconnect keeps the capabilities on screen: offline is no missing capability.
+        if (sessionId != null && !current.connected) {
+            update { it.copy(toolOutput = failure(ToolOutputFailure.OFFLINE)) }
+            return
+        }
         if (
             sessionId == null ||
-                !current.connected ||
                 TOOL_OUTPUT_CAPABILITY !in current.capabilities ||
                 TOOL_OUTPUT_CAPABILITY in current.unavailableCapabilities
         ) {
@@ -3546,11 +4178,12 @@ class DefaultRemoteRepository(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.loadToolOutput", e)
                 if (!active()) return@launch
-                val reason = when (e.message) {
-                    "unsupported" -> ToolOutputFailure.UNSUPPORTED
-                    "not_found" -> ToolOutputFailure.NOT_FOUND
-                    "offline" -> ToolOutputFailure.OFFLINE
+                val reason = when {
+                    e.isUnsupported -> ToolOutputFailure.UNSUPPORTED
+                    e.hostCode == "not_found" -> ToolOutputFailure.NOT_FOUND
+                    e.hostCode == "offline" -> ToolOutputFailure.OFFLINE
                     else -> ToolOutputFailure.FAILED
                 }
                 update {
@@ -3597,7 +4230,7 @@ class DefaultRemoteRepository(
         try {
             transport.send(Wire.objectOf("type" to type, "requestId" to id, *fields))
             return withTimeoutOrNull(30000) { completion.await() }
-                ?: throw IllegalStateException("Request timed out")
+                ?: throw RemoteRequestException.timeout()
         } finally {
             folderCompletions.remove(id)
         }
@@ -3606,7 +4239,7 @@ class DefaultRemoteRepository(
     private fun failFolderRequests() {
         val pending = folderCompletions.values.toList()
         folderCompletions.clear()
-        pending.forEach { it.completeExceptionally(IllegalStateException("Connection lost")) }
+        pending.forEach { it.completeExceptionally(RemoteRequestException.connectionLost()) }
     }
 
     override fun browseFolder(routeId: String, path: String) {
@@ -3652,6 +4285,7 @@ class DefaultRemoteRepository(
                 if (version == folderVersion) updateFolders { it.copy(loading = false) }
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.browseFolder", e)
                 if (version == folderVersion)
                     updateFolders {
                         it.copy(loading = false, error = folderErrorMessage(e, FolderCommand.BROWSE))
@@ -3680,6 +4314,7 @@ class DefaultRemoteRepository(
                 folderWrite(routeId, session) { it.copy(working = false) }
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.createFolder", e)
                 folderWrite(routeId, session) {
                     it.copy(working = false, notice = folderErrorMessage(e, FolderCommand.MKDIR))
                 }
@@ -3722,6 +4357,7 @@ class DefaultRemoteRepository(
                 folderWrite(routeId, session) { it.copy(working = false) }
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.cloneRepository", e)
                 folderWrite(routeId, session) {
                     it.copy(working = false, notice = folderErrorMessage(e, FolderCommand.CLONE))
                 }
@@ -3782,6 +4418,7 @@ class DefaultRemoteRepository(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    Diagnostics.caught("repo.resumeClone", e)
                     if (e.message == "not_found") {
                         if (state.value.folders.clones[routeId]?.cloneId == clone.cloneId)
                             updateFolders {
@@ -3862,6 +4499,7 @@ class DefaultRemoteRepository(
                 if (version == providerVersion) updateProviders { it.copy(loading = false) }
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.refreshProviders", e)
                 if (version == providerVersion)
                     providerWrite(routeId, session) {
                         it.copy(loading = false, error = providerErrorMessage(e))
@@ -3905,6 +4543,7 @@ class DefaultRemoteRepository(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    Diagnostics.caught("repo.recoverLogin", e)
                     if (e.message == "not_found") {
                         providerWrite(routeId, session) { auth ->
                             if (auth.flow?.loginId != flow.loginId) auth
@@ -3927,7 +4566,8 @@ class DefaultRemoteRepository(
         val update =
             try {
                 providerAuthEvent(payload)
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.receiveProviderAuthEvent", swallowed)
                 if (state.value.providerAuth.flow?.finished == false) recoverLogin()
                 return
             }
@@ -3975,6 +4615,7 @@ class DefaultRemoteRepository(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.startLogin", e)
                 earlyProviderUpdates.clear()
                 providerWrite(routeId, session) {
                     it.copy(working = false, notice = ProviderNotice(providerErrorMessage(e)))
@@ -4010,6 +4651,7 @@ class DefaultRemoteRepository(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.answerLogin", e)
                 providerWrite(routeId, session) { auth ->
                     auth.copy(
                         flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.let { current ->
@@ -4041,6 +4683,7 @@ class DefaultRemoteRepository(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.cancelLogin", e)
                 providerWrite(routeId, session) { auth ->
                     auth.copy(
                         flow = auth.flow?.takeIf { it.loginId == flow.loginId }?.copy(
@@ -4070,6 +4713,7 @@ class DefaultRemoteRepository(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Diagnostics.caught("repo.logoutProvider", e)
                 providerWrite(routeId, session) {
                     it.copy(working = false, notice = ProviderNotice(providerErrorMessage(e)))
                 }
@@ -4152,6 +4796,7 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            Diagnostics.caught("repo.openFolder", e)
             if (!current()) return null
             if (e.message == "trust_required") {
                 // A missing or malformed flag errs toward the warning.
@@ -4190,7 +4835,8 @@ class DefaultRemoteRepository(
         scope.launch {
             try {
                 request(type, epoch, *fields)
-            } catch (_: CancellationException) {} catch (_: Exception) {
+            } catch (_: CancellationException) {} catch (swallowed: Exception) {
+                Diagnostics.caught("repo.action", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
             } finally {
                 if (epoch == selectionEpoch) {
@@ -4224,7 +4870,7 @@ class DefaultRemoteRepository(
         val current = state.value
         if (!current.connected) throw RemoteRequestException("offline")
         // An older host closes the connection on a command it does not know.
-        if (!canUseBackgroundJobs(current)) throw RemoteRequestException("unsupported")
+        if (!canUseBackgroundJobs(current)) throw RemoteRequestException.unsupported()
     }
 
     // Built on first use. Lazy does not make it safe to reach during construction: the delegate
@@ -4285,7 +4931,7 @@ class DefaultRemoteRepository(
         // An older host closes the connection on a command it does not know.
         if (GIT_CAPABILITY !in current.capabilities ||
             GIT_CAPABILITY in current.unavailableCapabilities || sessionId.isEmpty()
-        ) throw RemoteRequestException("unsupported")
+        ) throw RemoteRequestException.unsupported()
     }
 
     override suspend fun gitStatus(sessionId: String, base: GitBase): GitStatus {
@@ -4362,7 +5008,7 @@ class DefaultRemoteRepository(
         // An older host closes the connection on a command it does not know.
         if (FILES_CAPABILITY !in current.capabilities ||
             FILES_CAPABILITY in current.unavailableCapabilities || sessionId.isEmpty()
-        ) throw RemoteRequestException("unsupported")
+        ) throw RemoteRequestException.unsupported()
     }
 
     override suspend fun filesList(sessionId: String, path: String, after: String?): FileListing {
@@ -4396,7 +5042,7 @@ class DefaultRemoteRepository(
         requireFiles(sessionId)
         val current = state.value
         if (FILES_WRITE_CAPABILITY !in current.capabilities || FILES_WRITE_CAPABILITY in current.unavailableCapabilities)
-            throw RemoteRequestException("unsupported")
+            throw RemoteRequestException.unsupported()
         val data =
             request(
                 "session.files.write",
@@ -4511,13 +5157,16 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: RemoteRequestException) {
+            Diagnostics.caught("repo.fetchAttachment", e)
             return when (e.code) {
                 "not_found", "forbidden", "invalid_request" -> AttachmentReadResult.Unavailable
                 else -> AttachmentReadResult.Failed
             }
         } catch (e: AttachmentProtocolException) {
+            Diagnostics.caught("repo.fetchAttachment.2", e)
             return AttachmentReadResult.Unavailable
         } catch (e: Exception) {
+            Diagnostics.caught("repo.fetchAttachment.3", e)
             return AttachmentReadResult.Failed
         }
         return AttachmentReadResult.Loaded(reassembler.bytes().also { attachmentBytes[key] = it })
@@ -4645,12 +5294,14 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: MediaException) {
+            Diagnostics.caught("repo.fetchProjectImage", e)
             when (e.failure) {
                 MediaFailure.UNAVAILABLE -> ProjectImageResult.Unavailable
                 MediaFailure.BUSY -> ProjectImageResult.Busy
                 MediaFailure.FAILED -> ProjectImageResult.Failed
             }
         } catch (e: Exception) {
+            Diagnostics.caught("repo.fetchProjectImage.2", e)
             ProjectImageResult.Failed
         }
     }
@@ -4749,12 +5400,14 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: MediaException) {
+            Diagnostics.caught("repo.fetchProjectArtifact", e)
             when (e.failure) {
                 MediaFailure.UNAVAILABLE -> ProjectArtifactResult.Unavailable
                 MediaFailure.BUSY -> ProjectArtifactResult.Busy
                 MediaFailure.FAILED -> ProjectArtifactResult.ConnectionFailure
             }
         } catch (e: Exception) {
+            Diagnostics.caught("repo.fetchProjectArtifact.2", e)
             ProjectArtifactResult.ConnectionFailure
         }
 
@@ -4788,6 +5441,7 @@ class DefaultRemoteRepository(
                 try {
                     parseArtifactsList(data, sessionId)
                 } catch (e: Exception) {
+                    Diagnostics.caught("repo.listSessionArtifacts", e)
                     return SessionArtifactListResult.Unavailable
                 }
             )
@@ -4796,11 +5450,12 @@ class DefaultRemoteRepository(
             currentCoroutineContext().ensureActive()
             SessionArtifactListResult.Failed
         } catch (e: RemoteRequestException) {
-            when (e.code) {
-                "not_found", "forbidden", "invalid_request", "unsupported" -> SessionArtifactListResult.Unavailable
-                else -> SessionArtifactListResult.Failed
-            }
+            Diagnostics.caught("repo.listSessionArtifacts.2", e)
+            if (e.isUnsupported || e.hostCode in setOf("not_found", "forbidden", "invalid_request"))
+                SessionArtifactListResult.Unavailable
+            else SessionArtifactListResult.Failed
         } catch (e: Exception) {
+            Diagnostics.caught("repo.listSessionArtifacts.3", e)
             SessionArtifactListResult.Failed
         }
     }
@@ -4906,12 +5561,14 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: MediaException) {
+            Diagnostics.caught("repo.fetchSessionArtifact", e)
             when (e.failure) {
                 MediaFailure.UNAVAILABLE -> SessionArtifactOpenResult.Unavailable
                 MediaFailure.BUSY -> SessionArtifactOpenResult.Busy
                 MediaFailure.FAILED -> SessionArtifactOpenResult.ConnectionFailure
             }
         } catch (e: Exception) {
+            Diagnostics.caught("repo.fetchSessionArtifact.2", e)
             SessionArtifactOpenResult.ConnectionFailure
         }
 
@@ -4937,8 +5594,10 @@ class DefaultRemoteRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: ExportException) {
+            Diagnostics.caught("repo.exportSession", e)
             ExportResult.Failed(e.failure)
         } catch (e: Exception) {
+            Diagnostics.caught("repo.exportSession.2", e)
             ExportResult.Failed(ExportFailure.FAILED)
         }
     }
@@ -4970,6 +5629,7 @@ class DefaultRemoteRepository(
             currentCoroutineContext().ensureActive()
             ReloadResult.Failed(ReloadFailure.Unknown)
         } catch (e: Exception) {
+            Diagnostics.caught("repo.reloadSession", e)
             val failure = reloadFailure(e)
             if (reloadResultUnknown(failure)) refreshAfterReload(epoch)
             ReloadResult.Failed(failure)
@@ -5018,6 +5678,7 @@ class DefaultRemoteRepository(
             currentCoroutineContext().ensureActive()
             TreeLoadResult.Failed(TreeFailure.FAILED)
         } catch (e: Exception) {
+            Diagnostics.caught("repo.loadSessionTree", e)
             // A read has no result that could be unknown.
             val failure = treeFailure(e)
             TreeLoadResult.Failed(if (treeResultUnknown(failure)) TreeFailure.FAILED else failure)
@@ -5071,6 +5732,7 @@ class DefaultRemoteRepository(
             currentCoroutineContext().ensureActive()
             TreeNavigateResult.Failed(TreeFailure.UNKNOWN_RESULT)
         } catch (e: Exception) {
+            Diagnostics.caught("repo.navigateSessionTree", e)
             val failure = treeFailure(e, navigating = true)
             // The move may have happened; show what the host has now.
             if (treeResultUnknown(failure) && epoch == selectionEpoch && state.value.connected) snapshotAsync()

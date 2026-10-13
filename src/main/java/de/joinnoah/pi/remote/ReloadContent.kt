@@ -45,18 +45,22 @@ internal fun validatedReloaded(data: JsonObject, sessionId: String) {
 internal fun reloadFailure(e: Exception): ReloadFailure =
     when (e) {
         is RemoteRequestException ->
-            when (e.code) {
-                "busy" -> ReloadFailure.Busy
-                "unsupported" -> ReloadFailure.Unsupported
-                "offline" -> ReloadFailure.ConnectionFailure
-                "timeout" -> ReloadFailure.Unknown
-                "internal" ->
-                    if (e.hostMessage?.startsWith(RELOAD_UNKNOWN_PREFIX) == true) ReloadFailure.Unknown
-                    else ReloadFailure.Failed(e.hostMessage?.takeIf { it.isNotBlank() && it != "Reload failed" })
-                else -> ReloadFailure.Failed(null)
+            when (e.kind) {
+                RemoteRequestException.Kind.UNSUPPORTED -> ReloadFailure.Unsupported
+                // The reload may have run without its reply reaching the phone.
+                RemoteRequestException.Kind.TIMEOUT -> ReloadFailure.Unknown
+                RemoteRequestException.Kind.CONNECTION_LOST -> ReloadFailure.ConnectionFailure
+                RemoteRequestException.Kind.HOST_ERROR ->
+                    when (e.code) {
+                        "busy" -> ReloadFailure.Busy
+                        "offline" -> ReloadFailure.ConnectionFailure
+                        "timeout" -> ReloadFailure.Unknown
+                        "internal" ->
+                            if (e.hostMessage?.startsWith(RELOAD_UNKNOWN_PREFIX) == true) ReloadFailure.Unknown
+                            else ReloadFailure.Failed(e.hostMessage?.takeIf { it.isNotBlank() && it != "Reload failed" })
+                        else -> ReloadFailure.Failed(null)
+                    }
             }
-        is IllegalStateException ->
-            if (e.message == "Request timed out") ReloadFailure.Unknown else ReloadFailure.ConnectionFailure
         else -> ReloadFailure.ConnectionFailure
     }
 

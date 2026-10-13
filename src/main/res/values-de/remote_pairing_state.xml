@@ -1,0 +1,3 @@
+<resources>
+    <string name="remote_pairing_timeout">Keine Bestätigung innerhalb von 2 Minuten. Führe /remote auf deinem Mac erneut aus und scanne den neuen Code.</string>
+</resources>

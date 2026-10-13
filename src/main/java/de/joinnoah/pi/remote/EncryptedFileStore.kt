@@ -57,6 +57,7 @@ class EncryptedFileStore(context: Context, name: String, private val alias: Stri
             stream.write(bytes)
             file.finishWrite(stream)
         } catch (e: Exception) {
+            Diagnostics.caught("store.write", e)
             file.failWrite(stream)
             throw e
         }
