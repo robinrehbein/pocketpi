@@ -182,4 +182,69 @@ class BackgroundJobsPopoverUiTest {
         compose.onNodeWithTag("jobsList").performScrollToNode(hasTestTag("job-job-20"))
         compose.onNodeWithTag("job-job-20").assertIsDisplayed()
     }
+
+    @Test
+    fun openJobsInThePopoverOpensTheFullList() {
+        var listOpens = 0
+        compose.setContent {
+            MaterialTheme {
+                BackgroundJobsChip(
+                    JobsState("session", listOf(job("one"))),
+                    JobsActions({}, {}, {}, {}, {}, onOpenList = { listOpens++ }),
+                )
+            }
+        }
+        compose.onNodeWithTag("jobsChip").performClick()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.remote_jobs_open_all)).performClick()
+        assertEquals(1, listOpens)
+        compose.onNodeWithTag("jobsPopover").assertDoesNotExist()
+    }
+
+    @Test
+    fun withoutAWayToTheListThePopoverOffersNone() {
+        compose.setContent {
+            MaterialTheme { BackgroundJobsChip(JobsState("session", listOf(job("one"))), JobsActions({}, {}, {}, {}, {})) }
+        }
+        compose.onNodeWithTag("jobsChip").performClick()
+        compose.onNodeWithTag("jobsOpenAll").assertDoesNotExist()
+    }
+
+    @Test
+    fun askingPiAboutTheOutputQuotesItsEndIntoTheComposer() {
+        val prompts = mutableListOf<String>()
+        var accepted = true
+        val view = JobView(
+            "one", job("one"), lines = listOf(JobOutputLine.Text("compiling"), JobOutputLine.Text("error: boom")), loaded = true,
+        )
+        compose.setContent {
+            MaterialTheme {
+                BackgroundJobsScreen(
+                    JobsState("session", listOf(job("one")), view = view),
+                    JobsActions({}, {}, {}, {}, {}, onAsk = { prompts += it; accepted }),
+                )
+            }
+        }
+        compose.onNodeWithTag("jobAsk").performClick()
+        val prompt = prompts.single()
+        assertTrue(prompt, prompt.startsWith(compose.activity.getString(R.string.remote_jobs_ask_prompt, "echo one")))
+        assertTrue(prompt, prompt.endsWith("```\ncompiling\nerror: boom\n```"))
+        compose.onNodeWithTag("jobAskFailed").assertDoesNotExist()
+        // A draft too full for it says so; nothing is sent either way.
+        accepted = false
+        compose.onNodeWithTag("jobAsk").performClick()
+        compose.onNodeWithTag("jobAskFailed").assertIsDisplayed()
+    }
+
+    @Test
+    fun withoutOutputThereIsNothingToAskAbout() {
+        compose.setContent {
+            MaterialTheme {
+                BackgroundJobsScreen(
+                    JobsState("session", listOf(job("one")), view = JobView("one", job("one"), loaded = true)),
+                    JobsActions({}, {}, {}, {}, {}, onAsk = { true }),
+                )
+            }
+        }
+        compose.onNodeWithTag("jobAsk").assertDoesNotExist()
+    }
 }

@@ -700,4 +700,25 @@ class BackgroundJobsTest {
         assertEquals(listOf("job"), harness.state.jobs?.jobs?.map { it.id })
         assertEquals(before, harness.source.lists.size)
     }
+
+    @Test
+    fun askingAboutAJobQuotesTheEndOfItsOutput() {
+        val lines = (1..50).map { JobOutputLine.Text("line $it") }
+        val prompt = checkNotNull(jobOutputPrompt("Output:", lines))
+        assertEquals("Output:\n\n```\n" + (11..50).joinToString("\n") { "line $it" } + "\n```", prompt)
+        // Skipped output ends the quote, and blank lines at either end go.
+        assertEquals(
+            "Output:\n\n```\ntail\n```",
+            jobOutputPrompt("Output:", listOf(JobOutputLine.Text("head"), JobOutputLine.Skipped(10), JobOutputLine.Text(""), JobOutputLine.Text("tail"), JobOutputLine.Text(" "))),
+        )
+        // Backticks in the output get a longer fence.
+        assertEquals("Output:\n\n````\n```\n````", jobOutputPrompt("Output:", listOf(JobOutputLine.Text("```"))))
+        // Nothing to quote: no prompt.
+        assertNull(jobOutputPrompt("Output:", emptyList()))
+        assertNull(jobOutputPrompt("Output:", listOf(JobOutputLine.Skipped(3), JobOutputLine.Text(""))))
+        // The quote stays within what the composer takes.
+        val long = List(10) { JobOutputLine.Text("x".repeat(MAX_FILE_QUOTE_BYTES / 4)) }
+        val cut = checkNotNull(jobOutputPrompt("Output:", long))
+        assertTrue(cut.encodeToByteArray().size < MAX_FILE_QUOTE_BYTES + 100)
+    }
 }

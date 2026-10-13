@@ -109,8 +109,9 @@ class LargeScreenResizeTest {
         width.value = to
         compose.waitForIdle()
         val layout = paneLayout(to, 800.dp)
-        if (layout.twoPane) compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
-        else compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        // Open changes beside the chat moved the list out of the way where it got cramped.
+        if (!layout.twoPane) compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        else if (!changesOpen || layout.inspector == InspectorMode.OVERLAY) compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
         if (changesOpen && layout.inspector != InspectorMode.OVERLAY) compose.onNodeWithTag("inspectorPane").assertIsDisplayed()
         if (layout.inspector == InspectorMode.OVERLAY) compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
     }
@@ -126,8 +127,8 @@ class LargeScreenResizeTest {
         assertReadingPositionKept()
         compose.runOnIdle { repository.openChanges() }
         compose.onNodeWithTag("changesPane").assertIsDisplayed()
-        // Two panes with Changes over the chat, the inspector beside it (on demand, then always
-        // there), and back down to a phone-wide split screen.
+        // Two panes with Changes in the inspector beside the chat (on demand, then always there),
+        // and back down to a phone-wide split screen.
         for (size in listOf(960.dp, 1180.dp, 1600.dp, 600.dp)) {
             resize(size, changesOpen = true)
             compose.onNodeWithTag("changesPane").assertIsDisplayed()
