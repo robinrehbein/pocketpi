@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
@@ -50,17 +51,10 @@ class MainActivity : ComponentActivity() {
         app.appLock.check()
         if (savedInstanceState == null) handleIntent(intent)
         else {
-            val route = savedInstanceState.getString("pendingRouteId")
-            val session = savedInstanceState.getString("pendingSessionId")
-            if (route != null && session != null)
-                open(
-                    NotificationTarget(
-                        route,
-                        session,
-                        savedInstanceState.getBoolean("pendingJobs"),
-                        savedInstanceState.getString("pendingJobId"),
-                    )
-                )
+            // Restored targets keep the saved prompt state: the user has been asked for them already.
+            savedInstanceState.target("pending")?.let { open(it, restored = true) }
+            // Held behind the lock when the process died, for example behind the confirm-credential screen.
+            savedInstanceState.target("held")?.let { open(it, restored = true) }
         }
         lifecycleScope.launch {
             // Recents would otherwise show the last screen of a locked app.
@@ -95,6 +89,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         app.appLock.check()
+        app.appLock.onForeground()
     }
 
     override fun onResume() {
@@ -117,13 +112,11 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        notification?.let {
-            outState.putString("pendingRouteId", it.routeId)
-            outState.putString("pendingSessionId", it.sessionId)
-            outState.putBoolean("pendingJobs", it.jobs)
-            it.jobId?.let { job -> outState.putString("pendingJobId", job) }
-        }
-        outState.putBoolean("appLockPrompted", autoPrompted)
+        notification?.let { outState.putTarget("pending", NotificationTarget(it.routeId, it.sessionId, it.jobs, it.jobId)) }
+        app.appLock.heldTarget?.let { outState.putTarget("held", it) }
+        // A BiometricPrompt does not outlive the process, so a restored activity asks again by itself;
+        // the confirm-credential screen below API 30 does, and its answer comes back to the new activity.
+        outState.putBoolean("appLockPrompted", autoPrompted && !(authenticating && Build.VERSION.SDK_INT >= 30))
         super.onSaveInstanceState(outState)
     }
 
@@ -137,11 +130,10 @@ class MainActivity : ComponentActivity() {
                 app.repository.reportError(R.string.remote_storage_error)
             }
         }
+        // Only an unlocked app starts its timeout here, and a prompt is only showing while locked.
+        app.appLock.onBackground()
         // Behind the confirm-credential screen the app has not left; the lock is still being answered.
-        if (!authenticating) {
-            app.appLock.onBackground()
-            autoPrompted = false
-        }
+        if (!authenticating) autoPrompted = false
         super.onStop()
     }
 
@@ -152,11 +144,11 @@ class MainActivity : ComponentActivity() {
         open(target)
     }
 
-    /** Opens [target] now, or holds it until the app lock is answered; a held target asks again on resume. */
-    private fun open(target: NotificationTarget) {
+    /** Opens [target] now, or holds it until the app lock is answered; a new held target asks again on resume. */
+    private fun open(target: NotificationTarget, restored: Boolean = false) {
         val admitted = app.appLock.admit(target)
         if (admitted == null) {
-            autoPrompted = false
+            if (!restored) autoPrompted = false
             return
         }
         notification = RemoteNotification(admitted.routeId, admitted.sessionId, ++delivery, admitted.jobs, admitted.jobId)
@@ -178,6 +170,9 @@ class MainActivity : ComponentActivity() {
         authenticating = false
         if (!verified) {
             app.appLock.cancel()
+            // A BiometricPrompt ends without a choice when the app leaves; ask again by itself on return.
+            // Below API 30 every answer arrives before onResume, so this would ask again after each cancel.
+            if (Build.VERSION.SDK_INT >= 30 && !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) autoPrompted = false
             return
         }
         app.appLock.unlock()?.let { notification = RemoteNotification(it.routeId, it.sessionId, ++delivery, it.jobs, it.jobId) }
@@ -188,6 +183,19 @@ class MainActivity : ComponentActivity() {
         recentsHidden = hide
         setRecentsScreenshotEnabled(!hide)
     }
+}
+
+private fun Bundle.putTarget(prefix: String, target: NotificationTarget) {
+    putString("${prefix}RouteId", target.routeId)
+    putString("${prefix}SessionId", target.sessionId)
+    putBoolean("${prefix}Jobs", target.jobs)
+    target.jobId?.let { putString("${prefix}JobId", it) }
+}
+
+private fun Bundle.target(prefix: String): NotificationTarget? {
+    val route = getString("${prefix}RouteId") ?: return null
+    val session = getString("${prefix}SessionId") ?: return null
+    return NotificationTarget(route, session, getBoolean("${prefix}Jobs"), getString("${prefix}JobId"))
 }
 
 @Suppress("DEPRECATION")

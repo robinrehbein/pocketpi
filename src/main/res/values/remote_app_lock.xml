@@ -1,11 +1,11 @@
 <resources>
     <string name="remote_app_lock_title">App lock</string>
-    <string name="remote_app_lock_help">Asks for your fingerprint, face or screen lock when PocketPi starts or you come back after a while. Approve and Reply in notifications still work without unlocking.</string>
+    <string name="remote_app_lock_help">Asks for your fingerprint or screen lock when PocketPi starts or you come back after a while. Approve and Reply in notifications still work without unlocking.</string>
     <string name="remote_app_lock_no_screen_lock">Set a screen lock on this device to use the app lock.</string>
     <string name="remote_app_lock_timeout">Lock after</string>
     <string name="remote_app_lock_minutes">%1$d min</string>
     <string name="remote_app_lock_prompt_title">Unlock PocketPi</string>
     <string name="remote_app_lock_locked_title">PocketPi is locked</string>
-    <string name="remote_app_lock_locked_help">Unlock with your fingerprint, face or screen lock to continue.</string>
+    <string name="remote_app_lock_locked_help">Unlock with your fingerprint or screen lock to continue.</string>
     <string name="remote_app_lock_unlock">Unlock</string>
 </resources>

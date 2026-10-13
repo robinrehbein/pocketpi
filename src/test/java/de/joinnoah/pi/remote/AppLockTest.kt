@@ -3,6 +3,23 @@ package de.joinnoah.pi.remote
 import android.app.KeyguardManager
 import android.content.Context
 import android.os.Bundle
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.isFocusable
+import androidx.compose.ui.test.isHeading
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.window.Dialog
+import java.time.Duration
+import org.robolectric.shadows.ShadowSystemClock
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -103,6 +120,33 @@ class AppLockTest {
         assertFalse(lock.locked.value)
     }
 
+    @Test fun nothingTimesOutWhileTheAppIsInFront() {
+        val store = store().apply {
+            setEnabled(true)
+            setTimeoutMinutes(5)
+        }
+        val lock = lock(store)
+        lock.check()
+        lock.onForeground()
+        lock.unlock()
+        // Six minutes of use, then a tap on a notification while still in front.
+        now += 6 * 60_000L
+        assertEquals(target, lock.admit(target))
+        assertFalse(lock.locked.value)
+
+        // Switched on in a process that was never in the background: a tap in front opens at once.
+        val fresh = lock(store().apply { setEnabled(false) })
+        fresh.onForeground()
+        fresh.store.setEnabled(true)
+        assertEquals(target, fresh.admit(target))
+        assertFalse(fresh.locked.value)
+        // Away for longer than the timeout: the tap that brings it back is held.
+        fresh.onBackground()
+        now += 5 * 60_000L
+        assertNull(fresh.admit(target))
+        assertTrue(fresh.locked.value)
+    }
+
     @Test fun withoutAScreenLockNothingIsAsked() {
         val store = store().apply { setEnabled(true) }
         secure = false
@@ -180,6 +224,36 @@ class AppLockTest {
         assertEquals("second", pending(controller))
     }
 
+    @Test fun aTapInFrontAfterTheTimeoutOpensAtOnce() {
+        val (controller, _) = lockedActivity(LaunchIntents.app(context))
+        controller.get().onAppLockResult(true)
+        ShadowSystemClock.advanceBy(Duration.ofMinutes(6))
+        // A tap on a heads-up notification while the app is in front: no onStop on the way.
+        controller.pause()
+        controller.newIntent(LaunchIntents.session(context, "route", "later"))
+        controller.resume()
+        assertFalse(app.appLock.locked.value)
+        assertEquals("later", pending(controller))
+    }
+
+    @Test fun aHeldTargetSurvivesTheActivityBeingRecreated() {
+        val (controller, prompt) = lockedActivity(LaunchIntents.session(context, "route", "held"))
+        val saved = Bundle().also { controller.pause().stop().saveInstanceState(it) }
+        assertEquals("held", saved.getString("heldSessionId"))
+        controller.destroy()
+        // The process died: a new one starts locked and has forgotten the target.
+        app.appLock.unlock()
+        app.appLock.onBackground()
+        ShadowSystemClock.advanceBy(Duration.ofMinutes(6))
+        val restored = Robolectric.buildActivity(MainActivity::class.java, LaunchIntents.app(context))
+        restored.get().appLockPrompt = prompt
+        restored.create(saved).start().resume()
+        assertTrue(app.appLock.locked.value)
+        assertEquals("held", app.appLock.heldTarget?.sessionId)
+        restored.get().onAppLockResult(true)
+        assertEquals("held", pending(restored))
+    }
+
     @Test fun anUnlockedAppOpensATapAtOnce() {
         val (controller, _) = lockedActivity(LaunchIntents.app(context))
         controller.get().onAppLockResult(true)
@@ -212,12 +286,12 @@ class AppLockTest {
         compose.onNodeWithTag("appLockSwitch").assertIsOff().assertIsNotEnabled()
     }
 
-    @Test fun theGateCoversTheAppWhileLocked() {
-        var locked by androidx.compose.runtime.mutableStateOf(true)
+    @Test fun theGateReplacesTheAppWhileLocked() {
+        var locked by mutableStateOf(true)
         var unlockTaps = 0
         compose.setContent {
             AppLockGate(locked, onUnlock = { unlockTaps++ }, colors = remoteColorScheme(dark = false)) {
-                androidx.compose.material3.Text("secret chat", androidx.compose.ui.Modifier.testTag("behind"))
+                Text("secret chat", Modifier.testTag("behind"))
             }
         }
         compose.onNodeWithTag("appLockScreen").assertIsDisplayed()
@@ -227,5 +301,37 @@ class AppLockTest {
         locked = false
         compose.onNodeWithTag("appLockScreen").assertDoesNotExist()
         compose.onNodeWithTag("behind").assertIsDisplayed()
+    }
+
+    @Test fun aDialogOrFieldOfTheAppIsGoneWhileLockedAndItsSavedStateComesBack() {
+        var locked by mutableStateOf(false)
+        compose.setContent {
+            AppLockGate(locked, onUnlock = {}, colors = remoteColorScheme(dark = false)) {
+                var draft by rememberSaveable { mutableStateOf("") }
+                Column {
+                    TextField(draft, { draft = it }, Modifier.testTag("composer"))
+                    // A dialog is a window of its own, above anything drawn in the activity's window.
+                    Dialog(onDismissRequest = {}) { Text("artifact", Modifier.testTag("dialog")) }
+                }
+            }
+        }
+        compose.onNodeWithTag("composer").performTextInput("draft")
+        compose.onNodeWithTag("dialog").assertIsDisplayed()
+        locked = true
+        compose.onNodeWithTag("appLockScreen").assertIsDisplayed()
+        compose.onNodeWithTag("dialog").assertDoesNotExist()
+        // Nothing of the app is left that a hardware keyboard's Tab could move focus into.
+        compose.onNodeWithTag("composer").assertDoesNotExist()
+        compose.onAllNodes(isFocusable()).assertCountEquals(1)
+        compose.onNodeWithTag("appLockUnlock").assert(isFocusable())
+        locked = false
+        compose.onNodeWithTag("composer").assertTextEquals("draft")
+    }
+
+    @Test fun theLockScreenIsAnnouncedWithAHeading() {
+        compose.setContent { AppLockGate(true, onUnlock = {}, colors = remoteColorScheme(dark = false)) {} }
+        val title = context.getString(R.string.remote_app_lock_locked_title)
+        compose.onNodeWithTag("appLockScreen").assert(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, title))
+        compose.onNode(isHeading()).assertTextEquals(title)
     }
 }

@@ -19,15 +19,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,8 +37,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /*
- * The optional app lock. When it is on, MainActivity covers the app and asks for the fingerprint,
- * face or the device's PIN, pattern or password when it comes back after [AppLockSettings.timeoutMinutes]
+ * The optional app lock. When it is on, MainActivity replaces the app with a lock screen and asks for
+ * a strong biometric (usually the fingerprint) or the device's PIN, pattern or password when it comes back after [AppLockSettings.timeoutMinutes]
  * in the background, and on every cold start. A notification, widget, shortcut or watch handoff that
  * arrives while locked is held and opened only after the user is verified; cancelling drops it.
  *
@@ -57,16 +59,23 @@ internal class AppLock(
     private val mutableLocked = MutableStateFlow(false)
     val locked: StateFlow<Boolean> = mutableLocked.asStateFlow()
 
-    /** When the app was last seen in front and unlocked; null until then in this process. */
+    /** When the app last left the front unlocked, or was unlocked; null until then in this process. */
     private var lastActive: Long? = null
+
+    /** The app is in front (started); nothing times out while it is used. */
+    private var inFront = false
     private var held: NotificationTarget? = null
+
+    /** The launch target held until the app is unlocked, for the activity's saved state. */
+    val heldTarget: NotificationTarget?
+        get() = held
 
     /** Whether the lock can ask for anything: switched on, and the device has a screen lock. */
     fun active(): Boolean = store.state.value.enabled && deviceSecure()
 
-    /** Locks when the timeout has run out since the app was last in front, or it never was. */
+    /** Locks when the timeout has run out since the app was last in front, or it never was; never while in front. */
     fun due(): Boolean {
-        if (!active()) return false
+        if (!active() || inFront) return false
         val since = lastActive ?: return true
         return clock() - since >= store.state.value.timeoutMinutes * 60_000L
     }
@@ -76,8 +85,14 @@ internal class AppLock(
         if (!mutableLocked.value && due()) mutableLocked.value = true
     }
 
+    /** The app came to the front; call after [check], so the time it was away counts first. */
+    fun onForeground() {
+        inFront = true
+    }
+
     /** The app leaves the front; its time in the background starts now unless it is locked already. */
     fun onBackground() {
+        inFront = false
         if (!mutableLocked.value) lastActive = clock()
     }
 
@@ -185,40 +200,45 @@ internal fun deviceSecure(context: Context): Boolean =
 internal val LocalAppLockStore = staticCompositionLocalOf<AppLockStore?> { null }
 
 /**
- * Shows [content] and, while [locked], covers it with [AppLockScreen]. The content stays composed so
- * the navigation and drafts are where the user left them, but it is hidden from accessibility services,
- * loses focus and the keyboard, and gets no touch or back press until the app is unlocked.
+ * Shows [content], or while [locked] only [AppLockScreen]. The content leaves the composition while
+ * locked: its dialogs, sheets and popups are windows of their own above the activity's window, so
+ * covering it would leave them visible and usable, and its focusable nodes and key handlers would
+ * still take a hardware keyboard's Tab, arrows and typing. Its saveable state (the back stack,
+ * drafts, scroll positions) is kept in a saveable state holder and comes back on unlock, as after a
+ * configuration change; dialogs that were open close.
  */
 @Composable
 internal fun AppLockGate(locked: Boolean, onUnlock: () -> Unit, colors: ColorScheme, content: @Composable () -> Unit) {
-    val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
-    LaunchedEffect(locked) {
-        if (locked) {
-            focus.clearFocus(force = true)
-            keyboard?.hide()
-        }
-    }
-    Box(Modifier.fillMaxSize()) {
-        Box(if (locked) Modifier.fillMaxSize().clearAndSetSemantics {} else Modifier.fillMaxSize()) { content() }
-        if (locked) MaterialTheme(colorScheme = colors, typography = RemoteTypography) { AppLockScreen(onUnlock) }
-    }
+    LaunchedEffect(locked) { if (locked) keyboard?.hide() }
+    val saved = rememberSaveableStateHolder()
+    if (locked) MaterialTheme(colorScheme = colors, typography = RemoteTypography) { AppLockScreen(onUnlock) }
+    else saved.SaveableStateProvider("app") { content() }
 }
 
 @Composable
 private fun AppLockScreen(onUnlock: () -> Unit) {
     val activity = LocalActivity.current
-    // Back leaves the app instead of navigating the screen under the lock.
+    // Back leaves the app; nothing else is composed that could take it.
     BackHandler { activity?.moveTaskToBack(true) }
-    // A Surface takes every touch, so nothing reaches the app behind it.
-    Surface(Modifier.fillMaxSize().testTag("appLockScreen"), color = MaterialTheme.colorScheme.background) {
+    val title = stringResource(R.string.remote_app_lock_locked_title)
+    // The pane title makes TalkBack announce the lock when it replaces the app.
+    Surface(
+        Modifier.fillMaxSize().semantics { paneTitle = title }.testTag("appLockScreen"),
+        color = MaterialTheme.colorScheme.background,
+    ) {
         Column(
             Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
-            Text(stringResource(R.string.remote_app_lock_locked_title), style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+            Text(
+                title,
+                Modifier.semantics { heading() },
+                style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.Center,
+            )
             Text(
                 stringResource(R.string.remote_app_lock_locked_help),
                 style = MaterialTheme.typography.bodyMedium,

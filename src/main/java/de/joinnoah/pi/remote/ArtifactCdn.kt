@@ -19,8 +19,10 @@ import java.util.concurrent.TimeUnit
  * What the page controls is the URL, and the URL is held to exact hosts: https only, port 443, no
  * credentials, one of [ARTIFACT_CDN_SCRIPT_HOSTS] or the two Google Fonts hosts. The path must have
  * the shape of a versioned package file on that host, and the query and fragment are dropped (Google
- * Fonts and Tailwind keep a query rebuilt from a few known parameters). So a page cannot use the
- * CDN as a beacon by putting data of its own into a URL the app fetches. Nothing else of the page's
+ * Fonts and Tailwind keep a query rebuilt from a few known parameters). That rules out free-form
+ * queries and fragments, but not every channel: a page can still spell data into what a package path
+ * allows (a file segment, a package name, a version, a font family), and the CDN operator, or public
+ * download statistics for a package the page's author owns, can see it. Nothing else of the page's
  * request is forwarded: no headers, cookies, Referer or Origin.
  */
 
@@ -60,6 +62,8 @@ private val pathPatterns: Map<String, List<Regex>> =
         ARTIFACT_CDN_FONT_CSS_HOST to listOf(Regex("/css2?"), Regex("/icon")),
         ARTIFACT_CDN_FONT_FILE_HOST to listOf(Regex("/s/[a-z0-9]+/v[0-9]+/[A-Za-z0-9_.\\-]+\\.(?:woff2|woff|ttf|otf)")),
     )
+        // A host listed in the CSP without a path shape here would be refused without a word.
+        .also { check(it.keys == allowedHosts) { "every allowed CDN host needs path patterns" } }
 
 private const val MAX_PATH_CHARS = 512
 

@@ -1,11 +1,11 @@
 <resources>
     <string name="remote_app_lock_title">App-Sperre</string>
-    <string name="remote_app_lock_help">Fragt nach deinem Fingerabdruck, Gesicht oder deiner Displaysperre, wenn PocketPi startet oder du nach einer Weile zurückkommst. Freigeben und Antworten in Benachrichtigungen funktionieren auch ohne Entsperren.</string>
+    <string name="remote_app_lock_help">Fragt nach deinem Fingerabdruck oder deiner Displaysperre, wenn PocketPi startet oder du nach einer Weile zurückkommst. Freigeben und Antworten in Benachrichtigungen funktionieren auch ohne Entsperren.</string>
     <string name="remote_app_lock_no_screen_lock">Richte auf diesem Gerät eine Displaysperre ein, um die App-Sperre zu nutzen.</string>
     <string name="remote_app_lock_timeout">Sperren nach</string>
     <string name="remote_app_lock_minutes">%1$d Min.</string>
     <string name="remote_app_lock_prompt_title">PocketPi entsperren</string>
     <string name="remote_app_lock_locked_title">PocketPi ist gesperrt</string>
-    <string name="remote_app_lock_locked_help">Entsperre mit deinem Fingerabdruck, Gesicht oder deiner Displaysperre, um weiterzumachen.</string>
+    <string name="remote_app_lock_locked_help">Entsperre mit deinem Fingerabdruck oder deiner Displaysperre, um weiterzumachen.</string>
     <string name="remote_app_lock_unlock">Entsperren</string>
 </resources>
