@@ -181,8 +181,15 @@ jobs:
         with:
           path: ~/.android/gradle/avd
           key: gmd-${{ env.GMD_DEVICE }}-aosp-${{ runner.os }}-agp-${{ steps.avd.outputs.agp }}-emulator-${{ steps.avd.outputs.emulator }}
+      # Build both APKs before the emulator starts. Otherwise the managed device boots while
+      # Kotlin compiles on the same few cores, and a starved System UI can stop responding.
+      - &build-test-apks
+        name: Build the app and test APKs
+        run: ./gradlew assembleDebug assembleDebugAndroidTest
       - name: Navigation and restoration instrumentation tests
-        run: ./gradlew pixel2Api36DebugAndroidTest
+        run: >-
+          ./gradlew pixel2Api36DebugAndroidTest
+          -Pandroid.testInstrumentationRunnerArguments.hideErrorDialogs=true
       # Both emulator jobs may miss the image entry in the same run; the second save then only
       # warns that the key is taken.
       - &save-image
@@ -226,12 +233,14 @@ jobs:
       - *locate-avd
       - *restore-image
       - *restore-avd
+      - *build-test-apks
       # Only the @LargeScreen tests: the phone job already runs everything, and each test here
       # costs a second emulator's time.
       - name: Large-screen instrumentation tests
         run: >-
           ./gradlew pixelTabletApi36DebugAndroidTest
           -Pandroid.testInstrumentationRunnerArguments.annotation=de.joinnoah.pi.remote.LargeScreen
+          -Pandroid.testInstrumentationRunnerArguments.hideErrorDialogs=true
       - *save-image
       - *save-avd
       - name: Upload instrumentation reports

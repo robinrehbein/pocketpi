@@ -183,7 +183,7 @@ android {
     defaultConfig {
         minSdk = 26
         targetSdk = 36
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "de.joinnoah.pi.remote.PocketPiTestRunner"
         applicationId = "de.robinrehbein.pocketpi"
         versionCode = releaseVersionCode ?: 1
         versionName = requestedVersionName ?: "0.3.19"
