@@ -17,8 +17,13 @@ import java.util.concurrent.TimeUnit
  * connects to those hosts; it only receives the bytes this file decided to hand over.
  *
  * What the page controls is the URL, and the URL is held to exact hosts: https only, port 443, no
- * credentials, one of [ARTIFACT_CDN_SCRIPT_HOSTS] or [ARTIFACT_CDN_FONT_HOSTS]. Nothing else of the
- * page's request is forwarded: no headers, cookies, Referer or Origin.
+ * credentials, one of [ARTIFACT_CDN_SCRIPT_HOSTS] or the two Google Fonts hosts. The path must have
+ * the shape of a versioned package file on that host, and the query and fragment are dropped (Google
+ * Fonts and Tailwind keep a query rebuilt from a few known parameters). That rules out free-form
+ * queries and fragments, but not every channel: a page can still spell data into what a package path
+ * allows (a file segment, a package name, a version, a font family), and the CDN operator, or public
+ * download statistics for a package the page's author owns, can see it. Nothing else of the page's
+ * request is forwarded: no headers, cookies, Referer or Origin.
  */
 
 /** Hosts that serve scripts, styles, images, data and fonts. These also go into script-src and connect-src. */
@@ -34,23 +39,99 @@ private val allowedHosts: Set<String> =
 
 private val authorityCharacters = Regex("[a-z0-9.:\\-]+")
 
+private const val NAME = "[A-Za-z0-9][A-Za-z0-9._\\-]*"
+
+/** A version that starts with a digit (`18`, `18.3.1`, `4.0.0-beta.2`), or three.js's `r128` on cdnjs. */
+private const val VERSION = "(?:[0-9][A-Za-z0-9.+\\-]*|r[0-9]+)"
+private const val PACKAGE = "(?:@$NAME/)?$NAME"
+
+/** Further path segments: a file inside the package. */
+private const val FILE = "(?:/[A-Za-z0-9._~@+\\-]+)*"
+
+/** Path shapes per host; each names a package or font file at a fixed version. */
+private val pathPatterns: Map<String, List<Regex>> =
+    mapOf(
+        "cdnjs.cloudflare.com" to listOf(Regex("/ajax/libs/$NAME/$VERSION$FILE")),
+        "cdn.jsdelivr.net" to listOf(Regex("/npm/$PACKAGE@$VERSION$FILE/?"), Regex("/gh/$NAME/$NAME@$VERSION$FILE/?")),
+        "unpkg.com" to listOf(Regex("/$PACKAGE@$VERSION$FILE/?")),
+        // The bare root is one fixed URL that redirects to the current version, so it carries no data.
+        "cdn.tailwindcss.com" to listOf(Regex("/"), Regex("/$VERSION")),
+        // jquery-3.7.1.min.js, ui/1.13.2/jquery-ui.min.js, color/jquery.color-2.2.0.min.js.
+        "code.jquery.com" to
+            listOf(Regex("(?:/[a-z]+)?/[a-z]+(?:[.\\-][a-z]+)*-$VERSION\\.(?:js|css|map)"), Regex("/[a-z]+/$VERSION$FILE")),
+        ARTIFACT_CDN_FONT_CSS_HOST to listOf(Regex("/css2?"), Regex("/icon")),
+        ARTIFACT_CDN_FONT_FILE_HOST to listOf(Regex("/s/[a-z0-9]+/v[0-9]+/[A-Za-z0-9_.\\-]+\\.(?:woff2|woff|ttf|otf)")),
+    )
+        // A host listed in the CSP without a path shape here would be refused without a word.
+        .also { check(it.keys == allowedHosts) { "every allowed CDN host needs path patterns" } }
+
+private const val MAX_PATH_CHARS = 512
+
+/** Google Fonts stylesheet parameters that are kept; `text`, which may carry any string, is not one. */
+private val fontQueryValue = Regex("[A-Za-z0-9+:,;@.%\\-]{1,256}")
+private val fontDisplayValues = setOf("auto", "block", "swap", "fallback", "optional")
+
+/** The official Tailwind Play CDN plugins. */
+private val tailwindPlugins = setOf("forms", "typography", "aspect-ratio", "line-clamp", "container-queries")
+
 /**
- * Whether [url] names a resource on the CDN allowlist. Exact host, `https` only, port 443 only, no
- * user info. Strict on purpose: anything this does not recognise exactly (upper case, a trailing dot,
- * a backslash, whitespace or control characters, punycode or other look-alikes) is refused, and the
- * WebView, which canonicalises URLs, never sends such a form for a legitimate request.
+ * The URL the app fetches for [url], or null when [url] is not on the allowlist. Exact host, `https`
+ * only, port 443 only, no user info, and a path of the shape [pathPatterns] gives for that host.
+ * Strict on purpose: anything this does not recognise exactly (upper case, a trailing dot, a
+ * backslash, whitespace or control characters, punycode or other look-alikes, percent escapes in
+ * the path, dot segments) is refused, and the WebView, which canonicalises URLs, never sends such a
+ * form for a legitimate request. The result has no fragment and no query, except the parameters
+ * [cdnQuery] keeps for Google Fonts and Tailwind.
  */
-internal fun artifactCdnAllowed(url: String): Boolean {
-    if (!url.startsWith("https://")) return false
-    if (url.any { it <= ' ' || it == '\\' || it == '\u007f' }) return false
+internal fun artifactCdnRequestUrl(url: String): String? {
+    if (!url.startsWith("https://")) return null
+    if (url.any { it <= ' ' || it == '\\' || it == '\u007f' }) return null
     val rest = url.removePrefix("https://")
     val authority = rest.takeWhile { it != '/' && it != '?' && it != '#' }
-    if (authority.isEmpty() || !authorityCharacters.matches(authority)) return false
+    if (authority.isEmpty() || !authorityCharacters.matches(authority)) return null
     val host = authority.substringBefore(':')
     val port = if (':' in authority) authority.substringAfter(':') else null
-    if (port != null && port != "443") return false
-    return host in allowedHosts
+    if (port != null && port != "443") return null
+    val patterns = pathPatterns[host] ?: return null
+    val afterAuthority = rest.substring(authority.length).substringBefore('#')
+    val path = afterAuthority.substringBefore('?').ifEmpty { "/" }
+    if (path.length > MAX_PATH_CHARS || "//" in path) return null
+    if (path.split('/').any { it == "." || it == ".." }) return null
+    if (patterns.none { it.matches(path) }) return null
+    val query = cdnQuery(host, afterAuthority.substringAfter('?', "")) ?: return null
+    return "https://$host$path$query"
 }
+
+/**
+ * The query kept for [host], with its leading `?`, or "" for none. Google Fonts needs its `family`
+ * parameters and gets null (refused) without one; Tailwind keeps a `plugins` list of known names.
+ * Every other parameter, and every query on other hosts, is dropped.
+ */
+private fun cdnQuery(host: String, query: String): String? {
+    val parameters = query.split('&').filter { it.isNotEmpty() }.map { it.substringBefore('=') to it.substringAfter('=', "") }
+    return when (host) {
+        ARTIFACT_CDN_FONT_CSS_HOST -> {
+            val kept =
+                parameters.filter { (key, value) ->
+                    when (key) {
+                        "family", "subset" -> fontQueryValue.matches(value)
+                        "display" -> value in fontDisplayValues
+                        else -> false
+                    }
+                }
+            if (kept.none { it.first == "family" }) null
+            else kept.joinToString("&", prefix = "?") { (key, value) -> "$key=$value" }
+        }
+        "cdn.tailwindcss.com" -> {
+            val plugins = parameters.lastOrNull { it.first == "plugins" }?.second?.split(',')?.filter { it in tailwindPlugins }?.distinct()
+            if (plugins.isNullOrEmpty()) "" else "?plugins=" + plugins.joinToString(",")
+        }
+        else -> ""
+    }
+}
+
+/** Whether [url] names a resource the CDN path may fetch (see [artifactCdnRequestUrl]). */
+internal fun artifactCdnAllowed(url: String): Boolean = artifactCdnRequestUrl(url) != null
 
 /** What the sandbox lets through from the CDN, as a media type without parameters. */
 internal fun artifactCdnContentTypeAllowed(mediaType: String?): Boolean {
@@ -200,10 +281,11 @@ internal fun interface ArtifactCdnFetcher {
  */
 internal class ArtifactCdnPolicyFetcher(private val transport: ArtifactCdnTransport) : ArtifactCdnFetcher {
     override fun fetch(url: String, userAgent: String, budget: ArtifactCdnBudget): ArtifactCdnReply {
-        var current = url
+        // What is fetched is the cleaned URL, without the page's query or fragment; redirects get the same.
+        var current = artifactCdnRequestUrl(url) ?: return ArtifactCdnReply.Refused(403)
         var hops = 0
         while (true) {
-            if (!artifactCdnAllowed(current) || budget.cancelled) return ArtifactCdnReply.Refused(403)
+            if (budget.cancelled) return ArtifactCdnReply.Refused(403)
             if (!budget.countRequest()) return ArtifactCdnReply.Refused(403)
             if (!budget.acquireFetch()) return ArtifactCdnReply.Refused(504)
             try {
@@ -211,7 +293,7 @@ internal class ArtifactCdnPolicyFetcher(private val transport: ArtifactCdnTransp
                     is Hop.Reply -> return step.reply
                     is Hop.Redirect -> {
                         if (++hops > ARTIFACT_CDN_MAX_REDIRECTS) return ArtifactCdnReply.Refused(403)
-                        current = step.target
+                        current = artifactCdnRequestUrl(step.target) ?: return ArtifactCdnReply.Refused(403)
                     }
                 }
             } finally {

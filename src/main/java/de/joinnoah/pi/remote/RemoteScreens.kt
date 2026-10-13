@@ -95,10 +95,13 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.first
 
 private data class AbortRunTarget(val sessionId: String, val questionIds: Set<String>)
 
@@ -216,7 +219,9 @@ internal fun RemoteScreen(
     val projectsColumn = LocalProjectsColumn.current?.takeIf { key is RemoteNavKey.Projects }
     val projectSelected = projectsColumn?.selectedProjectId != null
     val detailPane = LocalDetailPane.current && key is RemoteNavKey.Chat
-    val sideInspector = key is RemoteNavKey.Chat && paneLayout.inspector != InspectorMode.OVERLAY
+    // The layout opens the inspector beside this chat (see sideInspector below for where it
+    // actually does).
+    val sideCapable = key is RemoteNavKey.Chat && paneLayout.inspector != InspectorMode.OVERLAY
     // With a hardware keyboard Enter and Ctrl+Enter send at every window size, phones included.
     val hardwareKeyboard = LocalHardwareKeyboard.current
     val shortcutTargets = LocalShortcutTargets.current
@@ -559,13 +564,84 @@ internal fun RemoteScreen(
         // The item is gone (another session, or history reloaded without it): drop the overlay.
         if (openToolId != null && openTool == null && !state.loading) openToolId = null
     }
+    val changesOpen =
+        state.changes?.takeIf { it.sessionId == state.selection.sessionId && chatModel != null }
+    val filesOpen = state.files?.takeIf { it.sessionId == state.selection.sessionId && chatModel != null }
+    val jobsOpen =
+        state.jobs?.let { (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId } == true
+    // The inspector's tabs beside this chat. What backs each tab decides which exist: the
+    // repository's changes, files and jobs, the open tool and the history (see the reconcile below).
+    var inspectorTabs by rememberSaveable(key, stateSaver = InspectorTabs.Saver) { mutableStateOf(InspectorTabs()) }
+    /** Shows [tab] in the inspector and makes room for it; the caller opens what backs it. */
+    fun showTab(tab: InspectorTab) {
+        inspectorTabs = inspectorTabs.open(tab)
+        // A phone's history is a sheet over everything else.
+        if (!sideCapable && tab != InspectorTab.HISTORY) historyOpen = false
+        // At once rather than after a frame, so a portrait chat never shows the pane over itself.
+        if (sideCapable && detailPane && paneLayout.autoCollapseList) twoPane?.autoCollapseList()
+    }
+    /**
+     * Opens [tab], or switches to it where it is open already. A side inspector keeps the changes
+     * and the files open together; the phone shows one at a time. Wherever the inspector can go
+     * beside the chat it does once [showTab] made room, which collapses a list in its way.
+     */
+    fun openInspector(tab: InspectorTab) {
+        val chat = chatModel ?: return
+        showTab(tab)
+        when (tab) {
+            InspectorTab.CHANGES -> if (changesOpen == null) chat.openChanges(exclusive = !sideCapable)
+            InspectorTab.FILES -> if (filesOpen == null) chat.openFiles(exclusive = !sideCapable)
+            InspectorTab.JOBS -> if (!jobsOpen) chat.openJobs()
+            InspectorTab.HISTORY -> historyOpen = true
+            InspectorTab.TOOL, InspectorTab.ARTIFACT -> Unit
+        }
+    }
+    /** Closes [tab] and what backs it; the tab before it becomes active. */
+    fun closeTab(tab: InspectorTab) {
+        inspectorTabs = inspectorTabs.close(tab)
+        when (tab) {
+            InspectorTab.CHANGES -> chatModel?.closeChanges()
+            InspectorTab.FILES -> chatModel?.closeFiles()
+            InspectorTab.JOBS -> chatModel?.closeJobs()
+            InspectorTab.TOOL -> closeTool()
+            InspectorTab.HISTORY -> historyOpen = false
+            InspectorTab.ARTIFACT -> Unit
+        }
+    }
+    // The panes show beside the chat, or would if the user had not hidden them (Ctrl+\); set
+    // once the tabs are known below, read by the actions.
+    val panesBesideNow = remember { mutableStateOf(false) }
+    /**
+     * Ctrl+Shift+G, E, J, Ctrl+H and the history button: open [tab], or switch to it where it is
+     * open behind another tab or hidden; the tab already shown, or a pane over the chat, closes.
+     */
+    fun toggleTab(tab: InspectorTab, open: Boolean, canOpen: Boolean): Boolean {
+        when {
+            open && (!panesBesideNow.value || (inspectorTabs.active == tab && !inspectorTabs.hidden)) -> closeTab(tab)
+            open -> showTab(tab)
+            canOpen -> openInspector(tab)
+            else -> return false
+        }
+        return true
+    }
+    fun toggleHistory() {
+        toggleTab(InspectorTab.HISTORY, historyOpen, canOpen = true)
+    }
     var touchedSheet by rememberSaveable(key) { mutableStateOf(false) }
     var childCandidates by remember(key) { mutableStateOf<List<SessionListItem>?>(null) }
     var abortChild by remember(key) { mutableStateOf<SubagentStripEntry?>(null) }
     val composerFocus = remember { FocusRequester() }
     var composerFocusRequest by remember { mutableStateOf(0) }
+    // An expanded inspector leaves the chat only a strip (see InspectorRow).
+    var chatStripped by remember { mutableStateOf(false) }
     LaunchedEffect(composerFocusRequest) {
         if (composerFocusRequest == 0) return@LaunchedEffect
+        // A prompt filled in or a composer asked for behind the strip: the chat comes back first,
+        // so the user sees what they type into.
+        if (chatStripped) {
+            twoPane?.inspectorExpanded = false
+            withTimeoutOrNull(1_000) { snapshotFlow { chatStripped }.first { !it } }
+        }
         withFrameNanos { }
         runCatching { composerFocus.requestFocus() }
     }
@@ -853,16 +929,7 @@ internal fun RemoteScreen(
         )
     val chatHeader: @Composable () -> Unit = {
         if (key is RemoteNavKey.Chat) {
-            val statusLabel =
-                stringResource(
-                    when {
-                        !state.connected || state.status == "offline" -> R.string.remote_status_offline
-                        state.status == "running" -> R.string.remote_status_running
-                        state.status == "waiting" -> R.string.remote_status_waiting
-                        state.status == "idle" -> R.string.remote_status_idle
-                        else -> R.string.remote_status_unknown
-                    }
-                )
+            val statusLabel = stringResource(chatStatusLabel(state))
             val statusColor = chatStatusColor(state.status, state.connected)
             val canRename = canRenameSession(state)
             val hasTuiInfo =
@@ -875,6 +942,7 @@ internal fun RemoteScreen(
                     buildSet {
                         if (canViewChanges(state) && state.connected) add(ChatAction.CHANGES)
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
+                        if (statusJobs != null) add(ChatAction.JOBS)
                         if (canRename) add(ChatAction.RENAME)
                         if (state.connected && !state.loading && !navigator.mutating) add(ChatAction.NEW_SESSION)
                         // Offered while pi runs (the sheet then explains it is read-only); `/settings` is typed into an idle draft only.
@@ -887,28 +955,23 @@ internal fun RemoteScreen(
             fun runAction(action: ChatAction) {
                 chatModel?.recordChatAction(action)
                 when (action) {
-                    ChatAction.CHANGES -> {
-                        historyOpen = false
-                        chatModel?.openChanges()
-                    }
-                    ChatAction.FILES -> {
-                        historyOpen = false
-                        chatModel?.openFiles()
-                    }
+                    ChatAction.CHANGES -> openInspector(InspectorTab.CHANGES)
+                    ChatAction.FILES -> openInspector(InspectorTab.FILES)
+                    ChatAction.JOBS -> openInspector(InspectorTab.JOBS)
                     ChatAction.RENAME ->
                         state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
                     ChatAction.NEW_SESSION -> navigator.createSession(key.routeId, key.projectId)
                     ChatAction.REFRESH -> model.refresh()
                     ChatAction.SESSION_SETTINGS -> settingsSheetRequested = true
                     ChatAction.SETTINGS -> navigator.settings()
-                    ChatAction.HISTORY -> historyOpen = !historyOpen
+                    ChatAction.HISTORY -> toggleHistory()
                 }
             }
             val actionsControl: @Composable (ChatActionLayout, Boolean) -> Unit = { actionLayout, standaloneHistory ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (standaloneHistory) FloatingSurface(shape = CircleShape, color = headerColor) {
                         IconButton(
-                            onClick = { historyOpen = !historyOpen },
+                            onClick = ::toggleHistory,
                             modifier = Modifier.size(48.dp).testTag("chatHistoryButton"),
                         ) {
                             Icon(Icons.AutoMirrored.Filled.List, stringResource(R.string.remote_chat_history))
@@ -1027,8 +1090,6 @@ internal fun RemoteScreen(
             }
         }
     }
-    val changesOpen =
-        state.changes?.takeIf { it.sessionId == state.selection.sessionId && chatModel != null }
     val changesContent: (@Composable () -> Unit)? =
         changesOpen?.let { changes ->
             {
@@ -1042,7 +1103,6 @@ internal fun RemoteScreen(
                 )
             }
         }
-    val filesOpen = state.files?.takeIf { it.sessionId == state.selection.sessionId && chatModel != null }
     val filesContent: (@Composable () -> Unit)? =
         filesOpen?.let { files ->
             {
@@ -1081,8 +1141,29 @@ internal fun RemoteScreen(
                 )
             }
         }
-    // Wide windows show tool details, diffs and files beside the chat; the tool detail stays on top of
-    // the diff there too, as in the overlay.
+    // The jobs' actions, for the screen over or beside the chat and the chip's popover. Asking pi
+    // about a job's output keeps it beside the chat, and closes it where it covers the composer.
+    val jobsActions =
+        chatModel?.let { chat ->
+            remember(chat, composerDraft) {
+                JobsActions(
+                    chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs, chat::stopJob,
+                    onAsk = { prompt ->
+                        composerDraft?.flush()
+                        chat.prefillPrompt(prompt).also { done ->
+                            if (done) {
+                                if (!panesBesideNow.value) chat.closeJobs()
+                                composerFocusRequest++
+                            }
+                        }
+                    },
+                )
+            }
+        }
+    val jobsContent: (@Composable () -> Unit)? =
+        state.jobs?.takeIf { jobsOpen && jobsActions != null }?.let { jobs ->
+            { BackgroundJobsScreen(jobs, checkNotNull(jobsActions), Modifier.fillMaxSize()) }
+        }
     // The history opens at the entry for the top of the chat's viewport.
     val historyStart =
         remember(historyOpen) {
@@ -1096,30 +1177,104 @@ internal fun RemoteScreen(
         }
     // The chat history opens last, so it lies on top; opening anything else closes it.
     val historyContent: (@Composable () -> Unit)? =
-        if (historyOpen && key is RemoteNavKey.Chat && sideInspector) {
+        if (historyOpen && key is RemoteNavKey.Chat && sideCapable) {
             { ChatHistoryPane(history, onOpen = ::jumpTo, onClose = { historyOpen = false }, initialIndex = historyStart) }
         } else null
-    val inspectorContent: (@Composable () -> Unit)? =
-        if (changesContent == null && filesContent == null && toolContent == null && historyContent == null) null
-        else {
-            {
-                changesContent?.invoke()
-                filesContent?.invoke()
-                toolContent?.invoke()
-                historyContent?.invoke()
+    fun tabContent(tab: InspectorTab): (@Composable () -> Unit)? =
+        when (tab) {
+            InspectorTab.CHANGES -> changesContent
+            InspectorTab.FILES -> filesContent
+            InspectorTab.JOBS -> jobsContent
+            InspectorTab.TOOL -> toolContent
+            InspectorTab.HISTORY -> historyContent
+            InspectorTab.ARTIFACT -> null
+        }
+    // A tab whose pane closed elsewhere (its own close button, a reconnect, another session)
+    // goes, and one that opened elsewhere (a notification, the jobs chip) joins.
+    val availableTabs =
+        buildList {
+            if (changesContent != null) add(InspectorTab.CHANGES)
+            if (filesContent != null) add(InspectorTab.FILES)
+            if (jobsContent != null) add(InspectorTab.JOBS)
+            if (toolContent != null) add(InspectorTab.TOOL)
+            if (historyOpen && sideCapable) add(InspectorTab.HISTORY)
+        }
+    val tabs = remember(inspectorTabs, availableTabs) { inspectorTabs.reconcile(availableTabs) }
+    val persistentInspector = paneLayout.inspector == InspectorMode.PERSISTENT
+    // The inspector would show: it has tabs, or is always there, and the user did not hide it.
+    val inspectorWanted = sideCapable && !tabs.hidden && (persistentInspector || tabs.open.isNotEmpty())
+    // A tab that opened elsewhere (the jobs chip, a notification) collapses the list in the effect
+    // below, a frame late; it counts as collapsed already, so the pane never starts over the chat.
+    val listMakingWay =
+        inspectorWanted && detailPane && twoPane != null && paneLayout.autoCollapseList &&
+            tabs.open.any { it !in inspectorTabs.open }
+    // The inspector shows beside the chat. Where it does not fit beside the session list, opening
+    // it collapses the list; while the user keeps the list shown it covers the chat as on a phone.
+    val sideInspector =
+        sideCapable &&
+            (!detailPane || twoPane == null || twoPane.listCollapsed || paneLayout.inspectorBesideList || listMakingWay)
+    // Hidden tabs (Ctrl+\) stay out of the chat's way too: they are the inspector's, not panes
+    // over the chat, even where the list came back meanwhile.
+    val panesBeside = sideInspector || (sideCapable && tabs.hidden)
+    panesBesideNow.value = panesBeside
+    SideEffect {
+        if (inspectorTabs == tabs) return@SideEffect
+        inspectorTabs = tabs
+        if (listMakingWay) twoPane?.autoCollapseList()
+    }
+    val inspectorShown = sideInspector && inspectorWanted
+    // The list makes way where the chat would get cramped, and comes back with the last tab.
+    if (detailPane && twoPane != null)
+        LaunchedEffect(twoPane, inspectorWanted, paneLayout.autoCollapseList) {
+            if (inspectorWanted) {
+                if (paneLayout.autoCollapseList) twoPane.autoCollapseList()
+            } else {
+                twoPane.restoreList()
+                twoPane.inspectorExpanded = false
             }
         }
-    val inspectorShown = sideInspector && (paneLayout.inspector == InspectorMode.PERSISTENT || inspectorContent != null)
+    // DeX keeps the inspector open: a chat starts with its running jobs there, else its changes.
+    // Once per chat, so a pane the user closes stays closed.
+    var persistentDefaultShown by rememberSaveable(key) { mutableStateOf(false) }
+    val jobsKnown =
+        !jobsAvailable ||
+            state.jobs?.let { it.sessionId == state.selection.sessionId && (it.loaded || it.unsupported || it.failure != null) } == true
+    if (chatKey != null && persistentInspector && sideCapable)
+        LaunchedEffect(state.connected, state.loading, jobsKnown) {
+            if (persistentDefaultShown || !state.connected || state.loading || !jobsKnown) return@LaunchedEffect
+            persistentDefaultShown = true
+            if (inspectorTabs.open.isNotEmpty()) return@LaunchedEffect
+            when {
+                state.jobs?.jobs.orEmpty().any { it.status == JobStatus.RUNNING } -> openInspector(InspectorTab.JOBS)
+                canViewChanges(state) -> openInspector(InspectorTab.CHANGES)
+            }
+        }
+    val inspectorContent: (@Composable () -> Unit)? =
+        if (tabs.open.isEmpty()) null
+        else {
+            {
+                InspectorHost(
+                    tabs,
+                    content = ::tabContent,
+                    onSelect = { inspectorTabs = inspectorTabs.open(it) },
+                    onClose = ::closeTab,
+                    expanded = twoPane?.inspectorExpanded == true,
+                    onExpand = { twoPane?.let { it.inspectorExpanded = !it.inspectorExpanded } },
+                    // An unsaved edit closes through its own prompt in the pane.
+                    closable = { tab -> tab != InspectorTab.FILES || filesOpen?.editor?.changed != true },
+                )
+            }
+        }
     val focusManager = LocalFocusManager.current
     // With a hardware keyboard a chat opens ready for typing, unless a question or a dialog is up
     // or TalkBack runs: then focus stays where the user put it.
     val chatDialogOpen = renameSessionId != null || abortTargetIsCurrent || abortChild != null || tuiInfoOpen
-    val jobsOpen =
-        state.jobs?.let { (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId } == true
-    // Files, Changes, a tool detail or the jobs fill the chat's place and hide the composer.
-    val composerCovered =
-        chatKey != null && chatModel != null &&
-            (jobsOpen || (!sideInspector && (changesOpen != null || filesOpen != null || openTool != null)))
+    // Files, Changes, a tool detail or the jobs fill the chat's place and hide the composer, and so
+    // does an expanded inspector that leaves the chat only a strip.
+    val paneOverChat =
+        chatKey != null && chatModel != null && !panesBeside &&
+            (jobsOpen || changesOpen != null || filesOpen != null || openTool != null)
+    val composerCovered = paneOverChat || (chatKey != null && inspectorShown && chatStripped)
     if (chatKey != null)
         LaunchedEffect(chatKey, hardwareKeyboard) {
             if (!hardwareKeyboard || questionPending || chatDialogOpen || composerCovered || touchExplorationEnabled(context))
@@ -1162,37 +1317,24 @@ internal fun RemoteScreen(
                 composerFocusRequest++
                 true
             }
-            Shortcut.CHANGES ->
-                when {
-                    changesOpen != null -> chat.closeChanges().let { true }
-                    canViewChanges(state) && state.connected -> {
-                        historyOpen = false
-                        chat.openChanges()
-                        true
-                    }
-                    else -> false
-                }
-            Shortcut.FILES ->
-                when {
-                    filesOpen != null -> chat.closeFiles().let { true }
-                    canBrowseFiles(state) && state.connected -> {
-                        historyOpen = false
-                        chat.openFiles()
-                        true
-                    }
-                    else -> false
-                }
-            Shortcut.JOBS ->
-                when {
-                    jobsOpen -> chat.closeJobs().let { true }
-                    jobsAvailable && state.connected -> {
-                        chat.openJobs()
-                        true
-                    }
-                    else -> false
-                }
-            Shortcut.HISTORY -> {
-                historyOpen = !historyOpen
+            Shortcut.CHANGES -> toggleTab(InspectorTab.CHANGES, changesOpen != null, canViewChanges(state) && state.connected)
+            Shortcut.FILES -> toggleTab(InspectorTab.FILES, filesOpen != null, canBrowseFiles(state) && state.connected)
+            Shortcut.JOBS -> toggleTab(InspectorTab.JOBS, jobsOpen, jobsAvailable && state.connected)
+            Shortcut.HISTORY -> toggleTab(InspectorTab.HISTORY, historyOpen, canOpen = true)
+            Shortcut.EXPAND_INSPECTOR -> {
+                val pane = twoPane ?: return false
+                if (!inspectorShown || tabs.open.isEmpty()) return false
+                pane.inspectorExpanded = !pane.inspectorExpanded
+                true
+            }
+            Shortcut.TOGGLE_INSPECTOR -> {
+                // Hides the pane and keeps its tabs; the same key brings them back.
+                if (!sideCapable || (tabs.open.isEmpty() && !persistentInspector)) return false
+                // Shown again as a tab opens, with the list making way at once.
+                val tab = tabs.active ?: tabs.open.firstOrNull()
+                if (!tabs.hidden) inspectorTabs = tabs.copy(hidden = true)
+                else if (tab != null) showTab(tab)
+                else inspectorTabs = tabs.copy(hidden = false)
                 true
             }
             Shortcut.RENAME -> {
@@ -1275,7 +1417,7 @@ internal fun RemoteScreen(
     // The rows F6 comes back to: the list's here, or the pane's over or beside the chat.
     val regionChildren = remember(key) { FocusRegionChildren() }
     val overlayChildren = remember(key) { FocusRegionChildren() }
-    val overlayRegion = rememberFocusRegion(FocusRegion.OVERLAY, enabled = composerCovered, children = overlayChildren)
+    val overlayRegion = rememberFocusRegion(FocusRegion.OVERLAY, enabled = paneOverChat, children = overlayChildren)
     CompositionLocalProvider(
         LocalChatKeyTarget provides chatKeyTarget.takeIf { chatKey != null },
         LocalFocusRegionChildren provides regionChildren,
@@ -1285,6 +1427,19 @@ internal fun RemoteScreen(
         width = { twoPane?.inspectorWidth(paneLayout) ?: paneLayout.inspectorWidth },
         onResize = twoPane?.let { pane -> { width -> pane.resizeInspector(paneLayout, width) } },
         inspector = inspectorContent,
+        minWidth = paneLayout.inspectorMinWidth,
+        expanded = twoPane?.inspectorExpanded == true,
+        chatStrip =
+            twoPane?.takeIf { chatKey != null }?.let { pane ->
+                {
+                    ChatStrip(
+                        chatStatusColor(state.status, state.connected),
+                        stringResource(chatStatusLabel(state)),
+                        onShowChat = { pane.inspectorExpanded = false },
+                    )
+                }
+            },
+        onChatStripped = { chatStripped = it },
     ) {
     Scaffold(
         // Esc parks keyboard focus here, on the chat itself: clearing it would hand it to the
@@ -1390,7 +1545,7 @@ internal fun RemoteScreen(
             else Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)
         ) {
         // While the tool detail covers the chat, the chat below must not be reachable by TalkBack.
-        val underlay = if (openTool != null && !sideInspector) Modifier.clearAndSetSemantics {} else Modifier
+        val underlay = if (openTool != null && !panesBeside) Modifier.clearAndSetSemantics {} else Modifier
         // A wide chat pane centres its bubbles in a reading column; phones never reach the limit.
         val readingInset =
             if (key is RemoteNavKey.Chat) ((maxWidth - 40.dp - MAX_READING_WIDTH) / 2).coerceAtLeast(0.dp)
@@ -1822,6 +1977,7 @@ internal fun RemoteScreen(
                             Spacer(Modifier.width(ButtonDefaults.IconSpacing))
                             Text(stringResource(R.string.remote_settings_privacy_open))
                         }
+                        AppLockSettingRow()
                     }
                 }
                 item {
@@ -2099,8 +2255,8 @@ internal fun RemoteScreen(
                                     thinkingActive = thinkingActive,
                                     onQuote = model::quote,
                                     onOpenTool = {
-                                        historyOpen = false
                                         openToolId = it.id
+                                        showTab(InspectorTab.TOOL)
                                     },
                                     onOpenAgent = ::openAgent,
                                     onAskToFix = if (acceptsPrompts) ::askToFix else null,
@@ -2317,10 +2473,7 @@ internal fun RemoteScreen(
                         ) {
                             TouchedFilesSummary(touched, touchedLines) {
                                 when (touchedFilesTarget(canViewChanges(state) && state.connected, touched.changed.isNotEmpty())) {
-                                    TouchedFilesTarget.CHANGES -> {
-                                        historyOpen = false
-                                        chatModel?.openChanges()
-                                    }
+                                    TouchedFilesTarget.CHANGES -> openInspector(InspectorTab.CHANGES)
                                     TouchedFilesTarget.SHEET -> touchedSheet = true
                                 }
                             }
@@ -2336,8 +2489,12 @@ internal fun RemoteScreen(
                             statusJobs?.let { jobs ->
                                 key(jobs.sessionId) {
                                     val chat = checkNotNull(chatModel)
+                                    val openJobs by rememberUpdatedState { openInspector(InspectorTab.JOBS) }
                                     BackgroundJobsChip(jobs, remember(chat) {
-                                        JobsActions(chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs, chat::stopJob)
+                                        JobsActions(
+                                            chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs, chat::stopJob,
+                                            onOpenList = { openJobs() },
+                                        )
                                     })
                                 }
                             }
@@ -2484,24 +2641,12 @@ internal fun RemoteScreen(
             )
             Box(Modifier.fillMaxSize().then(overlayRegion)) {
             CompositionLocalProvider(LocalFocusRegionChildren provides overlayChildren) {
-            if (!sideInspector) changesContent?.invoke()
-            if (!sideInspector) filesContent?.invoke()
-            state.jobs
-                ?.takeIf {
-                    // Stays open through a reconnect, which clears the capabilities for a moment.
-                    (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId && chatModel != null
-                }
-                ?.let { jobs ->
-                    val chat = checkNotNull(chatModel)
-                    BackgroundJobsScreen(
-                        jobs,
-                        remember(chat) {
-                            JobsActions(chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs, chat::stopJob)
-                        },
-                        Modifier.fillMaxSize(),
-                    )
-                }
-            if (!sideInspector) toolContent?.invoke()
+            // Beside the chat these are the inspector's tabs. The jobs stay open through a
+            // reconnect, which clears the capabilities for a moment.
+            if (!panesBeside) changesContent?.invoke()
+            if (!panesBeside) filesContent?.invoke()
+            if (!panesBeside) jobsContent?.invoke()
+            if (!panesBeside) toolContent?.invoke()
             }
             }
         }
@@ -2544,7 +2689,7 @@ internal fun RemoteScreen(
         )
     if (touchedSheet && key is RemoteNavKey.Chat)
         TouchedFilesSheet(touched, onDismiss = { touchedSheet = false }, onOpen = ::jumpTo)
-    if (historyOpen && key is RemoteNavKey.Chat && !sideInspector)
+    if (historyOpen && key is RemoteNavKey.Chat && !panesBeside)
         ChatHistorySheet(history, onDismiss = { historyOpen = false }, onOpen = ::jumpTo, initialIndex = historyStart)
     childCandidates?.let { candidates ->
         ChildSessionPickerSheet(
@@ -3075,3 +3220,14 @@ private fun ScrollToLatestSlot(visible: Boolean, onClick: () -> Unit) {
         }
     }
 }
+
+/** What the chat's status dot says. */
+@androidx.annotation.StringRes
+internal fun chatStatusLabel(state: RemoteState): Int =
+    when {
+        !state.connected || state.status == "offline" -> R.string.remote_status_offline
+        state.status == "running" -> R.string.remote_status_running
+        state.status == "waiting" -> R.string.remote_status_waiting
+        state.status == "idle" -> R.string.remote_status_idle
+        else -> R.string.remote_status_unknown
+    }

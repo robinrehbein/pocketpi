@@ -343,7 +343,8 @@ internal class ChatViewModel(
         if (repository.state.value.draft.isBlank()) repository.draft(prompt)
     }
 
-    fun openChanges() = active(repository::openChanges)
+    /** [exclusive] false keeps the files open beside the changes ([RemoteRepository.openChanges]). */
+    fun openChanges(exclusive: Boolean = true) = active { repository.openChanges(exclusive) }
 
     fun refreshJobs() = active(repository::refreshJobs)
 
@@ -370,7 +371,8 @@ internal class ChatViewModel(
 
     fun requestChangesPreview(path: String) = active { repository.requestChangesPreview(path) }
 
-    fun openFiles() = active(repository::openFiles)
+    /** [exclusive] false keeps the changes open beside the files ([RemoteRepository.openFiles]). */
+    fun openFiles(exclusive: Boolean = true) = active { repository.openFiles(exclusive) }
 
     fun closeFiles() = repository.closeFiles()
 

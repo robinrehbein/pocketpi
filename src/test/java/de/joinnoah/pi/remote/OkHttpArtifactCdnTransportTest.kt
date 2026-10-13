@@ -114,7 +114,7 @@ class OkHttpArtifactCdnTransportTest {
             budget.cancel()
         }.start()
         val started = System.nanoTime()
-        val reply = ArtifactCdnPolicyFetcher(viaServer).fetch("https://unpkg.com/slow.js", "UA", budget)
+        val reply = ArtifactCdnPolicyFetcher(viaServer).fetch("https://unpkg.com/slow@1.0.0/slow.js", "UA", budget)
         assertEquals(504, (reply as ArtifactCdnReply.Refused).status)
         assertTrue("took too long", TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started) < 10)
         assertTrue(budget.cancelled)

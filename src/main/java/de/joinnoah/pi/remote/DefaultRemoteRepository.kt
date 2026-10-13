@@ -5526,12 +5526,17 @@ class DefaultRemoteRepository(
             ::update,
         )
 
-    // Changes and files share one place on screen: opening one closes the other, which also
-    // stops its loader.
-    override fun openChanges() {
-        // An unsaved edit asks first; its prompt runs this again through confirmFileEditorLeave.
-        if (filesLoader.requestLeave(EditorLeave.CHANGES)) return
-        filesLoader.close()
+    // On a phone changes and files share one place on screen: opening one closes the other,
+    // which also stops its loader. A side inspector shows both as tabs, and each loader closes
+    // only with its own tab.
+    override fun openChanges() = openChanges(exclusive = true)
+
+    override fun openChanges(exclusive: Boolean) {
+        if (exclusive) {
+            // An unsaved edit asks first; its prompt runs this again through confirmFileEditorLeave.
+            if (filesLoader.requestLeave(EditorLeave.CHANGES)) return
+            filesLoader.close()
+        }
         changesLoader.open(currentDraftKey()?.let { drafts[it]?.reviewComments }.orEmpty())
     }
 
@@ -6310,11 +6315,13 @@ class DefaultRemoteRepository(
             ::update,
         )
 
-    override fun openFiles() {
+    override fun openFiles() = openFiles(exclusive = true)
+
+    override fun openFiles(exclusive: Boolean) {
         // The pane already shows the open editor; opening the browser again would drop its edit.
         val current = state.value
         if (current.files?.takeIf { it.sessionId == current.selection.sessionId }?.editor != null) return
-        changesLoader.close()
+        if (exclusive) changesLoader.close()
         filesLoader.open()
     }
 

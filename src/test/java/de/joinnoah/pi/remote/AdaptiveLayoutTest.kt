@@ -43,7 +43,16 @@ class AdaptiveLayoutTest {
         assertEquals(280.dp, paneLayout(959.dp, TALL).listWidth)
         assertEquals(360.dp, paneLayout(960.dp, TALL).listWidth)
         assertEquals(280.dp, paneLayout(960.dp, TALL).projectsWidth)
-        assertEquals(InspectorMode.OVERLAY, paneLayout(1179.dp, TALL).inspector)
+        // The inspector opens beside the chat once the chat's minimum and the narrowest portrait
+        // inspector fit next to the strip: 65 + 400 + 1 + 280 dp.
+        assertEquals(InspectorMode.OVERLAY, paneLayout(745.dp, TALL).inspector)
+        assertEquals(InspectorMode.ON_DEMAND, paneLayout(746.dp, TALL).inspector)
+        assertEquals(InspectorMode.ON_DEMAND, paneLayout(750.dp, TALL).inspector)
+        assertEquals(320.dp, paneLayout(750.dp, TALL).inspectorWidth)
+        assertEquals(SIDE_INSPECTOR_MIN_WIDTH, paneLayout(959.dp, TALL).inspectorMinWidth)
+        assertEquals(InspectorMode.ON_DEMAND, paneLayout(1179.dp, TALL).inspector)
+        assertEquals(360.dp, paneLayout(1179.dp, TALL).inspectorWidth)
+        assertEquals(INSPECTOR_PANE_MIN_WIDTH, paneLayout(1179.dp, TALL).inspectorMinWidth)
         assertEquals(InspectorMode.ON_DEMAND, paneLayout(1180.dp, TALL).inspector)
         assertEquals(320.dp, paneLayout(1180.dp, TALL).listWidth)
         assertEquals(360.dp, paneLayout(1180.dp, TALL).inspectorWidth)
@@ -190,33 +199,66 @@ class AdaptiveLayoutTest {
 
     @Test
     fun listWidthStaysWithinItsBoundsAndLeavesTheChatRoom() {
-        assertEquals(240.dp, listPaneWidth(100.dp, 1600.dp, InspectorMode.PERSISTENT))
-        assertEquals(480.dp, listPaneWidth(900.dp, 1600.dp, InspectorMode.PERSISTENT))
+        val persistent = paneLayout(1600.dp, TALL)
+        assertEquals(240.dp, listPaneWidth(100.dp, 1600.dp, persistent))
+        assertEquals(480.dp, listPaneWidth(900.dp, 1600.dp, persistent))
         // 400 dp of chat and the divider line.
-        assertEquals(319.dp, listPaneWidth(500.dp, 720.dp, InspectorMode.OVERLAY))
-        // Also the narrowest inspector pane and its divider.
-        assertEquals(398.dp, listPaneWidth(500.dp, 1100.dp, InspectorMode.ON_DEMAND))
+        assertEquals(319.dp, listPaneWidth(500.dp, 720.dp, paneLayout(720.dp, TALL)))
+        // Also the narrowest inspector pane and its divider, where it opens beside the list.
+        val beside = PaneLayout(true, InspectorMode.ON_DEMAND, inspectorBesideList = true)
+        assertEquals(398.dp, listPaneWidth(500.dp, 1100.dp, beside))
+        // Where it does not, the list collapses for it instead and keeps its room.
+        assertEquals(319.dp, listPaneWidth(500.dp, 720.dp, beside.copy(inspectorBesideList = false)))
+    }
+
+    /** The chat's width beside the strip, the default list and, with [inspector], the inspector. */
+    private fun chatWidth(window: Int, height: Int = 800, inspector: Boolean = false, listCollapsed: Boolean = false): Dp {
+        val layout = paneLayout(window.dp, height.dp)
+        val room = window.dp - PROJECT_STRIP_RESERVE
+        val chatPane = if (listCollapsed) room else room - listPaneWidth(layout.listWidth, room, layout) - 1.dp
+        if (!inspector) return chatPane
+        return chatPane - inspectorPaneWidth(layout.inspectorWidth, chatPane, layout.inspectorMinWidth) - 1.dp
     }
 
     @Test
     fun aGalaxyTabS11KeepsTheChatReadableBesideTheStrip() {
-        fun chatWidth(window: Int): Dp {
-            val layout = paneLayout(window.dp, TALL)
-            val list = listPaneWidth(layout.listWidth, window.dp - PROJECT_STRIP_RESERVE, layout.inspector)
-            return window.dp - PROJECT_STRIP_RESERVE - list - 1.dp
-        }
         // Portrait: strip 65, list 281, chat 407.
         assertEquals(280.dp, paneLayout(753.dp, 1205.dp).listWidth)
         assertEquals(240.dp, paneLayout(753.dp, 1205.dp).projectsWidth)
-        assertEquals(407.dp, chatWidth(753))
+        assertEquals(407.dp, chatWidth(753, 1205))
+        assertEquals(454.dp, chatWidth(800, 1280))
         // Landscape: strip 65, list 321, chat and inspector 819.
         val landscape = paneLayout(1205.dp, 753.dp)
         assertEquals(InspectorMode.ON_DEMAND, landscape.inspector)
-        assertEquals(819.dp, chatWidth(1205))
-        assertEquals(360.dp, inspectorPaneWidth(landscape.inspectorWidth, chatWidth(1205)))
-        assertTrue(chatWidth(1205) - 361.dp >= CHAT_PANE_MIN_WIDTH)
+        assertEquals(819.dp, chatWidth(1205, 753))
+        assertEquals(360.dp, inspectorPaneWidth(landscape.inspectorWidth, chatWidth(1205, 753)))
         // Without a chat, the full projects column, the list and an empty pane.
         assertEquals(231.dp, 753.dp - 240.dp - 1.dp - 280.dp - 1.dp)
+    }
+
+    @Test
+    fun aGalaxyTabS11OpensTheInspectorBesideTheChatInBothOrientations() {
+        for ((width, height) in listOf(753 to 1205, 800 to 1280, 1205 to 753, 1280 to 800)) {
+            val layout = paneLayout(width.dp, height.dp)
+            assertEquals("mode at $width", InspectorMode.ON_DEMAND, layout.inspector)
+            // Beside the list the chat would be cramped, so the list makes way for the inspector.
+            assertTrue("auto collapse at $width", layout.autoCollapseList)
+            assertTrue("cramped at $width", chatWidth(width, height, inspector = true) < COMFORTABLE_CHAT_WIDTH)
+            val room = width.dp - PROJECT_STRIP_RESERVE
+            val inspector = inspectorPaneWidth(layout.inspectorWidth, room, layout.inspectorMinWidth)
+            assertTrue("inspector at $width is $inspector", inspector >= layout.inspectorMinWidth)
+            val chat = chatWidth(width, height, inspector = true, listCollapsed = true)
+            assertTrue("chat at $width is $chat", chat >= CHAT_PANE_MIN_WIDTH)
+        }
+        // Portrait: 287 dp of inspector at the larger display zoom, the 320 dp default at the smaller one.
+        assertEquals(287.dp, 753.dp - PROJECT_STRIP_RESERVE - chatWidth(753, 1205, inspector = true, listCollapsed = true) - 1.dp)
+        assertEquals(414.dp, chatWidth(800, 1280, inspector = true, listCollapsed = true))
+        // Landscape keeps the inspector beside the list too, when the user shows the list again.
+        assertTrue(paneLayout(1205.dp, 753.dp).inspectorBesideList)
+        assertTrue(paneLayout(1280.dp, 800.dp).inspectorBesideList)
+        assertFalse(paneLayout(800.dp, 1280.dp).inspectorBesideList)
+        // DeX keeps the list: the chat stays comfortable beside it.
+        assertFalse(paneLayout(1600.dp, 1000.dp).autoCollapseList)
     }
 
     @Test
@@ -224,6 +266,66 @@ class AdaptiveLayoutTest {
         assertEquals(378.dp, inspectorPaneWidth(900.dp, 779.dp))
         assertEquals(300.dp, inspectorPaneWidth(100.dp, 779.dp))
         assertEquals(720.dp, inspectorPaneWidth(900.dp, 2000.dp))
+        // A portrait minimum lets it get narrower.
+        assertEquals(287.dp, inspectorPaneWidth(320.dp, 688.dp, SIDE_INSPECTOR_MIN_WIDTH))
+        assertEquals(280.dp, inspectorPaneWidth(100.dp, 688.dp, SIDE_INSPECTOR_MIN_WIDTH))
+    }
+
+    @Test
+    fun anExpandedInspectorLeavesTheChatItsMinimumOrAStrip() {
+        // 1280 dp landscape with the list collapsed: 1215 dp for both, 814 dp of inspector past the cap.
+        assertFalse(chatStripped(1215.dp))
+        assertEquals(814.dp, expandedInspectorWidth(1215.dp))
+        assertTrue(expandedInspectorWidth(1215.dp) > INSPECTOR_PANE_MAX_WIDTH)
+        // Below 1200 dp of room the chat would leave the inspector under 800 dp: it becomes a strip.
+        assertTrue(chatStripped(1140.dp))
+        assertEquals(1140.dp - 49.dp, expandedInspectorWidth(1140.dp))
+        assertEquals(735.dp - 49.dp, expandedInspectorWidth(735.dp))
+        assertFalse(chatStripped(1201.dp))
+        assertTrue(chatStripped(1200.dp))
+    }
+
+    @Test
+    fun theListCollapsesForTheInspectorAndComesBackUnlessTheUserToggledIt() {
+        val state = TwoPaneState()
+        state.autoCollapseList()
+        assertTrue(state.listCollapsed)
+        assertTrue(state.autoCollapsed)
+        state.restoreList()
+        assertFalse(state.listCollapsed)
+        // A list the user hid stays hidden when the inspector closes.
+        state.listCollapsed = true
+        state.autoCollapseList()
+        assertFalse(state.autoCollapsed)
+        state.restoreList()
+        assertTrue(state.listCollapsed)
+        // Showing the list by hand while the inspector is open makes the state the user's.
+        state.listCollapsed = false
+        state.autoCollapseList()
+        state.listCollapsed = false
+        state.autoCollapseList()
+        state.listCollapsed = true
+        state.restoreList()
+        assertTrue(state.listCollapsed)
+    }
+
+    @Test
+    fun theAutoCollapseAndTheExpandedInspectorSurviveRecreation() {
+        val state = TwoPaneState()
+        state.autoCollapseList()
+        state.inspectorExpanded = true
+        val scope = androidx.compose.runtime.saveable.SaverScope { true }
+        val restored = TwoPaneState.Saver.restore(with(TwoPaneState.Saver) { scope.save(state) }!!)!!
+        assertTrue(restored.listCollapsed)
+        assertTrue(restored.autoCollapsed)
+        assertTrue(restored.inspectorExpanded)
+        restored.restoreList()
+        assertFalse(restored.listCollapsed)
+        // State an older version saved has neither.
+        val old = TwoPaneState.Saver.restore(listOf(true, -1f, -1f, ""))!!
+        assertTrue(old.listCollapsed)
+        assertFalse(old.autoCollapsed)
+        assertFalse(old.inspectorExpanded)
     }
 
     @Test
@@ -234,18 +336,23 @@ class AdaptiveLayoutTest {
             val side = layout.inspector != InspectorMode.OVERLAY
             // The project strip takes its share first.
             val available = width - PROJECT_STRIP_RESERVE
-            val list = listPaneWidth(layout.listWidth, available, layout.inspector)
+            val list = listPaneWidth(layout.listWidth, available, layout)
             assertEquals("list at $window", layout.listWidth, list)
-            if (side)
+            val minimum = layout.inspectorMinWidth
+            if (side && layout.inspectorBesideList)
                 assertEquals(
                     "inspector at $window",
                     layout.inspectorWidth,
-                    inspectorPaneWidth(layout.inspectorWidth, available - list - 1.dp),
+                    inspectorPaneWidth(layout.inspectorWidth, available - list - 1.dp, minimum),
                 )
+            // An inspector that does not fit beside the list opens with the list collapsed.
+            if (side) assertTrue("collapse at $window", layout.inspectorBesideList || layout.autoCollapseList)
+            if (side && !layout.inspectorBesideList)
+                assertTrue("inspector at $window", inspectorPaneWidth(layout.inspectorWidth, available, minimum) >= minimum)
             // The widest both panes can be dragged still leaves the chat its minimum.
-            val widestList = listPaneWidth(10_000.dp, available, layout.inspector)
-            val chatPane = available - widestList - 1.dp
-            val chat = if (side) chatPane - inspectorPaneWidth(10_000.dp, chatPane) - 1.dp else chatPane
+            val widestList = listPaneWidth(10_000.dp, available, layout)
+            val chatPane = if (side && !layout.inspectorBesideList) available else available - widestList - 1.dp
+            val chat = if (side) chatPane - inspectorPaneWidth(10_000.dp, chatPane, minimum) - 1.dp else chatPane
             assertTrue("chat at $window is $chat", chat >= CHAT_PANE_MIN_WIDTH)
         }
     }
