@@ -141,6 +141,14 @@ jobs:
         run: |
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
+      # The managed device setup installs the emulator only while it also downloads the system
+      # image. Once the image comes from the cache, the setup fails without an emulator, so both
+      # jobs install it here. The cache key below then names the real emulator revision.
+      - &install-emulator
+        name: Install the Android emulator
+        run: |
+          "$ANDROID_HOME/cmdline-tools/16111833/bin/sdkmanager" --install emulator
+          test -f "$ANDROID_HOME/emulator/source.properties" || { echo "FATAL - emulator did not install"; exit 1; }
       - &locate-avd
         id: avd
         name: Locate the managed device cache
@@ -148,15 +156,11 @@ jobs:
           agp="$(sed -n 's/^agp = "\(.*\)"$/\1/p' gradle/libs.versions.toml)"
           test -n "$agp" || { echo "FATAL - agp version is missing from gradle/libs.versions.toml"; exit 1; }
           echo "agp=$agp" >> "$GITHUB_OUTPUT"
-          # A runner image update can bring a new emulator that cannot load the cached boot
-          # snapshot, so the emulator revision is part of the key. Without a preinstalled
-          # emulator the managed device setup installs one, and the key says "none".
-          emulator="none"
+          # A new emulator release may not load the cached boot snapshot, so the emulator
+          # revision is part of the key.
           props="$ANDROID_HOME/emulator/source.properties"
-          if [ -f "$props" ]; then
-            emulator="$(sed -n 's/^Pkg\.Revision=//p' "$props" | tr -d '[:space:]')"
-            test -n "$emulator" || { echo "FATAL - Pkg.Revision is missing from $props"; exit 1; }
-          fi
+          emulator="$(sed -n 's/^Pkg\.Revision=//p' "$props" | tr -d '[:space:]')"
+          test -n "$emulator" || { echo "FATAL - Pkg.Revision is missing from $props"; exit 1; }
           echo "emulator=$emulator" >> "$GITHUB_OUTPUT"
           echo "images=$ANDROID_HOME/system-images/android-36" >> "$GITHUB_OUTPUT"
       # Gradle managed devices keep their AVD and boot snapshot under ~/.android/gradle/avd.
@@ -181,8 +185,15 @@ jobs:
         with:
           path: ~/.android/gradle/avd
           key: gmd-${{ env.GMD_DEVICE }}-aosp-${{ runner.os }}-agp-${{ steps.avd.outputs.agp }}-emulator-${{ steps.avd.outputs.emulator }}
+      # Build both APKs before the emulator starts. Otherwise the managed device boots while
+      # Kotlin compiles on the same few cores, and a starved System UI can stop responding.
+      - &build-test-apks
+        name: Build the app and test APKs
+        run: ./gradlew assembleDebug assembleDebugAndroidTest
       - name: Navigation and restoration instrumentation tests
-        run: ./gradlew pixel2Api36DebugAndroidTest
+        run: >-
+          ./gradlew pixel2Api36DebugAndroidTest
+          -Pandroid.testInstrumentationRunnerArguments.hideErrorDialogs=true
       # Both emulator jobs may miss the image entry in the same run; the second save then only
       # warns that the key is taken.
       - &save-image
@@ -223,15 +234,18 @@ jobs:
       - *verify-android-tools
       - *install-sdk
       - *enable-kvm
+      - *install-emulator
       - *locate-avd
       - *restore-image
       - *restore-avd
+      - *build-test-apks
       # Only the @LargeScreen tests: the phone job already runs everything, and each test here
       # costs a second emulator's time.
       - name: Large-screen instrumentation tests
         run: >-
           ./gradlew pixelTabletApi36DebugAndroidTest
           -Pandroid.testInstrumentationRunnerArguments.annotation=de.joinnoah.pi.remote.LargeScreen
+          -Pandroid.testInstrumentationRunnerArguments.hideErrorDialogs=true
       - *save-image
       - *save-avd
       - name: Upload instrumentation reports
