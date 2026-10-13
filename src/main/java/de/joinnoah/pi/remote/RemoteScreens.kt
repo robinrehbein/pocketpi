@@ -21,6 +21,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
@@ -266,13 +267,14 @@ internal fun RemoteScreen(
     // The composer's text lives here rather than in the state, so typing recomposes only the
     // composer; this screen's own draft changes go through it or flush it first. It belongs to
     // this destination's chat from the start, so text typed before a load or a navigation lands
-    // there; while the chat loads it takes no edits.
+    // there. It takes edits once the chat is selected and its stored draft shown, also while the
+    // chat loads (a reconnect, a resume); before that it takes none.
     val composerDraft =
         if (chatKey != null)
             rememberComposerDraft(
                 chatKey.selection(),
                 state.draft,
-                editable = !state.loading && state.selection == chatKey.selection(),
+                editable = state.selection == chatKey.selection(),
                 push = model::draft,
             )
         else null
@@ -1197,6 +1199,45 @@ internal fun RemoteScreen(
                 forkMenuRequest = latest.id
                 true
             }
+            Shortcut.PAGE_UP,
+            Shortcut.PAGE_DOWN -> {
+                // A page of what shows between the header and the composer; whether to follow
+                // new output then depends on where it ends, as for a scroll by hand.
+                val page = chatPageDistance(listState.layoutInfo.viewportSize.height, headerSize.height + composerSize.height)
+                val up = shortcut == Shortcut.PAGE_UP
+                viewportRestorePending = false
+                if (up && listState.canScrollBackward) autoFollow = false
+                listScope.launch {
+                    scrollingProgrammatically = true
+                    try {
+                        listState.scrollBy(if (up) -page else page)
+                        // The list's ends are known once it laid out the new position.
+                        withFrameNanos { }
+                    } finally {
+                        scrollingProgrammatically = false
+                    }
+                    autoFollow = !listState.canScrollForward
+                }
+                true
+            }
+            Shortcut.CHAT_START -> {
+                viewportRestorePending = false
+                autoFollow = false
+                listScope.launch {
+                    scrollingProgrammatically = true
+                    try {
+                        listState.scrollToItem(0)
+                    } finally {
+                        scrollingProgrammatically = false
+                    }
+                }
+                if (state.nextCursor != null && state.connected) chat.older()
+                true
+            }
+            Shortcut.CHAT_END -> {
+                scrollToLatestItem()
+                true
+            }
             else -> false
         }
     }
@@ -1214,7 +1255,23 @@ internal fun RemoteScreen(
             chatKeyTarget.shortcut = ::chatShortcut
         }
     }
-    CompositionLocalProvider(LocalChatKeyTarget provides chatKeyTarget.takeIf { chatKey != null }) {
+    // F6 into the chat goes to the composer, or with a question to the chat itself; a pane over
+    // the chat is a region of its own.
+    val chatRegion =
+        if (chatKey == null) Modifier
+        else
+            rememberFocusRegion(FocusRegion.CHAT, enabled = !composerCovered) {
+                if (questionPending) parkFocus() else composerFocusRequest++
+                true
+            }
+    // The rows F6 comes back to: the list's here, or the pane's over or beside the chat.
+    val regionChildren = remember(key) { FocusRegionChildren() }
+    val overlayChildren = remember(key) { FocusRegionChildren() }
+    val overlayRegion = rememberFocusRegion(FocusRegion.OVERLAY, enabled = composerCovered, children = overlayChildren)
+    CompositionLocalProvider(
+        LocalChatKeyTarget provides chatKeyTarget.takeIf { chatKey != null },
+        LocalFocusRegionChildren provides regionChildren,
+    ) {
     InspectorRow(
         shown = inspectorShown,
         width = { twoPane?.inspectorWidth(paneLayout) ?: paneLayout.inspectorWidth },
@@ -1228,7 +1285,7 @@ internal fun RemoteScreen(
         // it is used up: Compose would move focus into the first button (Back) instead.
         modifier =
             if (chatKey != null)
-                Modifier.focusRequester(chatFocus)
+                chatRegion.focusRequester(chatFocus)
                     .onFocusChanged {
                         // Only leaving the parked focus ends it; the composer's focus passing
                         // through on its way here does not.
@@ -1335,11 +1392,18 @@ internal fun RemoteScreen(
         val laneInset =
             if (key is RemoteNavKey.Chat && inspectorShown && twoPane != null) maxOf(readingInset, PANE_RESIZE_HANDLE_OVERHANG)
             else readingInset
+        // F6 reaches the project and session lists, and comes back to the row it left there.
+        val listRegion =
+            when (key) {
+                is RemoteNavKey.Projects -> rememberFocusRegion(FocusRegion.PROJECTS, children = regionChildren)
+                is RemoteNavKey.Sessions -> rememberFocusRegion(FocusRegion.SESSIONS, children = regionChildren)
+                else -> Modifier
+            }
         LazyColumn(
             if (key is RemoteNavKey.Chat)
                 Modifier.fillMaxSize().testTag("conversationList").then(underlay)
                     .onFocusChanged { conversationFocused = it.hasFocus }
-            else Modifier.fillMaxSize(),
+            else Modifier.fillMaxSize().then(listRegion),
             state = listState,
             contentPadding =
                 PaddingValues(
@@ -1627,45 +1691,38 @@ internal fun RemoteScreen(
                         )
                     }
                 }
-                item {
-                    Section(stringResource(R.string.remote_keyboard_title)) {
-                        Text(
-                            stringResource(R.string.remote_keyboard_help),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        val enterSends = preferences?.enterSends ?: true
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .toggleable(value = enterSends, role = Role.Switch) {
-                                    (model as SettingsViewModel).setEnterSends(it)
-                                }
-                                .testTag("enterSendsSwitch")
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(stringResource(R.string.remote_keyboard_enter_sends), Modifier.weight(1f))
-                            Switch(checked = enterSends, onCheckedChange = null)
-                        }
-                        Column(
-                            Modifier.testTag("keyboardShortcuts"),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            listOf(
-                                R.string.remote_keyboard_shortcut_send,
-                                R.string.remote_keyboard_shortcut_search,
-                                R.string.remote_keyboard_shortcut_switch,
-                                R.string.remote_keyboard_shortcut_project,
-                            ).forEach {
-                                Text(
-                                    stringResource(it),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // Only where a keyboard can be in use: one is attached, or the wide layout of a
+                // tablet, which usually has one nearby.
+                if (keyboardSettingsShown(hardwareKeyboard, paneLayout.twoPane))
+                    item {
+                        Section(stringResource(R.string.remote_keyboard_title), Modifier.testTag("keyboardSettings")) {
+                            val helpKeys =
+                                chordText(
+                                    checkNotNull(tooltipChord(Shortcut.HELP)),
+                                    androidx.compose.ui.platform.LocalResources.current,
+                                    rememberKeyCaps(),
                                 )
+                            Text(
+                                stringResource(R.string.remote_keyboard_help, helpKeys),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            val enterSends = preferences?.enterSends ?: true
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .toggleable(value = enterSends, role = Role.Switch) {
+                                        (model as SettingsViewModel).setEnterSends(it)
+                                    }
+                                    .testTag("enterSendsSwitch")
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(stringResource(R.string.remote_keyboard_enter_sends), Modifier.weight(1f))
+                                Switch(checked = enterSends, onCheckedChange = null)
                             }
+                            ShortcutList(null, Modifier.testTag("keyboardShortcuts"))
                         }
                     }
-                }
                 item { PredictionSettingsSection() }
                 item {
                     Section(stringResource(R.string.remote_notifications)) {
@@ -2408,6 +2465,8 @@ internal fun RemoteScreen(
                 snackbar,
                 Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp),
             )
+            Box(Modifier.fillMaxSize().then(overlayRegion)) {
+            CompositionLocalProvider(LocalFocusRegionChildren provides overlayChildren) {
             if (!sideInspector) changesContent?.invoke()
             if (!sideInspector) filesContent?.invoke()
             state.jobs
@@ -2426,6 +2485,8 @@ internal fun RemoteScreen(
                     )
                 }
             if (!sideInspector) toolContent?.invoke()
+            }
+            }
         }
         }
     }
@@ -2928,8 +2989,8 @@ private fun SkeletonBar(modifier: Modifier) {
 }
 
 @Composable
-internal fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
+internal fun Section(title: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Card(modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
                 title,

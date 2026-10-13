@@ -279,7 +279,7 @@ class SessionControlsTest {
         val running = reloadable.copy(status = "running")
         assertTrue(LocalCommand.RELOAD in availableLocalCommands(running, true, 0, reloading = true))
         assertEquals(
-            R.string.remote_local_command_reload_running,
+            R.string.remote_reload_running,
             localCommandDescription(LocalCommand.RELOAD, running, reloading = true),
         )
         assertEquals(
@@ -303,7 +303,7 @@ class SessionControlsTest {
         assertTrue(LocalCommand.RELOAD in availableLocalCommands(terminal, true, 0))
         assertTrue(LocalCommand.RELOAD in availableLocalCommands(terminal.copy(status = "running"), true, 0))
         assertEquals(
-            R.string.remote_local_command_reload_terminal,
+            R.string.remote_reload_terminal_hint,
             localCommandDescription(LocalCommand.RELOAD, terminal),
         )
         assertEquals(ReloadAvailability.NONE, reloadAvailability(terminal.copy(status = "offline")))

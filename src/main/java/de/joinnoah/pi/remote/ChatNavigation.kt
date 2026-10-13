@@ -10,6 +10,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -142,6 +145,18 @@ private const val SCROLLBAR_MIN_ITEMS = 30
 internal fun chatScrollbarVisible(scrollable: Boolean, markers: Int, items: Int): Boolean =
     scrollable && (markers >= 2 || items >= SCROLLBAR_MIN_ITEMS)
 
+// ---- Keyboard scrolling --------------------------------------------------------------------
+
+/** The share of the visible chat that PgUp and PgDn move, so a line or two stays in view. */
+internal const val CHAT_PAGE_SHARE = 0.9f
+
+/**
+ * How far PgUp and PgDn scroll a chat [viewport] pixels high, of which the header and the
+ * composer [covered] lie over the list: about a page of what shows between them.
+ */
+internal fun chatPageDistance(viewport: Int, covered: Int): Float =
+    (viewport - covered).coerceAtLeast(viewport / 3).coerceAtLeast(0) * CHAT_PAGE_SHARE
+
 // ---- Scrollbar ----------------------------------------------------------------------------
 
 /** The lane the bar sits in: the list's end padding, so it never covers a message. */
@@ -150,7 +165,10 @@ internal val CHAT_SCROLLBAR_LANE = 20.dp
 /** The thumb and the ticks share this axis, measured from the lane's end. */
 private val SCROLLBAR_AXIS_END = 7.dp
 
-/** A hairline at rest, so the bar stays calm while reading; it grows while the user holds it. */
+/**
+ * A hairline at rest, so the bar stays calm while reading; it grows while the user holds it or a
+ * mouse, trackpad or S Pen hovers over it.
+ */
 internal val SCROLLBAR_THUMB_WIDTH = 2.dp
 internal val SCROLLBAR_THUMB_HELD_WIDTH = 8.dp
 private val SCROLLBAR_THUMB_MIN = 24.dp
@@ -237,6 +255,9 @@ internal fun ChatScrollbar(
     var dragging by remember { mutableStateOf(false) }
     var touching by remember { mutableStateOf(false) }
     val held = dragging || touching
+    val hover = remember { MutableInteractionSource() }
+    val hovered by hover.collectIsHoveredAsState()
+    val wide = held || hovered
     val currentMarkers by rememberUpdatedState(markers)
     val currentListIndex by rememberUpdatedState(listIndex)
     val currentJump by rememberUpdatedState(onJump)
@@ -245,11 +266,11 @@ internal fun ChatScrollbar(
     // Reduced motion switches between the two looks without the grow.
     val motion = ValueAnimator.areAnimatorsEnabled()
     val thumbWidth by animateDpAsState(
-        if (held) SCROLLBAR_THUMB_HELD_WIDTH else SCROLLBAR_THUMB_WIDTH,
+        if (wide) SCROLLBAR_THUMB_HELD_WIDTH else SCROLLBAR_THUMB_WIDTH,
         if (motion) tween(150) else snap(),
         label = "scrollbarThumbWidth",
     )
-    val thumbAlpha by animateFloatAsState(if (held) 0.6f else 0.35f, if (motion) tween(150) else snap(), label = "scrollbarThumbAlpha")
+    val thumbAlpha by animateFloatAsState(if (wide) 0.6f else 0.35f, if (motion) tween(150) else snap(), label = "scrollbarThumbAlpha")
     val thumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = thumbAlpha)
     val density = LocalDensity.current
     val minThumb = with(density) { SCROLLBAR_THUMB_MIN.toPx() }
@@ -287,6 +308,7 @@ internal fun ChatScrollbar(
         Box(
             Modifier.matchParentSize()
                 .testTag("chatScrollbar")
+                .hoverable(hover)
                 // TalkBack reaches the same places through the chat history.
                 .clearAndSetSemantics {}
                 // Watches without consuming, so the bar looks held from the first touch on.

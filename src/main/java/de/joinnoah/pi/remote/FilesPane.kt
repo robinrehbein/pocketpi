@@ -55,6 +55,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -131,6 +132,7 @@ internal fun FilesPane(
     LaunchedEffect(state.file?.path, state.path) { prefillFailed = false }
     val send: (String) -> Unit = { prompt -> prefillFailed = !actions.onSend(prompt) }
     val density = LocalDensity.current
+    val focusManager = LocalFocusManager.current
     var headerHeight by remember { mutableStateOf(64.dp) }
     Surface(modifier.fillMaxSize().testTag("filesPane")) {
         val editor = state.editor
@@ -149,7 +151,9 @@ internal fun FilesPane(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
-                Box(Modifier.weight(1f).fillMaxWidth()) {
+                // Backspace, or Left at the edge, goes up a folder or back from a file.
+                val parent = back.takeIf { state.peek == null && (state.file != null || state.path.isNotEmpty()) }
+                Box(Modifier.weight(1f).fillMaxWidth().parentOnLeft(focusManager, parent)) {
                     val inset = if (prefillFailed) 0.dp else headerHeight
                     val file = state.file
                     if (file == null) key(state.path) { FolderList(state, actions, inset) }

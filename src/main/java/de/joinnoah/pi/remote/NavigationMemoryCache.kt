@@ -22,5 +22,7 @@ internal class NavigationMemoryCache<K, V>(private val capacity: Int) {
         entries.replaceAll { _, value -> transform(value) }
     }
 
+    fun remove(key: K): V? = entries.remove(key)
+
     fun clear() = entries.clear()
 }

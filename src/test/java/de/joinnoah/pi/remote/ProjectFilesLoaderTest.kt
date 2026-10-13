@@ -683,8 +683,8 @@ class ProjectFilesLoaderTest {
     }
 
     @Test
-    fun anotherSessionOrABrowserWithoutEditorIsClosedOnActivation() = runTest {
-        // An unchanged editor is dropped with its session.
+    fun anotherSessionClosesTheBrowserAndAReturnOpensItAgain() = runTest {
+        // An unchanged editor is dropped with its session; the return shows its file read-only.
         val plainTransport = editorTransport()
         val plain = editing(plainTransport)
         plain.activate(RemoteSelection("host", "project", "other"))
@@ -692,15 +692,21 @@ class ProjectFilesLoaderTest {
         assertNull(plain.state.value.files)
         plain.activate(RemoteSelection("host", "project", sessionId))
         runCurrent()
-        assertNull(plain.state.value.files)
+        val reopened = checkNotNull(plain.state.value.files)
+        assertNull(reopened.editor)
+        assertEquals("src/app/main.ts", reopened.file?.path)
+        assertFalse(reopened.file?.loading == true)
 
+        // The browser of the chat on screen stays open across a reconnect and reads again.
         val browsingTransport = editorTransport()
         val browsing = opened(browsingTransport)
-        assertNotNull(browsing.state.value.files)
+        val listing = checkNotNull(browsing.state.value.files?.listing)
+        val lists = browsingTransport.files().count { it.text("type") == "session.files.list" }
         browsingTransport.listener.failed(false, R.string.remote_connection_error)
         browsing.activate(RemoteSelection("host", "project", sessionId))
         runCurrent()
-        assertNull(browsing.state.value.files)
+        assertEquals(listing, browsing.state.value.files?.listing)
+        assertEquals(lists + 1, browsingTransport.files().count { it.text("type") == "session.files.list" })
     }
 
     @Test

@@ -4,6 +4,8 @@ import android.content.Intent
 import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.os.Bundle
+import android.view.KeyboardShortcutGroup
+import android.view.Menu
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
@@ -118,6 +120,12 @@ class MainActivity : ComponentActivity() {
         // the confirm-credential screen below API 30 does, and its answer comes back to the new activity.
         outState.putBoolean("appLockPrompted", autoPrompted && !(authenticating && Build.VERSION.SDK_INT >= 30))
         super.onSaveInstanceState(outState)
+    }
+
+    // The system's keyboard shortcut helper (Meta+/) lists PocketPi's keys.
+    override fun onProvideKeyboardShortcuts(data: MutableList<KeyboardShortcutGroup>, menu: Menu?, deviceId: Int) {
+        super.onProvideKeyboardShortcuts(data, menu, deviceId)
+        data.addAll(keyboardShortcutGroups(this))
     }
 
     override fun onStop() {

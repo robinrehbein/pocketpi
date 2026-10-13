@@ -24,6 +24,12 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.performSemanticsAction
+import org.junit.Assert.assertFalse
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
@@ -1225,6 +1231,326 @@ class TwoPaneNavigationTest {
         compose.waitForIdle()
         compose.onNodeWithTag("sessionSearch").assertDoesNotExist()
         compose.onNodeWithText("First session").assertIsDisplayed()
+    }
+
+    // ---- Discoverability, completion, focus and scrolling ----------------------------------
+
+    private val ctrlMeta = android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_CTRL_LEFT_ON
+
+    private fun openSettings() {
+        back()
+        compose.onAllNodesWithContentDescription(label(R.string.remote_settings)).onFirst().performClick()
+        compose.waitForIdle()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h3000dp")
+    fun aPhoneWithoutAKeyboardHasNoKeyboardSettings() {
+        render(hardwareKeyboard = false)
+        openSettings()
+        compose.onNodeWithText(label(R.string.remote_swipe_title)).assertExists()
+        compose.onNodeWithTag("keyboardSettings").assertDoesNotExist()
+        compose.onNodeWithTag("enterSendsSwitch").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h3000dp-keysexposed-qwerty")
+    fun aPhoneWithAKeyboardListsEveryShortcutInSettings() {
+        render(hardwareKeyboard = true)
+        windowKey(android.view.KeyEvent.KEYCODE_COMMA, ctrlMeta)
+        compose.onNodeWithTag("keyboardSettings").assertExists()
+        compose.onNodeWithTag("enterSendsSwitch").assertExists()
+        // Generated from the keymap: Ctrl+N and Ctrl+B are there now, and the chat's own keys.
+        for (keys in listOf("Ctrl+N", "Ctrl+B", "Ctrl+K, Ctrl+F", "Ctrl+.", "F6, Ctrl+Alt+→", "Ctrl+End"))
+            compose.onNode(hasText(keys) and hasAnyAncestor(hasTestTag("keyboardShortcuts"))).assertExists()
+        // The help no longer claims the keys need the two-pane layout.
+        val help = compose.activity.getString(R.string.remote_keyboard_help, "Ctrl+/")
+        compose.onNodeWithText(help).assertExists()
+        assertFalse(help.contains("two-pane"))
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h3000dp")
+    fun theTwoPaneLayoutShowsTheKeyboardSettingsWithoutAKeyboard() {
+        render(hardwareKeyboard = false)
+        openSettings()
+        compose.onNodeWithTag("keyboardSettings").assertExists()
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun ctrlSlashListsTheKeysOfWhereTheUserIs() {
+        render(hardwareKeyboard = true)
+        windowKey(android.view.KeyEvent.KEYCODE_SLASH, ctrlMeta)
+        compose.onNodeWithTag("shortcutHelp").assertExists()
+        // In a chat: the chat's and the composer's keys too.
+        compose.onNode(hasText("Ctrl+.") and hasAnyAncestor(hasTestTag("shortcutHelp"))).assertExists()
+        compose.onNode(hasText("Tab") and hasAnyAncestor(hasTestTag("shortcutHelp"))).assertExists()
+        compose.onNodeWithTag("shortcutHelpClose").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("shortcutHelp").assertDoesNotExist()
+        assertChatShown()
+        // On the session list only the keys that work there.
+        back()
+        windowKey(android.view.KeyEvent.KEYCODE_SLASH, ctrlMeta)
+        compose.onNode(hasText("Ctrl+N") and hasAnyAncestor(hasTestTag("shortcutHelp"))).assertExists()
+        compose.onNode(hasText("Ctrl+.") and hasAnyAncestor(hasTestTag("shortcutHelp"))).assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun enterWithAPartialSlashCommandPicksItInsteadOfSendingIt() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performTextInput("/ne")
+        compose.waitForIdle()
+        compose.onNodeWithTag("slashHighlight").assert(hasText("/new"))
+        composerKeys { pressKey(Key.Enter) }
+        compose.onNodeWithTag("composerField").assert(hasText("/new"))
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
+        assertEquals(0, repository.prompts)
+        assertEquals(0, repository.createdSessions)
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun arrowsMoveTheSlashHighlightAndTabPicksIt() {
+        repository.state.value =
+            repository.state.value.copy(
+                capabilities = setOf(COMMANDS_CAPABILITY),
+                commands = listOf(RemoteCommand("review", "Review the diff", "prompt"), RemoteCommand("refactor", null, "skill")),
+            )
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performTextInput("/re")
+        compose.waitForIdle()
+        compose.onNodeWithTag("slashHighlight").assert(hasText("/review"))
+        composerKeys { pressKey(Key.DirectionDown) }
+        compose.onNodeWithTag("slashHighlight").assert(hasText("/refactor"))
+        // Past the last one the highlight wraps to the first.
+        composerKeys { pressKey(Key.DirectionDown) }
+        compose.onNodeWithTag("slashHighlight").assert(hasText("/review"))
+        composerKeys { pressKey(Key.DirectionUp) }
+        composerKeys { pressKey(Key.Tab) }
+        compose.onNodeWithTag("composerField").assert(hasText("/refactor"))
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
+        assertEquals(0, repository.prompts)
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun upInAnEmptyComposerRecallsThisSessionsLastMessage() {
+        repository.state.value =
+            repository.state.value.copy(
+                messages =
+                    listOf(
+                        buildJsonObject {
+                            put("id", "u1")
+                            put("role", "user")
+                            put("text", "first question")
+                        },
+                        buildJsonObject {
+                            put("id", "u2")
+                            put("role", "user")
+                            put("text", "second question")
+                        },
+                    )
+            )
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        composerKeys { pressKey(Key.DirectionUp) }
+        compose.onNodeWithTag("composerField").assert(hasText("second question"))
+        composerKeys { pressKey(Key.DirectionUp) }
+        compose.onNodeWithTag("composerField").assert(hasText("first question"))
+        composerKeys { pressKey(Key.DirectionDown) }
+        composerKeys { pressKey(Key.DirectionDown) }
+        compose.onNodeWithTag("composerField").assert(hasText(""))
+        assertEquals(0, repository.prompts)
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun aRecalledSlashCommandKeepsUpForTheHistory() {
+        repository.state.value =
+            repository.state.value.copy(
+                capabilities = setOf(COMMANDS_CAPABILITY),
+                commands = listOf(RemoteCommand("review", "Review the diff", "prompt")),
+                messages =
+                    listOf(
+                        buildJsonObject {
+                            put("id", "u1")
+                            put("role", "user")
+                            put("text", "first question")
+                        },
+                        buildJsonObject {
+                            put("id", "u2")
+                            put("role", "user")
+                            put("text", "/review")
+                        },
+                    ),
+            )
+        render(hardwareKeyboard = true)
+        composerKeys { pressKey(Key.DirectionUp) }
+        compose.onNodeWithTag("composerField").assert(hasText("/review"))
+        // The recalled command opens the suggestions, but Up still walks the history.
+        composerKeys { pressKey(Key.DirectionUp) }
+        compose.onNodeWithTag("composerField").assert(hasText("first question"))
+        assertEquals(0, repository.prompts)
+    }
+
+    private fun longChat() {
+        repository.state.value =
+            repository.state.value.copy(
+                messages =
+                    (1..80).map {
+                        buildJsonObject {
+                            put("id", "m$it")
+                            put("role", "assistant")
+                            put("text", "Line $it of the chat")
+                        }
+                    }
+            )
+    }
+
+    private fun scrollToLatestShown() =
+        compose.onAllNodesWithContentDescription(label(R.string.remote_scroll_to_bottom)).fetchSemanticsNodes().isNotEmpty()
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun pageKeysScrollTheChatWhileTheComposerKeepsFocus() {
+        longChat()
+        render(hardwareKeyboard = true)
+        compose.onNodeWithText("Line 80 of the chat").assertIsDisplayed()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        composerKeys { pressKey(Key.PageUp) }
+        compose.onNodeWithText("Line 80 of the chat").assertIsNotDisplayed()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        // Reading back stops following new output, as a scroll by hand does.
+        assertTrue(scrollToLatestShown())
+        repeat(3) { composerKeys { pressKey(Key.PageDown) } }
+        compose.onNodeWithText("Line 80 of the chat").assertIsDisplayed()
+        assertFalse(scrollToLatestShown())
+        assertEquals(0, repository.prompts)
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun ctrlHomeGoesToTheStartAndCtrlEndFollowsTheChatAgain() {
+        longChat()
+        render(hardwareKeyboard = true)
+        composerKeys { withKeyDown(Key.CtrlLeft) { pressKey(Key.MoveHome) } }
+        compose.onNodeWithText("Line 1 of the chat").assertIsDisplayed()
+        compose.onNodeWithText("Line 80 of the chat").assertDoesNotExist()
+        assertTrue(scrollToLatestShown())
+        // With nothing typed the key goes to the chat; the composer keeps focus.
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        composerKeys { withKeyDown(Key.CtrlLeft) { pressKey(Key.MoveEnd) } }
+        compose.onNodeWithText("Line 80 of the chat").assertIsDisplayed()
+        assertFalse(scrollToLatestShown())
+        // Following again: new output scrolls into view.
+        repository.state.value =
+            repository.state.value.copy(
+                messages =
+                    repository.state.value.messages +
+                        buildJsonObject {
+                            put("id", "m81")
+                            put("role", "assistant")
+                            put("text", "Line 81 of the chat")
+                        }
+            )
+        compose.waitForIdle()
+        compose.onNodeWithText("Line 81 of the chat").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun ctrlHomeWithADraftReachesTheChatOnlyAfterTheFieldLeftIt() {
+        longChat()
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performTextInput("first line\nsecond line")
+        compose.waitForIdle()
+        // Sent to the field alone, the key is the field's: the layout leaves it alone.
+        composerKeys { withKeyDown(Key.CtrlLeft) { pressKey(Key.MoveHome) } }
+        compose.onNodeWithText("Line 80 of the chat").assertIsDisplayed()
+        assertFalse(scrollToLatestShown())
+        // Through the window, the field ignores Ctrl+Home, so the chat goes to its start.
+        windowKey(android.view.KeyEvent.KEYCODE_MOVE_HOME, ctrlMeta)
+        compose.onNodeWithText("Line 1 of the chat").assertIsDisplayed()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        compose.onNodeWithTag("composerField").assert(hasText("first line\nsecond line"))
+        assertEquals(0, repository.prompts)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp-keysexposed-qwerty")
+    fun f6CyclesThePanesAndComesBackToTheRowItLeft() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        val inList = hasAnyAncestor(hasTestTag("sessionListPane"))
+        // From the chat F6 wraps around to the project strip, then goes on to the sessions.
+        windowKey(android.view.KeyEvent.KEYCODE_F6)
+        compose.onNode(isFocused() and hasAnyAncestor(hasTestTag("projectStripList"))).assertExists()
+        windowKey(android.view.KeyEvent.KEYCODE_F6)
+        compose.onNode(isFocused() and inList).assertExists()
+        compose.onNodeWithTag("composerField").assertIsNotFocused()
+        // Down moves to the next row, which shows its focus ring.
+        windowKey(android.view.KeyEvent.KEYCODE_DPAD_DOWN)
+        val row = compose.onNode(isFocused() and inList).fetchSemanticsNode()
+        compose.onNode(isFocused() and inList).assert(SemanticsMatcher.expectValue(FocusRingShown, true))
+        // Ctrl+Alt+Right goes on to the chat's composer, Shift+F6 back to the same row.
+        windowKey(android.view.KeyEvent.KEYCODE_DPAD_RIGHT, ctrlMeta or android.view.KeyEvent.META_ALT_ON or android.view.KeyEvent.META_ALT_LEFT_ON)
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        windowKey(android.view.KeyEvent.KEYCODE_F6, android.view.KeyEvent.META_SHIFT_ON or android.view.KeyEvent.META_SHIFT_LEFT_ON)
+        assertEquals(row.id, compose.onNode(isFocused() and inList).fetchSemanticsNode().id)
+    }
+
+    @Test
+    @Config(qualifiers = "w1205dp-h753dp-keysexposed-qwerty")
+    fun f6ReachesTheProjectStripBesideAChat() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        val inStrip = hasAnyAncestor(hasTestTag("projectStripList"))
+        // From the chat F6 wraps around to the projects, then goes on to the sessions.
+        windowKey(android.view.KeyEvent.KEYCODE_F6)
+        compose.onNode(isFocused() and inStrip).assertExists()
+        compose.onNode(isFocused() and inStrip).assert(SemanticsMatcher.expectValue(FocusRingShown, true))
+        windowKey(android.view.KeyEvent.KEYCODE_F6)
+        compose.onNode(isFocused() and hasAnyAncestor(hasTestTag("sessionListPane"))).assertExists()
+        windowKey(android.view.KeyEvent.KEYCODE_F6)
+        compose.onNodeWithTag("composerField").assertIsFocused()
+    }
+
+    @Test
+    @Config(qualifiers = "w1700dp-h1000dp-keysexposed-qwerty")
+    fun f6StillReachesTheSideInspectorAfterTheJobsClose() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(BACKGROUND_JOBS_CAPABILITY))
+        render(hardwareKeyboard = true)
+        openTool()
+        compose.onNode(hasTestTag("toolDetail") and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
+        // The jobs cover the chat beside the inspector, then close again.
+        compose.runOnIdle {
+            repository.state.value = repository.state.value.copy(jobs = JobsState("s1", loaded = true, listOpen = true))
+        }
+        compose.waitForIdle()
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(jobs = null) }
+        compose.waitForIdle()
+        compose.onNodeWithTag("composerField").requestFocusAndWait()
+        windowKey(android.view.KeyEvent.KEYCODE_F6)
+        compose.onNode(isFocused() and hasAnyAncestor(hasTestTag("inspectorPane"))).assertExists()
+    }
+
+    private fun androidx.compose.ui.test.SemanticsNodeInteraction.requestFocusAndWait() {
+        performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.waitForIdle()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp-keysexposed-qwerty")
+    fun hoveringAHeaderButtonNamesItAndItsShortcut() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("chatAction_changes").performMouseInput { moveTo(center) }
+        compose.waitForIdle()
+        compose.onNodeWithText(label(R.string.remote_changes_open) + " · Ctrl+Shift+G").assertExists()
     }
 
     // ---- Code editor ---------------------------------------------------------------------
