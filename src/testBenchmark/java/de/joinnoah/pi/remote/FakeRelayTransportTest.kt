@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -303,6 +304,69 @@ class FakeRelayTransportTest {
         // Four handshake round trips and three reads, without a backoff.
         val resumed = sections.duration(FlowFreshness.Cause.RESUME.section)
         assertTrue("fresh after $resumed ms", resumed in 7L * 100..7L * 200 + 100)
+    }
+
+    @Test
+    fun repliesCountOnlyNewestPageSuccessesOnTheLiveConnection() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val transport = FakeRelayTransport(backgroundScope, { fixture }, dispatcher) { testScheduler.currentTime }
+        val delivered = mutableListOf<String>()
+        transport.listener = object : RemoteTransport.Listener {
+            override fun ready(capabilities: Set<String>) {}
+            override fun approval() {}
+            override suspend fun persistPairing(host: PairedHost) {}
+            override fun paired(host: PairedHost) {}
+            override fun message(payload: JsonObject) {
+                delivered += payload.text("requestId")
+            }
+            override fun failed(reconnect: Boolean, error: Int) {}
+        }
+        val host = PairedHost(fixture.routeId, "relay", fixture.deviceId, fixture.deviceSecret, fixture.hostName)
+        val key = "session.snapshot:session-uncached"
+        var requests = 0
+        fun snapshot(sessionId: String = "session-uncached", cursor: String? = null): String {
+            val id = "request-${++requests}"
+            transport.send(
+                Wire.objectOf("type" to "session.snapshot", "requestId" to id, "sessionId" to sessionId, "cursor" to cursor)
+            )
+            return id
+        }
+        transport.connect(host)
+        advanceTimeBy(5_000)
+        assertTrue(transport.isConnected)
+
+        val newest = snapshot()
+        advanceTimeBy(5_000)
+        assertEquals(listOf(newest), delivered)
+        assertEquals(1L, transport.replies.value.sequence)
+        assertEquals(mapOf(key to 1L), transport.replies.value.last)
+
+        // An older page is answered, but the screen's newest page was not read again.
+        val older = snapshot(cursor = "before:10")
+        // A failed read is answered too, and counts for nothing.
+        val missing = snapshot(sessionId = "session-missing")
+        advanceTimeBy(5_000)
+        assertEquals(listOf(newest, older, missing), delivered)
+        assertEquals(1L, transport.replies.value.sequence)
+        assertEquals(mapOf(key to 1L), transport.replies.value.last)
+
+        // A reply still in flight when the socket drops is neither delivered nor counted.
+        snapshot()
+        transport.drop()
+        assertFalse(transport.isConnected)
+        advanceTimeBy(5_000)
+        assertEquals(3, delivered.size)
+        assertEquals(1L, transport.replies.value.sequence)
+        assertEquals(0, transport.inFlight.value)
+
+        // Only the next connection's newest-page reply advances the sequence.
+        transport.connect(host)
+        advanceTimeBy(5_000)
+        val again = snapshot()
+        advanceTimeBy(5_000)
+        assertEquals(again, delivered.last())
+        assertEquals(2L, transport.replies.value.sequence)
+        assertEquals(mapOf(key to 2L), transport.replies.value.last)
     }
 
     @Test

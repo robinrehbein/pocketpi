@@ -21,6 +21,7 @@ FIXTURE_CLASSES = [
     b"Lde/joinnoah/pi/remote/RelayFixture;",
     b"Lde/joinnoah/pi/remote/ConnectedFlowActivity;",
     b"Lde/joinnoah/pi/remote/FlowFreshness;",
+    b"Lde/joinnoah/pi/remote/FlowTrace;",
 ]
 
 

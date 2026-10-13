@@ -163,6 +163,17 @@ class ConnectedFlowBenchmarks {
         device.waitForIdle(1_000)
     }
 
+    /**
+     * [openFlowChat] after a prepare pass. An iteration ends on the uncached chat, so the stored
+     * navigation snapshot names it and the next cold start would restore it into the chat cache.
+     * Every iteration after the first therefore prepares again, which stores the cached chat as the
+     * last one, so each iteration starts from the same state with the flow chat uncached.
+     */
+    private fun MacrobenchmarkScope.prepareFlowChat() {
+        if (prepared) prepare(clear = false) else prepareOnce()
+        openFlowChat()
+    }
+
     /** The newest FlowFreshness mark ConnectedFlowActivity reports; the next one is this plus one. */
     private fun MacrobenchmarkScope.currentMark(): Int {
         check(device.wait(Until.hasObject(By.desc(MARK)), 10_000)) { "No freshness mark on screen" }
@@ -260,11 +271,18 @@ class ConnectedFlowBenchmarks {
      * Home, a fixed time in the background, then the app's task brought back to the front, as
      * its launcher icon does: the process and activity stay alive, and ProcessLifecycleOwner
      * reports the return to RemoteApplication like on a phone. How long the app was away picks the
-     * repository's resume tier (a probe of the socket below 60 s, a quiet reconnect above). The
-     * measurement ends once the app has read the open chat again.
+     * repository's resume tier: nothing below 15 s with a live socket (which this scenario cannot
+     * measure), a probe of the socket below 60 s, a quiet reconnect above. The measurement ends once
+     * the app has read the open chat again.
      */
     @Test
     fun resumeAfterBackground() {
+        // ProcessLifecycleOwner reports the stop about 0.7 s late, so the repository counts a little
+        // less time away than this sleeps; keep clear of both tier boundaries.
+        require(resumeAwaySeconds >= 16 && resumeAwaySeconds !in 59L..62L) {
+            "pocketpi.resumeAwaySeconds=$resumeAwaySeconds: below 15 s the resume does nothing and the " +
+                "scenario would time out, 16 to 58 measures the probe, 63 or more the quiet reconnect"
+        }
         var mark = 0
         benchmark.measureRepeated(
             packageName = TARGET,
@@ -273,8 +291,7 @@ class ConnectedFlowBenchmarks {
             compilationMode = CompilationMode.None(),
             iterations = 10,
             setupBlock = {
-                prepareOnce()
-                openFlowChat()
+                prepareFlowChat()
                 mark = currentMark()
                 pressHome()
                 // ProcessLifecycleOwner reports the stop 700 ms after the last activity stopped.
@@ -303,8 +320,7 @@ class ConnectedFlowBenchmarks {
             compilationMode = CompilationMode.None(),
             iterations = 10,
             setupBlock = {
-                prepareOnce()
-                openFlowChat()
+                prepareFlowChat()
                 mark = currentMark()
             },
         ) {
@@ -325,11 +341,9 @@ class ConnectedFlowBenchmarks {
         compilationMode = CompilationMode.None(),
         iterations = 10,
         setupBlock = {
-            // The stored navigation snapshot of an iteration that ended on this chat holds the
-            // streamed answer; another prepare pass stores the cached chat as the last one again,
-            // so the open below shows only what the fake relay holds in this process.
-            if (prepared) prepare(clear = false) else prepareOnce()
-            openFlowChat()
+            // Without the prepare pass in prepareFlowChat, the stored navigation snapshot of an
+            // iteration that ended on this chat would show an earlier iteration's streamed answer.
+            prepareFlowChat()
             check(!device.hasObject(By.text(STREAM_COMPLETE))) { "The chat shows an earlier stream" }
         },
     ) {

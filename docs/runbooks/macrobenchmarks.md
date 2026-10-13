@@ -157,7 +157,9 @@ is an async section and needs API 29 or newer, as the benchmark module does.
 
 The flow scenarios start each iteration in a fresh process, open the uncached chat (48 turns, no
 draft, so no keyboard) from the session list and wait until it is settled. Only then does the
-measured block start.
+measured block start. Each iteration ends on that chat, so every iteration after the first runs
+the prepare pass again first; the stored navigation snapshot then names the cached chat, the open
+stays uncached and every iteration starts from the same state.
 
 - `resumeAfterBackground` presses Home, waits `pocketpi.resumeAwaySeconds` (20 by default) and
   brings the app's task back with `am start`, as the launcher icon does. The process and the
@@ -166,13 +168,15 @@ measured block start.
   a phone. The time away picks the repository's resume tier: below 15 s with a live socket it does
   nothing (and the scenario would time out), up to 60 s it probes the socket with a snapshot and
   reads the lists again in place, beyond 60 s with a quiet socket it reconnects quietly. 20 s
-  measures the probe; pass 65 for the reconnect.
+  measures the probe; pass 65 for the reconnect. ProcessLifecycleOwner reports the stop about
+  0.7 s late, so the scenario refuses values below 16 and from 59 to 62, which would land on or
+  near a tier boundary.
 - `reconnectAfterDrop` sends `drop`: the fake relay closes the socket with code 1006 and fails it,
   as a dead socket does. The repository keeps the chat on screen as stale, waits its first backoff
   (about one second with jitter) and reconnects.
 - `streamingThroughRepository` sends `stream` and waits for the completion marker, which shows only
-  while the list follows the tail. Every iteration after the first runs the prepare pass again, so
-  the stored navigation snapshot does not hold an earlier iteration's stream.
+  while the list follows the tail. The prepare pass before each iteration also keeps an earlier
+  iteration's stream out of the stored navigation snapshot.
 
 Commands reach `ConnectedFlowActivity` through `am start --activity-single-top`, which pauses and
 resumes the activity once at the start of the measured block. `PocketPi.publishTimelineCount` and
