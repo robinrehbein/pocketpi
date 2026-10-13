@@ -120,8 +120,11 @@ internal fun ChatActionPill(layout: ChatActionLayout, color: Color, onAction: (C
     }
 }
 
-/** Wires [ChangesPane] to [model]; prefilled prompts move focus to the composer via [focusComposer]. */
-internal fun changesActions(model: ChatViewModel, focusComposer: () -> Unit) =
+/**
+ * Wires [ChangesPane] to [model]; prefilled prompts move focus to the composer via [focusComposer].
+ * [flushComposer] first hands the composer's typing to the draft the prefill extends.
+ */
+internal fun changesActions(model: ChatViewModel, flushComposer: () -> Unit = {}, focusComposer: () -> Unit) =
     ChangesActions(
         onClose = model::closeChanges,
         onSelectBase = model::selectChangesBase,
@@ -131,8 +134,12 @@ internal fun changesActions(model: ChatViewModel, focusComposer: () -> Unit) =
         onRequestPreview = model::requestChangesPreview,
         onSetComment = model::setReviewComment,
         onRemoveComment = model::removeReviewComment,
-        onUseReview = { prompt -> model.useReview(prompt).also { if (it) focusComposer() } },
+        onUseReview = { prompt ->
+            flushComposer()
+            model.useReview(prompt).also { if (it) focusComposer() }
+        },
         onPrefill = { prompt ->
+            flushComposer()
             model.prefillPrompt(prompt).also {
                 if (it) {
                     model.closeChanges()
@@ -142,8 +149,11 @@ internal fun changesActions(model: ChatViewModel, focusComposer: () -> Unit) =
         },
     )
 
-/** Wires [FilesPane] to [model]; a prefilled quote moves focus to the composer via [focusComposer]. */
-internal fun filesActions(model: ChatViewModel, focusComposer: () -> Unit) =
+/**
+ * Wires [FilesPane] to [model]; a prefilled quote moves focus to the composer via [focusComposer].
+ * [flushComposer] first hands the composer's typing to the draft the prefill extends.
+ */
+internal fun filesActions(model: ChatViewModel, flushComposer: () -> Unit = {}, focusComposer: () -> Unit) =
     FilesActions(
         onClose = model::closeFiles,
         onOpenDir = model::openFilesDir,
@@ -155,6 +165,7 @@ internal fun filesActions(model: ChatViewModel, focusComposer: () -> Unit) =
         onDismissPeek = model::dismissFilesPeek,
         onSelectLines = model::selectFileLines,
         onSend = { prompt ->
+            flushComposer()
             model.prefillPrompt(prompt).also {
                 if (it) {
                     model.closeFiles()

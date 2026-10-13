@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.view.ContextThemeWrapper
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
@@ -340,7 +341,10 @@ internal fun createArtifactWebView(
     webRtcBlock: (WebView) -> Boolean = ::installArtifactWebRtcBlock,
     cdn: ArtifactCdnFetcher? = null,
 ): WebView =
-    WebView(context).also { view ->
+    // A light theme: from API 33 WebView derives prefers-color-scheme from the theme's isLightTheme,
+    // and the activity is dark in dark mode. HTML artifacts stay light on their white background as
+    // before; Mermaid gets dark mode explicitly through ArtifactPage.dark.
+    WebView(ContextThemeWrapper(context, android.R.style.Theme_Material_Light_NoActionBar)).also { view ->
         configureArtifactWebView(view)
         view.setBackgroundColor(background)
         view.webViewClient =

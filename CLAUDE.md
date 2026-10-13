@@ -28,9 +28,15 @@ or `review-diff.ts`. The process is:
 ```sh
 python3 scripts/i18n-check.py .
 ./gradlew testDebugUnitTest assembleDebug lintDebug
+./gradlew :wear:testDebugUnitTest :wear:assembleDebug :wear:lintDebug
+./gradlew assembleDebugAndroidTest :assembleBenchmark :benchmarks:assembleBenchmark
 ```
 
-CI also runs the emulator tests (`./gradlew pixel2Api36DebugAndroidTest`), which need `/dev/kvm`.
+The wear module compiles every source file in `src/main/java`, and the androidTest and benchmark
+source sets hold fakes of app interfaces, so a change can pass the first line and still break one
+of the others. CI also runs the emulator tests (`./gradlew pixel2Api36DebugAndroidTest`), which
+need `/dev/kvm`. Lint reports only findings missing from `lint-baseline.xml` and
+`wear/lint-baseline.xml`; fix new findings instead of regenerating a baseline.
 Every user-facing string exists in `src/main/res/values/strings.xml` (English) and
 `src/main/res/values-de/strings.xml` (German).
 

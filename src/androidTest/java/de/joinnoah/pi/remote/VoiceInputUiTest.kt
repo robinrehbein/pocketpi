@@ -51,11 +51,34 @@ class VoiceInputUiTest {
         compose.onNodeWithContentDescription(label(R.string.remote_voice_start)).performClick()
         harness.onKeyboardEdit = { engine.listener.onFinal("late speech") }
         compose.onNode(hasSetTextAction()).performTextInput("typed on keyboard")
+        // The edit reaches the draft after the composer's pause; the late result arrives then.
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
         compose.waitForIdle()
 
         compose.onNode(hasSetTextAction()).assertTextContains("typed on keyboard")
         assertEquals(0, harness.sends)
         assertEquals(1, engine.cancels)
+    }
+
+    @Test
+    fun dictationLivesInTheComposerAndIsSentAsShown() {
+        val engine = FakeEngine()
+        val harness = showComposer(engine)
+
+        compose.onNodeWithContentDescription(label(R.string.remote_voice_start)).performClick()
+        compose.runOnIdle { engine.listener.onFinal("dictated text") }
+        compose.waitForIdle()
+        // Dictated text reaches the repository after the composer's pause.
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
+        assertEquals("dictated text", harness.state.draft)
+        compose.mainClock.autoAdvance = false
+        compose.onNode(hasSetTextAction()).performTextInput(" and typed")
+        compose.mainClock.advanceTimeByFrame()
+        // The typing pause has not ended, but the send hands the shown text to the draft first.
+        assertEquals("dictated text", harness.state.draft)
+        compose.onNodeWithContentDescription(label(R.string.remote_send)).performClick()
+
+        assertEquals(listOf("dictated text and typed"), harness.sentDrafts)
     }
 
     @Test
@@ -127,7 +150,10 @@ class VoiceInputUiTest {
                         harness.onKeyboardEdit?.invoke()
                         harness.state = harness.state.copy(draft = it)
                     },
-                    onSend = { harness.sends++ },
+                    onSend = {
+                        harness.sends++
+                        harness.sentDrafts += harness.state.draft
+                    },
                     onStop = { harness.stops++ },
                     onRemoveQuote = {},
                     voiceEngine = engine,
@@ -143,6 +169,7 @@ class VoiceInputUiTest {
     private class Harness(initial: RemoteState) {
         var state by mutableStateOf(initial)
         var sends = 0
+        val sentDrafts = mutableListOf<String>()
         var stops = 0
         var onKeyboardEdit: (() -> Unit)? = null
     }

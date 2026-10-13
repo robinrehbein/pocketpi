@@ -14,6 +14,13 @@
 - Remember Markdown fence splits, lines and inline styled text in composition. Compile Markdown
   regular expressions once rather than on each line or recomposition. Theme changes invalidate
   styled text through its link-color key.
+- Keep the composer's text in `ComposerDraft`, not in `RemoteState`: a keystroke recomposes the
+  composer only. The text reaches the repository after a 300 ms pause, and at once before a send,
+  on stop and when the chat changes. Each write names its chat, and the repository files a late
+  one under that chat even when another one is shown; while the chat loads the field takes no
+  edits. Code that reads or changes the draft outside the composer flushes it first or goes
+  through it, and `ChatComposerFlushTest` covers each such path. Values handed to message bubbles (such as `MessageFork`)
+  stay the same instance while unchanged, so the bubbles skip; `ChatRecompositionTest` checks it.
 
 Caches bound entry count, not total transcript bytes. Check memory with unusually large tool outputs
 before increasing capacity. The active timeline and network event delivery are not throttled.

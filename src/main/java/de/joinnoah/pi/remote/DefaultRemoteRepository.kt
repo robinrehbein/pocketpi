@@ -3507,6 +3507,20 @@ class DefaultRemoteRepository(
         persist()
     }
 
+    override fun draft(selection: RemoteSelection, text: String) {
+        val routeId = selection.routeId ?: return
+        val key = DraftKey(routeId, selection.sessionId ?: return)
+        if (key == currentDraftKey()) return draft(text)
+        // A composer's flush on the way out of a chat, after the selection moved on: the text
+        // goes to that chat's stored draft, which it shows when it opens again.
+        if (!draftsAvailable || routeId in removedRoutes || state.value.hosts.none { it.routeId == routeId }) return
+        if (text.toByteArray().size > 128 * 1024) return
+        val stored = drafts[key] ?: StoredDraft()
+        if (stored.text == text) return
+        drafts[key] = stored.copy(text = text)
+        persist()
+    }
+
     override fun quote(messageId: String?) {
         if (state.value.loading) return
         val key = currentDraftKey() ?: return

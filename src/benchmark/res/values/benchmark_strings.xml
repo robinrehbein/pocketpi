@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Labels for the benchmark-only fixture activities. They never ship in the regular app, so they
+     stay out of src/main/res and are not translated. -->
+<resources>
+    <string name="performance_fixture_title" translatable="false">Performance fixture</string>
+    <string name="performance_fixture_switch" translatable="false">Switch session</string>
+    <string name="performance_fixture_stream" translatable="false">Stream response</string>
+    <string name="performance_fixture_session" translatable="false">Session %1$d</string>
+    <string name="performance_full_chat_title" translatable="false">Full chat fixture</string>
+    <string name="performance_full_chat_continue" translatable="false">Continue stream</string>
+</resources>

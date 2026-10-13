@@ -13,8 +13,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -122,7 +127,32 @@ internal fun RemoteApp(
     val theme = preferences.theme
     val dark = isSystemInDarkTheme()
     val activity = LocalActivity.current
+    val context = LocalContext.current
     val view = LocalView.current
+    val colors = remoteColorScheme(dark, synthwave = theme == "synthwave")
+    val windowInfo = LocalWindowInfo.current
+    val uriHandler =
+        remember(activity, context, windowInfo) {
+            // Read at each tap, outside composition: the window can enter split screen or change its
+            // size without a new activity, and RemoteApp need not recompose while a window is resized.
+            AdjacentUriHandler(context) {
+                val size = windowInfo.containerDpSize
+                opensLinksAdjacent(
+                    inMultiWindow = activity?.isInMultiWindowMode == true,
+                    width = size.width,
+                    // Outside split screen the window fills the screen, so its smaller side is the
+                    // screen's smallest width.
+                    smallestWidth = minOf(size.width, size.height),
+                )
+            }
+        }
+    val windowBackground = colors.background
+    DisposableEffect(activity, windowBackground) {
+        // A dark mode switch no longer recreates the activity, so the window behind the content
+        // follows the theme here instead of keeping the one it started with.
+        activity?.window?.setBackgroundDrawable(windowBackground.toArgb().toDrawable())
+        onDispose {}
+    }
     SideEffect {
         activity?.window?.let { window ->
             WindowCompat.getInsetsController(window, view).apply {
@@ -136,25 +166,26 @@ internal fun RemoteApp(
             }
         }
     }
-    val colors = remoteColorScheme(dark, synthwave = theme == "synthwave")
-    MaterialTheme(
-        colorScheme = colors,
-        typography = RemoteTypography,
-        shapes =
-            Shapes(
-                extraLarge = RoundedCornerShape(28.dp),
-                large = RoundedCornerShape(24.dp),
-                medium = RoundedCornerShape(20.dp),
-            ),
-    ) {
-        RemoteNavigation(
-            repository,
-            settings,
-            pushConfigured,
-            enablePush,
-            notification,
-            consumeNotification,
-            disablePush,
-        )
+    CompositionLocalProvider(LocalUriHandler provides uriHandler) {
+        MaterialTheme(
+            colorScheme = colors,
+            typography = RemoteTypography,
+            shapes =
+                Shapes(
+                    extraLarge = RoundedCornerShape(28.dp),
+                    large = RoundedCornerShape(24.dp),
+                    medium = RoundedCornerShape(20.dp),
+                ),
+        ) {
+            RemoteNavigation(
+                repository,
+                settings,
+                pushConfigured,
+                enablePush,
+                notification,
+                consumeNotification,
+                disablePush,
+            )
+        }
     }
 }
