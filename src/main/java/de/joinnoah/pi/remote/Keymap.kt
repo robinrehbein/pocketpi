@@ -54,8 +54,8 @@ internal enum class Shortcut(val group: ShortcutGroup, val listed: Boolean = tru
     HISTORY(ShortcutGroup.PANES),
     SETTINGS(ShortcutGroup.NAVIGATION),
     HELP(ShortcutGroup.NAVIGATION),
-    EXPAND_INSPECTOR(ShortcutGroup.PANES, listed = false),
-    TOGGLE_INSPECTOR(ShortcutGroup.PANES, listed = false),
+    EXPAND_INSPECTOR(ShortcutGroup.PANES),
+    TOGGLE_INSPECTOR(ShortcutGroup.PANES),
     OTHER_BUSY_ACTION(ShortcutGroup.COMPOSER),
     REFRESH(ShortcutGroup.NAVIGATION),
     RENAME(ShortcutGroup.CHAT),
@@ -216,7 +216,10 @@ internal enum class EscapeStep {
     /** A text selection in the chat or a line selection in Files. */
     CLEAR_SELECTION,
 
-    /** The topmost tool detail, Files, Changes, jobs or history, as Back closes it. */
+    /**
+     * The topmost pane, as Back closes it: the inspector's active tab beside the chat, or the
+     * tool detail, Files, Changes or jobs over it.
+     */
     CLOSE_PANE,
 
     /** Leaves the composer; the draft stays. */

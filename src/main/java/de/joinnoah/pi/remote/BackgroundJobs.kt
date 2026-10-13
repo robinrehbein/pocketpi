@@ -9,6 +9,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.*
@@ -859,6 +861,21 @@ internal fun BackgroundJobsChip(jobs: JobsState, actions: JobsActions) {
             IconButton(onClick = actions.onRefresh, enabled = !jobs.loading, modifier = Modifier.testTag("jobsRefresh")) {
                 Icon(Icons.Default.Refresh, stringResource(R.string.remote_refresh))
             }
+            // The full list: beside the chat where a side inspector fits, over it elsewhere.
+            actions.onOpenList?.let { open ->
+                val label = stringResource(R.string.remote_jobs_open_all)
+                ShortcutTooltip(label, Shortcut.JOBS) {
+                    IconButton(
+                        onClick = {
+                            expanded = false
+                            open()
+                        },
+                        modifier = Modifier.testTag("jobsOpenAll"),
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, label)
+                    }
+                }
+            }
         },
     ) {
         JobListContent(jobs, { id -> expanded = false; actions.onOpenJob(id) }, Modifier.heightIn(max = 320.dp))
@@ -871,7 +888,40 @@ internal class JobsActions(
     val onCloseJob: () -> Unit,
     val onClose: () -> Unit,
     val onStop: (String) -> Unit,
+    /** Opens the full list from the chip's popover; null leaves the popover without it. */
+    val onOpenList: (() -> Unit)? = null,
+    /**
+     * Puts a prompt quoting the job's output into the composer, never sending it; false when the
+     * draft could not take it. Null hides the action.
+     */
+    val onAsk: ((String) -> Boolean)? = null,
 )
+
+/** Most lines of a job's output "Ask pi about this output" quotes, from its end. */
+internal const val JOB_ASK_LINES = 40
+
+/**
+ * The composer text that shows pi the end of a job's output: [intro], then the last [maxLines]
+ * text lines in a fence, as many as fit [MAX_FILE_QUOTE_BYTES]. Skipped output ends the quote,
+ * since the lines before it are not contiguous with the rest. Null without any text to quote.
+ */
+internal fun jobOutputPrompt(intro: String, lines: List<JobOutputLine>, maxLines: Int = JOB_ASK_LINES): String? {
+    val quoted = ArrayDeque<String>()
+    var bytes = 0
+    for (line in lines.asReversed()) {
+        val text = (line as? JobOutputLine.Text)?.text ?: break
+        val size = text.encodeToByteArray().size + 1
+        if (quoted.size >= maxLines || bytes + size > MAX_FILE_QUOTE_BYTES) break
+        quoted.addFirst(text)
+        bytes += size
+    }
+    while (quoted.isNotEmpty() && quoted.first().isBlank()) quoted.removeFirst()
+    while (quoted.isNotEmpty() && quoted.last().isBlank()) quoted.removeLast()
+    if (quoted.isEmpty()) return null
+    val text = quoted.joinToString("\n")
+    val fence = codeFence(text)
+    return "$intro\n\n$fence\n$text\n$fence"
+}
 
 @Composable
 private fun JobsTopBar(title: String, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {}) {
@@ -985,7 +1035,19 @@ private fun JobsMessage(text: String, modifier: Modifier = Modifier.fillMaxSize(
 private fun ColumnScope.JobDetail(view: JobView, actions: JobsActions) {
     val job = view.job
     var confirmStop by remember { mutableStateOf(false) }
+    val askIntro = stringResource(R.string.remote_jobs_ask_prompt, job?.command.orEmpty())
+    val askPrompt = remember(view.lines, askIntro) { jobOutputPrompt(askIntro, view.lines) }
+    var askFailed by remember { mutableStateOf(false) }
     JobsTopBar(job?.command ?: stringResource(R.string.remote_jobs_title), actions.onCloseJob) {
+        val ask = actions.onAsk
+        if (ask != null && job != null && askPrompt != null) {
+            val label = stringResource(R.string.remote_jobs_ask)
+            ShortcutTooltip(label) {
+                IconButton(onClick = { askFailed = !ask(askPrompt) }, modifier = Modifier.testTag("jobAsk")) {
+                    Icon(Icons.AutoMirrored.Outlined.Chat, label)
+                }
+            }
+        }
         if (job?.status == JobStatus.RUNNING && !view.vanished)
             TextButton(
                 onClick = { confirmStop = true },
@@ -1015,6 +1077,13 @@ private fun ColumnScope.JobDetail(view: JobView, actions: JobsActions) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
         }
+    if (askFailed)
+        Text(
+            stringResource(R.string.remote_files_prefill_failed),
+            Modifier.padding(horizontal = 16.dp).testTag("jobAskFailed"),
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodyMedium,
+        )
     if (view.stopFailed)
         Text(
             stringResource(R.string.remote_jobs_stop_failed),

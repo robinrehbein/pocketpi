@@ -40,6 +40,10 @@ internal class NavigationFakeRepository : RemoteRepository {
     override fun openJob(jobId: String) {
         jobOpens += jobId
     }
+
+    override fun closeJobs() {
+        state.value = state.value.copy(jobs = state.value.jobs?.copy(listOpen = false, view = null))
+    }
     val toolOutputRequests = mutableListOf<String>()
     var sessionRefreshes = 0
     val browsed = mutableListOf<Pair<String, String>>()
@@ -111,6 +115,23 @@ internal class NavigationFakeRepository : RemoteRepository {
                 files = null,
                 changes = ChangesState(sessionId, loading = false, status = GitStatus(GitBase.SESSION, "Q2hhbmdlc1NuYXBzaG90MQ"), log = GitLog()),
             )
+    }
+
+    // Beside the chat both stay open, each in its own inspector tab.
+    override fun openFiles(exclusive: Boolean) {
+        if (exclusive) return openFiles()
+        filesOpens++
+        state.value = state.value.copy(files = filesOnOpen(checkNotNull(state.value.selection.sessionId)))
+    }
+
+    var sharedChangesOpens = 0
+
+    override fun openChanges(exclusive: Boolean) {
+        if (exclusive) return openChanges()
+        sharedChangesOpens++
+        val files = state.value.files
+        openChanges()
+        state.value = state.value.copy(files = files)
     }
 
     override fun closeChanges() {

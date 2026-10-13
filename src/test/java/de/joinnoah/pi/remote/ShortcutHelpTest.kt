@@ -5,7 +5,6 @@ import android.view.KeyboardShortcutGroup
 import androidx.compose.ui.input.key.Key
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -40,9 +39,10 @@ class ShortcutHelpTest {
         val changes = groups[3].items.single { it.label == "Changes" }
         assertEquals(KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON, changes.modifiers)
         assertTrue(groups[2].items.any { it.keycode == KeyEvent.KEYCODE_ENTER && it.modifiers == KeyEvent.META_ALT_ON })
-        // Keys without an action yet stay out.
+        // The inspector's keys have their actions now.
         val labels = groups.flatMap { group -> group.items.map { it.label.toString() } }
-        assertFalse(labels.contains(context.getString(R.string.remote_keymap_toggle_inspector)))
+        assertTrue(labels.contains(context.getString(R.string.remote_keymap_toggle_inspector)))
+        assertTrue(labels.contains(context.getString(R.string.remote_keymap_expand_inspector)))
     }
 
     @Test

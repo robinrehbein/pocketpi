@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.unit.IntOffset
@@ -39,6 +40,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
@@ -114,13 +116,16 @@ import kotlinx.serialization.json.JsonObject
  *   project's sessions beside them and the selected chat on the right. Once a chat is open, the
  *   projects column narrows to a strip of project avatars, so another project is one tap away.
  *   The session list can be collapsed so the chat gets the rest of the width;
- * - from 1180 dp: tool details and diffs open in an inspector pane beside the chat instead of
- *   covering it, and the pane closes with them;
- * - from 1600 dp (DeX): the inspector pane stays open, empty until something is inspected.
+ * - from about 750 dp: tool details, diffs, files and jobs open in an inspector pane beside the
+ *   chat instead of covering it, as tabs, and the pane closes with its last tab. Where the session
+ *   list, the chat and the inspector do not fit side by side, opening the inspector collapses the
+ *   list and closing it brings the list back ([PaneLayout.autoCollapseList]);
+ * - from 1600 dp (DeX): the inspector pane stays open, with jobs or the changes by default.
  *
  * A Galaxy Tab S11 reports about 753-800 dp in portrait and 1205-1280 dp in landscape, depending
- * on the display zoom, so both orientations land in a column bucket. Every bucket leaves an open
- * chat at least [CHAT_PANE_MIN_WIDTH] beside the strip and the default session list.
+ * on the display zoom, so both orientations land in a column bucket and both open the inspector
+ * beside the chat. Every bucket leaves an open chat at least [CHAT_PANE_MIN_WIDTH] beside the
+ * strip and the default session list, or beside the strip and the inspector.
  *
  * The back stack stays the single source of truth in every layout: the columns are only a
  * different way to show the same [RemoteNavKey.Projects], [RemoteNavKey.Sessions] and
@@ -135,6 +140,7 @@ internal val TWO_PANE_MIN_WIDTH = 720.dp
  * list and a chat with its composer and keyboard, so it keeps the phone layout.
  */
 internal val TWO_PANE_MIN_HEIGHT = 480.dp
+/** From here the landscape buckets take a narrower session list and a wider inspector. */
 internal val INSPECTOR_MIN_WIDTH = 1180.dp
 internal val PERSISTENT_INSPECTOR_MIN_WIDTH = 1600.dp
 
@@ -150,7 +156,7 @@ internal val MAX_PAGE_WIDTH = 720.dp
 internal enum class InspectorMode {
     /** Tool details and diffs cover the chat, as on a phone. */
     OVERLAY,
-    /** A side pane opens with a tool detail or diff and closes with it. */
+    /** A side pane opens with its first tab and closes with its last one. */
     ON_DEMAND,
     /** The side pane is always there. */
     PERSISTENT,
@@ -163,32 +169,70 @@ internal data class PaneLayout(
     val inspectorWidth: Dp = 0.dp,
     /** The projects column's width while no chat is open; it is not resizable. */
     val projectsWidth: Dp = 0.dp,
+    /** The narrowest the inspector pane gets: portrait tablets take a narrower one. */
+    val inspectorMinWidth: Dp = INSPECTOR_PANE_MIN_WIDTH,
+    /**
+     * The session list, the chat and the inspector at their default widths would leave the chat
+     * under [COMFORTABLE_CHAT_WIDTH], so opening the inspector collapses the list
+     * ([TwoPaneState.autoCollapseList]) and closing it brings the list back.
+     */
+    val autoCollapseList: Boolean = false,
+    /**
+     * The inspector at its default width fits beside the default session list and the chat.
+     * Where it does not, it shows beside the chat only while the list is collapsed, and covers
+     * the chat while the user keeps the list open.
+     */
+    val inspectorBesideList: Boolean = false,
 ) {
     companion object {
         val Phone = PaneLayout(twoPane = false, inspector = InspectorMode.OVERLAY)
     }
 }
 
-internal fun paneLayout(width: Dp, height: Dp): PaneLayout =
-    when {
-        width < TWO_PANE_MIN_WIDTH || height < TWO_PANE_MIN_HEIGHT -> PaneLayout.Phone
-        width < 750.dp -> PaneLayout(true, InspectorMode.OVERLAY, listWidth = 240.dp, projectsWidth = 240.dp)
-        width < 960.dp -> PaneLayout(true, InspectorMode.OVERLAY, listWidth = 280.dp, projectsWidth = 240.dp)
-        width < INSPECTOR_MIN_WIDTH ->
-            PaneLayout(true, InspectorMode.OVERLAY, listWidth = 360.dp, projectsWidth = 280.dp)
-        width < 1280.dp ->
-            PaneLayout(
-                true, InspectorMode.ON_DEMAND, listWidth = 320.dp, inspectorWidth = 360.dp, projectsWidth = 280.dp,
-            )
-        width < PERSISTENT_INSPECTOR_MIN_WIDTH ->
-            PaneLayout(
-                true, InspectorMode.ON_DEMAND, listWidth = 360.dp, inspectorWidth = 400.dp, projectsWidth = 280.dp,
-            )
-        else ->
-            PaneLayout(
-                true, InspectorMode.PERSISTENT, listWidth = 360.dp, inspectorWidth = 480.dp, projectsWidth = 280.dp,
-            )
-    }
+/**
+ * The layout of a [width] by [height] window. The inspector opens beside the chat wherever the
+ * chat and the narrowest inspector fit next to the project strip, that is once the session list
+ * can make way: 753 and 800 dp portrait windows qualify with [SIDE_INSPECTOR_MIN_WIDTH].
+ */
+internal fun paneLayout(width: Dp, height: Dp): PaneLayout {
+    if (width < TWO_PANE_MIN_WIDTH || height < TWO_PANE_MIN_HEIGHT) return PaneLayout.Phone
+    val columns =
+        when {
+            width < 750.dp ->
+                PaneLayout(
+                    true, InspectorMode.ON_DEMAND, listWidth = 240.dp, inspectorWidth = SIDE_INSPECTOR_MIN_WIDTH,
+                    projectsWidth = 240.dp, inspectorMinWidth = SIDE_INSPECTOR_MIN_WIDTH,
+                )
+            width < 960.dp ->
+                PaneLayout(
+                    true, InspectorMode.ON_DEMAND, listWidth = 280.dp, inspectorWidth = 320.dp, projectsWidth = 240.dp,
+                    inspectorMinWidth = SIDE_INSPECTOR_MIN_WIDTH,
+                )
+            width < INSPECTOR_MIN_WIDTH ->
+                PaneLayout(true, InspectorMode.ON_DEMAND, listWidth = 360.dp, inspectorWidth = 360.dp, projectsWidth = 280.dp)
+            width < 1280.dp ->
+                PaneLayout(
+                    true, InspectorMode.ON_DEMAND, listWidth = 320.dp, inspectorWidth = 360.dp, projectsWidth = 280.dp,
+                )
+            width < PERSISTENT_INSPECTOR_MIN_WIDTH ->
+                PaneLayout(
+                    true, InspectorMode.ON_DEMAND, listWidth = 360.dp, inspectorWidth = 400.dp, projectsWidth = 280.dp,
+                )
+            else ->
+                PaneLayout(
+                    true, InspectorMode.PERSISTENT, listWidth = 360.dp, inspectorWidth = 480.dp, projectsWidth = 280.dp,
+                )
+        }
+    // What the chat and the inspector share once the list is collapsed; the strip always stays.
+    val room = width - PROJECT_STRIP_RESERVE
+    if (room < CHAT_PANE_MIN_WIDTH + PANE_DIVIDER_WIDTH + columns.inspectorMinWidth)
+        return columns.copy(inspector = InspectorMode.OVERLAY, inspectorWidth = 0.dp, inspectorMinWidth = INSPECTOR_PANE_MIN_WIDTH)
+    val besideList = room - columns.listWidth - PANE_DIVIDER_WIDTH
+    return columns.copy(
+        autoCollapseList = besideList - columns.inspectorWidth - PANE_DIVIDER_WIDTH < COMFORTABLE_CHAT_WIDTH,
+        inspectorBesideList = besideList >= CHAT_PANE_MIN_WIDTH + PANE_DIVIDER_WIDTH + columns.inspectorWidth,
+    )
+}
 
 /*
  * The dividers beside the session list and the inspector pane can be dragged. A width set that
@@ -201,6 +245,19 @@ internal val LIST_PANE_MAX_WIDTH = 480.dp
 internal val INSPECTOR_PANE_MIN_WIDTH = 300.dp
 internal val INSPECTOR_PANE_MAX_WIDTH = 720.dp
 internal val CHAT_PANE_MIN_WIDTH = 400.dp
+
+/** The narrowest inspector of a portrait tablet: 753 dp leave 287 dp beside the chat's minimum. */
+internal val SIDE_INSPECTOR_MIN_WIDTH = 280.dp
+
+/** A chat narrower than this beside the list and the inspector is cramped; the list makes way. */
+internal val COMFORTABLE_CHAT_WIDTH = 560.dp
+
+/**
+ * An expanded inspector gets everything but the chat's minimum; where that would be narrower than
+ * this, the chat shrinks to a [CHAT_STRIP_WIDTH] strip instead.
+ */
+internal val EXPANDED_INSPECTOR_MIN_WIDTH = 800.dp
+internal val CHAT_STRIP_WIDTH = 48.dp
 
 /** How far the "wider" and "narrower" accessibility actions move a divider. */
 internal val PANE_RESIZE_STEP = 40.dp
@@ -221,25 +278,39 @@ internal val PROJECT_STRIP_WIDTH = 64.dp
 internal val PROJECT_STRIP_RESERVE = PROJECT_STRIP_WIDTH + PANE_DIVIDER_WIDTH
 
 /**
- * The session list's width for [requested] in a [window] wide layout: it leaves room for the
- * chat and, where one can open beside it, the narrowest inspector pane.
+ * The session list's width for [requested] in a [window] wide [layout]: it leaves room for the
+ * chat and, where the inspector opens beside the list, the narrowest inspector pane. Where it
+ * does not, opening the inspector collapses the list instead.
  */
-internal fun listPaneWidth(requested: Dp, window: Dp, inspector: InspectorMode): Dp {
+internal fun listPaneWidth(requested: Dp, window: Dp, layout: PaneLayout): Dp {
     val inspectorReserve =
-        if (inspector == InspectorMode.OVERLAY) 0.dp else INSPECTOR_PANE_MIN_WIDTH + PANE_DIVIDER_WIDTH
+        if (layout.inspector == InspectorMode.OVERLAY || !layout.inspectorBesideList) 0.dp
+        else layout.inspectorMinWidth + PANE_DIVIDER_WIDTH
     val reserve = CHAT_PANE_MIN_WIDTH + PANE_DIVIDER_WIDTH + inspectorReserve
     return requested.coerceIn(LIST_PANE_MIN_WIDTH, maxOf(LIST_PANE_MIN_WIDTH, minOf(LIST_PANE_MAX_WIDTH, window - reserve)))
 }
 
-/** The inspector pane's width for [requested] beside a chat with [available] room for both. */
-internal fun inspectorPaneWidth(requested: Dp, available: Dp): Dp =
+/**
+ * The inspector pane's width for [requested] beside a chat with [available] room for both, no
+ * narrower than [minimum].
+ */
+internal fun inspectorPaneWidth(requested: Dp, available: Dp, minimum: Dp = INSPECTOR_PANE_MIN_WIDTH): Dp =
     requested.coerceIn(
-        INSPECTOR_PANE_MIN_WIDTH,
-        maxOf(
-            INSPECTOR_PANE_MIN_WIDTH,
-            minOf(INSPECTOR_PANE_MAX_WIDTH, available - CHAT_PANE_MIN_WIDTH - PANE_DIVIDER_WIDTH),
-        ),
+        minimum,
+        maxOf(minimum, minOf(INSPECTOR_PANE_MAX_WIDTH, available - CHAT_PANE_MIN_WIDTH - PANE_DIVIDER_WIDTH)),
     )
+
+/** An expanded inspector in [available] room leaves the chat only a strip. */
+internal fun chatStripped(available: Dp): Boolean =
+    available - CHAT_PANE_MIN_WIDTH - PANE_DIVIDER_WIDTH < EXPANDED_INSPECTOR_MIN_WIDTH
+
+/**
+ * The expanded inspector's width in [available] room: all but the chat's minimum, past
+ * [INSPECTOR_PANE_MAX_WIDTH], or all but the chat strip where that would stay under
+ * [EXPANDED_INSPECTOR_MIN_WIDTH].
+ */
+internal fun expandedInspectorWidth(available: Dp): Dp =
+    available - PANE_DIVIDER_WIDTH - if (chatStripped(available)) CHAT_STRIP_WIDTH else CHAT_PANE_MIN_WIDTH
 
 /** Identifies a layout bucket for [TwoPaneState]; a dragged width belongs to one bucket. */
 internal fun PaneLayout.sizeKey(): String = "${inspector.name}:${listWidth.value}:${inspectorWidth.value}"
@@ -335,12 +406,50 @@ internal fun CenteredPage(content: @Composable () -> Unit) {
 internal val LocalPaneLayout = staticCompositionLocalOf { PaneLayout.Phone }
 
 /**
- * Two-pane state that is not part of the back stack. The collapsed list and the dragged pane
- * widths survive recreation; the rest is rebuilt by the panes themselves.
+ * Two-pane state that is not part of the back stack. The collapsed list, the expanded inspector
+ * and the dragged pane widths survive recreation; the rest is rebuilt by the panes themselves.
  */
 @Stable
 internal class TwoPaneState(listCollapsed: Boolean = false) {
-    var listCollapsed by mutableStateOf(listCollapsed)
+    private var collapsed by mutableStateOf(listCollapsed)
+
+    /**
+     * The session list is hidden beside the chat. Setting it, as the user's toggle, Back and the
+     * shortcuts do, makes the state the user's own: closing the inspector then leaves it alone.
+     */
+    var listCollapsed: Boolean
+        get() = collapsed
+        set(value) {
+            collapsed = value
+            autoCollapsed = false
+        }
+
+    /**
+     * The list collapsed by itself to make room for the inspector ([autoCollapseList]); closing
+     * the inspector brings it back ([restoreList]).
+     */
+    var autoCollapsed by mutableStateOf(false)
+        private set
+
+    /**
+     * The inspector takes all but the chat's minimum width, or all but a strip of the chat where
+     * that would leave it narrow ([expandedInspectorWidth]).
+     */
+    var inspectorExpanded by mutableStateOf(false)
+
+    /** The inspector opened where the list, the chat and it do not fit side by side. */
+    fun autoCollapseList() {
+        if (collapsed) return
+        collapsed = true
+        autoCollapsed = true
+    }
+
+    /** The inspector closed: a list that collapsed for it comes back, one the user hid stays hidden. */
+    fun restoreList() {
+        if (!autoCollapsed) return
+        collapsed = false
+        autoCollapsed = false
+    }
 
     /** Dragged widths, null for the layout's default; they belong to the bucket [sizedFor]. */
     private var listOverride by mutableStateOf<Dp?>(null)
@@ -390,6 +499,8 @@ internal class TwoPaneState(listCollapsed: Boolean = false) {
                         it.listOverride?.value ?: -1f,
                         it.inspectorOverride?.value ?: -1f,
                         it.sizedFor ?: "",
+                        it.autoCollapsed,
+                        it.inspectorExpanded,
                     )
                 },
                 restore = {
@@ -397,6 +508,9 @@ internal class TwoPaneState(listCollapsed: Boolean = false) {
                         listOverride = (it[1] as Float).takeIf { width -> width >= 0f }?.dp
                         inspectorOverride = (it[2] as Float).takeIf { width -> width >= 0f }?.dp
                         sizedFor = (it[3] as String).ifEmpty { null }
+                        // State saved by an older version has neither.
+                        autoCollapsed = it.getOrNull(4) as? Boolean ?: false
+                        inspectorExpanded = it.getOrNull(5) as? Boolean ?: false
                     }
                 },
             )
@@ -567,7 +681,7 @@ private data class ProjectColumnsScene(
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val window by rememberUpdatedState(maxWidth)
             val reserve = if (projects != null) PROJECT_STRIP_RESERVE else 0.dp
-            val listWidth = listPaneWidth(state.listWidth(layout), maxWidth - reserve, layout.inspector)
+            val listWidth = listPaneWidth(state.listWidth(layout), maxWidth - reserve, layout)
             val direction = if (rtl) -1f else 1f
             val slide = with(LocalDensity.current) { COLUMN_SLIDE.toPx() } * direction
             // Slides a column in from the end side and, while it is the top one, moves it with a
@@ -666,9 +780,9 @@ private data class ProjectColumnsScene(
             }
             if (list != null && !collapsed) {
                 // Reads the state on every call: several drag events can arrive between frames.
-                fun currentWidth() = listPaneWidth(state.listWidth(layout), window - reserve, layout.inspector)
+                fun currentWidth() = listPaneWidth(state.listWidth(layout), window - reserve, layout)
                 fun resizeTo(width: Dp) =
-                    state.resizeList(layout, listPaneWidth(width, window - reserve, layout.inspector))
+                    state.resizeList(layout, listPaneWidth(width, window - reserve, layout))
                 // A drag sets start + distance, so the divider follows the finger again after a clamp.
                 var dragStart by remember { mutableStateOf(0.dp) }
                 PaneResizeHandle(
@@ -953,11 +1067,13 @@ internal fun filterSessions(items: List<SessionListItem>, query: String): List<S
 
 /**
  * The chat with its inspector pane beside it while [shown]. The chat keeps its place in the
- * composition either way, so opening or closing the pane (or a resize across 1100 dp) keeps its
+ * composition either way, so opening or closing the pane (or a resize across buckets) keeps its
  * scroll position and open tool.
  *
- * [width] is the requested pane width, read again on every drag event; with [onResize] the
- * divider can be dragged, and null resets the width.
+ * [width] is the requested pane width, read again on every drag event, and [minWidth] the
+ * narrowest it gets; with [onResize] the divider can be dragged, and null resets the width.
+ * [expanded] gives the pane all but the chat's minimum; where that stays narrow, the chat makes
+ * way for [chatStrip] instead, and [onChatStripped] hears when that starts and ends.
  */
 @Composable
 internal fun InspectorRow(
@@ -965,6 +1081,10 @@ internal fun InspectorRow(
     width: () -> Dp,
     onResize: ((Dp?) -> Unit)?,
     inspector: (@Composable () -> Unit)?,
+    minWidth: Dp = INSPECTOR_PANE_MIN_WIDTH,
+    expanded: Boolean = false,
+    chatStrip: (@Composable () -> Unit)? = null,
+    onChatStripped: (Boolean) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     // F6 reaches the pane's content, and comes back to the row it left there; the pane keeps its
@@ -973,9 +1093,27 @@ internal fun InspectorRow(
     val region = rememberFocusRegion(FocusRegion.INSPECTOR, enabled = shown && inspector != null, children = children)
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val available by rememberUpdatedState(maxWidth)
-        val paneWidth = inspectorPaneWidth(width(), maxWidth)
+        val widened = shown && expanded
+        val stripped = widened && chatStrip != null && chatStripped(maxWidth)
+        val currentStripped by rememberUpdatedState(onChatStripped)
+        LaunchedEffect(stripped) { currentStripped(stripped) }
+        val paneWidth = if (widened) expandedInspectorWidth(maxWidth) else inspectorPaneWidth(width(), maxWidth, minWidth)
         Row(Modifier.fillMaxSize()) {
-            Box(Modifier.weight(1f).fillMaxHeight()) { content() }
+            Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
+                // A stripped chat keeps its usual width behind the strip, so nothing in it rewraps,
+                // and TalkBack skips it.
+                Box(
+                    if (stripped)
+                        Modifier.wrapContentWidth(Alignment.Start, unbounded = true)
+                            .width(CHAT_PANE_MIN_WIDTH)
+                            .fillMaxHeight()
+                            .clearAndSetSemantics {}
+                    else Modifier.fillMaxSize()
+                ) {
+                    content()
+                }
+                if (stripped && chatStrip != null) Box(Modifier.fillMaxSize().testTag("chatStrip")) { chatStrip() }
+            }
             if (shown) {
                 VerticalDivider()
                 Box(Modifier.width(paneWidth).fillMaxHeight().testTag("inspectorPane").then(region)) {
@@ -995,10 +1133,11 @@ internal fun InspectorRow(
                 }
             }
         }
-        if (shown && onResize != null) {
+        // An expanded pane has no width of its own to drag.
+        if (shown && !widened && onResize != null) {
             // The pane sits at the end side, so moving the divider towards the end narrows it.
-            fun currentWidth() = inspectorPaneWidth(width(), available)
-            fun resizeTo(width: Dp) = onResize(inspectorPaneWidth(width, available))
+            fun currentWidth() = inspectorPaneWidth(width(), available, minWidth)
+            fun resizeTo(width: Dp) = onResize(inspectorPaneWidth(width, available, minWidth))
             var dragStart by remember { mutableStateOf(0.dp) }
             PaneResizeHandle(
                 label = stringResource(R.string.remote_pane_resize_inspector),

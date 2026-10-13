@@ -435,6 +435,44 @@ class ProjectFilesLoaderTest {
         assertEquals(listOf("a.kt"), repository.state.value.files?.listing?.entries?.map { it.name })
     }
 
+    @Test
+    fun aSideInspectorKeepsFilesAndChangesOpenTogether() = runTest {
+        val transport = Transport(capabilities) { request ->
+            if (request.text("type") == "session.files.list") listing(request, "a.kt") else null
+        }
+        val repository = opened(transport)
+        assertNotNull(repository.state.value.files)
+        // Changes as a tab of their own: the files stay, at the folder they show.
+        repository.openFilesDir("src")
+        runCurrent()
+        repository.openChanges(exclusive = false)
+        runCurrent()
+        assertNotNull(repository.state.value.changes)
+        assertEquals("src", repository.state.value.files?.path)
+        // Files as a tab of their own: the changes stay, still loading their status.
+        repository.closeFiles()
+        repository.openFiles(exclusive = false)
+        runCurrent()
+        assertNotNull(repository.state.value.files)
+        assertNotNull(repository.state.value.changes)
+        assertTrue(repository.state.value.changes?.loading == true)
+        // Each closes only with its own tab.
+        repository.closeChanges()
+        assertNull(repository.state.value.changes)
+        assertNotNull(repository.state.value.files)
+    }
+
+    @Test
+    fun aSideInspectorOpensChangesBesideAnUnsavedEditWithoutAsking() = runTest {
+        val repository = editing(editorTransport())
+        repository.updateFileEditorText("mine\n")
+        repository.openChanges(exclusive = false)
+        runCurrent()
+        assertNotNull(repository.state.value.changes)
+        assertNull(repository.state.value.files?.editor?.leaveRequest)
+        assertEquals("mine\n", repository.state.value.files?.editor?.text)
+    }
+
     // ---- Editor ---------------------------------------------------------------------------
 
     private val writeFixture: JsonObject by lazy {

@@ -6,6 +6,8 @@ import kotlin.math.pow
 enum class ChatAction {
     CHANGES,
     FILES,
+    /** The session's background jobs; offered while it has any. */
+    JOBS,
     RENAME,
     REFRESH,
     SETTINGS,
@@ -24,11 +26,11 @@ internal const val ACTION_USAGE_HALF_LIFE_MILLIS = 14L * 24 * 60 * 60 * 1000
 
 /**
  * The ranking without any use, and the tie-break: Changes and Refresh come first. Usage is stored
- * per action name, so an action added later, like Files or New session, simply starts without uses.
+ * per action name, so an action added later, like Files, New session or Jobs, simply starts without uses.
  */
 internal val DEFAULT_CHAT_ACTIONS =
     listOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.RENAME, ChatAction.NEW_SESSION,
-        ChatAction.SESSION_SETTINGS, ChatAction.SETTINGS, ChatAction.HISTORY)
+        ChatAction.SESSION_SETTINGS, ChatAction.SETTINGS, ChatAction.JOBS, ChatAction.HISTORY)
 
 internal fun ActionUsage.decayed(now: Long): Double =
     score * 0.5.pow((now - at).coerceAtLeast(0L) / ACTION_USAGE_HALF_LIFE_MILLIS.toDouble())
