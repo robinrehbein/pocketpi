@@ -667,6 +667,7 @@ internal fun ChatComposer(
                                 val target = keyTarget
                                 val names = target?.slashNames.orEmpty()
                                 val highlight = target?.slashHighlight ?: 0
+                                val recalling = recall.recalling(draft.text)
                                 val completion =
                                     composerKey(
                                         event.key,
@@ -675,13 +676,15 @@ internal fun ChatComposer(
                                         alt = event.isAltPressed,
                                         shift = event.isShiftPressed,
                                         hardwareKeyboard = hardwareKeyboard,
+                                        // A recalled "/…" message keeps Up and Down for the history.
                                         suggestionsOpen =
-                                            target != null && target.slashShown && !draft.suggestionsClosed && names.isNotEmpty(),
+                                            target != null && target.slashShown && !draft.suggestionsClosed &&
+                                                names.isNotEmpty() && !recalling,
                                         highlightTyped =
                                             commandName(draft.text)?.equals(names.getOrNull(highlight), ignoreCase = true) == true,
                                         predictionShown = prediction != null,
                                         draftEmpty = draft.text.isEmpty(),
-                                        recalling = recall.recalling(draft.text),
+                                        recalling = recalling,
                                     )
                                 when (completion) {
                                     ComposerKey.DEFAULT -> Unit
@@ -692,10 +695,6 @@ internal fun ChatComposer(
                                     }
                                     ComposerKey.SUGGESTION_RUN -> {
                                         target?.runSlash?.invoke(highlight)
-                                        return@onPreviewKeyEvent true
-                                    }
-                                    ComposerKey.SUGGESTIONS_CLOSE -> {
-                                        draft.closeSuggestions()
                                         return@onPreviewKeyEvent true
                                     }
                                     ComposerKey.ACCEPT_PREDICTION -> {

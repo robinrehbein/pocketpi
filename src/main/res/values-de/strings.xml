@@ -373,7 +373,7 @@
     <string name="remote_session_search">Sitzungen durchsuchen</string>
     <string name="remote_session_search_empty">Keine Sitzung passt zur Suche.</string>
     <string name="remote_keyboard_title">Hardware-Tastatur</string>
-    <string name="remote_keyboard_help">Mit jeder angeschlossenen Tastatur, etwa dem Book Cover Keyboard oder einer Bluetooth-Tastatur am Smartphone, sendet Enter und diese Tastenkürzel funktionieren in jeder Fenstergröße. Strg+/ zeigt die Tasten für die Stelle, an der du gerade bist.</string>
+    <string name="remote_keyboard_help">Mit jeder angeschlossenen Tastatur, etwa dem Book Cover Keyboard oder einer Bluetooth-Tastatur am Smartphone, sendet Enter und diese Tastenkürzel funktionieren in jeder Fenstergröße. %1$s zeigt die Tasten für die Stelle, an der du gerade bist.</string>
     <string name="remote_keyboard_enter_sends">Enter sendet, Umschalt+Enter fügt eine Zeile ein</string>
     <string name="wear_pair">Mac koppeln</string>
     <string name="wear_pair_instructions">Starte /remote auf deinem Mac. Gib den vollständigen Kopplungscode ein und bestätige diese Uhr auf dem Mac.</string>

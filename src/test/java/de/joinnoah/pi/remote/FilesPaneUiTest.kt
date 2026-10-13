@@ -10,6 +10,8 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -73,11 +75,19 @@ class FilesPaneUiTest {
     private fun scrollToEntry(name: String) =
         compose.onNodeWithTag("filesList").performScrollToNode(hasTestTag("filesEntry:$name"))
 
-    /** Renders the pane alone; navigation only records, the test moves [state] itself. */
-    private fun render(initial: FilesState, projectName: String? = null): (FilesState) -> Unit {
+    /**
+     * Renders the pane alone, or with [besideChat] right of a focusable button as in the two-pane
+     * layout; navigation only records, the test moves [state] itself.
+     */
+    private fun render(initial: FilesState, projectName: String? = null, besideChat: Boolean = false): (FilesState) -> Unit {
         var state by mutableStateOf(initial)
         compose.setContent {
             MaterialTheme {
+                androidx.compose.foundation.layout.Row {
+                if (besideChat)
+                    androidx.compose.material3.Button(onClick = {}, modifier = androidx.compose.ui.Modifier.testTag("chatButton")) {
+                        androidx.compose.material3.Text("Chat")
+                    }
                 FilesPane(
                     state,
                     FilesActions(
@@ -100,6 +110,7 @@ class FilesPaneUiTest {
                     ),
                     projectName = projectName,
                 )
+                }
             }
         }
         return { state = it }
@@ -152,6 +163,34 @@ class FilesPaneUiTest {
         compose.onNodeWithTag("filesEntry:Util.kt").performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Backspace) }
         compose.waitForIdle()
         assertEquals(listOf(""), opened)
+    }
+
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    @Test
+    @Config(qualifiers = "w1205dp-h753dp")
+    fun leftOnTheFirstTileGoesUpAFolderInsteadOfIntoTheChatBesideIt() {
+        val listing = FileListing("src", listOf(FileEntry("lib", FileEntryType.DIR), FileEntry("Main.kt", FileEntryType.FILE, 10)))
+        render(FilesState("s", loading = false, path = "src", listing = listing), besideChat = true)
+        val lib = compose.onNodeWithTag("filesEntry:lib")
+        lib.performSemanticsAction(SemanticsActions.RequestFocus)
+        lib.performKeyInput { pressKey(androidx.compose.ui.input.key.Key.DirectionLeft) }
+        compose.waitForIdle()
+        assertEquals(listOf(""), opened)
+        compose.onNodeWithTag("chatButton").assertIsNotFocused()
+        lib.assertIsFocused()
+    }
+
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    @Test
+    @Config(qualifiers = "w1205dp-h753dp")
+    fun leftAtTheTopFolderMayLeaveThePane() {
+        render(FilesState("s", loading = false, listing = root), besideChat = true)
+        val src = compose.onNodeWithTag("filesEntry:src")
+        src.performSemanticsAction(SemanticsActions.RequestFocus)
+        src.performKeyInput { pressKey(androidx.compose.ui.input.key.Key.DirectionLeft) }
+        compose.waitForIdle()
+        assertEquals(emptyList<String>(), opened)
+        compose.onNodeWithTag("chatButton").assertIsFocused()
     }
 
     @Test

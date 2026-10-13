@@ -1265,7 +1265,8 @@ internal fun RemoteScreen(
             }
     // The rows F6 comes back to: the list's here, or the pane's over or beside the chat.
     val regionChildren = remember(key) { FocusRegionChildren() }
-    val overlayRegion = rememberFocusRegion(FocusRegion.INSPECTOR, enabled = composerCovered, children = regionChildren)
+    val overlayChildren = remember(key) { FocusRegionChildren() }
+    val overlayRegion = rememberFocusRegion(FocusRegion.OVERLAY, enabled = composerCovered, children = overlayChildren)
     CompositionLocalProvider(
         LocalChatKeyTarget provides chatKeyTarget.takeIf { chatKey != null },
         LocalFocusRegionChildren provides regionChildren,
@@ -1694,8 +1695,14 @@ internal fun RemoteScreen(
                 if (keyboardSettingsShown(hardwareKeyboard, paneLayout.twoPane))
                     item {
                         Section(stringResource(R.string.remote_keyboard_title), Modifier.testTag("keyboardSettings")) {
+                            val helpKeys =
+                                chordText(
+                                    checkNotNull(tooltipChord(Shortcut.HELP)),
+                                    androidx.compose.ui.platform.LocalResources.current,
+                                    rememberKeyCaps(),
+                                )
                             Text(
-                                stringResource(R.string.remote_keyboard_help),
+                                stringResource(R.string.remote_keyboard_help, helpKeys),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -2437,6 +2444,7 @@ internal fun RemoteScreen(
                 Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp),
             )
             Box(Modifier.fillMaxSize().then(overlayRegion)) {
+            CompositionLocalProvider(LocalFocusRegionChildren provides overlayChildren) {
             if (!sideInspector) changesContent?.invoke()
             if (!sideInspector) filesContent?.invoke()
             state.jobs
@@ -2455,6 +2463,7 @@ internal fun RemoteScreen(
                     )
                 }
             if (!sideInspector) toolContent?.invoke()
+            }
             }
         }
         }

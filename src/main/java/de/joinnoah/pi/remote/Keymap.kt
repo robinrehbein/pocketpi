@@ -149,8 +149,25 @@ internal fun resolveShortcut(key: Key, ctrl: Boolean, alt: Boolean, shift: Boole
         it.key == key && it.ctrl == ctrl && it.alt == alt && it.shift == shift && context.includes(it.context)
     }?.shortcut
 
-internal fun resolveShortcut(event: KeyEvent, context: KeyContext): Shortcut? =
-    resolveShortcut(event.key, event.isCtrlPressed || event.isMetaPressed, event.isAltPressed, event.isShiftPressed, context)
+internal fun resolveShortcut(event: KeyEvent, context: KeyContext): Shortcut? {
+    val ctrl = event.isCtrlPressed || event.isMetaPressed
+    return resolveShortcut(event.key, ctrl, event.isAltPressed, event.isShiftPressed, context)
+        ?: typedShortcut(typedWithCtrl(event), ctrl, event.isAltPressed)
+}
+
+/**
+ * A shortcut named after the character its key types rather than the key: Ctrl with whatever
+ * types "/" opens the help, also where "/" is Shift+7 (German) and not the slash key.
+ */
+internal fun typedShortcut(typed: Int, ctrl: Boolean, alt: Boolean): Shortcut? =
+    if (ctrl && !alt && typed == '/'.code) Shortcut.HELP else null
+
+/** The character [event]'s key types with its modifiers but Ctrl and Meta; 0 for none. */
+private fun typedWithCtrl(event: KeyEvent): Int {
+    val native = event.nativeKeyEvent
+    val ctrlMeta = android.view.KeyEvent.META_CTRL_MASK or android.view.KeyEvent.META_META_MASK
+    return runCatching { native.getUnicodeChar(native.metaState and ctrlMeta.inv()) }.getOrDefault(0)
+}
 
 /** How long a first Esc waits for the second one that stops pi. */
 internal const val ESCAPE_STOP_WINDOW_MILLIS = 1500L
@@ -293,6 +310,12 @@ internal class ChatKeyTarget {
             questionFieldBlank = true
         }
     }
+
+    /**
+     * A text field with text has focus, the composer or a question's field: text-editing chords
+     * such as Ctrl+Home and Ctrl+End are its own.
+     */
+    val editingText: Boolean get() = (composerFocused && !composerBlank) || (questionFieldFocused && !questionFieldBlank)
 
     /**
      * Files, Changes, a tool detail or the jobs lie over the chat, hiding the composer: typed

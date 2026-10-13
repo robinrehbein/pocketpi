@@ -75,6 +75,29 @@ class ShortcutHelpTest {
     }
 
     @Test
+    @Config(qualifiers = "de")
+    fun characterKeysAreNamedAfterTheAttachedKeyboardsLayout() {
+        val resources = context.resources
+        // A German layout puts ß on the key that sends the slash key code, and swaps Y and Z.
+        val german = mapOf(KeyEvent.KEYCODE_SLASH to 'ß', KeyEvent.KEYCODE_Z to 'z', KeyEvent.KEYCODE_PERIOD to '.')
+        assertEquals("Strg+ß", chordText(KeyChord(Key.Slash, ctrl = true), resources) { german[it] })
+        assertEquals("Strg+Z", chordText(KeyChord(Key.Z, ctrl = true), resources) { german[it] })
+        // Keys without a character keep their names, whatever the layout says.
+        assertEquals("Strg+Pos1", chordText(KeyChord(Key.MoveHome, ctrl = true), resources) { 'x' })
+        assertEquals("F6", chordText(KeyChord(Key.F6), resources) { 'x' })
+        // Without a layout label the fixed names stay.
+        assertEquals("Strg+/", chordText(KeyChord(Key.Slash, ctrl = true), resources) { null })
+    }
+
+    @Test
+    fun ctrlWithWhateverTypesASlashOpensTheHelp() {
+        assertEquals(Shortcut.HELP, typedShortcut('/'.code, ctrl = true, alt = false))
+        assertEquals(null, typedShortcut('/'.code, ctrl = false, alt = false))
+        assertEquals(null, typedShortcut('/'.code, ctrl = true, alt = true))
+        assertEquals(null, typedShortcut('7'.code, ctrl = true, alt = false))
+    }
+
+    @Test
     fun theListsFollowWhereTheUserIs() {
         val global = shortcutEntries(KeyContext.GLOBAL)
         val chat = shortcutEntries(KeyContext.COMPOSER)

@@ -14,6 +14,7 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.FocusState
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
@@ -111,6 +112,9 @@ internal enum class FocusRegion {
     SESSIONS,
     CHAT,
     INSPECTOR,
+
+    /** Files, Changes, a tool detail or the jobs over the chat, beside a side inspector or not. */
+    OVERLAY,
 }
 
 /**
@@ -130,7 +134,12 @@ internal fun nextFocusRegion(available: Collection<FocusRegion>, current: FocusR
  * F6 and Ctrl+Alt+Right move to the next one, Shift+F6 and Ctrl+Alt+Left to the previous one.
  */
 internal class FocusRegions {
-    private val regions = mutableMapOf<FocusRegion, () -> Boolean>()
+    /**
+     * Each region's focus actions, oldest first; the newest one acts. Two screens of one region
+     * can be composed at once (a transition, or one leaving), and the older one must take over
+     * again when the newer one leaves.
+     */
+    private val regions = mutableMapOf<FocusRegion, MutableList<() -> Boolean>>()
 
     /** The regions holding focus, each with the element ([focusChanged]'s owner) that has it. */
     private val focused = mutableMapOf<FocusRegion, Any>()
@@ -141,11 +150,13 @@ internal class FocusRegions {
     val available: Set<FocusRegion> get() = regions.keys
 
     fun register(region: FocusRegion, focus: () -> Boolean) {
-        regions[region] = focus
+        regions.getOrPut(region) { mutableListOf() } += focus
     }
 
     fun unregister(region: FocusRegion, focus: () -> Boolean) {
-        if (regions[region] === focus) regions.remove(region)
+        val actions = regions[region] ?: return
+        actions.removeAll { it === focus }
+        if (actions.isEmpty()) regions.remove(region)
     }
 
     /**
@@ -162,7 +173,7 @@ internal class FocusRegions {
         var from = leaving
         repeat(regions.size) {
             val next = nextFocusRegion(regions.keys, from, step) ?: return false
-            if (next != leaving && regions[next]?.invoke() == true) return true
+            if (next != leaving && regions[next]?.lastOrNull()?.invoke() == true) return true
             from = next
         }
         return false
@@ -239,18 +250,23 @@ internal fun Modifier.openOnRight(focusManager: FocusManager, open: () -> Unit):
     }
 
 /**
- * Backspace, and Left where focus cannot move further left, go to the parent of a file list: up
- * a folder, or from a file or diff back to its list. [onParent] is null at the top.
+ * Backspace, and Left where focus cannot move further left inside this pane, go to the parent of
+ * a file list: up a folder, or from a file or diff back to its list. [onParent] is null at the
+ * top. Left never leaves the pane while there is a parent: in the two-pane layout the chat lies
+ * left of the inspector, and Compose's search would otherwise move focus there.
  */
 internal fun Modifier.parentOnLeft(focusManager: FocusManager, onParent: (() -> Unit)?): Modifier =
-    if (onParent == null) this
-    else
-        onKeyEvent { event ->
-            if (!event.plain()) return@onKeyEvent false
-            when (event.key) {
-                Key.Backspace -> onParent()
-                Key.DirectionLeft -> if (!focusManager.moveFocus(FocusDirection.Left)) onParent()
-                else -> return@onKeyEvent false
-            }
-            true
+    onKeyEvent { event ->
+        val parent = onParent
+        if (parent == null || !event.plain()) return@onKeyEvent false
+        when (event.key) {
+            Key.Backspace -> parent()
+            Key.DirectionLeft -> if (!focusManager.moveFocus(FocusDirection.Left)) parent()
+            else -> return@onKeyEvent false
         }
+        true
+    }
+        .focusProperties {
+            onExit = { if (onParent != null && requestedFocusDirection == FocusDirection.Left) cancelFocusChange() }
+        }
+        .focusGroup()

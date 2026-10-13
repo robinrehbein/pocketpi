@@ -373,7 +373,7 @@
     <string name="remote_session_search">Search sessions</string>
     <string name="remote_session_search_empty">No session matches your search.</string>
     <string name="remote_keyboard_title">Hardware keyboard</string>
-    <string name="remote_keyboard_help">With any hardware keyboard attached, such as the Book Cover Keyboard or a Bluetooth keyboard on a phone, Enter sends and these shortcuts work at every window size. Ctrl+/ lists the keys for where you are.</string>
+    <string name="remote_keyboard_help">With any hardware keyboard attached, such as the Book Cover Keyboard or a Bluetooth keyboard on a phone, Enter sends and these shortcuts work at every window size. %1$s lists the keys for where you are.</string>
     <string name="remote_keyboard_enter_sends">Enter sends, Shift+Enter adds a line</string>
     <string name="wear_pair">Pair Mac</string>
     <string name="wear_pair_instructions">Start /remote on your Mac. Enter its full pairing code and approve this watch on the Mac.</string>

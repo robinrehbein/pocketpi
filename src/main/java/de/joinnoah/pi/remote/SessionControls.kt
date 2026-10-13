@@ -331,8 +331,10 @@ internal fun SessionControls(
         val slashShown =
             slashCommands && (slashLoading || localSuggestions.isNotEmpty() || hostSuggestions.isNotEmpty())
         val keyTarget = LocalChatKeyTarget.current
-        val names = remember(localSuggestions, hostSuggestions) {
-            localSuggestions.map { it.commandName } + hostSuggestions.map { it.name }
+        // While the host's list loads only a progress bar shows: no highlight that Enter could run.
+        val names = remember(localSuggestions, hostSuggestions, slashLoading) {
+            if (slashLoading) emptyList()
+            else localSuggestions.map { it.commandName } + hostSuggestions.map { it.name }
         }
         if (keyTarget != null) {
             SideEffect {

@@ -37,11 +37,12 @@ class ComposerKeyTest {
     )
 
     @Test
-    fun openSuggestionsTakeTheArrowsTabEnterAndEsc() {
+    fun openSuggestionsTakeTheArrowsTabAndEnter() {
         assertEquals(ComposerKey.SUGGESTION_UP, key(Key.DirectionUp, suggestions = true))
         assertEquals(ComposerKey.SUGGESTION_DOWN, key(Key.DirectionDown, suggestions = true))
         assertEquals(ComposerKey.SUGGESTION_RUN, key(Key.Tab, suggestions = true))
-        assertEquals(ComposerKey.SUGGESTIONS_CLOSE, key(Key.Escape, suggestions = true))
+        // Esc is the layout's (ChatKeyTarget.escape), which closes the list first.
+        assertEquals(ComposerKey.DEFAULT, key(Key.Escape, suggestions = true))
         // Arrows walk the list even in an empty composer with a prediction.
         assertEquals(ComposerKey.SUGGESTION_UP, key(Key.DirectionUp, suggestions = true, empty = true, prediction = true))
     }

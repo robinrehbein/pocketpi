@@ -2,6 +2,7 @@ package de.joinnoah.pi.remote
 
 import android.content.Context
 import android.content.res.Resources
+import android.view.InputDevice
 import android.view.KeyboardShortcutGroup
 import android.view.KeyboardShortcutInfo
 import androidx.annotation.StringRes
@@ -20,12 +21,23 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TooltipAnchorPosition
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.TooltipState
 import androidx.compose.material3.rememberTooltipState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.nativeKeyCode
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -94,16 +106,22 @@ internal fun shortcutGroups(context: KeyContext?): List<Pair<ShortcutGroup, List
     return ShortcutGroup.entries.mapNotNull { group -> entries.filter { it.group == group }.takeIf { it.isNotEmpty() }?.let { group to it } }
 }
 
-/** The name of [key] on a keyboard key cap, such as "G", "F6", "Esc" or (German) "Bild auf". */
-internal fun keyName(key: Key, resources: Resources): String {
+/**
+ * The name of [key] on a keyboard key cap, such as "G", "F6", "Esc" or (German) "Bild auf".
+ * Shortcuts match key codes, so a character key is named after the attached keyboard's layout
+ * ([keyCap]): on a German one the key that sends the slash key code carries ß.
+ */
+internal fun keyName(key: Key, resources: Resources, keyCap: (Int) -> Char? = { null }): String {
     val code = key.nativeKeyCode
+    val cap = keyCap(code)?.takeIf { !it.isWhitespace() && !it.isISOControl() }
     return when {
+        code in android.view.KeyEvent.KEYCODE_F1..android.view.KeyEvent.KEYCODE_F12 ->
+            "F" + (code - android.view.KeyEvent.KEYCODE_F1 + 1)
+        code in CHARACTER_KEYS && cap != null -> cap.uppercaseChar().toString()
         code in android.view.KeyEvent.KEYCODE_A..android.view.KeyEvent.KEYCODE_Z ->
             ('A' + (code - android.view.KeyEvent.KEYCODE_A)).toString()
         code in android.view.KeyEvent.KEYCODE_0..android.view.KeyEvent.KEYCODE_9 ->
             ('0' + (code - android.view.KeyEvent.KEYCODE_0)).toString()
-        code in android.view.KeyEvent.KEYCODE_F1..android.view.KeyEvent.KEYCODE_F12 ->
-            "F" + (code - android.view.KeyEvent.KEYCODE_F1 + 1)
         else ->
             when (key) {
                 Key.Comma -> ","
@@ -127,14 +145,47 @@ internal fun keyName(key: Key, resources: Resources): String {
     }
 }
 
+/** The key codes whose key cap shows a character, which depends on the keyboard's layout. */
+private val CHARACTER_KEYS: Set<Int> =
+    buildSet {
+        addAll(android.view.KeyEvent.KEYCODE_A..android.view.KeyEvent.KEYCODE_Z)
+        addAll(android.view.KeyEvent.KEYCODE_0..android.view.KeyEvent.KEYCODE_9)
+        add(android.view.KeyEvent.KEYCODE_COMMA)
+        add(android.view.KeyEvent.KEYCODE_PERIOD)
+        add(android.view.KeyEvent.KEYCODE_SLASH)
+        add(android.view.KeyEvent.KEYCODE_BACKSLASH)
+    }
+
 /** [chord] as the keyboard's labels name it, such as "Ctrl+Shift+G" or (German) "Strg+Umschalt+G". */
-internal fun chordText(chord: KeyChord, resources: Resources): String =
+internal fun chordText(chord: KeyChord, resources: Resources, keyCap: (Int) -> Char? = { null }): String =
     buildList {
         if (chord.ctrl) add(resources.getString(R.string.remote_key_ctrl))
         if (chord.alt) add(resources.getString(R.string.remote_key_alt))
         if (chord.shift) add(resources.getString(R.string.remote_key_shift))
-        add(keyName(chord.key, resources))
+        add(keyName(chord.key, resources, keyCap))
     }.joinToString("+")
+
+/** The key cap labels of the attached hardware keyboard's layout, or none without one. */
+internal fun hardwareKeyCaps(): (Int) -> Char? {
+    val map =
+        runCatching {
+            InputDevice.getDeviceIds().asSequence()
+                .mapNotNull { InputDevice.getDevice(it) }
+                .firstOrNull { !it.isVirtual && it.keyboardType == InputDevice.KEYBOARD_TYPE_ALPHABETIC }
+                ?.keyCharacterMap
+        }.getOrNull() ?: return { null }
+    return { code -> map.getDisplayLabel(code).takeIf { it != 0.toChar() } }
+}
+
+/** [hardwareKeyCaps], read again when a keyboard comes or goes. */
+@Composable
+internal fun rememberKeyCaps(): (Int) -> Char? {
+    val hardwareKeyboard = LocalHardwareKeyboard.current
+    val configuration = LocalConfiguration.current
+    return remember(hardwareKeyboard, configuration.keyboard, configuration.hardKeyboardHidden) {
+        if (hardwareKeyboard) hardwareKeyCaps() else { _ -> null }
+    }
+}
 
 /** The chord a tooltip names for [shortcut]: a Ctrl chord where there is one, as F-keys need Fn. */
 internal fun tooltipChord(shortcut: Shortcut): KeyChord? {
@@ -166,6 +217,7 @@ private fun KeyChord.metaState(): Int =
 @Composable
 internal fun ShortcutList(context: KeyContext?, modifier: Modifier = Modifier) {
     val resources = LocalResources.current
+    val keyCaps = rememberKeyCaps()
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         for ((group, entries) in shortcutGroups(context)) {
             Text(
@@ -176,7 +228,7 @@ internal fun ShortcutList(context: KeyContext?, modifier: Modifier = Modifier) {
             for (entry in entries)
                 Row(verticalAlignment = Alignment.Top) {
                     Text(
-                        entry.chords.joinToString(", ") { chordText(it, resources) },
+                        entry.chords.joinToString(", ") { chordText(it, resources, keyCaps) },
                         Modifier.width(132.dp).padding(end = 12.dp),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.primary,
@@ -213,9 +265,10 @@ internal fun ShortcutHelpDialog(context: KeyContext, onDismiss: () -> Unit) {
 }
 
 /**
- * A tooltip on [content] (an icon button) that names it on hover, S Pen hover or long press: its
- * [label], and with a hardware keyboard the [chord] that does the same (by default the one of
- * [shortcut]), as "Changes · Ctrl+Shift+G".
+ * A tooltip on [content] (an icon button) that names it while a mouse, trackpad or S Pen hovers
+ * over it: its [label], and with a hardware keyboard the [chord] that does the same (by default
+ * the one of [shortcut]), as "Changes · Ctrl+Shift+G". A long press does not show it: the button
+ * still acts on a held touch, so a long press on Stop or Send stops or sends as before.
  */
 @Composable
 internal fun ShortcutTooltip(
@@ -225,7 +278,10 @@ internal fun ShortcutTooltip(
     content: @Composable () -> Unit,
 ) {
     val resources = LocalResources.current
-    val keys = chord?.takeIf { LocalHardwareKeyboard.current }?.let { chordText(it, resources) }
+    val keyCaps = rememberKeyCaps()
+    val keys = chord?.takeIf { LocalHardwareKeyboard.current }?.let { chordText(it, resources, keyCaps) }
+    val state = rememberTooltipState()
+    val scope = rememberCoroutineScope()
     TooltipBox(
         positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Below),
         tooltip = {
@@ -233,7 +289,33 @@ internal fun ShortcutTooltip(
                 Text(if (keys == null) label else stringResource(R.string.remote_shortcut_tooltip, label, keys))
             }
         },
-        state = rememberTooltipState(),
+        state = state,
+        modifier = Modifier.showTooltipOnHover(state, scope),
+        // Material's own handling also shows it on a long press, which then never clicks.
+        enableUserInput = false,
         content = content,
     )
 }
+
+/** Shows [state]'s tooltip while a hovering pointer (mouse, trackpad, stylus) is over the element. */
+private fun Modifier.showTooltipOnHover(state: TooltipState, scope: CoroutineScope): Modifier =
+    pointerInput(state) {
+        var showing: Job? = null
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Main)
+                if (event.changes.any { it.type == PointerType.Touch }) continue
+                when (event.type) {
+                    PointerEventType.Enter -> {
+                        showing?.cancel()
+                        showing = scope.launch { state.show() }
+                    }
+                    PointerEventType.Exit, PointerEventType.Press -> {
+                        showing?.cancel()
+                        showing = null
+                        state.dismiss()
+                    }
+                }
+            }
+        }
+    }

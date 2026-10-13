@@ -852,9 +852,6 @@ internal enum class ComposerKey {
     /** Runs the highlighted slash suggestion, as a tap on it does. */
     SUGGESTION_RUN,
 
-    /** Closes the slash suggestions; the next edit brings them back. */
-    SUGGESTIONS_CLOSE,
-
     /** Takes the prompt prediction into the empty composer. */
     ACCEPT_PREDICTION,
 
@@ -865,10 +862,10 @@ internal enum class ComposerKey {
 
 /**
  * The composer's completion keys for a hardware key without modifiers. While the slash
- * suggestions show, Up and Down move the highlight, Tab runs it, Esc closes the list, and Enter
- * runs it too unless the highlighted command is [highlightTyped] in full already, so a partial
+ * suggestions show, Up and Down move the highlight, Tab runs it, and Enter runs it too unless the highlighted command is [highlightTyped] in full already, so a partial
  * "/com" is never sent. With an empty draft, Tab or Right takes a shown prediction, and Up walks
- * this session's earlier messages; while [recalling] one, Up and Down walk on.
+ * this session's earlier messages; while [recalling] one, Up and Down walk on. Esc never gets
+ * here: the layout runs it through [ChatKeyTarget.escape], whose first step closes the list.
  */
 internal fun composerKey(
     key: Key,
@@ -890,7 +887,6 @@ internal fun composerKey(
             Key.DirectionDown -> return ComposerKey.SUGGESTION_DOWN
             Key.Tab -> return ComposerKey.SUGGESTION_RUN
             Key.Enter, Key.NumPadEnter -> return if (highlightTyped) ComposerKey.DEFAULT else ComposerKey.SUGGESTION_RUN
-            Key.Escape -> return ComposerKey.SUGGESTIONS_CLOSE
         }
     if (draftEmpty && predictionShown && (key == Key.Tab || key == Key.DirectionRight)) return ComposerKey.ACCEPT_PREDICTION
     if (draftEmpty || recalling)
@@ -971,9 +967,10 @@ internal fun InspectorRow(
     inspector: (@Composable () -> Unit)?,
     content: @Composable () -> Unit,
 ) {
-    // F6 reaches the pane's content, and comes back to the row it left there.
-    val region =
-        rememberFocusRegion(FocusRegion.INSPECTOR, enabled = shown && inspector != null, children = LocalFocusRegionChildren.current)
+    // F6 reaches the pane's content, and comes back to the row it left there; the pane keeps its
+    // own rows, apart from a pane over the chat beside it.
+    val children = remember { FocusRegionChildren() }
+    val region = rememberFocusRegion(FocusRegion.INSPECTOR, enabled = shown && inspector != null, children = children)
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val available by rememberUpdatedState(maxWidth)
         val paneWidth = inspectorPaneWidth(width(), maxWidth)
@@ -982,7 +979,7 @@ internal fun InspectorRow(
             if (shown) {
                 VerticalDivider()
                 Box(Modifier.width(paneWidth).fillMaxHeight().testTag("inspectorPane").then(region)) {
-                    if (inspector != null) inspector()
+                    if (inspector != null) CompositionLocalProvider(LocalFocusRegionChildren provides children) { inspector() }
                     else
                         Box(
                             Modifier.fillMaxSize().padding(32.dp).testTag("inspectorPlaceholder"),
