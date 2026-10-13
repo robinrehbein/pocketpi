@@ -32,14 +32,28 @@ internal class FixtureSession(
     val projectId: String get() = session.text("projectId")
 }
 
+/**
+ * The scripted answer [FakeRelayTransport.stream] sends: [chunks] upserts [intervalMs] apart, each
+ * appending the next of [parts] (cycled, `{chunk}` replaced by its index). After [toolAt] chunks
+ * the first answer completes and an edit tool call and its result follow, as when the agent stops
+ * to edit a file; the remaining chunks stream into a second answer.
+ */
 internal class StreamScript(
     val intervalMs: Long,
     val chunks: Int,
-    private val chunk: String,
+    private val parts: List<String>,
+    val toolAt: Int,
     /** Text of a separate message published after the stream, for benchmarks to wait for. */
     val complete: String,
 ) {
-    fun chunk(index: Int) = chunk.replace("{chunk}", index.toString())
+    init {
+        require(intervalMs > 0 && chunks > 0 && parts.isNotEmpty() && toolAt in 0..chunks)
+    }
+
+    fun chunk(index: Int) = parts[index % parts.size].replace("{chunk}", index.toString())
+
+    /** The text of the answer streamed over chunks [range]. */
+    fun text(range: IntRange) = range.joinToString("") { chunk(it) }
 }
 
 /**
@@ -85,12 +99,17 @@ internal class RelayFixture(
 
     /** The full history of [session], oldest first, ending with its tail marker. */
     fun transcript(session: FixtureSession): List<JsonObject> = buildList {
-        val template = JsonArray(turn).toString()
-        repeat(session.turns) { index ->
-            val expanded = template.replace("{session}", session.id).replace("{turn}", index.toString())
-            addAll(Wire.json.parseToJsonElement(expanded).jsonArray.map { it.jsonObject })
-        }
+        repeat(session.turns) { index -> addAll(turn(session.id, index.toString())) }
         add(Wire.objectOf("id" to "${session.id}-tail", "role" to "user", "state" to "complete", "text" to session.tail))
+    }
+
+    /**
+     * One turn from the template: user prompt, edit tool call, tool result and answer. Message IDs
+     * start with [prefix]; [turn] names the turn in IDs, paths and texts.
+     */
+    fun turn(prefix: String, turn: String): List<JsonObject> {
+        val expanded = JsonArray(this.turn).toString().replace("{session}", prefix).replace("{turn}", turn)
+        return Wire.json.parseToJsonElement(expanded).jsonArray.map { it.jsonObject }
     }
 
     companion object {
@@ -130,8 +149,14 @@ internal class RelayFixture(
                     FixtureSession(it.obj("session"), it.long("revision"), it.long("turns").toInt(), it.text("tail"))
                 },
                 turn = root.array("turn"),
-                stream = root.obj("stream").let {
-                    StreamScript(it.long("intervalMs"), it.long("chunks").toInt(), it.text("chunk"), it.text("complete"))
+                stream = root.obj("stream").let { stream ->
+                    StreamScript(
+                        intervalMs = stream.long("intervalMs"),
+                        chunks = stream.long("chunks").toInt(),
+                        parts = stream.getValue("parts").jsonArray.map { it.jsonPrimitive.content },
+                        toolAt = stream.long("toolAt").toInt(),
+                        complete = stream.text("complete"),
+                    )
                 },
             )
             require(fixture.defaultProfile in profiles && fixture.snapshotPageSize > 0)

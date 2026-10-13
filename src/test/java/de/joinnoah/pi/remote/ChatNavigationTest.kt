@@ -21,6 +21,7 @@ import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -28,6 +29,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -228,5 +230,81 @@ class ChatNavigationTest {
         compose.onNodeWithTag("chatHistoryEmpty").assertExists()
         compose.onNodeWithText(context.getString(R.string.remote_chat_history_empty)).assertExists()
         compose.onNodeWithTag("chatHistoryList").assertDoesNotExist()
+    }
+
+    // ---- Cold start ----------------------------------------------------------------------
+
+    private val coldHost = PairedHost("host", "wss://relay.test", "device", "secret", "Studio Mac")
+
+    // A phone-sized window, so the lists' first rows are on screen below the header.
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun theHostsScreenShowsAPlaceholderUntilThePairingsAreRead() {
+        val repository = NavigationFakeRepository()
+        compose.setContent { RemoteApp(repository, FakeSettingsRepository(), false, {}) }
+        compose.waitForIdle()
+        val welcome = context.getString(R.string.remote_welcome)
+        compose.onNodeWithText(welcome).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.remote_empty_hosts)).assertDoesNotExist()
+        compose.onNodeWithContentDescription(context.getString(R.string.remote_hosts_loading)).assertExists()
+
+        // Nothing paired: only now is the first-run text true.
+        repository.state.value = RemoteState(hostsLoaded = true)
+        compose.waitForIdle()
+        compose.onNodeWithText(welcome).assertExists()
+        compose.onNodeWithContentDescription(context.getString(R.string.remote_hosts_loading)).assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun theHostsScreenSaysWhenThePairingsCouldNotBeRead() {
+        val repository = NavigationFakeRepository()
+        repository.state.value = RemoteState(hostsUnreadable = true)
+        compose.setContent { RemoteApp(repository, FakeSettingsRepository(), false, {}) }
+        compose.waitForIdle()
+        compose.onNodeWithText(context.getString(R.string.remote_storage_error)).assertExists()
+        compose.onNodeWithContentDescription(context.getString(R.string.remote_hosts_loading)).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.remote_welcome)).assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun theProjectsScreenShowsASkeletonWhileItLoadsAndTheEmptyTextOnlyOnceTheMacAnswered() {
+        val repository = NavigationFakeRepository()
+        repository.state.value = RemoteState(hosts = listOf(coldHost), hostsLoaded = true)
+        // The open of the Mac is still connecting.
+        val opened = CompletableDeferred<Unit>()
+        repository.activation = { selection, mode ->
+            if (mode == ActivationMode.USER_OPEN) opened.await()
+            selection
+        }
+        compose.setContent { RemoteApp(repository, FakeSettingsRepository(), false, {}) }
+        compose.waitForIdle()
+        compose.onNodeWithText("Studio Mac").performClick()
+        compose.waitForIdle()
+        val empty = context.getString(R.string.remote_empty_projects)
+        val skeleton = context.getString(R.string.remote_projects_loading)
+        // The open has not selected the Mac yet.
+        compose.onNodeWithContentDescription(skeleton).assertExists()
+        compose.onNodeWithText(empty).assertDoesNotExist()
+
+        // Selected and still connecting, with nothing cached.
+        repository.state.value =
+            RemoteState(hosts = listOf(coldHost), hostsLoaded = true, host = coldHost, selection = RemoteSelection("host"), loading = true)
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription(skeleton).assertExists()
+        compose.onNodeWithText(empty).assertDoesNotExist()
+
+        // Offline without a list: no list was read, so nothing claims there are no projects.
+        repository.state.value = repository.state.value.copy(loading = false)
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription(skeleton).assertDoesNotExist()
+        compose.onNodeWithText(empty).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.remote_projects_unread)).assertExists()
+
+        repository.state.value = repository.state.value.copy(connected = true, connection = R.string.remote_connected)
+        compose.waitForIdle()
+        compose.onNodeWithText(empty).assertExists()
+        compose.onNodeWithContentDescription(skeleton).assertDoesNotExist()
     }
 }

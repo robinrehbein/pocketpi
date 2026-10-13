@@ -32,17 +32,26 @@ private const val CACHED_CHAT = "Cached chat fixture"
 private const val CACHED_TAIL = "CONNECTED_FLOW_CACHED_TAIL"
 private const val UNCACHED_CHAT = "Uncached chat fixture"
 private const val UNCACHED_TAIL = "CONNECTED_FLOW_UNCACHED_TAIL"
+private const val STREAM_COMPLETE = "CONNECTED_FLOW_STREAM_COMPLETE"
 
 // Trace sections of the production repository and chat projection (Diagnostics.kt).
 private const val ACTIVATE = "PocketPi.activate"
 private const val PUBLISH_TIMELINE = "PocketPi.publishTimeline"
 private const val CONVERSATION_ITEMS = "PocketPi.conversationItems"
 
+// The harness's own sections (FlowFreshness.kt in the app's src/benchmark).
+private const val RESUME_TO_FRESH = "ConnectedFlow.resumeToFresh"
+private const val DROP_TO_CONNECTED = "ConnectedFlow.dropToConnected"
+private const val DROP_TO_FRESH = "ConnectedFlow.dropToFresh"
+
+private val MARK = Pattern.compile("connected-flow-mark-(\\d+)-(fresh|pending)")
+
 /**
  * Cold start and chat opens through the real app: RemoteApplication's repository with its
  * lifecycle and network wiring, the normal UI, and FakeRelayTransport in place of the relay.
  * The latency profile is the instrumentation argument `pocketpi.relayProfile` (lan, lte or bad;
- * lte by default). See docs/runbooks/macrobenchmarks.md.
+ * lte by default); `pocketpi.resumeAwaySeconds` sets how long resumeAfterBackground stays in the
+ * background (20 by default). See docs/runbooks/macrobenchmarks.md.
  */
 @OptIn(ExperimentalMetricApi::class)
 @RunWith(AndroidJUnit4::class)
@@ -50,6 +59,8 @@ class ConnectedFlowBenchmarks {
     @get:Rule val benchmark = MacrobenchmarkRule()
     private val profile =
         InstrumentationRegistry.getArguments().getString("pocketpi.relayProfile") ?: "lte"
+    private val resumeAwaySeconds =
+        InstrumentationRegistry.getArguments().getString("pocketpi.resumeAwaySeconds")?.toLong() ?: 20L
     private var prepared = false
     private var originalIdleTimeout = 0L
 
@@ -141,6 +152,52 @@ class ConnectedFlowBenchmarks {
         }
     }
 
+    /**
+     * A fresh process on the uncached chat, opened from the session list and settled, with its
+     * tail on screen. The flow scenarios below start here.
+     */
+    private fun MacrobenchmarkScope.openFlowChat() {
+        openSessions(UNCACHED_CHAT)
+        openChat(UNCACHED_CHAT, UNCACHED_TAIL, cached = null)
+        waitSettled("chat")
+        device.waitForIdle(1_000)
+    }
+
+    /**
+     * [openFlowChat] after a prepare pass. An iteration ends on the uncached chat, so the stored
+     * navigation snapshot names it and the next cold start would restore it into the chat cache.
+     * Every iteration after the first therefore prepares again, which stores the cached chat as the
+     * last one, so each iteration starts from the same state with the flow chat uncached.
+     */
+    private fun MacrobenchmarkScope.prepareFlowChat() {
+        if (prepared) prepare(clear = false) else prepareOnce()
+        openFlowChat()
+    }
+
+    /** The newest FlowFreshness mark ConnectedFlowActivity reports; the next one is this plus one. */
+    private fun MacrobenchmarkScope.currentMark(): Int {
+        check(device.wait(Until.hasObject(By.desc(MARK)), 10_000)) { "No freshness mark on screen" }
+        val matcher = MARK.matcher(checkNotNull(device.findObject(By.desc(MARK))).contentDescription)
+        check(matcher.matches())
+        return matcher.group(1)!!.toInt()
+    }
+
+    /** Waits until the app read the open chat again after [mark]: connected, loaded, not stale. */
+    private fun MacrobenchmarkScope.waitFresh(mark: Int) {
+        check(device.wait(Until.hasObject(By.desc("connected-flow-mark-$mark-fresh")), 90_000)) {
+            "The chat was not read again after mark $mark"
+        }
+    }
+
+    /**
+     * Sends [command] to the running ConnectedFlowActivity, which is on top: the shell starts it
+     * as a new task with FLAG_ACTIVITY_SINGLE_TOP, so it arrives in onNewIntent. Without -W the
+     * shell returns once the activity manager took the intent.
+     */
+    private fun MacrobenchmarkScope.command(command: String) {
+        device.executeShellCommand("am start -n $TARGET/$CONNECTED_FLOW --activity-single-top --es command $command")
+    }
+
     @Test
     fun coldStartToProjects() = benchmark.measureRepeated(
         packageName = TARGET,
@@ -208,5 +265,99 @@ class ConnectedFlowBenchmarks {
         TraceSectionMetric(PUBLISH_TIMELINE, TraceSectionMetric.Mode.Sum),
         TraceSectionMetric(CONVERSATION_ITEMS, TraceSectionMetric.Mode.Sum),
         FrameTimingMetric(),
+    )
+
+    /**
+     * Home, a fixed time in the background, then the app's task brought back to the front, as
+     * its launcher icon does: the process and activity stay alive, and ProcessLifecycleOwner
+     * reports the return to RemoteApplication like on a phone. How long the app was away picks the
+     * repository's resume tier: nothing below 15 s with a live socket (which this scenario cannot
+     * measure), a probe of the socket below 60 s, a quiet reconnect above. The measurement ends once
+     * the app has read the open chat again.
+     */
+    @Test
+    fun resumeAfterBackground() {
+        // ProcessLifecycleOwner reports the stop about 0.7 s late, so the repository counts a little
+        // less time away than this sleeps; keep clear of both tier boundaries.
+        require(resumeAwaySeconds >= 16 && resumeAwaySeconds !in 59L..62L) {
+            "pocketpi.resumeAwaySeconds=$resumeAwaySeconds: below 15 s the resume does nothing and the " +
+                "scenario would time out, 16 to 58 measures the probe, 63 or more the quiet reconnect"
+        }
+        var mark = 0
+        benchmark.measureRepeated(
+            packageName = TARGET,
+            metrics = listOf(TraceSectionMetric(RESUME_TO_FRESH, TraceSectionMetric.Mode.First)) +
+                appSections() + FrameTimingMetric(),
+            compilationMode = CompilationMode.None(),
+            iterations = 10,
+            setupBlock = {
+                prepareFlowChat()
+                mark = currentMark()
+                pressHome()
+                // ProcessLifecycleOwner reports the stop 700 ms after the last activity stopped.
+                Thread.sleep(resumeAwaySeconds * 1_000)
+            },
+        ) {
+            // Not startActivityAndWait: a task brought to the front reports no launch to wait for.
+            device.executeShellCommand("am start -n $TARGET/$CONNECTED_FLOW")
+            waitFresh(mark + 1)
+        }
+    }
+
+    /**
+     * The fake relay fails the socket of the open, settled chat. The repository reconnects
+     * quietly with the chat on screen; the measurement ends once the chat was read again.
+     */
+    @Test
+    fun reconnectAfterDrop() {
+        var mark = 0
+        benchmark.measureRepeated(
+            packageName = TARGET,
+            metrics = listOf(
+                TraceSectionMetric(DROP_TO_CONNECTED, TraceSectionMetric.Mode.First),
+                TraceSectionMetric(DROP_TO_FRESH, TraceSectionMetric.Mode.First),
+            ) + appSections(),
+            compilationMode = CompilationMode.None(),
+            iterations = 10,
+            setupBlock = {
+                prepareFlowChat()
+                mark = currentMark()
+            },
+        ) {
+            command("drop")
+            waitFresh(mark + 1)
+        }
+    }
+
+    /**
+     * The fixture's scripted answer streams into the open chat through the production repository,
+     * Timeline and publish path: 120 upserts 50 ms apart (20 per second) in two answers with an
+     * edit tool call between them, while the list follows the tail. Ends at the completion marker.
+     */
+    @Test
+    fun streamingThroughRepository() = benchmark.measureRepeated(
+        packageName = TARGET,
+        metrics = appSections() + FrameTimingMetric(),
+        compilationMode = CompilationMode.None(),
+        iterations = 10,
+        setupBlock = {
+            // Without the prepare pass in prepareFlowChat, the stored navigation snapshot of an
+            // iteration that ended on this chat would show an earlier iteration's streamed answer.
+            prepareFlowChat()
+            check(!device.hasObject(By.text(STREAM_COMPLETE))) { "The chat shows an earlier stream" }
+        },
+    ) {
+        command("stream")
+        check(device.wait(Until.hasObject(By.text(STREAM_COMPLETE)), 60_000)) { "The stream did not complete" }
+    }
+
+    /**
+     * The production repository's and projection's sections. Sum also reports each section's
+     * count, and 0 for a section that did not run (no activation during a probe or a stream).
+     */
+    private fun appSections() = listOf(
+        TraceSectionMetric(ACTIVATE, TraceSectionMetric.Mode.Sum),
+        TraceSectionMetric(PUBLISH_TIMELINE, TraceSectionMetric.Mode.Sum),
+        TraceSectionMetric(CONVERSATION_ITEMS, TraceSectionMetric.Mode.Sum),
     )
 }

@@ -77,7 +77,17 @@
   "stream": {
     "intervalMs": 50,
     "chunks": 120,
-    "chunk": "Chunk {chunk}: **bold**, `code`, and [a link](https://example.com).\n",
+    "toolAt": 60,
+    "parts": [
+      "## Step {chunk}\n",
+      "Chunk {chunk} reads the **fixture**, keeps `state` in one place and links [the notes](https://example.com).\n",
+      "- Item {chunk} with `inline code`\n",
+      "- Item {chunk} with *emphasis* and a longer tail that wraps on a phone screen\n\n",
+      "```kotlin\n",
+      "val chunk{chunk} = listOf({chunk}, {chunk} + 1).map { it * 2 }\n",
+      "```\n\n",
+      "| Chunk | Change |\n| --- | --- |\n| {chunk} | +1 / -1 |\n\n"
+    ],
     "complete": "CONNECTED_FLOW_STREAM_COMPLETE"
   }
 }

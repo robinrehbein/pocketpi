@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -195,6 +196,13 @@ internal fun RemoteScreen(
     disablePush: () -> Unit = {},
 ) {
     val state by model.state.collectAsStateWithLifecycle()
+    // The first list the user came for is on screen: the time to full display that startup
+    // benchmarks measure. A list from the caches is not it until the Mac confirms it.
+    when (key) {
+        RemoteNavKey.Hosts -> ReportDrawnWhen { state.hostsLoaded || state.hostsUnreadable || state.hosts.isNotEmpty() }
+        is RemoteNavKey.Projects, is RemoteNavKey.Sessions -> ReportDrawnWhen { state.connected && !state.loading }
+        else -> Unit
+    }
     val context = LocalContext.current
     val settings = key == RemoteNavKey.Settings
     val preferences =
@@ -2015,7 +2023,14 @@ internal fun RemoteScreen(
                     is RemoteNavKey.FolderBrowser -> Unit
                     is RemoteNavKey.Providers -> Unit
                     RemoteNavKey.Hosts -> {
-                        if (state.hosts.isEmpty()) {
+                        // Until the pairings are read, no list is no news: the first-run text
+                        // would flash before the Macs appear. A read that failed says so instead.
+                        if (state.hosts.isEmpty() && state.hostsUnreadable) {
+                            item { Text(stringResource(R.string.remote_storage_error)) }
+                            item { Text(stringResource(R.string.remote_pair_help)) }
+                        } else if (state.hosts.isEmpty() && !state.hostsLoaded) {
+                            item(key = "hosts_loading") { HostListSkeleton() }
+                        } else if (state.hosts.isEmpty()) {
                             item {
                                 Text(
                                     stringResource(R.string.remote_welcome),
@@ -2035,9 +2050,12 @@ internal fun RemoteScreen(
                         }
                     }
                     is RemoteNavKey.Projects -> {
-                        if (state.projects.isEmpty())
-                            item { Text(stringResource(R.string.remote_empty_projects)) }
-                        else {
+                        if (state.projects.isEmpty()) {
+                            // Only a list read on the live connection says there are no projects.
+                            if (state.loading) item(key = "projects_loading") { ProjectListSkeleton() }
+                            else if (state.connected) item { Text(stringResource(R.string.remote_empty_projects)) }
+                            else item { Text(stringResource(R.string.remote_projects_unread)) }
+                        } else {
                             item(key = "shared_projects_heading") {
                                 Text(
                                     stringResource(R.string.remote_projects_shared),
@@ -3087,6 +3105,35 @@ private fun SessionListSkeleton() {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun HostListSkeleton() {
+    val label = stringResource(R.string.remote_hosts_loading)
+    Row(
+        Modifier.fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, RoundedCornerShape(12.dp))
+            .padding(16.dp)
+            .clearAndSetSemantics { contentDescription = label },
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Box(Modifier.size(52.dp).background(MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape))
+        Column(Modifier.weight(1f).padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            SkeletonBar(Modifier.fillMaxWidth(0.48f))
+            SkeletonBar(Modifier.fillMaxWidth(0.72f))
+        }
+    }
+}
+
+@Composable
+private fun ProjectListSkeleton() {
+    val label = stringResource(R.string.remote_projects_loading)
+    Column(
+        Modifier.fillMaxWidth().padding(top = 28.dp).clearAndSetSemantics { contentDescription = label },
+        verticalArrangement = Arrangement.spacedBy(28.dp),
+    ) {
+        repeat(3) { index -> SkeletonBar(Modifier.fillMaxWidth(if (index == 1) 0.44f else 0.6f)) }
     }
 }
 
