@@ -86,10 +86,8 @@
     <string name="remote_local_command_export">Sitzung als HTML-Datei exportieren</string>
     <string name="remote_export_running">Sitzung wird exportiert …</string>
     <string name="remote_local_command_reload">Extensions, Skills, Prompts und Kontextdateien neu laden</string>
-    <string name="remote_local_command_reload_terminal">In Terminal-Sitzungen noch nicht möglich. Nur für Sitzungen, die über die App laufen.</string>
-    <string name="remote_reload_terminal_hint">Neu laden geht nur für Sitzungen, die über die App laufen. In Terminal-Sitzungen ist das noch nicht möglich.</string>
+    <string name="remote_reload_terminal_hint">In Terminal-Sitzungen noch nicht möglich, nur für Sitzungen, die über die App laufen.</string>
     <string name="remote_reload_running">Wird neu geladen …</string>
-    <string name="remote_local_command_reload_running">Wird neu geladen …</string>
     <string name="remote_reload_done">Extensions, Skills, Prompts, Themes und Kontextdateien neu geladen</string>
     <string name="remote_reload_busy">Die Sitzung ist beschäftigt. Versuch es noch einmal, wenn sie fertig ist.</string>
     <string name="remote_reload_unsupported">Dein Computer kann diese Sitzung nicht vom Handy aus neu laden.</string>
@@ -375,11 +373,8 @@
     <string name="remote_session_search">Sitzungen durchsuchen</string>
     <string name="remote_session_search_empty">Keine Sitzung passt zur Suche.</string>
     <string name="remote_keyboard_title">Hardware-Tastatur</string>
-    <string name="remote_keyboard_help">Im zweispaltigen Layout auf breiten Bildschirmen, solange eine Tastatur wie das Book Cover Keyboard angeschlossen ist. Auf dem Smartphone fügt Enter weiterhin eine Zeile ein.</string>
+    <string name="remote_keyboard_help">Mit jeder angeschlossenen Tastatur, etwa dem Book Cover Keyboard oder einer Bluetooth-Tastatur am Smartphone, sendet Enter und diese Tastenkürzel funktionieren in jeder Fenstergröße. %1$s zeigt die Tasten für die Stelle, an der du gerade bist.</string>
     <string name="remote_keyboard_enter_sends">Enter sendet, Umschalt+Enter fügt eine Zeile ein</string>
-    <string name="remote_keyboard_shortcut_send">Strg+Enter: senden</string>
-    <string name="remote_keyboard_shortcut_search">Strg+K oder Strg+F: Sitzungen durchsuchen</string>
-    <string name="remote_keyboard_shortcut_switch">Strg+Pfeil hoch/runter oder Alt+Pfeil hoch/runter: vorherige oder nächste Sitzung</string>
     <string name="wear_pair">Mac koppeln</string>
     <string name="wear_pair_instructions">Starte /remote auf deinem Mac. Gib den vollständigen Kopplungscode ein und bestätige diese Uhr auf dem Mac.</string>
     <string name="wear_refresh">Aktualisieren</string>
@@ -491,7 +486,6 @@
     <string name="wear_advisor_share">Kontextfreigabe-Anfrage entwerfen</string>
     <string name="wear_notifications">Uhr-Benachrichtigungen</string>
     <string name="wear_push_unconfigured">Push ist in diesem Build ohne Firebase-Konfiguration nicht verfügbar. Öffne die App zum Aktualisieren deiner Sessions.</string>
-    <string name="remote_keyboard_shortcut_project">Alt+Bild auf/Bild ab: vorheriges oder nächstes Projekt</string>
     <string name="providers_title">Anbieter</string>
     <string name="providers_open">Anbieter und Anmeldung</string>
     <string name="providers_host_fallback">dem Mac</string>

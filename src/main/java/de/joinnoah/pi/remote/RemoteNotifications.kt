@@ -121,15 +121,6 @@ internal object RemoteNotifications {
 
     fun tag(routeId: String, sessionId: String) = "pi:$routeId:$sessionId"
 
-    /** Opens exactly this session, also from a cold start and from another project or host. */
-    fun openIntent(context: Context, routeId: String, sessionId: String): PendingIntent =
-        PendingIntent.getActivity(
-            context,
-            0,
-            sessionIntent(context, routeId, sessionId),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-
     /**
      * The generic completion notice. With a [label] (read from the Mac afterwards) it names the
      * session instead, replacing the notice in place without alerting again. The lock screen
@@ -189,7 +180,7 @@ internal object RemoteNotifications {
                     alert = label == null,
                     channel = UPDATES_CHANNEL,
                 )
-                .setContentIntent(openIntent(context, target))
+                .setContentIntent(LaunchIntents.open(context, target))
                 .setContentTitle(title)
                 .setContentText(
                     named?.takeIf { it.isNotEmpty() }
@@ -209,15 +200,6 @@ internal object RemoteNotifications {
     /** `*.done` and `*.stuck` post under separate ids, so one never replaces the other. */
     private fun attentionId(event: PushEvent): Int =
         if (event == PushEvent.SUBAGENT_STUCK || event == PushEvent.JOB_STUCK) STUCK_ID else DONE_ID
-
-    /** Opens [target]'s session and, for a job notice, its background jobs. */
-    private fun openIntent(context: Context, target: NotificationTarget): PendingIntent =
-        PendingIntent.getActivity(
-            context,
-            0,
-            notificationIntent(context, target),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
 
     /** The question notification without its content, used when the question can't be read. */
     fun postGenericQuestion(context: Context, payload: PushPayload) {
@@ -321,7 +303,7 @@ internal object RemoteNotifications {
                     .addAction(
                         0,
                         localized.getString(R.string.remote_notification_open_action),
-                        openIntent(context, routeId, sessionId),
+                        LaunchIntents.open(context, routeId, sessionId),
                     )
                     .apply {
                         if (failedReply != null && Build.VERSION.SDK_INT >= 31) {
@@ -347,7 +329,7 @@ internal object RemoteNotifications {
                 .addAction(
                     0,
                     localized.getString(R.string.remote_notification_open_action),
-                    openIntent(context, routeId, sessionId),
+                    LaunchIntents.open(context, routeId, sessionId),
                 )
                 .build(),
         )
@@ -416,7 +398,7 @@ internal object RemoteNotifications {
     ): NotificationCompat.Builder =
         NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_remote)
-            .setContentIntent(openIntent(context, routeId, sessionId))
+            .setContentIntent(LaunchIntents.open(context, routeId, sessionId))
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
@@ -453,7 +435,7 @@ internal object RemoteNotifications {
                                 R.string.remote_notification_open_action
                             else R.string.remote_notification_answer
                         ),
-                        openIntent(context, payload.routeId, payload.sessionId),
+                        LaunchIntents.open(context, payload.routeId, payload.sessionId),
                     )
                     .build()
             is NotificationAction.Answer ->
@@ -560,46 +542,3 @@ internal object RemoteNotifications {
 }
 
 internal data class FailedReply(val questionId: String, val text: String)
-
-/**
- * An explicit intent that opens one session; shared by notifications, the widget and shortcuts.
- * It reuses the running activity instead of stacking a second one on top.
- */
-internal fun sessionIntent(context: Context, routeId: String, sessionId: String): Intent =
-    Intent(context, MainActivity::class.java)
-        .setAction(Intent.ACTION_VIEW)
-        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        .setData(
-            Uri.Builder()
-                .scheme("pocketpi")
-                .authority("session")
-                .appendPath(routeId)
-                .appendPath(sessionId)
-                .build()
-        )
-        .putExtra(RemoteNotifications.EXTRA_ROUTE, routeId)
-        .putExtra(RemoteNotifications.EXTRA_TARGET, sessionId)
-
-/**
- * [sessionIntent] for a notification [target]. A jobs target gets its own data URI, so its
- * PendingIntent never shares extras with the plain session one of the same session.
- */
-internal fun notificationIntent(context: Context, target: NotificationTarget): Intent {
-    val intent = sessionIntent(context, target.routeId, target.sessionId)
-    if (!target.jobs) return intent
-    val data =
-        checkNotNull(intent.data).buildUpon().appendPath("jobs").apply {
-            target.jobId?.let(::appendPath)
-        }
-    return intent
-        .setData(data.build())
-        .putExtra(RemoteNotifications.EXTRA_JOBS, true)
-        .apply { target.jobId?.let { putExtra(RemoteNotifications.EXTRA_JOB, it) } }
-}
-
-/** Opens the app without choosing a session; reuses the running activity. */
-internal fun appIntent(context: Context): Intent =
-    Intent(context, MainActivity::class.java)
-        .setAction(Intent.ACTION_MAIN)
-        .addCategory(Intent.CATEGORY_LAUNCHER)
-        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)

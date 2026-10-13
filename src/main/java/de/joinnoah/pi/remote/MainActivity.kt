@@ -4,6 +4,8 @@ import android.content.Intent
 import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.os.Bundle
+import android.view.KeyboardShortcutGroup
+import android.view.Menu
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
@@ -80,6 +82,12 @@ class MainActivity : ComponentActivity() {
         super.onSaveInstanceState(outState)
     }
 
+    // The system's keyboard shortcut helper (Meta+/) lists PocketPi's keys.
+    override fun onProvideKeyboardShortcuts(data: MutableList<KeyboardShortcutGroup>, menu: Menu?, deviceId: Int) {
+        super.onProvideKeyboardShortcuts(data, menu, deviceId)
+        data.addAll(keyboardShortcutGroups(this))
+    }
+
     override fun onStop() {
         lifecycleScope.launch {
             try {
@@ -94,21 +102,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent) {
-        // Reopening from Recents replays the task's original intent; it must not reopen a session
-        // from an old notification, widget row or shortcut.
-        if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
-        val watchTarget = parseWatchHandoff(intent)
-        val route = watchTarget?.first ?: intent.getStringExtra("routeId") ?: return
-        val session = watchTarget?.second ?: intent.getStringExtra("target") ?: return
-        notification =
-            RemoteNotification(
-                route,
-                session,
-                ++delivery,
-                intent.getBooleanExtra(RemoteNotifications.EXTRA_JOBS, false),
-                // Nullable on purpose: the strict push-id check, not the looser String one.
-                intent.getStringExtra(RemoteNotifications.EXTRA_JOB).takeIf(::isOpaqueId),
-            )
+        // Extras count only on the app's own non-exported alias; other apps reach this exported
+        // activity too (LaunchIntents).
+        val target = LaunchIntents.target(intent) ?: return
+        notification = RemoteNotification(target.routeId, target.sessionId, ++delivery, target.jobs, target.jobId)
     }
 }
 

@@ -2,7 +2,6 @@ package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -27,7 +26,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -87,6 +88,9 @@ internal fun ProjectStrip(
             ?: state.project?.optionalText("name")
     val selectedIndex = state.projects.indexOfFirst { it.text("id") == selectedProjectId }
     val listState = rememberLazyListState()
+    // F6 reaches the avatars, and comes back to the one it left.
+    val regionChildren = remember { FocusRegionChildren() }
+    val region = rememberFocusRegion(FocusRegion.PROJECTS, children = regionChildren)
     // The strip opens with every chat, also after a switch or a restore: keep its avatar in view.
     LaunchedEffect(selectedIndex) {
         if (selectedIndex < 0) return@LaunchedEffect
@@ -109,21 +113,23 @@ internal fun ProjectStrip(
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.remote_back))
             }
         }
-        Spacer(Modifier.height(28.dp))
-        LazyColumn(
-            Modifier.weight(1f, fill = false),
-            state = listState,
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            items(state.projects, key = { it.text("id") }) { project ->
-                val projectId = project.text("id")
-                ProjectAvatar(
-                    name = project.text("name"),
-                    projectId = projectId,
-                    selected = projectId == selectedProjectId,
-                    onClick = { openProject(navigator, twoPane, key.routeId, projectId) },
-                )
+        Spacer(Modifier.height(26.dp))
+        CompositionLocalProvider(LocalFocusRegionChildren provides regionChildren) {
+            LazyColumn(
+                Modifier.weight(1f, fill = false).testTag("projectStripList").then(region),
+                state = listState,
+                // Each avatar's 2 dp focus margin keeps them 4 dp apart.
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                items(state.projects, key = { it.text("id") }) { project ->
+                    val projectId = project.text("id")
+                    ProjectAvatar(
+                        name = project.text("name"),
+                        projectId = projectId,
+                        selected = projectId == selectedProjectId,
+                        onClick = { openProject(navigator, twoPane, key.routeId, projectId) },
+                    )
+                }
             }
         }
         if (!selectedName.isNullOrBlank())
@@ -135,11 +141,15 @@ internal fun ProjectStrip(
 private fun ProjectAvatar(name: String, projectId: String, selected: Boolean, onClick: () -> Unit) {
     val description = stringResource(R.string.remote_project_strip_open, name)
     Box(
-        Modifier.size(48.dp)
+        // The keyboard's focus ring takes the outer 2 dp, outside the selected ring.
+        Modifier.size(52.dp)
             .clip(CircleShape)
+            .focusRing(CircleShape)
+            .then(rememberRegionChild())
             .selectable(selected = selected, role = Role.Button, onClick = onClick)
             .semantics(mergeDescendants = true) { contentDescription = description }
             .testTag("projectAvatar-$projectId")
+            .padding(2.dp)
             // The selected ring leaves a 2 dp gap around the 40 dp avatar.
             .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape) else Modifier),
         contentAlignment = Alignment.Center,

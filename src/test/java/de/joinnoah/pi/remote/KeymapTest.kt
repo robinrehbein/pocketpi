@@ -58,6 +58,25 @@ class KeymapTest {
     }
 
     @Test
+    fun focusRegionsAndChatScrollingHaveTheirKeys() {
+        assertEquals(Shortcut.NEXT_REGION, plain(Key.F6, KeyContext.GLOBAL))
+        assertEquals(Shortcut.PREVIOUS_REGION, resolveShortcut(Key.F6, ctrl = false, alt = false, shift = true, context = KeyContext.GLOBAL))
+        assertEquals(Shortcut.NEXT_REGION, resolveShortcut(Key.DirectionRight, ctrl = true, alt = true, shift = false, context = KeyContext.GLOBAL))
+        assertEquals(Shortcut.PREVIOUS_REGION, resolveShortcut(Key.DirectionLeft, ctrl = true, alt = true, shift = false, context = KeyContext.GLOBAL))
+        assertEquals(Shortcut.PAGE_UP, plain(Key.PageUp))
+        assertEquals(Shortcut.PAGE_DOWN, plain(Key.PageDown))
+        assertEquals(Shortcut.CHAT_START, ctrl(Key.MoveHome))
+        assertEquals(Shortcut.CHAT_END, ctrl(Key.MoveEnd))
+        // The page keys scroll a chat, also from the composer; elsewhere they stay the lists' own.
+        assertEquals(Shortcut.PAGE_DOWN, plain(Key.PageDown, KeyContext.COMPOSER))
+        assertNull(ctrl(Key.MoveEnd, context = KeyContext.GLOBAL))
+        // Ctrl+Down stays the next session, also at the end of a chat.
+        assertEquals(Shortcut.NEXT_SESSION, ctrl(Key.DirectionDown))
+        // Tab stays in the composer.
+        assertNull(plain(Key.Tab, KeyContext.COMPOSER))
+    }
+
+    @Test
     fun everyFKeyHasACtrlAlias() {
         // The Book Cover Keyboard needs Fn for them.
         assertEquals(Shortcut.REFRESH, plain(Key.F5, context = KeyContext.GLOBAL))
@@ -112,7 +131,7 @@ class KeymapTest {
 
     @Test
     fun onlyEscFKeysAndPageKeysGoWithoutAModifier() {
-        val allowed = setOf(Key.Escape, Key.F2, Key.F5, Key.PageUp, Key.PageDown)
+        val allowed = setOf(Key.Escape, Key.F2, Key.F5, Key.F6, Key.PageUp, Key.PageDown)
         for (binding in KEYMAP.filter { !it.ctrl && !it.alt })
             assertTrue("${binding.shortcut} on ${binding.key}", binding.key in allowed)
     }
