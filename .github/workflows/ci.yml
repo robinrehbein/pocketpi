@@ -143,19 +143,40 @@ jobs:
           agp="$(sed -n 's/^agp = "\(.*\)"$/\1/p' gradle/libs.versions.toml)"
           test -n "$agp" || { echo "FATAL - agp version is missing from gradle/libs.versions.toml"; exit 1; }
           echo "agp=$agp" >> "$GITHUB_OUTPUT"
+          # A runner image update can bring a new emulator that cannot load the cached boot
+          # snapshot, so the emulator revision is part of the key. Without a preinstalled
+          # emulator the managed device setup installs one, and the key says "none".
+          emulator="none"
+          props="$ANDROID_HOME/emulator/source.properties"
+          if [ -f "$props" ]; then
+            emulator="$(sed -n 's/^Pkg\.Revision=//p' "$props" | tr -d '[:space:]')"
+            test -n "$emulator" || { echo "FATAL - Pkg.Revision is missing from $props"; exit 1; }
+          fi
+          echo "emulator=$emulator" >> "$GITHUB_OUTPUT"
           echo "images=$ANDROID_HOME/system-images/android-36" >> "$GITHUB_OUTPUT"
       # Gradle managed devices keep their AVD and boot snapshot under ~/.android/gradle/avd.
       # Restoring them with the system image skips the image download and the cold boot. The
       # plugin checks the snapshot before use and re-creates one the current emulator cannot load.
-      - name: Restore the managed device AVD and snapshot
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      # Every run restores the entry, but only push runs on main save it: the entry is several GB,
+      # and pull request runs would each save their own copy under the pull request's ref.
+      - id: gmd-cache
+        name: Restore the managed device AVD and snapshot
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.android/gradle/avd
             ${{ steps.avd.outputs.images }}
-          key: gmd-pixel2Api36-aosp-${{ runner.os }}-agp-${{ steps.avd.outputs.agp }}
+          key: gmd-pixel2Api36-aosp-${{ runner.os }}-agp-${{ steps.avd.outputs.agp }}-emulator-${{ steps.avd.outputs.emulator }}
       - name: Navigation and restoration instrumentation tests
         run: ./gradlew pixel2Api36DebugAndroidTest
+      - name: Save the managed device AVD and snapshot
+        if: github.event_name == 'push' && steps.gmd-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.android/gradle/avd
+            ${{ steps.avd.outputs.images }}
+          key: ${{ steps.gmd-cache.outputs.cache-primary-key }}
       - name: Upload instrumentation reports
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
