@@ -53,11 +53,11 @@ internal class GitChangesLoader(
         }
 
     private fun failure(e: Exception): ChangesFailure =
-        when ((e as? RemoteRequestException)?.code) {
+        if (e.isUnsupported) ChangesFailure.UNSUPPORTED
+        else when (e.hostCode) {
             "not_found" -> ChangesFailure.NOT_FOUND
             "forbidden" -> ChangesFailure.FORBIDDEN
             "busy" -> ChangesFailure.BUSY
-            "unsupported" -> ChangesFailure.UNSUPPORTED
             "offline" -> ChangesFailure.OFFLINE
             else -> if (!current().connected) ChangesFailure.OFFLINE else ChangesFailure.FAILED
         }

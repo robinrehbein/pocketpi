@@ -155,7 +155,14 @@ class RemoteTransportTest {
         return server
     }
 
-    private fun TestScope.authenticate(capabilities: List<String>, socket: Socket = Socket()): Listener {
+    private fun TestScope.authenticate(capabilities: List<String>, socket: Socket = Socket()): Listener =
+        authenticated(capabilities, socket).first
+
+    /** An established device connection: its listener and the Mac's end of the channel. */
+    private fun TestScope.authenticated(
+        capabilities: List<String> = emptyList(),
+        socket: Socket = Socket(),
+    ): Pair<Listener, SecureChannel> {
         val listener = Listener { }
         val transport = SecureRemoteTransport(backgroundScope, socket) { "Test device" }
             .also { it.listener = listener }
@@ -175,7 +182,7 @@ class RemoteTransportTest {
         socket.receive(server.seal(Wire.objectOf("type" to "device.authenticated",
             "capabilities" to JsonArray(capabilities.map(::JsonPrimitive)))))
         runCurrent()
-        return listener
+        return listener to server
     }
 
     private fun TestScope.authenticateReplying(reply: JsonObject): Listener {
@@ -508,6 +515,8 @@ class RemoteTransportTest {
         assertEquals(2, socket.sent.size)
         assertTrue(listener.failed)
         assertFalse(listener.paired)
+        assertEquals(listOf(R.string.remote_storage_error), listener.errors)
+        assertEquals(listOf(false), listener.reconnects)
     }
 
     @Test
@@ -558,6 +567,48 @@ class RemoteTransportTest {
         runCurrent()
         assertTrue(listener.failed)
         assertTrue(socket.cancelled)
+        // An expired code says so instead of blaming the network, and a pairing never retries.
+        assertEquals(listOf(R.string.remote_pairing_timeout), listener.errors)
+        assertEquals(listOf(false), listener.reconnects)
+    }
+
+    @Test
+    fun undecryptableFrameOnAnEstablishedConnectionReconnects() = runTest {
+        val socket = Socket()
+        val (listener, server) = authenticated(socket = socket)
+        val frame = server.seal(Wire.objectOf("type" to "event", "kind" to "future.kind"))
+        socket.receive(JsonObject(frame + ("ciphertext" to JsonPrimitive(Wire.random(48)))))
+        runCurrent()
+        assertEquals(listOf(R.string.remote_connection_error), listener.errors)
+        assertEquals(listOf(true), listener.reconnects)
+        assertTrue(socket.cancelled)
+    }
+
+    @Test
+    fun replayedFrameOnAnEstablishedConnectionReconnects() = runTest {
+        val socket = Socket()
+        val (listener, server) = authenticated(socket = socket)
+        val frame = server.seal(Wire.objectOf("type" to "event", "kind" to "future.kind"))
+        socket.receive(frame)
+        runCurrent()
+        assertFalse(listener.failed)
+        socket.receive(frame)
+        runCurrent()
+        assertEquals(listOf(true), listener.reconnects)
+    }
+
+    @Test
+    fun malformedPairingFrameFailsWithoutRetry() = runTest {
+        val socket = Socket()
+        val listener = Listener { }
+        val transport =
+            SecureRemoteTransport(backgroundScope, socket) { "Test device" }
+                .also { it.listener = listener }
+        pairUntilReady(transport, socket)
+        socket.receive(Wire.objectOf("v" to 1, "nonce" to Wire.random(12), "data" to Wire.random(32)))
+        runCurrent()
+        assertEquals(listOf(R.string.remote_connection_error), listener.errors)
+        assertEquals(listOf(false), listener.reconnects)
     }
 
     @Test

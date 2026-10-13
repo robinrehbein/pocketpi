@@ -345,12 +345,13 @@ class RemoteFolderRepositoryTest {
     }
 
     @Test
-    fun malformedHostEventClosesTheChannel() = runTest {
+    fun malformedHostEventIsDroppedAndKeepsTheChannel() = runTest {
         val transport = Transport()
         val repository = connected(transport)
         transport.event("kind" to "clone.progress", "cloneId" to "x", "phase" to "receiving", "percent" to 101)
         runCurrent()
-        assertFalse(repository.state.value.connected)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.folders.clone)
     }
 
     @Test

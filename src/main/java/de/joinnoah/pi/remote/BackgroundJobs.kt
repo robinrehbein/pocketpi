@@ -552,9 +552,9 @@ internal class BackgroundJobsController(
         }
 
     private fun failure(e: Exception): JobsFailure =
-        when ((e as? RemoteRequestException)?.code) {
-            "unsupported" -> JobsFailure.UNSUPPORTED
-            "offline" -> JobsFailure.OFFLINE
+        when {
+            e.isUnsupported -> JobsFailure.UNSUPPORTED
+            e.hostCode == "offline" -> JobsFailure.OFFLINE
             else -> if (!current().connected) JobsFailure.OFFLINE else JobsFailure.FAILED
         }
 

@@ -388,11 +388,40 @@ class SnapshotFencingTest {
                 )
             )
         )
-        assertTrue(
+        // A newer host's kind advances the revision and asks for a resync instead of a snapshot now.
+        assertFalse(
             timeline.event(Wire.objectOf("sessionId" to "one", "revision" to 3, "kind" to "future.kind"))
         )
+        assertTrue(timeline.unknownKindSeen)
+        assertEquals(3L, timeline.revision)
         assertNull(timeline.compaction)
         assertEquals("idle", timeline.status)
         assertEquals(1, timeline.messages.size)
+    }
+
+    @Test
+    fun malformedBufferedEventDoesNotUndoTheSnapshotAndAsksForAResync() {
+        val timeline = Timeline("one") { 1L }
+        timeline.snapshot(snapshotData("one", 0))
+        // Revision 2 arrives before 1, so it waits for the next snapshot; it has no message.
+        assertTrue(
+            timeline.event(Wire.objectOf("sessionId" to "one", "revision" to 2, "kind" to "message.upsert"))
+        )
+        assertFalse(timeline.unknownKindSeen)
+
+        timeline.snapshot(snapshotData("one", 1))
+
+        assertEquals(2L, timeline.revision)
+        assertTrue(timeline.unknownKindSeen)
+        assertFalse(timeline.needsSnapshot)
+    }
+
+    @Test
+    fun eventWithoutASessionIsNotTheTimelines() {
+        val timeline = Timeline("one") { 1L }
+        timeline.snapshot(snapshotData("one", 0))
+        assertFalse(timeline.event(Wire.objectOf("revision" to 1, "kind" to "host.future")))
+        assertEquals(0L, timeline.revision)
+        assertFalse(timeline.unknownKindSeen)
     }
 }

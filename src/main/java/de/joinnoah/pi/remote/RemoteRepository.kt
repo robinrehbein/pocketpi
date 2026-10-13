@@ -68,6 +68,12 @@ data class RemoteState(
     val reconnectAt: Long? = null,
     /** The host whose device was denied (paused or revoked) by the current [error], if any. */
     val deniedRouteId: String? = null,
+    /**
+     * When the pairing waiting for approval on the Mac expires, in
+     * [android.os.SystemClock.elapsedRealtime] millis (see [Diagnostics.now]); null unless the Mac
+     * is asking the user right now.
+     */
+    val pairingDeadline: Long? = null,
     val projects: List<JsonObject> = emptyList(),
     val projectChats: List<ProjectChatSummary> = emptyList(),
     val project: JsonObject? = null,
@@ -164,6 +170,9 @@ interface RemoteRepository {
 
     suspend fun pair(text: String): RemoteSelection?
 
+    /** Gives up the pairing that is running, so [pair] returns without a host and loading ends. */
+    fun cancelPairing() {}
+
     fun remove(routeId: String)
 
     fun disconnect()
@@ -257,15 +266,15 @@ interface RemoteRepository {
 
     /** `session.git.status`; only with [GIT_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun gitStatus(sessionId: String, base: GitBase): GitStatus =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
 
     /** `session.git.diff` for a path of the snapshot's list. Throws [RemoteRequestException]. */
     suspend fun gitDiff(sessionId: String, snapshotId: String, path: String): GitDiff =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
 
     /** `session.git.log` for the snapshot's base. Throws [RemoteRequestException]. */
     suspend fun gitLog(sessionId: String, snapshotId: String): GitLog =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
 
     /** Opens [RemoteState.changes] for the selected session, starting at session start. */
     fun openChanges() {}
@@ -286,11 +295,11 @@ interface RemoteRepository {
 
     /** `session.files.list`; only with [FILES_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
 
     /** `session.files.read` of one page; a later page carries the first page's version. */
     suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?): FileChunk =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
 
     /**
      * `session.files.write`: replaces [path] with [content] when its version is still
@@ -304,7 +313,7 @@ interface RemoteRepository {
         baseVersion: String,
         content: String,
         requestId: String = Wire.random(),
-    ): FileWritten = throw RemoteRequestException("unsupported")
+    ): FileWritten = throw RemoteRequestException.unsupported()
 
     /**
      * The bytes of an image this device sent in [sessionId]'s chat, from memory or read from the
