@@ -19,7 +19,7 @@ espressoCore = "3.7.0"
 zxing = "3.5.3"
 wearCompose = "1.5.6"
 wearRemoteInteractions = "1.1.0"
-playServicesWearable = "19.0.0"
+playServicesWearable = "20.0.1"
 androidsvg = "1.4"
 benchmark = "1.4.1"
 
