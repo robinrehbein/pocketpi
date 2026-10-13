@@ -1,0 +1,4 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <string name="remote_pairing_timeout">No approval within 2 minutes. Run /remote on your Mac again and scan the new code.</string>
+</resources>

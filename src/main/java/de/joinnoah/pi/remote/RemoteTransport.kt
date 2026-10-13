@@ -9,6 +9,9 @@ import okhttp3.*
 /** The transport gives up on a handshake that has not authenticated after this long. */
 internal const val HANDSHAKE_TIMEOUT_MILLIS = 20_000L
 
+/** A pairing the user has not approved on the Mac this long after it started fails. */
+internal const val PAIRING_TIMEOUT_MILLIS = 120_000L
+
 /**
  * Where a connection's handshake stands. Each value names what the transport is waiting for:
  * [OPENING] the socket to the relay, [CHALLENGE] the Mac's answer to the hello, [READY] the Mac's
@@ -42,6 +45,12 @@ interface RemoteTransport {
 
         /** The relay closed the socket with [code]; delivered just before [failed]. */
         fun closed(code: Int) {}
+
+        /**
+         * A frame this app cannot read (undecryptable, out of sequence, too large or malformed)
+         * ended the connection; delivered just before [failed].
+         */
+        fun broken() {}
 
         /** The handshake reached [phase]: the transport now waits for what the phase names. */
         fun progress(phase: HandshakePhase) {}
@@ -136,6 +145,8 @@ class SecureRemoteTransport(
         }
         advance(HandshakePhase.OPENING)
         var approvedHost: PairedHost? = null
+        // Set once the Mac denied this device, even with a reply this app cannot read.
+        var denied = false
         val request =
             Request.Builder()
                 .url(relay.replaceFirst("https://", "wss://") + "/v1/peer/" + routeId)
@@ -152,11 +163,11 @@ class SecureRemoteTransport(
         }
         if (pairing != null) {
             pairingTimeout = scope.launch {
-                delay(120000)
+                delay(PAIRING_TIMEOUT_MILLIS)
                 if (epoch == generation) {
                     trace.finish("pairing.timeout")
                     close()
-                    listener.failed(false, R.string.remote_denied)
+                    listener.failed(false, R.string.remote_pairing_timeout)
                 }
             }
         }
@@ -252,6 +263,7 @@ class SecureRemoteTransport(
                                     }
                                     HandshakePhase.AUTHENTICATING -> {
                                         if (payload.text("type") == "device.denied") {
+                                            denied = true
                                             // Strict: exactly `type` and a known `reason`; anything
                                             // else throws into the generic connection error.
                                             Wire.keys(payload, setOf("type", "reason"))
@@ -293,8 +305,13 @@ class SecureRemoteTransport(
                                         if (phase == HandshakePhase.PERSISTING) R.string.remote_storage_error
                                         else R.string.remote_connection_error
                                     close()
+                                    listener.broken()
+                                    // A frame that fails to decrypt, arrives out of sequence or breaks
+                                    // the handshake ends this connection, and a paired device tries
+                                    // again. A pairing code is single-use, a storage error needs the
+                                    // user, and a denial stays one.
                                     listener.failed(
-                                        false,
+                                        pairing == null && !denied && phase != HandshakePhase.PERSISTING,
                                         error,
                                     )
                                 }

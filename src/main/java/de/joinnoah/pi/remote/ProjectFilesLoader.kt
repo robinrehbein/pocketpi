@@ -18,7 +18,7 @@ internal interface FileSource {
 
     /** Sends [content] under [requestId]; a resent ID gets the host's first answer again. */
     suspend fun filesWrite(sessionId: String, path: String, baseVersion: String, content: String, requestId: String): FileWritten =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
 }
 
 /**
@@ -59,13 +59,13 @@ internal class ProjectFilesLoader(
         write(sessionId) { files -> files.file?.takeIf { it.path == path }?.let { files.copy(file = block(it)) } ?: files }
 
     private fun failure(e: Exception): FilesFailure =
-        when ((e as? RemoteRequestException)?.code) {
+        if (e.isUnsupported) FilesFailure.UNSUPPORTED
+        else when (e.hostCode) {
             "not_found" -> FilesFailure.NOT_FOUND
             "invalid_path" -> FilesFailure.INVALID_PATH
             "forbidden" -> FilesFailure.FORBIDDEN
             "busy" -> FilesFailure.BUSY
             "conflict" -> FilesFailure.CONFLICT
-            "unsupported" -> FilesFailure.UNSUPPORTED
             "offline" -> FilesFailure.OFFLINE
             else -> if (!current().connected) FilesFailure.OFFLINE else FilesFailure.FAILED
         }
@@ -580,7 +580,7 @@ internal class ProjectFilesLoader(
                                 files()?.editor?.superseded?.any { it.content == chunk.content }
                             } == true
                         if (host == null || !ours) {
-                            saveFailed(sessionId, path, requestId, reason, answered = e is RemoteRequestException && e.code != "offline")
+                            saveFailed(sessionId, path, requestId, reason, answered = e.hostCode.let { it != null && it != "offline" })
                             return@launch
                         }
                         // The host holds an earlier save of ours: send this text again on top of it, once.

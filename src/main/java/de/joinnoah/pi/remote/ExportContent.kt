@@ -106,20 +106,21 @@ private fun requestFailure(e: Exception, fromStart: Boolean): ExportException =
     when (e) {
         is RemoteRequestException ->
             ExportException(
-                when (e.code) {
-                    "busy" -> ExportFailure.BUSY
-                    // Nothing exists yet at the start, so "not found" is no expiry there.
-                    "not_found" -> if (fromStart) ExportFailure.FAILED else ExportFailure.NOT_FOUND
-                    "unsupported" -> ExportFailure.UNSUPPORTED
-                    "offline" -> ExportFailure.OFFLINE
-                    // A render over the limit is refused at the start; a read never is.
-                    "invalid_request" -> if (fromStart) ExportFailure.TOO_LARGE else ExportFailure.PROTOCOL
-                    else -> ExportFailure.FAILED
+                when (e.kind) {
+                    RemoteRequestException.Kind.UNSUPPORTED -> ExportFailure.UNSUPPORTED
+                    RemoteRequestException.Kind.TIMEOUT -> ExportFailure.TIMED_OUT
+                    RemoteRequestException.Kind.CONNECTION_LOST -> ExportFailure.FAILED
+                    RemoteRequestException.Kind.HOST_ERROR ->
+                        when (e.code) {
+                            "busy" -> ExportFailure.BUSY
+                            // Nothing exists yet at the start, so "not found" is no expiry there.
+                            "not_found" -> if (fromStart) ExportFailure.FAILED else ExportFailure.NOT_FOUND
+                            "offline" -> ExportFailure.OFFLINE
+                            // A render over the limit is refused at the start; a read never is.
+                            "invalid_request" -> if (fromStart) ExportFailure.TOO_LARGE else ExportFailure.PROTOCOL
+                            else -> ExportFailure.FAILED
+                        }
                 }
-            )
-        is IllegalStateException ->
-            ExportException(
-                if (e.message == "Request timed out") ExportFailure.TIMED_OUT else ExportFailure.FAILED
             )
         else -> ExportException(ExportFailure.FAILED)
     }
