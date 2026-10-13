@@ -51,6 +51,16 @@ data class RemoteSelection(
     val sessionId: String? = null,
 )
 
+/**
+ * What a chat showed when it was last open, read while it opens again: a read-only preview, never
+ * the chat's selection. [messages] may be empty for a session known only from its list row.
+ */
+data class ChatPreview(
+    val session: JsonObject?,
+    val messages: List<JsonObject>,
+    val draft: String,
+)
+
 enum class ActivationMode {
     RESTORE,
     USER_OPEN,
@@ -69,6 +79,11 @@ data class RemoteState(
     val host: PairedHost? = null,
     val selection: RemoteSelection = RemoteSelection(),
     val loading: Boolean = false,
+    /**
+     * A chat destination shows [ChatPreview] content while its open runs: read-only, and only on
+     * that destination's own state, never the repository's.
+     */
+    val preview: Boolean = false,
     val connection: Int = R.string.remote_offline,
     val connected: Boolean = false,
     /**
@@ -183,6 +198,9 @@ interface RemoteRepository {
     suspend fun forkSessionAtNode(source: RemoteSelection, nodeId: String): RemoteSelection = source
 
     fun cancelSelection()
+
+    /** The cached content of the chat [selection] for a preview while it opens, or null. */
+    fun peekCachedChat(selection: RemoteSelection): ChatPreview? = null
 
     suspend fun pair(text: String): RemoteSelection?
 

@@ -139,8 +139,8 @@ changes.
 - An uncached open leaves that chat in the navigation snapshot, and the next cold start would
   restore it into the chat cache. `openUncachedChat` therefore runs the prepare pass again before
   every iteration after the first, which stores the cached chat as the last one.
-  Both still wait for `sessions.open` and `session.snapshot`; the cached one shows the cached
-  messages while they are in flight. `PocketPi.activate` ends when the snapshot is published, so
+  Both still wait for `sessions.open` and `session.snapshot` (sent right behind it for a live
+  chat); the cached one shows the cached messages from the first frame while they are in flight. `PocketPi.activate` ends when the snapshot is published, so
   the difference between the two shows mostly in frame timing and in when the tail appears, not in
   the activate duration.
 

@@ -144,6 +144,78 @@ class RemoteViewModelsTest {
     }
 
     @Test
+    fun `an opening chat previews its cached content read-only until it is selected`() = runTest {
+        val repository = NavigationFakeRepository()
+        val chat = RemoteSelection("host", "project", "session")
+        val row = buildJsonObject {
+            put("id", "session")
+            put("origin", "rpc")
+            put("status", "idle")
+        }
+        val cached = listOf(buildJsonObject { put("id", "cached-message") })
+        repository.cachedChats[chat] = ChatPreview(row, cached, "stored draft")
+        // The open still runs: the session list is selected, connected.
+        repository.state.value =
+            RemoteState(
+                selection = chat.copy(sessionId = null),
+                connected = true,
+                capabilities = setOf(SESSION_FORK_CAPABILITY),
+                draft = "list draft",
+            )
+        val model = ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "session"), FakeSettingsRepository())
+        // The first value already carries the cache, before anything is collected.
+        val first = model.state.value
+        assertTrue(first.preview)
+        assertTrue(first.loading)
+        assertEquals(listOf("cached-message"), first.messages.map { it.text("id") })
+        assertEquals("stored draft", first.draft)
+        assertEquals("session", first.session?.text("id"))
+        // Never the selection: the composer takes no edits, and nothing can fork or send.
+        assertEquals(RemoteSelection(), first.selection)
+        assertFalse(first.connected)
+        assertFalse(canFork(first))
+
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.state.collect() }
+        runCurrent()
+        assertTrue(model.state.value.preview)
+        assertEquals(cached, model.state.value.messages)
+        model.prompt()
+        model.answer("question", buildJsonObject {})
+        model.draft("typed into the preview")
+        model.quote("cached-message")
+        assertEquals(0, repository.prompts)
+        assertEquals(0, repository.answers)
+        assertTrue(repository.quotes.isEmpty())
+        assertEquals("list draft", repository.state.value.draft)
+
+        // Selected: the repository's state replaces the preview.
+        val fresh = listOf(buildJsonObject { put("id", "fresh-message") })
+        repository.state.value =
+            RemoteState(selection = chat, connected = true, messages = fresh, draft = "stored draft", session = row)
+        runCurrent()
+        assertFalse(model.state.value.preview)
+        assertEquals(fresh, model.state.value.messages)
+        model.prompt()
+        assertEquals(1, repository.prompts)
+    }
+
+    @Test
+    fun `a chat without a cache opens without a preview`() = runTest {
+        val repository = NavigationFakeRepository()
+        repository.state.value = RemoteState(selection = RemoteSelection("host", "project"))
+        val model = ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "session"), FakeSettingsRepository())
+        assertFalse(model.state.value.preview)
+        assertTrue(model.state.value.loading)
+        assertTrue(model.state.value.messages.isEmpty())
+        // A non-chat destination never previews a chat.
+        repository.cachedChats[RemoteSelection("host", "project", "session")] =
+            ChatPreview(null, listOf(buildJsonObject { put("id", "m") }), "draft")
+        val sessions = SessionsViewModel(repository, RemoteNavKey.Sessions("host", "other"), FakeSettingsRepository())
+        assertFalse(sessions.state.value.preview)
+        assertTrue(sessions.state.value.messages.isEmpty())
+    }
+
+    @Test
     fun `non chat destination never exposes draft or transcript`() = runTest {
         val repository = NavigationFakeRepository()
         repository.state.value =

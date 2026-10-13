@@ -2543,6 +2543,7 @@ internal fun RemoteScreen(
                             },
                             onDismiss = { artifactsSheetRequested = false },
                         )
+                    ChatPreviewHint(state)
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,

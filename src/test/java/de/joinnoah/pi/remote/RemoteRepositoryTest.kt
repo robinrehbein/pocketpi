@@ -2672,7 +2672,8 @@ class RemoteRepositoryTest {
             )
         runCurrent()
         assertEquals(messages, repository.state.value.messages)
-        assertEquals(snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        // The restore's own snapshot went out alongside the project list; the events ask for none.
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
 
         transport.response = normal
         transport.result(held.single(), data("projects", listOf(project)))
@@ -2753,9 +2754,10 @@ class RemoteRepositoryTest {
             )
         )
         runCurrent()
-        assertEquals(snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        // The restore's own snapshot went out alongside the project list; the event asks for none.
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
 
-        // The project list fails with the connection up, so the restore never reaches its snapshot.
+        // The project list fails with the connection up, so the restore never takes its snapshot.
         transport.listener.message(
             Wire.objectOf(
                 "type" to "result",
@@ -2767,7 +2769,8 @@ class RemoteRepositoryTest {
         restoring.await()
         runCurrent()
         assertTrue(repository.state.value.connected)
-        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        // The unconfirmed one is dropped; the chat on screen asks for its own.
+        assertEquals(snapshots + 2, transport.sent.count { it.text("type") == "session.snapshot" })
         assertEquals(listOf("a", "b", "c"), repository.state.value.messages.map { it.text("id") })
     }
 
@@ -6703,8 +6706,8 @@ class RemoteRepositoryTest {
         opening.await()
 
         assertEquals(RemoteSelection("host", "project", "session"), repository.state.value.selection)
-        // The activation's snapshot, then the deferred resume's probe.
-        assertEquals(snapshots + 2, transport.typeCount("session.snapshot"))
+        // The activation's snapshot went out with the open; then the deferred resume's probe.
+        assertEquals(snapshots + 1, transport.typeCount("session.snapshot"))
         assertFalse(repository.state.value.loading)
     }
 
@@ -6778,8 +6781,8 @@ class RemoteRepositoryTest {
         assertEquals(RemoteSelection("host", "project", "session"), opening.await())
         assertEquals(RemoteSelection("host", "project", "session"), repository.state.value.selection)
         assertEquals(connects, transport.connects)
-        // The activation's snapshot, then the deferred resume's probe.
-        assertEquals(snapshots + 2, transport.typeCount("session.snapshot"))
+        // The activation's snapshot went out with the open; then the deferred resume's probe.
+        assertEquals(snapshots + 1, transport.typeCount("session.snapshot"))
     }
 
     @Test
@@ -7449,5 +7452,237 @@ class RemoteRepositoryTest {
             gate.countDown()
             io.close()
         }
+    }
+
+    @Test
+    fun aRestoreReadsItsSnapshotAlongsideTheListsAndTheControlsBeforeItsReply() = runTest {
+        val transport =
+            Transport().apply { capabilities = setOf(CONFIGURATION_CAPABILITY, ADVISOR_CAPABILITY, COMMANDS_CAPABILITY) }
+        configure(transport)
+        quoteMessages(transport)
+        val answer = transport.response
+        val held = mutableMapOf<String, JsonObject>()
+        transport.response = { request ->
+            when (val type = request.text("type")) {
+                "projects.list", "sessions.list", "session.snapshot" -> {
+                    held[type] = request
+                    null
+                }
+                "session.configuration.get" -> configurationData()
+                "session.commands.get" -> commandData()
+                "session.advisor.get" -> advisorData()
+                else -> answer(request)
+            }
+        }
+        val repository = repository(transport)
+        val chat = RemoteSelection("host", "project", "session")
+        val restoring = async { repository.activate(chat, ActivationMode.RESTORE) }
+        runCurrent()
+        // The snapshot and the session list go out with the projects, before any reply.
+        assertEquals(
+            listOf("session.snapshot", "sessions.list", "projects.list"),
+            transport.sent.map { it.text("type") }.filter { it in held },
+        )
+        assertEquals(setOf("session.snapshot", "sessions.list", "projects.list"), held.keys)
+
+        transport.result(
+            held.getValue("projects.list"),
+            JsonObject(data("projects", listOf(project)) + ("capabilities" to JsonArray(emptyList()))),
+        )
+        runCurrent()
+        // Nothing is selected before the lists confirm the chat.
+        assertNull(repository.state.value.selection.sessionId)
+        transport.result(held.getValue("sessions.list"), data("sessions", listOf(session())))
+        runCurrent()
+        assertEquals(chat, repository.state.value.selection)
+        assertTrue(repository.state.value.loading)
+        // The controls are read while the snapshot still is.
+        val sent = transport.sent.map { it.text("type") }
+        for (type in listOf("session.configuration.get", "session.advisor.get", "session.commands.get"))
+            assertTrue(type, type in sent)
+        assertEquals(1, sent.count { it == "session.snapshot" })
+
+        val snapshot = held.getValue("session.snapshot")
+        transport.result(snapshot, checkNotNull(answer(snapshot)))
+        assertEquals(chat, restoring.await())
+        runCurrent()
+        val state = repository.state.value
+        assertFalse(state.loading)
+        assertEquals(listOf("a", "b"), state.messages.map { it.text("id") })
+        assertEquals("model", state.configuration?.model?.id)
+        assertEquals(listOf("review"), state.commands.map { it.name })
+        assertNotNull(state.advisor)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
+    }
+
+    @Test
+    fun aRestoreOfAMissingSessionDropsItsHeldSnapshotAndLandsOnTheProject() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session("other")))
+        quoteMessages(transport)
+        val answer = transport.response
+        val snapshots = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") {
+                snapshots += request
+                null
+            } else answer(request)
+        }
+        val repository = repository(transport)
+        val parent = RemoteSelection("host", "project")
+        assertEquals(parent, repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.RESTORE))
+        runCurrent()
+        // It went out alongside the lists and was dropped with the chat.
+        assertEquals(1, snapshots.size)
+        assertEquals(parent, repository.state.value.selection)
+
+        // Its late reply, and an event of the gone chat, change nothing.
+        transport.result(snapshots.single(), checkNotNull(answer(snapshots.single())))
+        transport.listener.message(
+            Wire.objectOf(
+                "type" to "event", "kind" to "session.status", "sessionId" to "session",
+                "revision" to 1, "status" to "running",
+            )
+        )
+        runCurrent()
+        val state = repository.state.value
+        assertEquals(parent, state.selection)
+        assertNull(state.session)
+        assertTrue(state.messages.isEmpty())
+        assertFalse(state.loading)
+        assertEquals(listOf("other"), state.sessions.map { it.text("id") })
+        assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
+    }
+
+    @Test
+    fun aLiveOpenWhoseIdChangesDropsTheSnapshotReadAlongside() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session()), opened = session("moved"))
+        quoteMessages(transport)
+        val answer = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && request.text("sessionId") == "session") {
+                held += request
+                null
+            } else answer(request)
+        }
+        val repository = repository(transport)
+        val moved = RemoteSelection("host", "project", "moved")
+        assertEquals(moved, repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN))
+        runCurrent()
+        // The open goes out first, the snapshot of the live chat right behind it; the open's ID wins.
+        val sent = transport.sent.map { it.text("type") }
+        assertTrue(sent.indexOf("sessions.open") < sent.indexOf("session.snapshot"))
+        assertEquals(
+            listOf("session", "moved"),
+            transport.sent.filter { it.text("type") == "session.snapshot" }.map { it.text("sessionId") },
+        )
+        assertEquals(moved, repository.state.value.selection)
+        assertEquals(listOf("a", "b"), repository.state.value.messages.map { it.text("id") })
+
+        transport.result(held.single(), JsonObject(checkNotNull(answer(held.single())) + ("messages" to JsonArray(emptyList()))))
+        runCurrent()
+        assertEquals(moved, repository.state.value.selection)
+        assertEquals(listOf("a", "b"), repository.state.value.messages.map { it.text("id") })
+    }
+
+    @Test
+    fun aHistoryOpenWaitsForTheForkBeforeItsSnapshot() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session("old", origin = "history")), opened = session("fork"))
+        val answer = transport.response
+        val opens = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "sessions.open") {
+                opens += request
+                null
+            } else answer(request)
+        }
+        val repository = repository(transport)
+        val opening = async { repository.activate(RemoteSelection("host", "project", "old"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        assertEquals(1, opens.size)
+        assertEquals(0, transport.sent.count { it.text("type") == "session.snapshot" })
+        transport.result(opens.single(), checkNotNull(answer(opens.single())))
+        assertEquals(RemoteSelection("host", "project", "fork"), opening.await())
+        assertEquals(
+            listOf("fork"),
+            transport.sent.filter { it.text("type") == "session.snapshot" }.map { it.text("sessionId") },
+        )
+    }
+
+    @Test
+    fun aRevisionGapAfterAConcurrentOpenAsksForOneResync() = runTest {
+        val transport = Transport()
+        configure(transport)
+        quoteMessages(transport)
+        val quoted = transport.response
+        var revision = 5
+        val opens = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            when (request.text("type")) {
+                "sessions.open" -> {
+                    opens += request
+                    null
+                }
+                "session.snapshot" -> JsonObject(checkNotNull(quoted(request)) + ("revision" to JsonPrimitive(revision)))
+                else -> quoted(request)
+            }
+        }
+        val repository = repository(transport)
+        val chat = RemoteSelection("host", "project", "session")
+        val opening = async { repository.activate(chat, ActivationMode.USER_OPEN) }
+        runCurrent()
+        // The snapshot answered before the open did; nothing is selected yet.
+        assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertNull(repository.state.value.selection.sessionId)
+        // Revision 7 of the chat arrives meanwhile: 6 never does.
+        revision = 7
+        transport.listener.message(
+            Wire.objectOf(
+                "type" to "event", "kind" to "session.status", "sessionId" to "session",
+                "revision" to 7, "status" to "running",
+            )
+        )
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
+
+        transport.result(opens.single(), checkNotNull(quoted(opens.single())))
+        assertEquals(chat, opening.await())
+        runCurrent()
+        // The held snapshot (revision 5) is applied, and the gap to 7 asks for exactly one more.
+        assertEquals(2, transport.sent.count { it.text("type") == "session.snapshot" })
+        runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertEquals(listOf("a", "b"), repository.state.value.messages.map { it.text("id") })
+        assertFalse(repository.state.value.loading)
+    }
+
+    @Test
+    fun aChatLeftBehindIsPreviewedWithItsDraft() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session(), session("other"), session("old", origin = "history")))
+        quoteMessages(transport)
+        val repository = repository(transport)
+        val chat = RemoteSelection("host", "project", "session")
+        assertNull(repository.peekCachedChat(chat))
+        repository.activate(chat)
+        runCurrent()
+        repository.draft("half typed")
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        val preview = checkNotNull(repository.peekCachedChat(chat))
+        assertEquals(listOf("a", "b"), preview.messages.map { it.text("id") })
+        assertEquals("half typed", preview.draft)
+        assertEquals("session", preview.session?.text("id"))
+        // A history session known only from its row previews without messages, to say it continues as a copy.
+        val history = checkNotNull(repository.peekCachedChat(RemoteSelection("host", "project", "old")))
+        assertTrue(history.messages.isEmpty())
+        assertEquals("history", history.session?.text("origin"))
+        assertNull(repository.peekCachedChat(RemoteSelection("host", "project", "unknown")))
+        // Peeking never touches the repository's own state.
+        assertFalse(repository.state.value.preview)
+        assertEquals(RemoteSelection("host", "project", "other"), repository.state.value.selection)
     }
 }

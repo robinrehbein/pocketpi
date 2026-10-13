@@ -54,9 +54,21 @@ internal open class DestinationViewModel(
                 )
         }
 
+    // A chat that opens shows its cached content at once, read-only: the selection stays empty, so
+    // the composer takes no edits and every action waits until the chat is selected.
     private val initialState =
         repository.state.value.let { current ->
-            if (matches(current)) screenState(current) else RemoteState(loading = true)
+            if (matches(current)) screenState(current)
+            else
+                (key as? RemoteNavKey.Chat)?.let { repository.peekCachedChat(it.selection()) }?.let { cached ->
+                    RemoteState(
+                        loading = true,
+                        preview = true,
+                        session = cached.session,
+                        messages = cached.messages,
+                        draft = cached.draft,
+                    )
+                } ?: RemoteState(loading = true)
         }
 
     val state =
