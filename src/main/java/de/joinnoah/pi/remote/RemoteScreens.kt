@@ -137,6 +137,22 @@ private fun ReconnectCountdown(reconnectAt: Long?, now: () -> Long = System::cur
 private fun reconnectSeconds(reconnectAt: Long, now: () -> Long): Int =
     ((reconnectAt - now() + 999) / 1000).toInt().coerceAtLeast(0)
 
+/** Keys of the chat list's own rows beside the messages, like "waiting-for-output". */
+internal const val CHAT_SKELETON_KEY = "chat-skeleton"
+internal const val LOAD_OLDER_KEY = "load-older"
+
+/**
+ * The chat list's content type of [item], so a scrolled-out row is reused only for one laid out
+ * the same way: a user and an assistant bubble differ, like a tool row and a thinking row.
+ */
+internal fun conversationContentType(item: ConversationItem): String =
+    when (item) {
+        is ConversationItem.Bubble -> if (item.role == "user") "bubble-user" else "bubble"
+        is ConversationItem.Thinking -> "thinking"
+        is ConversationItem.Activity -> "activity"
+        is ConversationItem.Subagent -> "subagent"
+    }
+
 /** Errors a reload can plausibly fix; only these offer "Try again" on the error card. */
 private val RETRYABLE_ERRORS =
     setOf(
@@ -221,6 +237,10 @@ internal fun RemoteScreen(
         }
     val chatKey = key as? RemoteNavKey.Chat
     val chatModel = model as? ChatViewModel
+    // The composer's text lives here rather than in the state, so typing recomposes only the
+    // composer; this screen's own draft changes go through it or flush it first.
+    val composerDraft =
+        if (chatKey != null) rememberComposerDraft(state.selection, state.draft, model::draft) else null
     val jobsAvailable = canUseBackgroundJobs(state)
     val jobsLeasable = canLeaseJobsList(state)
     // A destination cannot refresh while loading. Retry when its snapshot is ready so the
@@ -275,13 +295,18 @@ internal fun RemoteScreen(
             if (onlyErrorsShown) onlyErrors(visibleConversation) else visibleConversation
         }
     val forkableIds = remember(shownItems) { forkableBubbleIds(shownItems) }
+    val forkReady = state.connected && !state.loading && !navigator.mutating && forkStopped(state)
+    val forkStopFirst = forkRunning(state)
+    // The same instance while nothing it holds changes, so the bubbles that get it can skip.
     val messageFork =
         if (chatKey != null && canFork(state))
-            MessageFork(
-                ready = state.connected && !state.loading && !navigator.mutating && forkStopped(state),
-                stopFirst = forkRunning(state),
-                onFork = { messageId, mode -> navigator.forkSession(chatKey, messageId, mode) },
-            )
+            remember(chatKey, navigator, forkReady, forkStopFirst) {
+                MessageFork(
+                    ready = forkReady,
+                    stopFirst = forkStopFirst,
+                    onFork = { messageId, mode -> navigator.forkSession(chatKey, messageId, mode) },
+                )
+            }
         else null
     val questionPending = state.questions.isNotEmpty()
     val markers =
@@ -516,6 +541,8 @@ internal fun RemoteScreen(
             (state.status == "idle" ||
                 (state.status == "running" && (canSteer(state) || canFollowUp(state))))
     fun askToFix(messageId: String) {
+        // The prompt fills only a blank draft, so the repository must first hold what was typed.
+        composerDraft?.flush()
         chatModel?.askToFix(messageId, askFixPrompt)
         openToolId = null
         composerFocusRequest++
@@ -671,12 +698,15 @@ internal fun RemoteScreen(
      */
     fun runLocalCommand(): Boolean {
         val chat = key as? RemoteNavKey.Chat ?: return false
+        val composer = composerDraft ?: return false
+        // The composer's text can be ahead of the draft this screen last saw.
+        val current = state.copy(draft = composer.text)
         val invocation =
-            localInvocation(state, availableLocalCommands(state, true, System.currentTimeMillis(), reloading))
+            localInvocation(current, availableLocalCommands(current, true, System.currentTimeMillis(), reloading))
                 ?: return false
         // Keeps the typed `/new` while another create is in flight; the navigator would drop it.
         if (invocation.command == LocalCommand.NEW && navigator.mutating) return true
-        model.draft("")
+        composer.replace("")
         when (invocation.command) {
             LocalCommand.NEW -> navigator.createSession(chat.routeId, chat.projectId)
             LocalCommand.COMPACT -> model.compactContext()
@@ -936,7 +966,9 @@ internal fun RemoteScreen(
             {
                 ChangesPane(
                     changes,
-                    remember(chatModel) { changesActions(checkNotNull(chatModel)) { composerFocusRequest++ } },
+                    remember(chatModel, composerDraft) {
+                        changesActions(checkNotNull(chatModel), { composerDraft?.flush() }) { composerFocusRequest++ }
+                    },
                     Modifier.fillMaxSize(),
                     projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
                 )
@@ -948,7 +980,9 @@ internal fun RemoteScreen(
             {
                 FilesPane(
                     files,
-                    remember(chatModel) { filesActions(checkNotNull(chatModel)) { composerFocusRequest++ } },
+                    remember(chatModel, composerDraft) {
+                        filesActions(checkNotNull(chatModel), { composerDraft?.flush() }) { composerFocusRequest++ }
+                    },
                     Modifier.fillMaxSize(),
                     projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
                     canEdit = canEditFile(state),
@@ -1724,11 +1758,11 @@ internal fun RemoteScreen(
                     is RemoteNavKey.Chat -> {
                         if (conversation.isEmpty() && state.questions.isEmpty() && state.loading) {
                             leading++
-                            item { ChatSkeleton() }
+                            item(key = CHAT_SKELETON_KEY, contentType = CHAT_SKELETON_KEY) { ChatSkeleton() }
                         }
                         if (state.nextCursor != null) {
                             leading++
-                            item {
+                            item(key = LOAD_OLDER_KEY, contentType = LOAD_OLDER_KEY) {
                                 TextButton(
                                     onClick = model::older,
                                     enabled = state.connected,
@@ -1742,7 +1776,7 @@ internal fun RemoteScreen(
                             shownItems.lastOrNull {
                                 it is ConversationItem.Bubble && it.role == "assistant"
                             }?.id
-                        items(shownItems, key = { it.id }) { item ->
+                        items(shownItems, key = { it.id }, contentType = ::conversationContentType) { item ->
                             val highlighted = item.id == highlightedId
                             Box(
                                 if (highlighted)
@@ -2040,9 +2074,12 @@ internal fun RemoteScreen(
                             },
                             onDismiss = { artifactsSheetRequested = false },
                         )
+                    val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,
                         onDraft = model::draft,
+                        onDraftFor = model::draft,
+                        draft = composer,
                         onSend = { if (!runLocalCommand()) model.prompt() },
                         onFollowUp = model::followUp,
                         onSteer = model::steer,
@@ -2059,8 +2096,9 @@ internal fun RemoteScreen(
                         },
                         onAnswer = model::answer,
                         suggestions = {
+                            val typed = composer.text
                             SessionControls(
-                                state,
+                                remember(state, typed) { state.copy(draft = typed) },
                                 model::refreshConfiguration,
                                 model::refreshContextUsage,
                                 model::compactContext,
@@ -2077,7 +2115,7 @@ internal fun RemoteScreen(
                                     // the chat runs, when a /tree or /artifacts draft could not be sent.
                                     if (command == LocalCommand.TREE || command == LocalCommand.ARTIFACTS) {
                                         // Like a sent command, a command draft does not stay in the composer.
-                                        if (state.draft.trimStart().startsWith("/")) model.draft("")
+                                        if (composer.text.trimStart().startsWith("/")) composer.replace("")
                                         if (command == LocalCommand.TREE) treeSheetRequested = true
                                         else if (artifactsAvailable) artifactsSheetRequested = true
                                         else showToast(R.string.remote_artifacts_host_outdated)
@@ -2086,13 +2124,13 @@ internal fun RemoteScreen(
                                     else if (command == LocalCommand.RELOAD &&
                                         (reloading || reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
                                     ) {
-                                        if (state.draft.trimStart().startsWith("/")) model.draft("")
+                                        if (composer.text.trimStart().startsWith("/")) composer.replace("")
                                         showToast(
                                             if (reloading) R.string.remote_reload_running
                                             else R.string.remote_reload_terminal_hint
                                         )
                                     }
-                                    else model.draft(selectCommandName(state.draft, command.commandName))
+                                    else composer.replace(selectCommandName(composer.text, command.commandName))
                                 },
                                 reloading = reloading,
                                 modelPickerRequested = modelPickerRequested,

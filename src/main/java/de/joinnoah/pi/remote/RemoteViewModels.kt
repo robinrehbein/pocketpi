@@ -96,6 +96,9 @@ internal open class DestinationViewModel(
 
     fun draft(text: String) = active { repository.draft(text) }
 
+    /** A composer's late write; see [RemoteRepository.draft]. */
+    fun draft(selection: RemoteSelection, text: String) = active { repository.draft(selection, text) }
+
     fun quote(messageId: String?) = active { repository.quote(messageId) }
 
     fun refreshConfiguration() = active(repository::refreshConfiguration)
