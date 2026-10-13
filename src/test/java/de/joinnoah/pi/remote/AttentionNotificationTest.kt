@@ -84,18 +84,30 @@ class AttentionNotificationTest {
 
     @Test
     fun jobIntentsCarryTheJobAndDifferFromTheSessionIntent() {
-        val session = sessionIntent(context, "r", "s")
-        val job = notificationIntent(context, NotificationTarget("r", "s", jobs = true, jobId = "job_1"))
-        val list = notificationIntent(context, NotificationTarget("r", "s", jobs = true))
+        val session = LaunchIntents.session(context, "r", "s")
+        val job = LaunchIntents.notification(context, NotificationTarget("r", "s", jobs = true, jobId = "job_1"))
+        val list = LaunchIntents.notification(context, NotificationTarget("r", "s", jobs = true))
         assertEquals("s", job.getStringExtra(RemoteNotifications.EXTRA_TARGET))
         assertTrue(job.getBooleanExtra(RemoteNotifications.EXTRA_JOBS, false))
         assertEquals("job_1", job.getStringExtra(RemoteNotifications.EXTRA_JOB))
         assertNull(list.getStringExtra(RemoteNotifications.EXTRA_JOB))
         assertEquals(3, setOf(session.data, job.data, list.data).size)
         assertNotEquals(session.data, job.data)
-        val plain = notificationIntent(context, NotificationTarget("r", "s"))
+        val plain = LaunchIntents.notification(context, NotificationTarget("r", "s"))
         assertEquals(session.data, plain.data)
         assertFalse(plain.hasExtra(RemoteNotifications.EXTRA_JOBS))
+    }
+
+    @Test
+    fun notificationsOpenTheirSessionThroughTheAlias() {
+        RemoteNotifications.postComplete(context, push("event" to "complete"))
+        RemoteNotifications.postAttention(context, push("event" to "job.done", "jobId" to "job_1"))
+        listOf(1 to NotificationTarget("r", "s"), 2 to NotificationTarget("r", "s", jobs = true, jobId = "job_1"))
+            .forEach { (id, target) ->
+                val intent = shadowOf(posted(id).notification.contentIntent).savedIntent
+                assertEquals(LaunchIntents.ALIAS, intent.component?.className)
+                assertEquals(target, LaunchIntents.target(intent))
+            }
     }
 
     @Test

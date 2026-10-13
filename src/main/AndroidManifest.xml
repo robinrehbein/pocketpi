@@ -36,6 +36,13 @@
                 <data android:scheme="pocketpi" android:host="session" />
             </intent-filter>
         </activity>
+        <!--
+            The app's own launches (notifications, the widget, launcher shortcuts) go through this
+            alias. It is not exported, so other apps cannot start it, and MainActivity reads a
+            session from intent extras only when it was started through it (LaunchIntents).
+        -->
+        <activity-alias android:name=".InternalLaunch" android:targetActivity=".MainActivity"
+            android:exported="false" />
         <!-- Its Compose content is always light, so its window stays light too. -->
         <activity android:name=".WatchPairingActivity" android:exported="true"
             android:theme="@android:style/Theme.Material.Light.NoActionBar">

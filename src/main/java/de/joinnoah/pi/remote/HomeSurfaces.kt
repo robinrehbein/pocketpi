@@ -38,8 +38,13 @@ internal class HomeSurfaces(
     // changed since the last, still-warm publish.
     private val shortcutPrefs =
         context.getSharedPreferences(PUBLISHED_SHORTCUTS_PREFS, Context.MODE_PRIVATE)
+    // A new version may launch differently (LaunchIntents), so its first publish replaces every
+    // shortcut once, pinned ones included, instead of trusting the signature of an older version.
+    @Volatile private var shortcutsCurrent =
+        shortcutPrefs.getInt(PUBLISHED_SHORTCUTS_VERSION_KEY, 0) == BuildConfig.VERSION_CODE
     private var publishedShortcuts: List<String>? =
         shortcutPrefs.getString(PUBLISHED_SHORTCUTS_KEY, null)
+            ?.takeIf { shortcutsCurrent }
             ?.let { if (it.isEmpty()) emptyList() else it.split(SHORTCUT_SIGNATURE_DELIMITER) }
 
     /** Shortcut IDs of sessions known to be closed, waiting to be disabled. */
@@ -192,7 +197,8 @@ internal class HomeSurfaces(
     }
 
     /** Runs off the main thread: ShortcutManager calls are binder calls. */
-    private suspend fun publishShortcuts(snapshot: HomeSnapshot) =
+    @androidx.annotation.VisibleForTesting
+    internal suspend fun publishShortcuts(snapshot: HomeSnapshot) =
         shortcutMutex.withLock {
             try {
                 val limit =
@@ -222,7 +228,7 @@ internal class HomeSurfaces(
                                 else "$title · ${session.projectName}".take(48)
                             )
                             .setIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher))
-                            .setIntent(sessionIntent(context, session.routeId, session.sessionId))
+                            .setIntent(LaunchIntents.session(context, session.routeId, session.sessionId))
                             .setRank(rank)
                             .build()
                     }
@@ -246,6 +252,10 @@ internal class HomeSurfaces(
                         }
                     }
                 }
+                if (!shortcutsCurrent && publishedShortcuts == signature && relaunchPinned(chosenIds)) {
+                    shortcutsCurrent = true
+                    shortcutPrefs.edit { putInt(PUBLISHED_SHORTCUTS_VERSION_KEY, BuildConfig.VERSION_CODE) }
+                }
                 // Pinned shortcuts stay on the home screen; disable the ones of closed sessions.
                 if (plan.disable.isNotEmpty()) {
                     ShortcutManagerCompat.removeDynamicShortcuts(context, plan.disable)
@@ -268,7 +278,38 @@ internal class HomeSurfaces(
             }
         }
 
+    /**
+     * Points pinned shortcuts that were not just republished at the current launch intent. A
+     * pinned shortcut stays on the home screen after it leaves the dynamic set, and only
+     * updateShortcuts reaches it; disabled ones are included, in case their session comes back.
+     * The update keeps each shortcut's icon and long label, which are left unset here.
+     */
+    private fun relaunchPinned(republished: List<String>): Boolean {
+        val updates =
+            ShortcutManagerCompat.getShortcuts(context, ShortcutManagerCompat.FLAG_MATCH_PINNED)
+                .filter { it.id !in republished }
+                .mapNotNull { pinned ->
+                    val (route, session) = shortcutTarget(pinned.id) ?: return@mapNotNull null
+                    ShortcutInfoCompat.Builder(context, pinned.id)
+                        .setShortLabel(pinned.shortLabel)
+                        .setIntent(LaunchIntents.session(context, route, session))
+                        .build()
+                }
+        return updates.isEmpty() || ShortcutManagerCompat.updateShortcuts(context, updates)
+    }
+}
+
+/** The route and session of a [shortcutId]. */
+internal fun shortcutTarget(id: String): Pair<String, String>? {
+    if (!id.startsWith("session:")) return null
+    val rest = id.removePrefix("session:")
+    // Nullable on purpose: the strict push-id check, whose route IDs never contain the colon.
+    val route = rest.substringBefore(':', "").ifEmpty { null }.takeIf(::isOpaqueId) ?: return null
+    val session = rest.substringAfter(':').takeIf(::isOpaqueId) ?: return null
+    return route to session
 }
 
 internal const val PUBLISHED_SHORTCUTS_PREFS = "pocket_pi_shortcuts"
 internal const val PUBLISHED_SHORTCUTS_KEY = "signature"
+/** The versionCode whose launch intents all shortcuts carry. */
+internal const val PUBLISHED_SHORTCUTS_VERSION_KEY = "version"
