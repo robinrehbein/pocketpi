@@ -189,6 +189,10 @@
     <string name="remote_answer_sending">Antwort wird gesendet…</string>
     <string name="remote_recommended">Empfohlen</string>
     <string name="remote_local_required">Eingabe am Mac erforderlich</string>
+    <string name="remote_question_answered_elsewhere">Anderswo beantwortet</string>
+    <string name="remote_question_session_offline">Die Sitzung ist offline</string>
+    <string name="remote_question_answer_on_mac">Beantworte das am Mac</string>
+    <string name="remote_question_answer_uncertain">Die Antwort wurde möglicherweise zugestellt; warte auf die Sitzung</string>
     <string name="remote_yes">Ja</string>
     <string name="remote_no">Nein</string>
     <string name="remote_other">Andere Antwort</string>

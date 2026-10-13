@@ -46,6 +46,7 @@ internal open class DestinationViewModel(
                     uncertain = false,
                     followUps = emptyList(),
                     answering = emptySet(),
+                    questionBlocks = emptyMap(),
                     toolOutput = null,
                     changes = null,
                     compaction = null,

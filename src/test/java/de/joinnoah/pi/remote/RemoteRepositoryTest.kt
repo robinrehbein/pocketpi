@@ -5024,4 +5024,156 @@ class RemoteRepositoryTest {
         runCurrent()
         assertEquals("agent-2", transport.sent.last { it.text("type") == "session.subagent.resume" }.text("agentId"))
     }
+
+    private val openQuestion = Wire.objectOf("id" to "q", "kind" to "confirm", "message" to "Go?")
+
+    /** A selected session with [openQuestion] pending; `question.answer` fails like [code]. */
+    private suspend fun TestScope.answering(
+        transport: Transport,
+        code: String? = null,
+        message: String? = null,
+    ): DefaultRemoteRepository {
+        configure(transport)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "waiting",
+                "messages" to JsonArray(emptyList()),
+                "pendingQuestions" to JsonArray(listOf(openQuestion)))
+            else if (request.text("type") == "question.answer") null
+            else normal(request)
+        }
+        transport.failure = { request ->
+            if (request.text("type") == "question.answer") code else null
+        }
+        transport.failureMessage = { message }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        assertEquals(listOf(openQuestion), repository.state.value.questions)
+        return repository
+    }
+
+    private fun TestScope.answerQuestion(repository: DefaultRemoteRepository) {
+        repository.answer("q", Wire.objectOf("kind" to "confirm", "value" to true))
+        runCurrent()
+    }
+
+    private fun Transport.questionClosed(revision: Int) =
+        listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to revision, "kind" to "question.closed", "questionId" to "q"))
+
+    @Test
+    fun answerClosedElsewhereDropsTheQuestionAndSaysSo() = runTest {
+        for (code in listOf("already_resolved", "not_found")) {
+            val repository = answering(Transport(), code)
+            answerQuestion(repository)
+            val state = repository.state.value
+            assertTrue(code, state.questions.isEmpty())
+            assertTrue(code, state.answering.isEmpty())
+            assertEquals(code, R.string.remote_question_answered_elsewhere, state.error)
+        }
+    }
+
+    @Test
+    fun unsupportedAnswerLeavesTheQuestionNotAnswerableHereAndDoesNotRetry() = runTest {
+        val transport = Transport()
+        val repository = answering(transport, "unsupported")
+        answerQuestion(repository)
+        val state = repository.state.value
+        assertEquals(listOf(openQuestion), state.questions)
+        assertEquals(mapOf("q" to QuestionBlock.LOCAL_ONLY), state.questionBlocks)
+        assertTrue(state.answering.isEmpty())
+        assertNull(state.error)
+        answerQuestion(repository)
+        assertEquals(1, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test
+    fun uncertainAnswerKeepsControlsOffUntilTheQuestionCloses() = runTest {
+        val cases = listOf(
+            "uncertain" to null,
+            "internal" to "Command outcome unknown; refresh before retrying",
+        )
+        for ((code, message) in cases) {
+            val transport = Transport()
+            val repository = answering(transport, code, message)
+            answerQuestion(repository)
+            assertEquals(code, mapOf("q" to QuestionBlock.UNCERTAIN), repository.state.value.questionBlocks)
+            assertEquals(code, listOf(openQuestion), repository.state.value.questions)
+            assertNull(code, repository.state.value.error)
+            answerQuestion(repository)
+            assertEquals(code, 1, transport.sent.count { it.text("type") == "question.answer" })
+            transport.questionClosed(1)
+            assertTrue(code, repository.state.value.questions.isEmpty())
+            assertTrue(code, repository.state.value.questionBlocks.isEmpty())
+        }
+    }
+
+    @Test
+    fun uncertainAnswerClearsOnTheNextSnapshotThatStillHasTheQuestion() = runTest {
+        val transport = Transport()
+        val repository = answering(transport, "uncertain")
+        answerQuestion(repository)
+        assertEquals(mapOf("q" to QuestionBlock.UNCERTAIN), repository.state.value.questionBlocks)
+        val earlier = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 5, "status" to "waiting",
+                "messages" to JsonArray(emptyList()),
+                "pendingQuestions" to JsonArray(listOf(openQuestion)))
+            else earlier(request)
+        }
+        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 5, "kind" to "snapshot.required"))
+        runCurrent()
+        assertTrue(repository.state.value.questionBlocks.isEmpty())
+        assertEquals(listOf(openQuestion), repository.state.value.questions)
+    }
+
+    @Test
+    fun internalErrorWithoutThePeerTimeoutMessageStaysGeneric() = runTest {
+        val repository = answering(Transport(), "internal", "boom")
+        answerQuestion(repository)
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertTrue(repository.state.value.questionBlocks.isEmpty())
+    }
+
+    @Test
+    fun offlineAnswerSaysTheSessionIsOfflineAndKeepsTheQuestion() = runTest {
+        val repository = answering(Transport(), "offline")
+        answerQuestion(repository)
+        val state = repository.state.value
+        assertEquals(R.string.remote_question_session_offline, state.error)
+        assertEquals(listOf(openQuestion), state.questions)
+        assertTrue(state.questionBlocks.isEmpty())
+        assertTrue(state.answering.isEmpty())
+    }
+
+    @Test
+    fun otherAnswerErrorsStayGeneric() = runTest {
+        for (code in listOf("busy", "forbidden", "invalid_request")) {
+            val repository = answering(Transport(), code)
+            answerQuestion(repository)
+            assertEquals(code, R.string.remote_request_error, repository.state.value.error)
+            assertEquals(code, listOf(openQuestion), repository.state.value.questions)
+        }
+    }
+
+    @Test
+    fun closeWhileAnsweringClearsPendingWithoutAnError() = runTest {
+        val transport = Transport()
+        val repository = answering(transport)
+        answerQuestion(repository)
+        assertEquals(setOf("q"), repository.state.value.answering)
+        transport.questionClosed(1)
+        assertTrue(repository.state.value.answering.isEmpty())
+        assertTrue(repository.state.value.questions.isEmpty())
+        // The host's late refusal for the same answer adds no error.
+        val request = transport.sent.last { it.text("type") == "question.answer" }
+        transport.listener.message(Wire.objectOf("type" to "result", "requestId" to request.text("requestId"),
+            "ok" to false, "error" to Wire.objectOf("code" to "already_resolved", "message" to "closed")))
+        runCurrent()
+        assertNull(repository.state.value.error)
+    }
 }

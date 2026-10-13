@@ -25,6 +25,7 @@ class QuestionCardUiTest {
     @get:Rule val compose = createComposeRule()
     private val answers = mutableListOf<JsonObject>()
     private val pending = mutableStateOf(false)
+    private val block = mutableStateOf<QuestionBlock?>(null)
     private val enabled = mutableStateOf(true)
     private val question = mutableStateOf(parse("""{"id":"q","kind":"confirm","message":"Continue?"}"""))
 
@@ -34,7 +35,7 @@ class QuestionCardUiTest {
         compose.setContent {
             MaterialTheme {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    QuestionCard(question.value, enabled.value, pending.value) { answers += it }
+                    QuestionCard(question.value, enabled.value, pending.value, block.value) { answers += it }
                 }
             }
         }
@@ -91,6 +92,30 @@ class QuestionCardUiTest {
             for (dialog in dialogs) {
                 change(dialog)
                 assertControlsDisabled()
+            }
+        }
+        assertTrue(answers.isEmpty())
+    }
+
+    @Test fun blockedDialogsDisableEveryControlAndExplainWhy() {
+        render("""{"id":"q","kind":"confirm","message":"Continue?"}""")
+        val dialogs = listOf(
+            """{"id":"q","kind":"confirm","message":"Continue?"}""",
+            """{"id":"s","kind":"select","options":["First"]}""",
+            """{"id":"i","kind":"input"}""",
+            """{"id":"p","kind":"plan","plan":"A plan"}""",
+            questionnaire,
+        )
+        for ((blocked, hint) in listOf(
+            QuestionBlock.LOCAL_ONLY to "Answer this on the Mac",
+            QuestionBlock.UNCERTAIN to "The answer may have been delivered; waiting for the session",
+        )) {
+            compose.runOnIdle { block.value = blocked }
+            for (dialog in dialogs) {
+                change(dialog)
+                assertControlsDisabled()
+                // Plan and questionnaire push the hint below the test viewport.
+                compose.onNodeWithText(hint).assertExists()
             }
         }
         assertTrue(answers.isEmpty())

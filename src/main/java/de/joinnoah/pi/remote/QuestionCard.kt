@@ -18,11 +18,12 @@ internal fun QuestionCard(
     question: JsonObject,
     enabled: Boolean,
     pending: Boolean = false,
+    block: QuestionBlock? = null,
     onAnswer: (JsonObject) -> Unit,
 ) {
     val id = question.text("id")
     val kind = question.text("kind")
-    val controlsEnabled = enabled && !pending
+    val controlsEnabled = enabled && !pending && block == null
     val currentControlsEnabled by rememberUpdatedState(controlsEnabled)
     fun submit(answer: JsonObject) {
         if (currentControlsEnabled) onAnswer(answer)
@@ -157,6 +158,19 @@ internal fun QuestionCard(
             TextButton(onClick = { submit(Wire.objectOf("kind" to "cancel")) }, enabled = controlsEnabled) {
                 Text(stringResource(R.string.remote_cancel))
             }
+        when (block) {
+            QuestionBlock.LOCAL_ONLY ->
+                Text(
+                    stringResource(R.string.remote_question_answer_on_mac),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            QuestionBlock.UNCERTAIN ->
+                Text(
+                    stringResource(R.string.remote_question_answer_uncertain),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            null -> Unit
+        }
     }
 }
 
