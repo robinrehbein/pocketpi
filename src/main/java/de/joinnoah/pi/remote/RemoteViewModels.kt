@@ -75,6 +75,15 @@ internal open class DestinationViewModel(
         if (matches(repository.state.value) && !repository.state.value.loading && !cleared) action()
     }
 
+    /**
+     * Like [active], but also while the destination loads (a reconnect), so the editor's text, a
+     * save and its prompt are never dropped without a word; the repository answers a save it
+     * cannot send with a retryable failure.
+     */
+    protected fun editing(action: () -> Unit) {
+        if (matches(repository.state.value) && !cleared) action()
+    }
+
     fun refresh() = active(repository::refresh)
 
     fun renameSession(sessionId: String, title: String) = active {
@@ -369,6 +378,27 @@ internal class ChatViewModel(
     fun dismissFilesPeek() = repository.dismissFilesPeek()
 
     fun selectFileLines(selection: LineSelection?) = active { repository.selectFileLines(selection) }
+
+    fun startFileEditing() = active(repository::startFileEditing)
+
+    fun updateFileEditorText(text: String) = editing { repository.updateFileEditorText(text) }
+
+    fun saveFileEditor() = editing(repository::saveFileEditor)
+
+    fun discardFileEditor() = repository.discardFileEditor()
+
+    fun reloadFileAfterConflict() = editing(repository::reloadFileAfterConflict)
+
+    fun confirmFileEditorLeave() = editing(repository::confirmFileEditorLeave)
+
+    fun cancelFileEditorLeave() = repository.cancelFileEditorLeave()
+
+    /** The edit as a diff prompt for the composer; null when unchanged. Nothing is sent. */
+    fun fileEditorPrompt(intro: String? = null): EditorPrompt? {
+        var prompt: EditorPrompt? = null
+        editing { prompt = repository.fileEditorPrompt(intro) }
+        return prompt
+    }
 
     /** False when the comment was not saved; the caller keeps the user's text on screen. */
     fun setReviewComment(comment: ReviewComment): Boolean {

@@ -123,6 +123,22 @@ saved conversation retains the reference after expiry, but the temporary file ma
 The phone keeps local copies while an encrypted draft or an uncertain send still references them.
 Disconnecting does not automatically resubmit a prompt.
 
+## Editing project files
+
+The file browser opens text files in an editor when the Mac's pi Remote host offers
+`session.files.write.v1`. Hosts offer it by default; it can be turned off on the Mac. The editor has
+line numbers, syntax colours, find, undo and redo, and Tab or Shift+Tab indenting. With a hardware
+keyboard, Ctrl+S saves, Ctrl+Z and Ctrl+Shift+Z or Ctrl+Y undo and redo, Ctrl+F finds and Esc closes
+find. While the editor has focus, the app's own shortcuts are off. Without a hardware keyboard, a
+row above the keyboard offers Tab, Shift+Tab and common code characters.
+
+Save replaces the file on the Mac only if it has not changed since it was opened; otherwise the app
+offers to reload it or to send the edit to the agent as a diff. Send to agent puts the unified diff
+of the unsaved edit into the composer. Only text files that fit in one read page (192 KiB) can be
+edited. Files the Mac runs by itself, such as `.pi`, `.claude`, `.husky`, `.vscode` or `.mcp.json`,
+stay read-only and are changed through the agent. Leaving the editor with unsaved changes asks
+first; a switch the app did not ask about keeps the edit with its session in memory.
+
 ## Firebase
 
 Push remains disabled when Firebase settings are absent. Configure a separate Firebase Android app
@@ -191,7 +207,7 @@ Keystore and encrypted file recreation. With an attached emulator, run
 `./gradlew connectedDebugAndroidTest`. For the managed API 36 device used by CI, run
 `./gradlew pixel2Api36DebugAndroidTest`.
 
-Unit tests consume the fourteen JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
+Unit tests consume the fifteen JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
 of `packages/pi-remote/protocol/fixtures/` from noah-monorepo commit
 `1550dcc200459913b9b1dc9b16fc3439db341c68`. `provider-auth-v1.json` (provider login) is a
 byte-for-byte copy from noah-monorepo commit `daca1ee562ca661fb76ce2d61a75ca2fc8c8059f`, the
@@ -214,7 +230,9 @@ commit `de58394641ea248b9acee8b924a4605af6275490`, the merge of pull request #66
 byte-for-byte copy from noah-monorepo commit `5025773464c96d8f5b70117e51e79bbe010bed18`, the squash merge of pull request #692.
 `session-notice-v1.json` (an extension's notify message as a transient session event) is a
 byte-for-byte copy from noah-monorepo commit `be79cf25492de1f8d0c6478a5c4f292cb34d0642`, the merge
-of pull request #691. When the
+of pull request #691. `files-write-v1.json` (saving an edited file back to the Mac) is a
+byte-for-byte copy from noah-monorepo commit `9cb687aa9d6ad55d605669d59ca9d6bacc23d834`, the merge
+of pull request #721. When the
 upstream protocol fixtures change, copy the changed files into
 `src/test/resources/`, compare their bytes with the upstream source, and run
 `./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and

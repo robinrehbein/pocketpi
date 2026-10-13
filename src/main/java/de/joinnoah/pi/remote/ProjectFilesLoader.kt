@@ -4,20 +4,28 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/** The two `session.files.*` reads. Implementations throw [RemoteRequestException] on errors. */
+/** How many earlier unanswered saves an editor remembers ([FileEditor.superseded]). */
+private const val MAX_SUPERSEDED_WRITES = 4
+
+/** The `session.files.*` commands. Implementations throw [RemoteRequestException] on errors. */
 internal interface FileSource {
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing
 
     suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?): FileChunk
+
+    /** Sends [content] under [requestId]; a resent ID gets the host's first answer again. */
+    suspend fun filesWrite(sessionId: String, path: String, baseVersion: String, content: String, requestId: String): FileWritten =
+        throw RemoteRequestException("unsupported")
 }
 
 /**
  * Loads the file browser into [RemoteState.files]. Folders and files load a page at a time; a
  * later file page that comes back `not_found` (the file changed, so its version no longer
  * matches) reads the file once more from the start. A response for a folder or file that is no
- * longer shown is dropped.
+ * longer shown is dropped, and so is a save reply once its editor is gone.
  */
 internal class ProjectFilesLoader(
     private val scope: CoroutineScope,
@@ -35,6 +43,7 @@ internal class ProjectFilesLoader(
     private val previewJobs = mutableMapOf<String, Job>()
     private var drainingPreviews = false
     private var peekJob: Job? = null
+    private var editorVersion = 0L
 
     private fun files(): FilesState? =
         current().files?.takeIf { it.sessionId == current().selection.sessionId }
@@ -55,6 +64,7 @@ internal class ProjectFilesLoader(
             "invalid_path" -> FilesFailure.INVALID_PATH
             "forbidden" -> FilesFailure.FORBIDDEN
             "busy" -> FilesFailure.BUSY
+            "conflict" -> FilesFailure.CONFLICT
             "unsupported" -> FilesFailure.UNSUPPORTED
             "offline" -> FilesFailure.OFFLINE
             else -> if (!current().connected) FilesFailure.OFFLINE else FilesFailure.FAILED
@@ -78,6 +88,11 @@ internal class ProjectFilesLoader(
         previewJobs.clear()
         previewQueue.clear()
         stopPeek()
+    }
+
+    /** Drops the editor's identity, so a save still on its way changes nothing. */
+    private fun stopEditor() {
+        editorVersion++
     }
 
     private fun stopPeek() {
@@ -229,6 +244,7 @@ internal class ProjectFilesLoader(
         stopList()
         stopFile()
         stopPreviews()
+        stopEditor()
         val state = current()
         val sessionId = state.selection.sessionId ?: return
         val failure =
@@ -245,6 +261,7 @@ internal class ProjectFilesLoader(
         stopList()
         stopFile()
         stopPreviews()
+        stopEditor()
         update { it.copy(files = null) }
     }
 
@@ -257,6 +274,7 @@ internal class ProjectFilesLoader(
         stopList()
         stopFile()
         stopPreviews()
+        stopEditor()
         val kept = files.parents.indexOfFirst { it.path == path }
         if (kept >= 0) {
             write(files.sessionId) {
@@ -271,6 +289,7 @@ internal class ProjectFilesLoader(
                     file = null,
                     previews = emptyMap(),
                     peek = null,
+                    editor = null,
                 )
             }
             return
@@ -292,6 +311,7 @@ internal class ProjectFilesLoader(
                 file = null,
                 previews = emptyMap(),
                 peek = null,
+                editor = null,
             )
         }
         if (!offline) list(files.sessionId, path, after = null)
@@ -375,15 +395,18 @@ internal class ProjectFilesLoader(
         val files = files() ?: return
         dismissPeek()
         stopFile()
+        stopEditor()
         if (path == null) {
-            write(files.sessionId) { it.copy(file = null) }
+            write(files.sessionId) { it.copy(file = null, editor = null) }
             return
         }
         if (!current().connected) {
-            write(files.sessionId) { it.copy(file = OpenFile(path, loading = false, failure = FilesFailure.OFFLINE)) }
+            write(files.sessionId) {
+                it.copy(file = OpenFile(path, loading = false, failure = FilesFailure.OFFLINE), editor = null)
+            }
             return
         }
-        write(files.sessionId) { it.copy(file = OpenFile(path)) }
+        write(files.sessionId) { it.copy(file = OpenFile(path), editor = null) }
         read(files.sessionId, path, 0, null, reopen = false)
     }
 
@@ -440,5 +463,258 @@ internal class ProjectFilesLoader(
         val files = files() ?: return
         val file = files.file ?: return
         writeFile(files.sessionId, file.path) { it.copy(selection = selection) }
+    }
+
+    // ---- Editor ---------------------------------------------------------------------------
+
+    private fun writeEditor(sessionId: String, path: String, block: (FileEditor) -> FileEditor) =
+        write(sessionId) { files -> files.editor?.takeIf { it.path == path }?.let { files.copy(editor = block(it)) } ?: files }
+
+    /**
+     * Opens the open file in the editor when [canEditFile] allows it; an open editor stays. The
+     * cursor starts at the first line picked in the file view.
+     */
+    fun startEditing() {
+        val files = files() ?: return
+        if (files.editor != null || !canEditFile(current())) return
+        val file = checkNotNull(files.file)
+        stopEditor()
+        val cursor = file.selection?.let { lineStartOffset(file.content, it.first) } ?: 0
+        write(files.sessionId) {
+            it.copy(peek = null, editor = FileEditor(file.path, checkNotNull(file.version), file.content, cursor = cursor))
+        }
+    }
+
+    fun updateEditorText(text: String) {
+        val files = files() ?: return
+        val editor = files.editor ?: return
+        if (editor.text != text) writeEditor(files.sessionId, editor.path) { it.copy(text = text) }
+    }
+
+    /**
+     * Sends the editor's text with the version it was read or last saved as. On success that text
+     * becomes the new original and the open file shows it; on `conflict` the edit stays and
+     * [FileEditor.conflict] is set, unless the host already holds exactly this text (a save whose
+     * reply was lost), which counts as saved. When the host holds the text of an earlier save of
+     * this editor that was never answered ([FileEditor.superseded]), that write becomes the new base
+     * and this text is sent once more against it. Text typed while the save runs stays as an
+     * unsaved change. A save the host never answered keeps its request ID for a retry of the same
+     * text. Unchanged text sends nothing and only clears an old failure.
+     */
+    fun saveEditor() {
+        val files = files() ?: return
+        val editor = files.editor ?: return
+        if (editor.saving) return
+        val sessionId = files.sessionId
+        val path = editor.path
+        val content = editor.latestText
+        if (content == editor.original) {
+            writeEditor(sessionId, path) { it.copy(text = content, saveFailure = null, conflict = false) }
+            return
+        }
+        val state = current()
+        val refused =
+            when {
+                // A lost connection forgets the host's capabilities, and a reconnect learns them
+                // again only with its first projects.list: both are "offline" for a save.
+                !state.connected || !state.capabilitiesKnown -> FilesFailure.OFFLINE
+                !canWriteFiles(state) -> FilesFailure.UNSUPPORTED
+                !filesContentFits(content) -> FilesFailure.TOO_LARGE
+                else -> null
+            }
+        if (refused != null) {
+            writeEditor(sessionId, path) { it.copy(text = content, saveFailure = refused, conflict = false) }
+            return
+        }
+        val firstBase = editor.baseVersion
+        val previous = editor.unconfirmed
+        val resent = previous?.takeIf { it.baseVersion == firstBase && it.content == content }
+        // An unanswered save of other text may still have reached the host: remember it.
+        val superseded =
+            if (previous == null || resent != null) editor.superseded
+            else (editor.superseded.filter { it.content != previous.content } + previous).takeLast(MAX_SUPERSEDED_WRITES)
+        var requestId = resent?.requestId ?: Wire.random()
+        val version = editorVersion
+        fun active() = version == editorVersion && files()?.let { it.sessionId == sessionId && it.editor?.path == path } == true
+        writeEditor(sessionId, path) {
+            it.copy(
+                text = content,
+                saving = true,
+                saveFailure = null,
+                unconfirmed = PendingWrite(requestId, firstBase, content),
+                superseded = superseded,
+            )
+        }
+        // Not cancelled by navigation: the host may already have the write, so only the reply is dropped.
+        scope.launch {
+            var baseVersion = firstBase
+            var rebased = false
+            try {
+                while (true) {
+                    try {
+                        val written = source.filesWrite(sessionId, path, baseVersion, content, requestId)
+                        if (active()) saved(sessionId, path, content, written)
+                        return@launch
+                    } catch (e: CancellationException) {
+                        // The repository also throws this when the selection changes under a live
+                        // request (a reconnect): the write may or may not have happened.
+                        if (!isActive) throw e
+                        if (active()) saveFailed(sessionId, path, requestId, FilesFailure.OFFLINE, answered = false)
+                        return@launch
+                    } catch (e: Exception) {
+                        if (!active()) return@launch
+                        val reason = failure(e)
+                        val host = if (reason == FilesFailure.CONFLICT) wholeFile(sessionId, path) else null
+                        if (!active()) return@launch
+                        if (host != null && host.content == content) {
+                            saved(sessionId, path, content, FileWritten(path, host.version, host.size))
+                            return@launch
+                        }
+                        val ours =
+                            host?.takeIf { !rebased }?.let { chunk ->
+                                files()?.editor?.superseded?.any { it.content == chunk.content }
+                            } == true
+                        if (host == null || !ours) {
+                            saveFailed(sessionId, path, requestId, reason, answered = e is RemoteRequestException && e.code != "offline")
+                            return@launch
+                        }
+                        // The host holds an earlier save of ours: send this text again on top of it, once.
+                        rebased = true
+                        baseVersion = host.version
+                        requestId = Wire.random()
+                        rebase(sessionId, path, host, PendingWrite(requestId, baseVersion, content))
+                    }
+                }
+            } finally {
+                // Whatever ended the save, the editor never stays "saving".
+                if (active()) writeEditor(sessionId, path) {
+                    if (it.saving && it.unconfirmed?.requestId == requestId) it.copy(saving = false, saveFailure = FilesFailure.OFFLINE)
+                    else it
+                }
+            }
+        }
+    }
+
+    /** The host's file read whole in one page as text, or null. */
+    private suspend fun wholeFile(sessionId: String, path: String): FileChunk? =
+        try {
+            source.filesRead(sessionId, path, 0, null).takeIf { !it.binary && !it.tooLarge && it.nextOffset == null }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+
+    /**
+     * Makes [host], an earlier write of this editor, its new original and base while [pending]
+     * sends the newer text on top of it; the open file shows what the host holds.
+     */
+    private fun rebase(sessionId: String, path: String, host: FileChunk, pending: PendingWrite) =
+        write(sessionId) { state ->
+            val current = state.editor?.takeIf { it.path == path } ?: return@write state
+            state.copy(
+                editor = current.copy(
+                    baseVersion = host.version,
+                    original = host.content,
+                    conflict = false,
+                    unconfirmed = pending,
+                    superseded = emptyList(),
+                ),
+                file = state.file?.takeIf { it.path == path }?.copy(
+                    version = host.version,
+                    size = host.size,
+                    content = host.content,
+                    selection = null,
+                    reopened = false,
+                ) ?: state.file,
+            )
+        }
+
+    private fun saved(sessionId: String, path: String, content: String, written: FileWritten) =
+        write(sessionId) { state ->
+            val current = state.editor?.takeIf { it.path == path } ?: return@write state
+            state.copy(
+                editor = current.copy(
+                    baseVersion = written.version,
+                    original = content,
+                    saving = false,
+                    saveFailure = null,
+                    conflict = false,
+                    savedAt = current.savedAt + 1,
+                    unconfirmed = null,
+                    superseded = emptyList(),
+                ),
+                file = state.file?.takeIf { it.path == path }?.copy(
+                    version = written.version,
+                    size = written.size,
+                    content = content,
+                    selection = null,
+                    reopened = false,
+                ) ?: state.file,
+            )
+        }
+
+    /**
+     * Shows [reason]. A failure the host [answered] forgets the request ID, so a retry is a new
+     * save; any other keeps it, since the host may have the write.
+     */
+    private fun saveFailed(sessionId: String, path: String, requestId: String, reason: FilesFailure, answered: Boolean) =
+        writeEditor(sessionId, path) {
+            it.copy(
+                saving = false,
+                saveFailure = reason,
+                conflict = reason == FilesFailure.CONFLICT,
+                unconfirmed = it.unconfirmed?.takeUnless { pending -> answered && pending.requestId == requestId },
+            )
+        }
+
+    /** Leaves the editor for the read-only file; its text is dropped. */
+    fun discardEditor() {
+        val files = files() ?: return
+        if (files.editor == null) return
+        stopEditor()
+        write(files.sessionId) { it.copy(editor = null) }
+    }
+
+    /** Drops the edit and reads the open file again, after a save found it changed. */
+    fun reloadAfterConflict() {
+        val files = files() ?: return
+        val path = files.editor?.path ?: return
+        stopEditor()
+        openFile(path)
+    }
+
+    /**
+     * True when [leave] has to wait because the editor holds unsaved changes; the editor then
+     * asks, and [confirmLeave] or [cancelLeave] answers. False when nothing is in the way.
+     */
+    fun requestLeave(leave: EditorLeave): Boolean {
+        val files = files() ?: return false
+        val editor = files.editor ?: return false
+        if (!editor.changed) return false
+        writeEditor(files.sessionId, editor.path) { it.copy(leaveRequest = leave) }
+        return true
+    }
+
+    /** Discards the edit and returns the action that waited for it, if any. */
+    fun confirmLeave(): EditorLeave? {
+        val leave = files()?.editor?.leaveRequest
+        discardEditor()
+        return leave
+    }
+
+    fun cancelLeave() {
+        val files = files() ?: return
+        val editor = files.editor ?: return
+        writeEditor(files.sessionId, editor.path) { it.copy(leaveRequest = null) }
+    }
+
+    /**
+     * The prompt that hands the editor's change to the agent ([editorPrompt]), or null when
+     * nothing changed or no editor is open.
+     */
+    fun editorPrompt(intro: String? = null): EditorPrompt? {
+        val editor = files()?.editor ?: return null
+        return de.joinnoah.pi.remote.editorPrompt(editor.path, editor.original, editor.latestText, intro ?: editorPromptIntro(editor.path))
     }
 }

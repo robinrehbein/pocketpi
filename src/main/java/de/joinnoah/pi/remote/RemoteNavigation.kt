@@ -213,6 +213,10 @@ internal class RemoteNavigator(
     }
 
     fun reconcile(state: RemoteState) {
+        // A prompt is about the editor of the session it was asked in; another session ends it.
+        editorLeave?.let { held ->
+            if (held.routeId != state.selection.routeId || held.sessionId != state.selection.sessionId) hold(null)
+        }
         if (state.loading || activation?.isActive == true) return
         val current = stack.lastOrNull { it != RemoteNavKey.Settings } as? RemoteNavKey ?: return
         val keys = current.selection().keys()
@@ -228,16 +232,76 @@ internal class RemoteNavigator(
         activate(key, ActivationMode.RESTORE)
     }
 
-    fun open(key: RemoteNavKey) {
-        replace(key.selection(), keepSettings = false, keepStackedChats = false)
-        activate(key, ActivationMode.USER_OPEN)
+    fun open(key: RemoteNavKey) =
+        leavingEditor(key.selection()) {
+            replace(key.selection(), keepSettings = false, keepStackedChats = false)
+            activate(key, ActivationMode.USER_OPEN)
+        }
+
+    /** Where keyboard focus is relative to the code editor; the editor reports it. */
+    val editorFocus = EditorFocus()
+
+    /**
+     * Keyboard focus is in the session's code editor, whose keys then win over the layout's
+     * shortcuts. With focus elsewhere (the composer, the session list) the shortcuts work, and
+     * those that navigate ask before they drop an unsaved edit.
+     */
+    val editing: Boolean
+        get() = editorFocus.focused && repository.state.value.let { state ->
+            state.files?.takeIf { it.sessionId == state.selection.sessionId }?.editor != null
+        }
+
+    /**
+     * A navigation held back because it would drop the editor's unsaved edit; the layout asks,
+     * then [leaveEditor] runs it or [stayInEditor] drops it.
+     */
+    var editorLeave: HeldNavigation? by mutableStateOf(null)
+        private set
+
+    private fun hold(held: HeldNavigation?) {
+        editorLeave = held
+        editorFocus.asking = held != null
+    }
+
+    /**
+     * Runs [action] now, or holds it for the discard prompt when it moves to another session than
+     * [target] while the editor has unsaved changes. Navigation nobody chose here (a
+     * notification, a restore) does not ask; the repository parks the edit for its session then.
+     */
+    private fun leavingEditor(target: RemoteSelection, action: () -> Unit) {
+        val state = repository.state.value
+        val editor = state.files?.takeIf { it.sessionId == state.selection.sessionId }?.editor
+        val leaves = target.routeId != state.selection.routeId || target.sessionId != state.selection.sessionId
+        if (editor != null && leaves && editor.changed)
+            hold(HeldNavigation(checkNotNull(state.selection.routeId), editor.path, state.selection.sessionId, action))
+        else action()
+    }
+
+    /**
+     * Discards the unsaved edit and runs the navigation that waited for it. When the editor the
+     * prompt was about is no longer the one shown, nothing is discarded and the navigation is dropped.
+     */
+    fun leaveEditor() {
+        val held = editorLeave ?: return
+        hold(null)
+        val state = repository.state.value
+        val editor = state.files?.takeIf { it.sessionId == state.selection.sessionId }?.editor
+        if (state.selection.routeId != held.routeId || state.selection.sessionId != held.sessionId || editor?.path != held.path) return
+        repository.discardFileEditor()
+        held.action()
+    }
+
+    fun stayInEditor() {
+        hold(null)
     }
 
     /**
      * Opens [child] on top of [parent] so back returns to the parent chat. Only the selection
      * survives process death, so a restored child comes back without its parent.
      */
-    fun openChild(parent: RemoteNavKey.Chat, child: RemoteNavKey.Chat) {
+    fun openChild(parent: RemoteNavKey.Chat, child: RemoteNavKey.Chat) = leavingEditor(child.selection()) { openChildNow(parent, child) }
+
+    private fun openChildNow(parent: RemoteNavKey.Chat, child: RemoteNavKey.Chat) {
         if (
             parent.routeId != child.routeId ||
                 parent.projectId != child.projectId ||
@@ -315,9 +379,8 @@ internal class RemoteNavigator(
         job.invokeOnCompletion { if (mutation === job) mutating = false }
     }
 
-    fun createSession(routeId: String, projectId: String) {
-        mutate { repository.createSession(routeId, projectId) }
-    }
+    fun createSession(routeId: String, projectId: String) =
+        leavingEditor(RemoteSelection(routeId, projectId)) { mutate { repository.createSession(routeId, projectId) } }
 
     /**
      * Forks the chat [source] at the user message [messageId]. The fork replaces [source] on the
@@ -325,7 +388,9 @@ internal class RemoteNavigator(
      */
     fun forkSession(source: RemoteNavKey.Chat, messageId: String, mode: ForkMode) {
         if (topKey() != source) return
-        mutate { repository.forkSession(source.selection(), messageId, mode) }
+        leavingEditor(RemoteSelection(source.routeId, source.projectId)) {
+            mutate { repository.forkSession(source.selection(), messageId, mode) }
+        }
     }
 
     /**
@@ -334,7 +399,9 @@ internal class RemoteNavigator(
      */
     fun forkSessionAtNode(source: RemoteNavKey.Chat, nodeId: String) {
         if (topKey() != source) return
-        mutate { repository.forkSessionAtNode(source.selection(), nodeId) }
+        leavingEditor(RemoteSelection(source.routeId, source.projectId)) {
+            mutate { repository.forkSessionAtNode(source.selection(), nodeId) }
+        }
     }
 
     /**
@@ -527,6 +594,26 @@ internal class RemoteNavigator(
     }
 }
 
+/** A navigation waiting for the discard prompt of the editor of [path] in the session [sessionId]. */
+internal class HeldNavigation(val routeId: String, val path: String, val sessionId: String?, val action: () -> Unit) {
+    val fileName: String get() = path.substringAfterLast('/')
+}
+
+/**
+ * The code editor's side of the layout's keys and prompts: the editor reports whether keyboard
+ * focus is inside it, and learns whether the layout is asking to drop its edit.
+ */
+internal class EditorFocus {
+    /** Focus is on the editor's text, its find field or one of its buttons. */
+    var focused by mutableStateOf(false)
+
+    /** The layout's discard prompt for a held navigation shows ([RemoteNavigator.editorLeave]). */
+    var asking by mutableStateOf(false)
+}
+
+/** The layout's [EditorFocus]; null outside [RemoteNavigation], as in a pane shown on its own. */
+internal val LocalEditorFocus = staticCompositionLocalOf<EditorFocus?> { null }
+
 /** Most chats kept stacked on one back stack (a parent chain ending in the open child). */
 private const val MAX_STACKED_CHATS = 4
 
@@ -681,6 +768,7 @@ internal fun RemoteNavigation(
             LocalPaneLayout provides layout,
             LocalTwoPane provides twoPane.takeIf { layout.twoPane },
             LocalHardwareKeyboard provides hardwareKeyboard,
+            LocalEditorFocus provides navigator.editorFocus,
         ) {
             Box(
                 // While something in the layout has focus (the composer, the search field), the
@@ -701,6 +789,13 @@ internal fun RemoteNavigation(
                     disablePush,
                 )
             }
+            navigator.editorLeave?.let { held ->
+                EditorDiscardDialog(
+                    fileName = held.fileName,
+                    onDiscard = navigator::leaveEditor,
+                    onKeep = navigator::stayInEditor,
+                )
+            }
         }
     }
 }
@@ -709,7 +804,7 @@ internal fun RemoteNavigation(
 private fun RemoteNavigator.shortcut(event: KeyEvent, twoPane: TwoPaneState): Boolean {
     if (event.type != KeyEventType.KeyDown) return false
     val shortcut =
-        keyboardShortcut(event.key, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed)
+        keyboardShortcut(event.key, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed, editing)
             ?: return false
     return shortcut(shortcut, twoPane, repeat = event.nativeKeyEvent.repeatCount > 0)
 }

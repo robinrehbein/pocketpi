@@ -132,6 +132,30 @@ internal class NavigationFakeRepository : RemoteRepository {
         state.value = state.value.copy(files = files.copy(file = file.copy(selection = selection)))
     }
 
+    var editorSaves = 0
+
+    override fun startFileEditing() {
+        val files = state.value.files ?: return
+        val file = files.file ?: return
+        if (files.editor != null) return
+        state.value = state.value.copy(files = files.copy(editor = FileEditor(file.path, file.version ?: "", file.content)))
+    }
+
+    override fun updateFileEditorText(text: String) {
+        val files = state.value.files ?: return
+        val editor = files.editor ?: return
+        state.value = state.value.copy(files = files.copy(editor = editor.copy(text = text)))
+    }
+
+    override fun saveFileEditor() {
+        editorSaves++
+    }
+
+    override fun discardFileEditor() {
+        val files = state.value.files ?: return
+        state.value = state.value.copy(files = files.copy(editor = null))
+    }
+
     override fun importAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) {
         imports += Triple(selection, uris, photo)
     }

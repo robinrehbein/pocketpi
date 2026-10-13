@@ -132,6 +132,11 @@ class AdaptiveLayoutTest {
         assertNull(keyboardShortcut(Key.PageDown, ctrl = false, alt = false, shift = false))
         assertNull(keyboardShortcut(Key.PageDown, ctrl = true, alt = true, shift = false))
         assertNull(keyboardShortcut(Key.PageDown, ctrl = false, alt = true, shift = true))
+        // An open code editor keeps every key: find, line moves and new sessions are its own or leave it.
+        for (key in listOf(Key.F, Key.K, Key.N, Key.B, Key.DirectionUp, Key.DirectionDown))
+            assertNull(keyboardShortcut(key, ctrl = true, alt = false, shift = false, editing = true))
+        assertNull(keyboardShortcut(Key.DirectionDown, ctrl = false, alt = true, shift = false, editing = true))
+        assertNull(keyboardShortcut(Key.PageDown, ctrl = false, alt = true, shift = false, editing = true))
     }
 
     @Test

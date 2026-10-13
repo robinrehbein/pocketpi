@@ -162,4 +162,12 @@ internal fun filesActions(model: ChatViewModel, focusComposer: () -> Unit) =
                 }
             }
         },
+        onStartEditing = model::startFileEditing,
+        onEditorText = model::updateFileEditorText,
+        onSaveEditor = model::saveFileEditor,
+        onDiscardEditor = model::discardFileEditor,
+        onReloadAfterConflict = model::reloadFileAfterConflict,
+        onEditorPrompt = model::fileEditorPrompt,
+        onConfirmLeave = model::confirmFileEditorLeave,
+        onCancelLeave = model::cancelFileEditorLeave,
     )

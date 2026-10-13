@@ -951,6 +951,7 @@ internal fun RemoteScreen(
                     remember(chatModel) { filesActions(checkNotNull(chatModel)) { composerFocusRequest++ } },
                     Modifier.fillMaxSize(),
                     projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
+                    canEdit = canEditFile(state),
                 )
             }
         }

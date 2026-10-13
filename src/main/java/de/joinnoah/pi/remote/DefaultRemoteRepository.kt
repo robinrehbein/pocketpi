@@ -48,6 +48,9 @@ private const val CAPABILITIES_V1_ROUTE = "capabilities.v1:"
 private const val CAPABILITIES_V2_ROUTE = "capabilities.v2:"
 /** The v2 list holds the v1 entries plus newer ones; installed apps accept 16, this one 32. */
 private const val MAX_ROUTE_CAPABILITIES = 32
+
+/** Sessions whose unsaved editor is kept while another session is open; the oldest goes first. */
+private const val MAX_PARKED_EDITORS = 4
 private val DENIED_DEVICE_ERRORS =
     setOf(R.string.remote_device_revoked, R.string.remote_device_paused)
 private val CONNECTION_ERRORS =
@@ -122,6 +125,8 @@ class DefaultRemoteRepository(
             SESSION_FORK_CAPABILITY,
             GIT_CAPABILITY,
             FILES_CAPABILITY,
+            // Only on the capabilities.v2 route, and only when the host enables writes.
+            FILES_WRITE_CAPABILITY,
             PROVIDER_AUTH_CAPABILITY,
             ATTACHMENT_READ_CAPABILITY,
             EXPORT_CAPABILITY,
@@ -1349,6 +1354,50 @@ class DefaultRemoteRepository(
         }
     }
 
+    /**
+     * Unsaved edits of sessions left without the discard prompt (a notification tap, Back, a
+     * restore), by session, oldest first. Not persisted; they come back when their session opens.
+     * Past [MAX_PARKED_EDITORS] the oldest is dropped with a message, and an unpaired host's go too.
+     */
+    private val parkedFiles = LinkedHashMap<DraftKey, FilesState>()
+
+    /**
+     * Parks the file browser of [previous] when its editor holds unsaved changes, and returns the
+     * one parked for [selection], ready to show again: nothing loading, and a save that was still
+     * running counts as unanswered, so Retry resends it.
+     */
+    private fun switchParkedEditor(previous: RemoteSelection, selection: RemoteSelection): FilesState? {
+        val leaving = state.value.files
+        val previousRoute = previous.routeId
+        if (previousRoute != null && leaving != null && leaving.sessionId == previous.sessionId && leaving.editor?.changed == true) {
+            val key = DraftKey(previousRoute, leaving.sessionId)
+            parkedFiles.remove(key)
+            parkedFiles[key] = leaving
+            if (parkedFiles.size > MAX_PARKED_EDITORS) {
+                while (parkedFiles.size > MAX_PARKED_EDITORS) parkedFiles.remove(parkedFiles.keys.first())
+                // The oldest edit is gone for good: say so once instead of losing it silently.
+                reportError(R.string.remote_files_editor_parked_dropped)
+            }
+        }
+        val routeId = selection.routeId ?: return null
+        val sessionId = selection.sessionId ?: return null
+        val parked = parkedFiles.remove(DraftKey(routeId, sessionId)) ?: return null
+        val editor = checkNotNull(parked.editor)
+        return parked.copy(
+            loading = false,
+            failure = parked.failure ?: if (parked.listing == null) FilesFailure.FAILED else null,
+            moreLoading = false,
+            previews = emptyMap(),
+            peek = null,
+            file = parked.file?.copy(loading = false, moreLoading = false),
+            editor = editor.copy(
+                saving = false,
+                saveFailure = if (editor.saving) FilesFailure.OFFLINE else editor.saveFailure,
+                leaveRequest = null,
+            ),
+        )
+    }
+
     private fun select(
         selection: RemoteSelection,
         host: PairedHost?,
@@ -1373,6 +1422,7 @@ class DefaultRemoteRepository(
         val sameSession = selection.sessionId != null && selection.routeId == previous.routeId &&
             selection.sessionId == previous.sessionId
         if (!sameSession) jobsController.stop()
+        val resumedFiles = if (sameSession) null else switchParkedEditor(previous, selection)
         update {
             it.copy(
                 selection = selection,
@@ -1380,7 +1430,10 @@ class DefaultRemoteRepository(
                 compactionRequesting = false,
                 toolOutput = null,
                 changes = null,
-                files = null,
+                // A reconnect keeps an open editor, so its unsaved text survives; another session
+                // brings back its own parked edit, if any. Anything else closes the file browser.
+                files = resumedFiles
+                    ?: it.files?.takeIf { files -> sameSession && files.sessionId == selection.sessionId && files.editor != null },
                 // A reconnect keeps the open jobs view; the refresh after it watches again.
                 jobs = it.jobs?.takeIf { jobs -> sameSession && jobs.sessionId == selection.sessionId },
                 host = host,
@@ -1893,6 +1946,7 @@ class DefaultRemoteRepository(
         ProjectImageBitmaps.clear()
         ArtifactThumbnails.clear()
         removedRoutes += routeId
+        parkedFiles.keys.removeAll { it.routeId == routeId }
         savedNavigation.remove(routeId)
         queueNavigationWrite(immediate = true)
         update { it.copy(hosts = it.hosts.filterNot { host -> host.routeId == routeId }) }
@@ -4267,6 +4321,8 @@ class DefaultRemoteRepository(
     // Changes and files share one place on screen: opening one closes the other, which also
     // stops its loader.
     override fun openChanges() {
+        // An unsaved edit asks first; its prompt runs this again through confirmFileEditorLeave.
+        if (filesLoader.requestLeave(EditorLeave.CHANGES)) return
         filesLoader.close()
         changesLoader.open(currentDraftKey()?.let { drafts[it]?.reviewComments }.orEmpty())
     }
@@ -4314,6 +4370,30 @@ class DefaultRemoteRepository(
             )
         val data = request("session.files.read", selectionEpoch, *fields.toTypedArray())
         return parseFilesRead(data, sessionId, path, offset, version)
+    }
+
+    override suspend fun filesWrite(
+        sessionId: String,
+        path: String,
+        baseVersion: String,
+        content: String,
+        requestId: String,
+    ): FileWritten {
+        requireFiles(sessionId)
+        val current = state.value
+        if (FILES_WRITE_CAPABILITY !in current.capabilities || FILES_WRITE_CAPABILITY in current.unavailableCapabilities)
+            throw RemoteRequestException("unsupported")
+        val data =
+            request(
+                "session.files.write",
+                selectionEpoch,
+                "sessionId" to sessionId,
+                "path" to path,
+                "baseVersion" to baseVersion,
+                "content" to content,
+                requestId = requestId,
+            )
+        return parseFilesWritten(data, sessionId, path)
     }
 
     // ---- Sent attachment content (session.attachments.read.v1) ---------------------------
@@ -4993,12 +5073,23 @@ class DefaultRemoteRepository(
 
                 override suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?) =
                     this@DefaultRemoteRepository.filesRead(sessionId, path, offset, version)
+
+                override suspend fun filesWrite(
+                    sessionId: String,
+                    path: String,
+                    baseVersion: String,
+                    content: String,
+                    requestId: String,
+                ) = this@DefaultRemoteRepository.filesWrite(sessionId, path, baseVersion, content, requestId)
             },
             { state.value },
             ::update,
         )
 
     override fun openFiles() {
+        // The pane already shows the open editor; opening the browser again would drop its edit.
+        val current = state.value
+        if (current.files?.takeIf { it.sessionId == current.selection.sessionId }?.editor != null) return
         changesLoader.close()
         filesLoader.open()
     }
@@ -5020,6 +5111,27 @@ class DefaultRemoteRepository(
     override fun dismissFilesPeek() = filesLoader.dismissPeek()
 
     override fun selectFileLines(selection: LineSelection?) = filesLoader.selectLines(selection)
+
+    override fun startFileEditing() = filesLoader.startEditing()
+
+    override fun updateFileEditorText(text: String) = filesLoader.updateEditorText(text)
+
+    override fun saveFileEditor() = filesLoader.saveEditor()
+
+    override fun discardFileEditor() = filesLoader.discardEditor()
+
+    override fun reloadFileAfterConflict() = filesLoader.reloadAfterConflict()
+
+    override fun fileEditorPrompt(intro: String?) = filesLoader.editorPrompt(intro)
+
+    override fun confirmFileEditorLeave() {
+        when (filesLoader.confirmLeave()) {
+            EditorLeave.CHANGES -> openChanges()
+            null -> {}
+        }
+    }
+
+    override fun cancelFileEditorLeave() = filesLoader.cancelLeave()
 
     private fun editReviewComments(block: (List<ReviewComment>) -> List<ReviewComment>) {
         val key = currentDraftKey() ?: return
