@@ -92,7 +92,7 @@ class ArtifactSandboxTest {
         )
         // Every host in the header is on the allowlist, and the header names no other.
         val hosts = Regex("https://([^\\s;]+)").findAll(html).map { it.groupValues[1] }.toSet()
-        assertTrue(hosts.all { artifactCdnAllowed("https://$it/x") })
+        assertEquals((ARTIFACT_CDN_SCRIPT_HOSTS + ARTIFACT_CDN_FONT_CSS_HOST + ARTIFACT_CDN_FONT_FILE_HOST).toSet(), hosts)
         assertFalse(host in html)
     }
 
@@ -404,10 +404,10 @@ class ArtifactSandboxTest {
     @Test fun externalReferencesCanonicaliseBeforeTheAllowlistCheck() {
         val html =
             """
-            <script src="HTTPS://CDN.JSDELIVR.NET/npm/a.js"></script>
-            <script src="https://unpkg.com:443/b.js"></script>
+            <script src="HTTPS://CDN.JSDELIVR.NET/npm/a@1/a.js"></script>
+            <script src="https://unpkg.com:443/b@1/b.js"></script>
             <link href="https://fonts.googleapis.com/css2?family=A&amp;display=swap">
-            <script src="//cdnjs.cloudflare.com/c.js"></script>
+            <script src="//cdnjs.cloudflare.com/ajax/libs/c/1.0.0/c.js"></script>
             <script src="https://unpkg.com&#58;8443/x.js"></script>
             <script src="https://evil.example/&amp;.js"></script>
             """.trimIndent()
@@ -444,8 +444,8 @@ class ArtifactSandboxTest {
 
     @Test fun anAllowlistedGetIsAnsweredFromTheFetcherWithCorsHeaders() {
         val fetcher = CountingFetcher(ArtifactCdnReply.Ok("text/javascript", "utf-8", "window.x=1".toByteArray()))
-        val response = clientWith(fetcher).shouldInterceptRequest(null, request("https://cdn.jsdelivr.net/npm/x.js", headers = mapOf("Cookie" to "a=b", "Referer" to "r")))!!
-        assertEquals(listOf("https://cdn.jsdelivr.net/npm/x.js"), fetcher.urls)
+        val response = clientWith(fetcher).shouldInterceptRequest(null, request("https://cdn.jsdelivr.net/npm/x@1.0.0/x.js?v=1", headers = mapOf("Cookie" to "a=b", "Referer" to "r")))!!
+        assertEquals(listOf("https://cdn.jsdelivr.net/npm/x@1.0.0/x.js?v=1"), fetcher.urls)
         assertEquals(200, response.statusCode)
         assertEquals("text/javascript", response.mimeType)
         assertEquals("*", response.responseHeaders["Access-Control-Allow-Origin"])
@@ -460,11 +460,14 @@ class ArtifactSandboxTest {
         listOf(
             request("https://cdn.jsdelivr.net.evil.example/x.js"),
             request("https://evil.example/x.js"),
-            request("http://cdn.jsdelivr.net/x.js"),
-            request("https://cdn.jsdelivr.net:8443/x.js"),
-            request("https://cdn.jsdelivr.net/x.js", method = "POST"),
-            request("https://cdn.jsdelivr.net/x.js", method = "HEAD"),
-            request("https://cdn.jsdelivr.net/x.js", mainFrame = true),
+            request("http://cdn.jsdelivr.net/npm/x@1/x.js"),
+            request("https://cdn.jsdelivr.net:8443/npm/x@1/x.js"),
+            request("https://cdn.jsdelivr.net/npm/x@1/x.js", method = "POST"),
+            request("https://cdn.jsdelivr.net/npm/x@1/x.js", method = "HEAD"),
+            request("https://cdn.jsdelivr.net/npm/x@1/x.js", mainFrame = true),
+            // The right host but no versioned package path.
+            request("https://cdn.jsdelivr.net/x.js"),
+            request("https://unpkg.com/beacon?data=1"),
         ).forEach {
             val response = client.shouldInterceptRequest(null, it)!!
             assertEquals("${it.method} ${it.url}", 403, response.statusCode)
@@ -473,13 +476,13 @@ class ArtifactSandboxTest {
         assertEquals(emptyList<String>(), fetcher.urls)
         // Mermaid has no CDN.
         val mermaid = clientWith(fetcher, ArtifactKind.Mermaid)
-        assertEquals(403, mermaid.shouldInterceptRequest(null, request("https://cdn.jsdelivr.net/x.js"))!!.statusCode)
+        assertEquals(403, mermaid.shouldInterceptRequest(null, request("https://cdn.jsdelivr.net/npm/x@1/x.js"))!!.statusCode)
         assertEquals(emptyList<String>(), fetcher.urls)
     }
 
     @Test fun aRefusedFetchReachesThePageAsAnEmptyErrorResponse() {
         listOf(404, 504, 403).forEach { status ->
-            val response = clientWith(CountingFetcher(ArtifactCdnReply.Refused(status))).shouldInterceptRequest(null, request("https://unpkg.com/x.js"))!!
+            val response = clientWith(CountingFetcher(ArtifactCdnReply.Refused(status))).shouldInterceptRequest(null, request("https://unpkg.com/x@1/x.js"))!!
             assertEquals(status, response.statusCode)
             assertEquals(0, response.data.readBytes().size)
         }
@@ -487,12 +490,35 @@ class ArtifactSandboxTest {
 
     @Test fun referencesOnTheAllowlistAreNotListedAsExternal() {
         val html =
-            """<script src="https://cdn.jsdelivr.net/npm/chart.js"></script><script src="//unpkg.com/x"></script>
+            """<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script><script src="//unpkg.com/x@1"></script>
                <link href="https://fonts.googleapis.com/css2?family=Inter" rel="stylesheet">
-               <script src="https://cdn.jsdelivr.net.evil.example/x.js"></script><img src="http://unpkg.com/x.png"><img src="logo.png">"""
+               <script src="https://cdn.jsdelivr.net.evil.example/x.js"></script><img src="http://unpkg.com/x.png"><img src="logo.png">
+               <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>"""
         assertEquals(
-            listOf("https://cdn.jsdelivr.net.evil.example/x.js", "http://unpkg.com/x.png", "logo.png"),
+            listOf(
+                "https://cdn.jsdelivr.net.evil.example/x.js", "http://unpkg.com/x.png", "logo.png",
+                // Not versioned, so the sandbox refuses it like any other host.
+                "https://cdn.jsdelivr.net/npm/chart.js",
+            ),
             externalReferences(html),
         )
+    }
+
+    @Test fun aThumbnailNeverCallsTheCdnFetcher() {
+        val fetcher = CountingFetcher(ArtifactCdnReply.Ok("text/javascript", null, ByteArray(1)))
+        val page = ArtifactPage(ArtifactKind.Html, "<script src=\"https://unpkg.com/x@1/x.js\"></script>", host = host)
+        val thumbnail = createArtifactWebView(context, page, ArtifactCallbacks(), networkLock = readyLock(), webRtcBlock = { true }, cdn = fetcher, thumbnail = true)
+        val response = thumbnail.webViewClient.shouldInterceptRequest(thumbnail, request("https://unpkg.com/x@1/x.js"))!!
+        assertEquals(403, response.statusCode)
+        assertEquals(0, response.data.readBytes().size)
+        // The document itself is still served.
+        assertEquals(200, thumbnail.webViewClient.shouldInterceptRequest(thumbnail, request(page.url, mainFrame = true))!!.statusCode)
+        assertEquals(emptyList<String>(), fetcher.urls)
+        // The same page in the viewer does reach it.
+        val viewer = createArtifactWebView(context, page, ArtifactCallbacks(), networkLock = readyLock(), webRtcBlock = { true }, cdn = fetcher)
+        assertEquals(200, viewer.webViewClient.shouldInterceptRequest(viewer, request("https://unpkg.com/x@1/x.js"))!!.statusCode)
+        assertEquals(listOf("https://unpkg.com/x@1/x.js"), fetcher.urls)
+        disposeArtifactWebView(thumbnail)
+        disposeArtifactWebView(viewer)
     }
 }
