@@ -4,11 +4,20 @@
 
 - Keep up to eight project session lists and eight chat snapshots in process-local LRU caches.
 - Preserve the outgoing chat before activation and show a previously loaded chat while its
-  authoritative snapshot is being fetched.
+  authoritative snapshot is being fetched. A Timeline publishes its messages, questions and cursor
+  only once its first snapshot is in, and only events of the selected session publish it, so
+  events during the fetch never blank the cached chat. A snapshot of the same session keeps the
+  older pages it overlaps.
+- Selecting the chat on screen again (a reconnect, a resume, a restore) keeps its panes, tool
+  output, controls and notice; after the snapshot the panes read again in place. Another chat
+  shows the controls and reopens the Changes or Files pane it had when it was left (eight chats
+  each, in memory).
 - Explicit opens still wait for `sessions.open`: historical sessions may fork and return different
   IDs. Never send mutations against a speculative selection.
-- Existing cache invalidation clears the corresponding LRU as well. Unpairing and cache bypass
-  must continue to discard host data.
+- Invalidation is per key: creating or forking a session drops only its project's session list,
+  closing one also drops its chat. Setting the current cache pointer to null leaves the LRU alone.
+  Unpairing, pairing, switching hosts and cache bypass (`clearNavigationCache()`) still discard all
+  host data; Refresh in a connected chat only reads the chat again.
 - Load drafts and navigation snapshots concurrently with pairings. Each storage failure remains
   isolated; initialization still waits for drafts before allowing mutations.
 - Remember Markdown fence splits, lines and inline styled text in composition. Compile Markdown
@@ -17,8 +26,9 @@
 - Keep the composer's text in `ComposerDraft`, not in `RemoteState`: a keystroke recomposes the
   composer only. The text reaches the repository after a 300 ms pause, and at once before a send,
   on stop and when the chat changes. Each write names its chat, and the repository files a late
-  one under that chat even when another one is shown; while the chat loads the field takes no
-  edits. Code that reads or changes the draft outside the composer flushes it first or goes
+  one under that chat even when another one is shown. The field takes edits once its chat is
+  selected, also while it loads; before that it takes none, so typing never lands on a draft not
+  shown yet. Code that reads or changes the draft outside the composer flushes it first or goes
   through it, and `ChatComposerFlushTest` covers each such path. Values handed to message bubbles (such as `MessageFork`)
   stay the same instance while unchanged, so the bubbles skip; `ChatRecompositionTest` checks it.
 

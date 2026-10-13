@@ -74,8 +74,11 @@ internal class GitChangesLoader(
         diffJob = null
     }
 
-    /** Opens the view for the selected session with [comments] from its draft. */
-    fun open(comments: List<ReviewComment>) {
+    /**
+     * Opens the view for the selected session with [comments] from its draft, at [base]. [file]
+     * opens once the status lists it: the view as a return to the session left it.
+     */
+    fun open(comments: List<ReviewComment>, base: GitBase = GitBase.SESSION, file: String? = null) {
         stop()
         val state = current()
         val sessionId = state.selection.sessionId ?: return
@@ -85,12 +88,16 @@ internal class GitChangesLoader(
                 !state.connected -> ChangesFailure.OFFLINE
                 else -> null
             }
+        val reopened = file?.takeIf { failure == null }
         update {
             it.copy(
                 changes = ChangesState(
                     sessionId,
+                    base = base,
                     loading = failure == null,
                     failure = failure,
+                    file = reopened,
+                    diffLoading = reopened != null,
                     comments = comments,
                 )
             )
@@ -98,7 +105,8 @@ internal class GitChangesLoader(
         stopSubagents()
         if (failure == null) {
             pendingSubagents = sessionId to null
-            loadStatus(sessionId, GitBase.SESSION, fallback = true)
+            // Only session start falls back to HEAD; another base was the user's own choice.
+            loadStatus(sessionId, base, fallback = base == GitBase.SESSION)
         }
     }
 
@@ -141,10 +149,23 @@ internal class GitChangesLoader(
         if (!offline) loadStatus(changes.sessionId, base, fallback = false)
     }
 
-    /** Reloads the status of the shown base, keeping the open file when it is still listed. */
+    /**
+     * Reloads the status of the shown base, keeping the open file when it is still listed and the
+     * previews of files whose change the new status still lists the same.
+     */
     fun reload() = reload(retry = true)
 
-    private fun reload(retry: Boolean) {
+    /**
+     * Reads the shown base again in place, as after a reconnect: the status, diff and log on
+     * screen stay until fresher ones replace them, and a failure leaves them. A view with nothing
+     * shown yet reloads.
+     */
+    fun refresh() {
+        val changes = changes() ?: return
+        reload(retry = true, silent = changes.status != null && changes.failure == null)
+    }
+
+    private fun reload(retry: Boolean, silent: Boolean = false) {
         val changes = changes() ?: return
         if (!current().connected) {
             write(changes.sessionId) { it.copy(failure = ChangesFailure.OFFLINE) }
@@ -152,7 +173,12 @@ internal class GitChangesLoader(
         }
         stop()
         val base = changes.status?.base ?: changes.base
-        write(changes.sessionId) { it.copy(loading = true, failure = null, previews = emptyMap()) }
+        // A preview still loading lost its request with stop(); a loaded one stays.
+        write(changes.sessionId) {
+            val previews = it.previews.filterValues { preview -> !preview.loading && preview.failure == null }
+            if (silent) it.copy(previews = previews)
+            else it.copy(loading = true, failure = null, previews = previews)
+        }
         // A subagent file shown now reopens from that subagent's fresh snapshot.
         val subagentFile = changes.file?.let { path -> changes.fileSession?.let { it to path } }
         stopSubagents()
@@ -162,6 +188,7 @@ internal class GitChangesLoader(
             base,
             fallback = changes.status == null && base == GitBase.SESSION,
             retry = retry,
+            silent = silent,
         )
     }
 
@@ -170,12 +197,13 @@ internal class GitChangesLoader(
         base: GitBase,
         fallback: Boolean,
         retry: Boolean = true,
+        silent: Boolean = false,
     ) {
         val version = ++statusVersion
         fun active() = version == statusVersion && changes()?.sessionId == sessionId
         statusJob = scope.launch {
             try {
-                loadStatusAndLog(sessionId, base, fallback, retry, ::active)
+                loadStatusAndLog(sessionId, base, fallback, retry, silent, ::active)
             } finally {
                 // The subagents wait for the session's own status and log, so their requests do not
                 // compete with those for the host's per-device limit, and are not asked at all when
@@ -197,6 +225,7 @@ internal class GitChangesLoader(
         base: GitBase,
         fallback: Boolean,
         retry: Boolean,
+        silent: Boolean,
         active: () -> Boolean,
     ) {
         run {
@@ -217,9 +246,18 @@ internal class GitChangesLoader(
                         val file =
                             if (!own) changes.file
                             else changes.file?.takeIf { path -> status.files.any { it.path == path } }
+                        // A silent read keeps the open diff and the log until fresher ones arrive.
+                        val keptDiff = changes.diff?.takeIf { silent && own && file != null && it.path == file }
+                        val keptLog = changes.log?.takeIf { silent && shownLog }
+                        // A preview stays while its file's change is listed the same.
+                        val before = changes.status?.files.orEmpty().associateBy { it.path }
+                        val listed = status.files.associateBy { it.path }
                         changes.copy(
                             loading = false,
                             status = status,
+                            previews = changes.previews.filterKeys { path ->
+                                listed[path] != null && listed[path] == before[path]
+                            },
                             // A reload of the HEAD fallback still explains why it shows HEAD.
                             sessionUnavailable = sessionUnavailable
                                 ?: changes.sessionUnavailable.takeIf {
@@ -227,11 +265,11 @@ internal class GitChangesLoader(
                                 },
                             failure = null,
                             file = file,
-                            diff = if (own) null else changes.diff,
-                            diffLoading = if (own) file != null else changes.diffLoading,
+                            diff = if (own) keptDiff else changes.diff,
+                            diffLoading = if (own) file != null && keptDiff == null else changes.diffLoading,
                             diffFailure = if (own) null else changes.diffFailure,
-                            log = if (status.available && !shownLog) GitLog() else null,
-                            logLoading = shownLog,
+                            log = if (status.available && !shownLog) GitLog() else keptLog,
+                            logLoading = shownLog && keptLog == null,
                             logFailure = null,
                             // Base dev gone since the last status: the repository has no such branch any more.
                             devBase = status.devBase
@@ -246,7 +284,9 @@ internal class GitChangesLoader(
                     throw e
                 } catch (e: Exception) {
                     Diagnostics.caught("git.loadStatusAndLog", e)
-                    if (active()) write(sessionId) { it.copy(loading = false, failure = failure(e)) }
+                    // A silent read that failed leaves what is shown; Reload tries again.
+                    if (active())
+                        write(sessionId) { it.copy(loading = false, failure = if (silent) it.failure else failure(e)) }
                     return
                 }
             val snapshotId = status.snapshotId ?: return

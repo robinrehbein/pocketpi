@@ -2474,10 +2474,13 @@ class RemoteRepositoryTest {
         transport: Transport,
         hosts: List<PairedHost> = listOf(host),
         extraCapabilities: List<String> = emptyList(),
+        sessions: List<JsonObject> = listOf(session()),
+        readyCapabilities: Set<String> = emptySet(),
     ): DefaultRemoteRepository {
-        configure(transport)
+        configure(transport, sessions = sessions)
         advertising(transport, JsonArray(fixtureCapabilities.jsonArray + extraCapabilities.map(::JsonPrimitive)))
-        transport.capabilities = setOf(CONFIGURATION_CAPABILITY, COMMANDS_CAPABILITY, ADVISOR_CAPABILITY)
+        transport.capabilities =
+            setOf(CONFIGURATION_CAPABILITY, COMMANDS_CAPABILITY, ADVISOR_CAPABILITY) + readyCapabilities
         val original = transport.response
         transport.response = { request ->
             when (request.text("type")) {
@@ -2552,6 +2555,161 @@ class RemoteRepositoryTest {
         assertEquals(before.questions, back.questions)
         assertEquals(before.configuration, back.configuration)
         assertEquals("ok", back.toolOutput?.text)
+    }
+
+    /** Holds every configuration, commands and advisor read from now on, so what stays shows. */
+    private fun holdControls(transport: Transport) {
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") in setOf("session.configuration.get", "session.commands.get", "session.advisor.get")) null
+            else original(request)
+        }
+    }
+
+    @Test
+    fun aForcedRestoreOfTheSameChatKeepsItsPanesAndControls() = runTest {
+        val transport = Transport()
+        val repository =
+            lastKnownRepository(
+                transport,
+                sessions = listOf(session(), session("other")),
+                readyCapabilities = setOf(SESSION_CLOSE_CAPABILITY),
+            )
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.close")
+                Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+            else original(request)
+        }
+        repository.openChanges()
+        runCurrent()
+        val before = repository.state.value
+        assertEquals("session", before.changes?.sessionId)
+        holdControls(transport)
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+
+        // Closing another chat reads the lists again with a forced restore of this one.
+        repository.closeSession("other")
+        runCurrent()
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        val after = repository.state.value
+        assertFalse(after.loading)
+        assertEquals("session", after.changes?.sessionId)
+        assertEquals("ok", after.toolOutput?.text)
+        assertEquals(before.configuration, after.configuration)
+        assertEquals(before.commands, after.commands)
+        assertEquals(before.advisor, after.advisor)
+        assertEquals(listOf(pendingQuestion), after.questions)
+    }
+
+    @Test
+    fun anotherChatAndBackShowsItsControlsWhileTheyLoad() = runTest {
+        val transport = Transport()
+        val repository = lastKnownRepository(transport, sessions = listOf(session(), session("other")))
+        val before = repository.state.value
+        holdControls(transport)
+
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertNull(repository.state.value.configuration)
+        assertTrue(repository.state.value.commands.isEmpty())
+        // The first chat's tool output stays behind with it.
+        assertNull(repository.state.value.toolOutput)
+
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals(before.configuration, repository.state.value.configuration)
+        assertEquals(before.commands, repository.state.value.commands)
+        assertEquals(before.advisor, repository.state.value.advisor)
+        assertTrue(repository.state.value.configurationLoading)
+    }
+
+    @Test
+    fun eventsDuringARestoreKeepTheCachedChatAndAskForNoExtraSnapshot() = runTest {
+        val transport = Transport().also {
+            configure(it, sessions = listOf(session(), session("other")))
+            quoteMessages(it)
+        }
+        val quoted = transport.response
+        // Revision 5, so an event of revision 3 is older than the snapshot that follows.
+        transport.response = { request ->
+            val response = quoted(request)
+            if (request.text("type") == "session.snapshot" && response != null)
+                JsonObject(response + ("revision" to JsonPrimitive(5)))
+            else response
+        }
+        val repository = repository(transport)
+        val first = RemoteSelection("host", "project", "session")
+        repository.activate(first)
+        val messages = repository.state.value.messages
+        assertEquals(2, messages.size)
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+
+        val normal = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "projects.list") {
+                held += request
+                null
+            } else normal(request)
+        }
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        val restoring = async { repository.activate(first, ActivationMode.RESTORE) }
+        runCurrent()
+        assertEquals(first, repository.state.value.selection)
+        assertEquals(messages, repository.state.value.messages)
+
+        // Another chat's status, and one of this chat that arrives ahead of its snapshot.
+        for ((sessionId, revision) in listOf("other" to 1, "session" to 3))
+            transport.listener.message(
+                Wire.objectOf(
+                    "type" to "event", "kind" to "session.status", "sessionId" to sessionId,
+                    "revision" to revision, "status" to "running",
+                )
+            )
+        runCurrent()
+        assertEquals(messages, repository.state.value.messages)
+        assertEquals(snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+
+        transport.response = normal
+        transport.result(held.single(), data("projects", listOf(project)))
+        assertEquals(first, restoring.await())
+        runCurrent()
+        assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
+        assertEquals(messages.map { it.text("id") }, repository.state.value.messages.map { it.text("id") })
+    }
+
+    @Test
+    fun creatingASessionOrRefreshingAChatKeepsOtherChatsCached() = runTest {
+        val transport = Transport().also {
+            configure(it, sessions = listOf(session(), session("other")), opened = session("new"))
+            quoteMessages(it)
+        }
+        val repository = repository(transport)
+        val first = RemoteSelection("host", "project", "session")
+        repository.activate(first)
+        val messages = repository.state.value.messages
+        assertTrue(messages.isNotEmpty())
+        repository.activate(RemoteSelection("host", "project", "other"))
+        assertEquals(
+            RemoteSelection("host", "project", "new"),
+            repository.createSession("host", "project"),
+        )
+        runCurrent()
+        repository.refresh()
+        runCurrent()
+
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") null else normal(request)
+        }
+        val returning = async { repository.activate(first) }
+        runCurrent()
+        assertEquals(first, repository.state.value.selection)
+        assertEquals(messages, repository.state.value.messages)
+        assertTrue(repository.state.value.loading)
+        returning.cancel()
     }
 
     @Test
