@@ -141,6 +141,14 @@ jobs:
         run: |
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
+      # The managed device setup installs the emulator only while it also downloads the system
+      # image. Once the image comes from the cache, the setup fails without an emulator, so both
+      # jobs install it here. The cache key below then names the real emulator revision.
+      - &install-emulator
+        name: Install the Android emulator
+        run: |
+          "$ANDROID_HOME/cmdline-tools/16111833/bin/sdkmanager" --install emulator
+          test -f "$ANDROID_HOME/emulator/source.properties" || { echo "FATAL - emulator did not install"; exit 1; }
       - &locate-avd
         id: avd
         name: Locate the managed device cache
@@ -148,15 +156,11 @@ jobs:
           agp="$(sed -n 's/^agp = "\(.*\)"$/\1/p' gradle/libs.versions.toml)"
           test -n "$agp" || { echo "FATAL - agp version is missing from gradle/libs.versions.toml"; exit 1; }
           echo "agp=$agp" >> "$GITHUB_OUTPUT"
-          # A runner image update can bring a new emulator that cannot load the cached boot
-          # snapshot, so the emulator revision is part of the key. Without a preinstalled
-          # emulator the managed device setup installs one, and the key says "none".
-          emulator="none"
+          # A new emulator release may not load the cached boot snapshot, so the emulator
+          # revision is part of the key.
           props="$ANDROID_HOME/emulator/source.properties"
-          if [ -f "$props" ]; then
-            emulator="$(sed -n 's/^Pkg\.Revision=//p' "$props" | tr -d '[:space:]')"
-            test -n "$emulator" || { echo "FATAL - Pkg.Revision is missing from $props"; exit 1; }
-          fi
+          emulator="$(sed -n 's/^Pkg\.Revision=//p' "$props" | tr -d '[:space:]')"
+          test -n "$emulator" || { echo "FATAL - Pkg.Revision is missing from $props"; exit 1; }
           echo "emulator=$emulator" >> "$GITHUB_OUTPUT"
           echo "images=$ANDROID_HOME/system-images/android-36" >> "$GITHUB_OUTPUT"
       # Gradle managed devices keep their AVD and boot snapshot under ~/.android/gradle/avd.
@@ -230,6 +234,7 @@ jobs:
       - *verify-android-tools
       - *install-sdk
       - *enable-kvm
+      - *install-emulator
       - *locate-avd
       - *restore-image
       - *restore-avd
