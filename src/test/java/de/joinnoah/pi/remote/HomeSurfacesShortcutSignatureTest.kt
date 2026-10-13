@@ -2,19 +2,27 @@ package de.joinnoah.pi.remote
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.shadows.ShadowShortcutManager
 
 /**
  * The launcher rate-limits setDynamicShortcuts; skipping it when nothing changed only helps if
@@ -141,6 +149,61 @@ class HomeSurfacesShortcutSignatureTest {
         assertEquals(MainActivity::class.java.name, pinned(shortcutId("route", "pinned")).intent?.component?.className)
     }
 
+    @After
+    fun resetShadow() {
+        RejectingShortcutManager.rejectUpdates = false
+        RejectingShortcutManager.dynamicPublishes = 0
+    }
+
+    @Test
+    @Config(shadows = [RejectingShortcutManager::class])
+    fun aRejectedPinnedUpdateIsRetriedWithoutRepublishingTheDynamicShortcuts() = runBlocking {
+        shadowOf(shortcuts).setIsRequestPinShortcutSupported(true)
+        shortcuts.requestPinShortcut(oldShortcut("pinned", "Pinned"), null)
+        persist(emptyList(), BuildConfig.VERSION_CODE - 1)
+        val snapshot = HomeSnapshot(paired = true, sessions = listOf(session("open", "Open")))
+        val home = surfaces()
+
+        // The launcher rate-limits the pinned update: the version must stay unrecorded.
+        RejectingShortcutManager.rejectUpdates = true
+        home.publishShortcuts(snapshot)
+        assertEquals(1, RejectingShortcutManager.dynamicPublishes)
+        assertEquals(MainActivity::class.java.name, pinned(shortcutId("route", "pinned")).intent?.component?.className)
+        assertEquals(BuildConfig.VERSION_CODE - 1, prefs.getInt(PUBLISHED_SHORTCUTS_VERSION_KEY, 0))
+
+        // The next publish retries only the pinned update; the dynamic set is already current.
+        RejectingShortcutManager.rejectUpdates = false
+        home.publishShortcuts(snapshot)
+        assertEquals(1, RejectingShortcutManager.dynamicPublishes)
+        assertEquals(LaunchIntents.ALIAS, pinned(shortcutId("route", "pinned")).intent?.component?.className)
+        assertEquals(BuildConfig.VERSION_CODE, prefs.getInt(PUBLISHED_SHORTCUTS_VERSION_KEY, 0))
+    }
+
+    @Test
+    fun refreshMovesShortcutsToTheAliasWithoutAStateChange() = runBlocking {
+        shadowOf(shortcuts).setIsRequestPinShortcutSupported(true)
+        shortcuts.requestPinShortcut(oldShortcut("pinned", "Pinned"), null)
+        persist(emptyList(), BuildConfig.VERSION_CODE - 1)
+
+        // What PackageReplacedReceiver runs right after an update, before the app is opened.
+        surfaces().refresh()
+
+        assertEquals(LaunchIntents.ALIAS, pinned(shortcutId("route", "pinned")).intent?.component?.className)
+        assertEquals(BuildConfig.VERSION_CODE, prefs.getInt(PUBLISHED_SHORTCUTS_VERSION_KEY, 0))
+    }
+
+    @Test
+    fun anUpdateReachesTheNonExportedPackageReplacedReceiver() {
+        val receivers =
+            context.packageManager.queryBroadcastReceivers(
+                Intent(Intent.ACTION_MY_PACKAGE_REPLACED).setPackage(context.packageName),
+                PackageManager.GET_RESOLVED_FILTER,
+            )
+        val receiver = receivers.single { it.activityInfo.name == PackageReplacedReceiver::class.java.name }
+        assertFalse(receiver.activityInfo.exported)
+        assertTrue(receiver.filter.hasAction(Intent.ACTION_MY_PACKAGE_REPLACED))
+    }
+
     @Test
     fun shortcutIdsParseBackToTheirSession() {
         assertEquals("route" to "019a-session", shortcutTarget(shortcutId("route", "019a-session")))
@@ -149,5 +212,24 @@ class HomeSurfacesShortcutSignatureTest {
         assertNull(shortcutTarget("session::s"))
         assertNull(shortcutTarget("other:route:s"))
         assertNull(shortcutTarget(shortcutId("route", "a b")))
+    }
+}
+
+/** A ShortcutManager whose launcher rejects updateShortcuts, as when it rate-limits the app. */
+@Implements(ShortcutManager::class)
+class RejectingShortcutManager : ShadowShortcutManager() {
+    @Implementation
+    override fun updateShortcuts(shortcutInfoList: MutableList<ShortcutInfo>): Boolean =
+        !rejectUpdates && super.updateShortcuts(shortcutInfoList)
+
+    @Implementation
+    override fun setDynamicShortcuts(shortcutInfoList: MutableList<ShortcutInfo>): Boolean {
+        dynamicPublishes++
+        return super.setDynamicShortcuts(shortcutInfoList)
+    }
+
+    companion object {
+        @JvmStatic var rejectUpdates = false
+        @JvmStatic var dynamicPublishes = 0
     }
 }

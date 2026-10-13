@@ -132,6 +132,19 @@ internal class HomeSurfaces(
         } catch (_: Exception) {}
     }
 
+    /**
+     * Redraws the widget and publishes the shortcuts even when nothing changed. Run after an app
+     * update ([PackageReplacedReceiver]), so the first publish of the new version moves every
+     * shortcut to its launch intents before the user taps one.
+     */
+    suspend fun refresh() {
+        try {
+            update(force = true) { it }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {}
+    }
+
     private fun launchUpdate(change: (HomeSnapshot) -> HomeSnapshot) {
         scope.launch {
             try {
@@ -252,10 +265,6 @@ internal class HomeSurfaces(
                         }
                     }
                 }
-                if (!shortcutsCurrent && publishedShortcuts == signature && relaunchPinned(chosenIds)) {
-                    shortcutsCurrent = true
-                    shortcutPrefs.edit { putInt(PUBLISHED_SHORTCUTS_VERSION_KEY, BuildConfig.VERSION_CODE) }
-                }
                 // Pinned shortcuts stay on the home screen; disable the ones of closed sessions.
                 if (plan.disable.isNotEmpty()) {
                     ShortcutManagerCompat.removeDynamicShortcuts(context, plan.disable)
@@ -271,6 +280,12 @@ internal class HomeSurfaces(
                         plan.disable.toSet()
                 )
                 reconciled = true
+                // Last, so a failed pinned update cannot hold up the bookkeeping above. Until it
+                // succeeds the version stays unrecorded and the next publish retries it.
+                if (!shortcutsCurrent && publishedShortcuts == signature && relaunchPinned(chosenIds)) {
+                    shortcutsCurrent = true
+                    shortcutPrefs.edit { putInt(PUBLISHED_SHORTCUTS_VERSION_KEY, BuildConfig.VERSION_CODE) }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -284,19 +299,23 @@ internal class HomeSurfaces(
      * updateShortcuts reaches it; disabled ones are included, in case their session comes back.
      * The update keeps each shortcut's icon and long label, which are left unset here.
      */
-    private fun relaunchPinned(republished: List<String>): Boolean {
-        val updates =
-            ShortcutManagerCompat.getShortcuts(context, ShortcutManagerCompat.FLAG_MATCH_PINNED)
-                .filter { it.id !in republished }
-                .mapNotNull { pinned ->
-                    val (route, session) = shortcutTarget(pinned.id) ?: return@mapNotNull null
-                    ShortcutInfoCompat.Builder(context, pinned.id)
-                        .setShortLabel(pinned.shortLabel)
-                        .setIntent(LaunchIntents.session(context, route, session))
-                        .build()
-                }
-        return updates.isEmpty() || ShortcutManagerCompat.updateShortcuts(context, updates)
-    }
+    private fun relaunchPinned(republished: List<String>): Boolean =
+        try {
+            val updates =
+                ShortcutManagerCompat.getShortcuts(context, ShortcutManagerCompat.FLAG_MATCH_PINNED)
+                    .filter { it.id !in republished }
+                    .mapNotNull { pinned ->
+                        val (route, session) = shortcutTarget(pinned.id) ?: return@mapNotNull null
+                        ShortcutInfoCompat.Builder(context, pinned.id)
+                            .setShortLabel(pinned.shortLabel)
+                            .setIntent(LaunchIntents.session(context, route, session))
+                            .build()
+                    }
+            updates.isEmpty() || ShortcutManagerCompat.updateShortcuts(context, updates)
+        } catch (_: Exception) {
+            // Rate-limited or rejected; the next publish tries again.
+            false
+        }
 }
 
 /** The route and session of a [shortcutId]. */

@@ -62,6 +62,10 @@
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/export_file_paths" />
         </provider>
         <receiver android:name=".NotificationActionReceiver" android:exported="false" />
+        <!-- Moves shortcuts and the widget to the new version's launch intents right after an update. -->
+        <receiver android:name=".PackageReplacedReceiver" android:exported="false">
+            <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
+        </receiver>
         <receiver android:name=".PocketPiWidgetReceiver" android:exported="true"
             android:label="@string/remote_widget_name">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>

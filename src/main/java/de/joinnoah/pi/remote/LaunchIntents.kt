@@ -20,7 +20,13 @@ import android.net.Uri
  *
  * Notifications posted by a version before the alias keep their old intents and open the app
  * without a session. Pinned and dynamic shortcuts are republished once per version (see
- * [HomeSurfaces]) and the widget is redrawn, so both carry alias intents again.
+ * [HomeSurfaces]) and the widget is redrawn, so both carry alias intents again; that first publish
+ * runs right after the update ([PackageReplacedReceiver]), before the user can tap a shortcut.
+ *
+ * The extras ignored on the exported component use the same keys as the FCM data. The app expects
+ * data-only pushes and [RemoteMessagingService] posts every notification itself; a push with a
+ * `notification` block would instead get a tray notification from the Firebase SDK while the app
+ * is in the background, and tapping it would open the app root, not the session.
  */
 internal object LaunchIntents {
     /** The non-exported activity-alias of MainActivity, declared in AndroidManifest.xml. */
