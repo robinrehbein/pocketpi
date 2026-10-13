@@ -2,7 +2,6 @@ package de.joinnoah.pi.remote
 
 import android.content.Context
 import android.text.format.DateUtils
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -85,7 +84,7 @@ internal class ChangesActions(
  */
 @Composable
 internal fun ChangesPane(state: ChangesState, actions: ChangesActions, modifier: Modifier = Modifier, projectName: String? = null) {
-    BackHandler { if (state.file != null) actions.onOpenFile(null) else actions.onClose() }
+    PaneBackHandler { if (state.file != null) actions.onOpenFile(null) else actions.onClose() }
     // One state object for the remembered actions below; a failed prefill belongs to the file
     // and base it happened on, so it resets when either changes.
     var prefillFailed by remember { mutableStateOf(false) }

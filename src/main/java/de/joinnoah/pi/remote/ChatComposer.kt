@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
@@ -139,6 +140,22 @@ internal class ComposerDraft(
         val typing = text != known
         known = draft
         if (!typing && draft != text) value = TextFieldValue(draft, TextRange(draft.length))
+    }
+
+    /** The text whose slash suggestions Esc closed; any edit brings them back. */
+    private var suggestionsClosedFor by mutableStateOf<String?>(null)
+
+    val suggestionsClosed: Boolean get() = suggestionsClosedFor == text
+
+    fun closeSuggestions() {
+        suggestionsClosedFor = text
+    }
+
+    /** Types [typed] over the selection, as a key press in the field would. */
+    fun insert(typed: String): Boolean {
+        val start = value.selection.min
+        val next = text.substring(0, start) + typed + text.substring(value.selection.max)
+        return edit(TextFieldValue(next, TextRange(start + typed.length)))
     }
 
     private fun tooLong(text: String) =
@@ -269,6 +286,15 @@ internal fun ChatComposer(
     val control = childControl(state)
     val childBusy = control?.phase in setOf(ChildControlPhase.STOPPING, ChildControlPhase.RESUMING)
     var confirmChildStop by remember(state.selection.sessionId) { mutableStateOf(false) }
+    // The layout's keys (Esc, Ctrl+., typing with nothing focused) reach the composer through this.
+    val keyTarget = LocalChatKeyTarget.current
+    if (keyTarget != null)
+        LaunchedEffect(keyTarget.stopHint) {
+            // The hint lasts as long as the second Esc may come.
+            if (!keyTarget.stopHint) return@LaunchedEffect
+            delay(ESCAPE_STOP_WINDOW_MILLIS)
+            keyTarget.stopHint = false
+        }
     // In a child the host can stop, Stop goes through the parent's subagent manager after a
     // confirmation, also while the composer offers a resume or asks a question; elsewhere it
     // aborts the run as before.
@@ -294,7 +320,19 @@ internal fun ChatComposer(
         )
     if (state.questions.isNotEmpty()) {
         val abort: () -> Unit = if (childControls) ({ confirmChildStop = true }) else onAbort
-        QuestionComposer(state, abort, abortBlocked = childControls && childBusy) { questionId, answer ->
+        val abortEnabled = !(childControls && childBusy) && questionAbortEnabled(state)
+        if (keyTarget != null)
+            SideEffect {
+                keyTarget.running = abortEnabled
+                keyTarget.stop = abort
+                keyTarget.composerFocused = false
+                keyTarget.composerBlank = true
+                keyTarget.transientOpen = { false }
+                keyTarget.type = {}
+            }
+        QuestionComposer(
+            state, abort, abortBlocked = childControls && childBusy, stopHint = keyTarget?.stopHint == true,
+        ) { questionId, answer ->
             val route = state.selection.routeId
             val session = state.selection.sessionId
             if (route != null && session != null && isPlanApproval(answer))
@@ -337,10 +375,14 @@ internal fun ChatComposer(
     val showBusyAction = busyAction != null && hasDraft
     val voiceInput = rememberVoiceInputBinding(state.draft, { draft.setText(it) }, voiceEngine)
     val shown = draft.value
+    // Esc closes the prediction until something is typed.
+    var predictionClosed by remember(state.selection) { mutableStateOf(false) }
+    val draftEmpty = state.draft.isEmpty()
+    LaunchedEffect(draftEmpty) { if (!draftEmpty) predictionClosed = false }
     val prediction =
         rememberPromptPrediction(state).takeIf {
             state.draft.isEmpty() && state.attachments.isEmpty() && state.quote == null &&
-                voiceInput.state !is VoiceInputState.Listening
+                voiceInput.state !is VoiceInputState.Listening && !predictionClosed
         }
     val acceptPrediction: () -> Unit = {
         if (prediction != null && state.draft.isEmpty()) {
@@ -363,6 +405,30 @@ internal fun ChatComposer(
         }
     }
     val latestKeyboardSend = rememberUpdatedState(keyboardSend)
+    // Alt+Enter sends with the choice the chip does not show, when both are offered.
+    val otherBusyAction: () -> Unit = {
+        if (showBusyAction && canQueue && canSteerNow && canFollowUpNow) {
+            recordPrompt()
+            if (busyAction == BusyComposerAction.Steer) onFollowUp() else onSteer()
+        }
+    }
+    val latestOtherBusyAction = rememberUpdatedState(otherBusyAction)
+    val slashOpen = commandName(state.draft) != null && !draft.suggestionsClosed
+    if (keyTarget != null) {
+        val running = state.status == "running" && state.connected && !state.loading
+        SideEffect {
+            keyTarget.running = running
+            keyTarget.stop = stop
+            keyTarget.composerBlank = !hasDraft
+            keyTarget.transientOpen = { slashOpen || prediction != null }
+            keyTarget.closeTransient = { if (slashOpen) draft.closeSuggestions() else predictionClosed = true }
+            keyTarget.type = { typed ->
+                if (draft.insert(typed)) voiceInput.userEdited(draft.text)
+                focusRequester?.let { runCatching { it.requestFocus() } }
+            }
+        }
+        LaunchedEffect(keyTarget, running) { if (!running) keyTarget.stopHint = false }
+    }
     FloatingSurface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             state.quote?.let { QuotePreview(it, Modifier.fillMaxWidth(), onRemoveQuote) }
@@ -417,6 +483,7 @@ internal fun ChatComposer(
                 content = suggestions,
             )
             VoiceInputStatus(voiceInput, state)
+            if (keyTarget?.stopHint == true) EscapeStopHint()
             if (childControls && (childResume || childStatus != null))
                 ChildControlRow(
                     status = childStatus,
@@ -560,7 +627,16 @@ internal fun ChatComposer(
                                     stringResource(R.string.remote_prediction_announce, it)
                                 }.orEmpty(),
                             ) { latestAccept.value() }
+                            .onFocusChanged { keyTarget?.composerFocused = it.isFocused }
                             .onPreviewKeyEvent { event ->
+                                if (
+                                    hardwareKeyboard && showBusyAction &&
+                                        event.type == KeyEventType.KeyDown &&
+                                        resolveShortcut(event, KeyContext.COMPOSER) == Shortcut.OTHER_BUSY_ACTION
+                                ) {
+                                    latestOtherBusyAction.value()
+                                    return@onPreviewKeyEvent true
+                                }
                                 when (
                                     composerEnter(
                                         event.key,
@@ -690,9 +766,27 @@ private fun ChildControlRow(
     }
 }
 
+/** "Press Esc again to stop pi", after the first Esc while pi runs. */
+@Composable
+private fun EscapeStopHint() {
+    Text(
+        stringResource(R.string.remote_escape_stop_hint),
+        modifier =
+            Modifier.padding(horizontal = 8.dp)
+                .semantics { liveRegion = LiveRegionMode.Polite }
+                .testTag("escapeStopHint"),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.error,
+    )
+}
+
 internal enum class BusyComposerAction { Steer, FollowUp;
     fun other() = if (this == Steer) FollowUp else Steer
 }
+
+/** The question composer's abort can run, apart from a child stop or resume in flight. */
+private fun questionAbortEnabled(state: RemoteState): Boolean =
+    state.connected && !state.loading && state.answering.isEmpty() && state.selection.sessionId != null
 
 @Composable
 private fun QuestionComposer(
@@ -700,14 +794,11 @@ private fun QuestionComposer(
     onAbort: () -> Unit,
     /** A child stop or resume is in flight; like the strip's Stop, the abort waits for it. */
     abortBlocked: Boolean = false,
+    /** The first Esc asked for a second one to abort ([ChatKeyTarget.stopHint]). */
+    stopHint: Boolean = false,
     onAnswer: (String, kotlinx.serialization.json.JsonObject) -> Unit,
 ) {
-    val abortEnabled =
-        !abortBlocked &&
-            state.connected &&
-            !state.loading &&
-            state.answering.isEmpty() &&
-            state.selection.sessionId != null
+    val abortEnabled = !abortBlocked && questionAbortEnabled(state)
     FloatingSurface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
         Column(
             Modifier.padding(8.dp),
@@ -727,6 +818,7 @@ private fun QuestionComposer(
                     )
                 }
             }
+            if (stopHint) EscapeStopHint()
             OutlinedButton(
                 onClick = onAbort,
                 enabled = abortEnabled,

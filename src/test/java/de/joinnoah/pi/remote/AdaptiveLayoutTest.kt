@@ -107,39 +107,6 @@ class AdaptiveLayoutTest {
     }
 
     @Test
-    fun shortcutsNeedTheirModifiers() {
-        assertEquals(KeyboardShortcut.SEARCH, keyboardShortcut(Key.K, ctrl = true, alt = false, shift = false))
-        assertEquals(KeyboardShortcut.SEARCH, keyboardShortcut(Key.F, ctrl = true, alt = false, shift = false))
-        assertNull(keyboardShortcut(Key.K, ctrl = false, alt = false, shift = false))
-        assertEquals(
-            KeyboardShortcut.NEXT_SESSION,
-            keyboardShortcut(Key.DirectionDown, ctrl = true, alt = false, shift = false),
-        )
-        assertEquals(
-            KeyboardShortcut.PREVIOUS_SESSION,
-            keyboardShortcut(Key.DirectionUp, ctrl = false, alt = true, shift = false),
-        )
-        assertNull(keyboardShortcut(Key.DirectionUp, ctrl = false, alt = false, shift = false))
-        assertNull(keyboardShortcut(Key.DirectionUp, ctrl = true, alt = false, shift = true))
-        assertEquals(KeyboardShortcut.NEW_SESSION, keyboardShortcut(Key.N, ctrl = true, alt = false, shift = false))
-        assertEquals(KeyboardShortcut.TOGGLE_LIST, keyboardShortcut(Key.B, ctrl = true, alt = false, shift = false))
-        assertNull(keyboardShortcut(Key.N, ctrl = false, alt = false, shift = false))
-        assertNull(keyboardShortcut(Key.B, ctrl = false, alt = false, shift = false))
-        assertNull(keyboardShortcut(Key.N, ctrl = false, alt = true, shift = false))
-        assertNull(keyboardShortcut(Key.N, ctrl = true, alt = false, shift = true))
-        assertEquals(KeyboardShortcut.PREVIOUS_PROJECT, keyboardShortcut(Key.PageUp, ctrl = false, alt = true, shift = false))
-        assertEquals(KeyboardShortcut.NEXT_PROJECT, keyboardShortcut(Key.PageDown, ctrl = false, alt = true, shift = false))
-        assertNull(keyboardShortcut(Key.PageDown, ctrl = false, alt = false, shift = false))
-        assertNull(keyboardShortcut(Key.PageDown, ctrl = true, alt = true, shift = false))
-        assertNull(keyboardShortcut(Key.PageDown, ctrl = false, alt = true, shift = true))
-        // An open code editor keeps every key: find, line moves and new sessions are its own or leave it.
-        for (key in listOf(Key.F, Key.K, Key.N, Key.B, Key.DirectionUp, Key.DirectionDown))
-            assertNull(keyboardShortcut(key, ctrl = true, alt = false, shift = false, editing = true))
-        assertNull(keyboardShortcut(Key.DirectionDown, ctrl = false, alt = true, shift = false, editing = true))
-        assertNull(keyboardShortcut(Key.PageDown, ctrl = false, alt = true, shift = false, editing = true))
-    }
-
-    @Test
     fun canCreateSessionFollowsTheFab() {
         val sessions = RemoteNavKey.Sessions("host", "project")
         val ready = RemoteState(connected = true, selection = RemoteSelection("host", "project"))
@@ -219,9 +186,6 @@ class AdaptiveLayoutTest {
         val scope = androidx.compose.runtime.saveable.SaverScope { true }
         val saved = with(TwoPaneState.Saver) { scope.save(state) }
         assertTrue(TwoPaneState.Saver.restore(saved!!)!!.listCollapsed)
-        state.requestSearch()
-        assertFalse(state.listCollapsed)
-        assertEquals(1, state.searchRequests)
     }
 
     @Test

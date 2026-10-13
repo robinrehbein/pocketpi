@@ -72,7 +72,6 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
@@ -370,18 +369,6 @@ internal class TwoPaneState(listCollapsed: Boolean = false) {
             inspectorOverride = null
         }
         sizedFor = key
-    }
-
-    /** Ctrl+K asks the list to focus its search field; the list handles each request once. */
-    var searchRequests by mutableIntStateOf(0)
-    var searchHandled by mutableIntStateOf(0)
-
-    /** The session ids the list shows, top to bottom, for Ctrl/Alt+Up/Down. */
-    var visibleSessionIds by mutableStateOf(emptyList<String>())
-
-    fun requestSearch() {
-        listCollapsed = false
-        searchRequests++
     }
 
     companion object {
@@ -791,36 +778,6 @@ internal fun hardwareKeyboardAttached(): Boolean {
     val configuration = LocalConfiguration.current
     return configuration.keyboard != Configuration.KEYBOARD_NOKEYS &&
         configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
-}
-
-internal enum class KeyboardShortcut {
-    SEARCH,
-    PREVIOUS_SESSION,
-    NEXT_SESSION,
-    NEW_SESSION,
-    TOGGLE_LIST,
-    PREVIOUS_PROJECT,
-    NEXT_PROJECT,
-}
-
-/**
- * Ctrl+K or Ctrl+F search the sessions; Ctrl or Alt with Up/Down switch to the adjacent one; Ctrl+N
- * starts a new session in the project and Ctrl+B collapses or expands the session list.
- * Alt+Page Up/Page Down switch to the adjacent project. None of them while [editing], keyboard
- * focus in the code editor: it uses some of these keys itself (Ctrl+F finds in the file).
- */
-internal fun keyboardShortcut(key: Key, ctrl: Boolean, alt: Boolean, shift: Boolean, editing: Boolean = false): KeyboardShortcut? {
-    if (shift || editing) return null
-    return when {
-        ctrl && !alt && (key == Key.K || key == Key.F) -> KeyboardShortcut.SEARCH
-        ctrl && !alt && key == Key.N -> KeyboardShortcut.NEW_SESSION
-        ctrl && !alt && key == Key.B -> KeyboardShortcut.TOGGLE_LIST
-        (ctrl != alt) && key == Key.DirectionUp -> KeyboardShortcut.PREVIOUS_SESSION
-        (ctrl != alt) && key == Key.DirectionDown -> KeyboardShortcut.NEXT_SESSION
-        alt && !ctrl && key == Key.PageUp -> KeyboardShortcut.PREVIOUS_PROJECT
-        alt && !ctrl && key == Key.PageDown -> KeyboardShortcut.NEXT_PROJECT
-        else -> null
-    }
 }
 
 /** Ctrl+N's condition, the same as the "new session" button: connected, not loading, in this project. */

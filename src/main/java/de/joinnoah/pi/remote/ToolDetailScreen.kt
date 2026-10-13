@@ -2,7 +2,6 @@ package de.joinnoah.pi.remote
 
 import android.content.ClipData
 import android.text.format.Formatter
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -286,7 +285,7 @@ internal fun ToolDetailScreen(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    BackHandler(onBack = onClose)
+    PaneBackHandler(onBack = onClose)
     // Everything below belongs to one tool call: another item starts with fresh search and scroll state.
     key(item.id) {
         ToolDetailContent(item, download, canAskToFix, canLoadFullOutput, onLoadFullOutput, onCancelFullOutput, onAskToFix, onQuote, onClose, modifier)

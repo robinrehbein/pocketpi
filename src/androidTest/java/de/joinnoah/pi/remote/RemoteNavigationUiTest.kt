@@ -61,17 +61,28 @@ class RemoteNavigationUiTest {
                             activity.flush = { fresh.flush() }
                             val settings = UiSettingsRepository().also { uiSettings = it }
                             val content: @Composable () -> Unit = {
-                                RemoteApp(
-                                    fresh,
-                                    settings,
-                                    false,
-                                    {},
-                                    activity.notification,
-                                    {
-                                        if (activity.notification == it)
-                                            activity.notification = null
-                                    },
-                                )
+                                val base = androidx.compose.ui.platform.LocalConfiguration.current
+                                // A Book Cover Keyboard for the tests that ask for one, whatever the emulator has.
+                                val configuration =
+                                    if (!hardwareKeyboard.value) base
+                                    else
+                                        android.content.res.Configuration(base).apply {
+                                            keyboard = android.content.res.Configuration.KEYBOARD_QWERTY
+                                            hardKeyboardHidden = android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
+                                        }
+                                CompositionLocalProvider(androidx.compose.ui.platform.LocalConfiguration provides configuration) {
+                                    RemoteApp(
+                                        fresh,
+                                        settings,
+                                        false,
+                                        {},
+                                        activity.notification,
+                                        {
+                                            if (activity.notification == it)
+                                                activity.notification = null
+                                        },
+                                    )
+                                }
                             }
                             content
                         }
@@ -89,7 +100,23 @@ class RemoteNavigationUiTest {
             )
             .around(compose)
 
+    private val hardwareKeyboard = mutableStateOf(false)
+
     private fun label(id: Int) = compose.activity.getString(id)
+
+    /** Presses [code] through the system's input pipeline, as a hardware keyboard does. */
+    private fun key(code: Int, meta: Int = 0) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val now = android.os.SystemClock.uptimeMillis()
+        instrumentation.sendKeySync(android.view.KeyEvent(now, now, android.view.KeyEvent.ACTION_DOWN, code, 0, meta))
+        instrumentation.sendKeySync(android.view.KeyEvent(now, now, android.view.KeyEvent.ACTION_UP, code, 0, meta))
+        compose.waitForIdle()
+    }
+
+    private fun attachHardwareKeyboard() {
+        compose.runOnUiThread { hardwareKeyboard.value = true }
+        compose.waitForIdle()
+    }
 
     private fun click(id: Int) {
         compose.onNodeWithText(label(id)).performClick()
@@ -108,6 +135,43 @@ class RemoteNavigationUiTest {
         compose.onNodeWithText("Project one").performClick()
         compose.onNodeWithText(title).performClick()
         compose.waitForIdle()
+    }
+
+    @Test
+    fun aDoubleEscStopsARunningSessionAndNeverLeavesTheChat() {
+        attachHardwareKeyboard()
+        openChat()
+        compose.runOnUiThread { repository.state.value = repository.state.value.copy(status = "running") }
+        compose.waitForIdle()
+        key(android.view.KeyEvent.KEYCODE_ESCAPE)
+        compose.onNodeWithTag("escapeStopHint").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(0, repository.aborts) }
+        key(android.view.KeyEvent.KEYCODE_ESCAPE)
+        compose.runOnIdle { assertEquals(1, repository.aborts) }
+        compose.onNodeWithTag("escapeStopHint").assertDoesNotExist()
+        // Esc never became Back: the chat is still open.
+        compose.onNodeWithTag("composerField").assertIsDisplayed()
+        compose.onNodeWithText("Message for live").assertIsDisplayed()
+    }
+
+    @Test
+    fun typingAfterCtrlDownLandsInTheNextSessionsComposer() {
+        attachHardwareKeyboard()
+        openChat()
+        key(android.view.KeyEvent.KEYCODE_DPAD_DOWN, android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_CTRL_LEFT_ON)
+        compose.runOnIdle { assertEquals("history", repository.activations.last().first.sessionId) }
+        key(android.view.KeyEvent.KEYCODE_H)
+        key(android.view.KeyEvent.KEYCODE_I)
+        compose.onNodeWithTag("composerField").assertIsFocused().assert(hasText("hi"))
+    }
+
+    @Test
+    fun aTypedSlashOpensTheSlashSuggestions() {
+        attachHardwareKeyboard()
+        openChat()
+        key(android.view.KeyEvent.KEYCODE_SLASH)
+        compose.onNodeWithTag("composerField").assert(hasText("/"))
+        compose.onNodeWithText("/new").assertIsDisplayed()
     }
 
     @Test

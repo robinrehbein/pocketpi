@@ -68,6 +68,8 @@ internal fun SessionControls(
     /** The header action or a typed `/settings` asks for the settings sheet; same handshake as the model picker. */
     settingsSheetRequested: Boolean = false,
     onSettingsSheetRequestHandled: () -> Unit = {},
+    /** False while Esc closed the slash suggestions; the next edit brings them back. */
+    slashSuggestions: Boolean = true,
 ) {
     var picker by remember { mutableStateOf<String?>(null) }
     val pickerSheet = rememberModalBottomSheetState()
@@ -316,7 +318,7 @@ internal fun SessionControls(
         }
         val hostCommands =
             COMMANDS_CAPABILITY in state.capabilities && COMMANDS_CAPABILITY !in state.unavailableCapabilities
-        if (slash != null && (hostCommands || localCommands.isNotEmpty())) {
+        if (slashSuggestions && slash != null && (hostCommands || localCommands.isNotEmpty())) {
             val (localSuggestions, hostSuggestions) =
                 mergeCommandSuggestions(localCommands, if (hostCommands) state.commands else emptyList(), slash)
             if (hostCommands && state.commandsLoading && localSuggestions.isEmpty())

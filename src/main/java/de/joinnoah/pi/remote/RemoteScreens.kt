@@ -6,6 +6,7 @@ import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
 import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -36,7 +37,9 @@ import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FilterAlt
@@ -55,6 +58,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusTarget
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -195,9 +201,13 @@ internal fun RemoteScreen(
     val projectSelected = projectsColumn?.selectedProjectId != null
     val detailPane = LocalDetailPane.current && key is RemoteNavKey.Chat
     val sideInspector = key is RemoteNavKey.Chat && paneLayout.inspector != InspectorMode.OVERLAY
-    // Hardware Enter and Ctrl+Enter only send in the two-pane layout; phones keep Enter as a newline.
-    val hardwareKeyboard = LocalHardwareKeyboard.current && paneLayout.twoPane
+    // With a hardware keyboard Enter and Ctrl+Enter send at every window size, phones included.
+    val hardwareKeyboard = LocalHardwareKeyboard.current
+    val shortcutTargets = LocalShortcutTargets.current
     var sessionQuery by rememberSaveable(key) { mutableStateOf("") }
+    // The phone's session list shows its search field behind a search icon.
+    var sessionSearchOpen by rememberSaveable(key) { mutableStateOf(false) }
+    val sessionSearchShown = key is RemoteNavKey.Sessions && (listPane != null || sessionSearchOpen)
     var collapsedSessionIds by rememberSaveable(key) { mutableStateOf(arrayListOf<String>()) }
     val collapsedIds = collapsedSessionIds.toSet()
     val visibleSessions =
@@ -211,11 +221,17 @@ internal fun RemoteScreen(
             )
         }
     val listedSessions =
-        remember(visibleSessions, sessionQuery, listPane != null) {
-            if (listPane != null) filterSessions(visibleSessions, sessionQuery) else visibleSessions
+        remember(visibleSessions, sessionQuery, sessionSearchShown) {
+            if (sessionSearchShown) filterSessions(visibleSessions, sessionQuery) else visibleSessions
         }
-    if (listPane != null && twoPane != null)
-        LaunchedEffect(listedSessions) { twoPane.visibleSessionIds = listedSessions.map { it.id } }
+    if (key is RemoteNavKey.Sessions && shortcutTargets != null)
+        LaunchedEffect(listedSessions) { shortcutTargets.listed(key, listedSessions.map { it.id }) }
+    if (shortcutTargets != null)
+        DisposableEffect(key, model, shortcutTargets) {
+            val refresh = model::refresh
+            shortcutTargets.registerRefresh(key, refresh)
+            onDispose { shortcutTargets.unregisterRefresh(key, refresh) }
+        }
     val sessionCount =
         remember(state.sessions, state.connected, state.loading, hideOfflineSessions) {
             visibleSessionListItems(
@@ -356,15 +372,21 @@ internal fun RemoteScreen(
     }
     val listState = rememberLazyListState()
     val sessionSearchFocus = remember { FocusRequester() }
-    if (listPane != null && twoPane != null)
-        LaunchedEffect(twoPane.searchRequests) {
-            // Ctrl+K: each request focuses the search field once, also when it expanded the list.
-            if (twoPane.searchRequests == twoPane.searchHandled) return@LaunchedEffect
-            twoPane.searchHandled = twoPane.searchRequests
+    if (key is RemoteNavKey.Sessions && shortcutTargets != null)
+        LaunchedEffect(shortcutTargets.searchRequests) {
+            // Ctrl+K: each request focuses the search field once, also when it expanded the list
+            // or opened the phone's search field.
+            if (shortcutTargets.searchRequests == shortcutTargets.searchHandled) return@LaunchedEffect
+            shortcutTargets.searchHandled = shortcutTargets.searchRequests
+            sessionSearchOpen = true
             listState.scrollToItem(0)
             withFrameNanos { }
             runCatching { sessionSearchFocus.requestFocus() }
         }
+    BackHandler(enabled = sessionSearchOpen && listPane == null) {
+        sessionSearchOpen = false
+        sessionQuery = ""
+    }
     var composerSize by remember { mutableStateOf(IntSize.Zero) }
     var headerSize by remember { mutableStateOf(IntSize.Zero) }
     val composerHeight = with(LocalDensity.current) { composerSize.height.toDp() }
@@ -527,6 +549,23 @@ internal fun RemoteScreen(
         withFrameNanos { }
         runCatching { composerFocus.requestFocus() }
     }
+    // The chat's side of the layout's keys (Esc, typing, the chat shortcuts); see ChatKeyTarget.
+    val chatKeyTarget = remember(key) { ChatKeyTarget() }
+    if (chatKey != null && shortcutTargets != null)
+        DisposableEffect(chatKey, chatKeyTarget, shortcutTargets) {
+            shortcutTargets.register(chatKey, chatKeyTarget)
+            onDispose { shortcutTargets.unregister(chatKey, chatKeyTarget) }
+        }
+    // A session this user just created starts with the composer focused, on every device.
+    if (chatKey != null)
+        LaunchedEffect(chatKey, navigator.freshSession) {
+            if (navigator.takeFreshSession(chatKey)) composerFocusRequest++
+        }
+    // Text selected in the chat; Esc clears it by taking focus away from the selection.
+    var conversationFocused by remember { mutableStateOf(false) }
+    val chatFocus = remember { FocusRequester() }
+    // Ctrl+Shift+N opens the rewind menu of this bubble once it is on screen.
+    var forkMenuRequest by remember(key) { mutableStateOf<String?>(null) }
     val snackbar = remember { SnackbarHostState() }
     val childNotice = stringResource(R.string.remote_insights_child_not_found)
     // An extension's notice (`session.notice`) shows once, in the chat only, which holds the snackbar
@@ -1051,6 +1090,88 @@ internal fun RemoteScreen(
             }
         }
     val inspectorShown = sideInspector && (paneLayout.inspector == InspectorMode.PERSISTENT || inspectorContent != null)
+    val focusManager = LocalFocusManager.current
+    // With a hardware keyboard a chat opens ready for typing, unless a question or a dialog is up
+    // or TalkBack runs: then focus stays where the user put it.
+    val chatDialogOpen = renameSessionId != null || abortTargetIsCurrent || abortChild != null || tuiInfoOpen
+    if (chatKey != null)
+        LaunchedEffect(chatKey, hardwareKeyboard) {
+            if (!hardwareKeyboard || questionPending || chatDialogOpen || touchExplorationEnabled(context))
+                return@LaunchedEffect
+            composerFocusRequest++
+        }
+    /** A chat shortcut from the keyboard ([KeyContext.CHAT]); false when it does not apply now. */
+    fun chatShortcut(shortcut: Shortcut): Boolean {
+        val chat = chatModel ?: return false
+        return when (shortcut) {
+            Shortcut.FOCUS_COMPOSER -> {
+                composerFocusRequest++
+                true
+            }
+            Shortcut.CHANGES ->
+                when {
+                    changesOpen != null -> chat.closeChanges().let { true }
+                    canViewChanges(state) && state.connected -> {
+                        historyOpen = false
+                        chat.openChanges()
+                        true
+                    }
+                    else -> false
+                }
+            Shortcut.FILES ->
+                when {
+                    filesOpen != null -> chat.closeFiles().let { true }
+                    canBrowseFiles(state) && state.connected -> {
+                        historyOpen = false
+                        chat.openFiles()
+                        true
+                    }
+                    else -> false
+                }
+            Shortcut.JOBS ->
+                when {
+                    state.jobs?.let { (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId } == true ->
+                        chat.closeJobs().let { true }
+                    jobsAvailable && state.connected -> {
+                        chat.openJobs()
+                        true
+                    }
+                    else -> false
+                }
+            Shortcut.HISTORY -> {
+                historyOpen = !historyOpen
+                true
+            }
+            Shortcut.RENAME -> {
+                val session = state.session?.takeIf { canRenameSession(state) } ?: return false
+                startRename(session.text("id"), session.text("title"))
+                true
+            }
+            Shortcut.FORK -> {
+                val latest = shownItems.lastOrNull { it.id in forkableIds }
+                if (messageFork == null || latest == null) return false
+                jumpTo(latest.id)
+                forkMenuRequest = latest.id
+                true
+            }
+            else -> false
+        }
+    }
+    if (chatKey != null) {
+        val linesSelected = filesOpen?.file?.selection != null
+        SideEffect {
+            chatKeyTarget.focusComposer = { composerFocusRequest++ }
+            val parkFocus = { runCatching { chatFocus.requestFocus() }.onFailure { focusManager.clearFocus() } }
+            chatKeyTarget.blurComposer = { parkFocus() }
+            chatKeyTarget.selectionActive = { conversationFocused || linesSelected }
+            chatKeyTarget.clearSelection = {
+                // Without focus a text selection ends; a line selection in Files is state.
+                if (conversationFocused) parkFocus() else chatModel?.selectFileLines(null)
+            }
+            chatKeyTarget.shortcut = ::chatShortcut
+        }
+    }
+    CompositionLocalProvider(LocalChatKeyTarget provides chatKeyTarget.takeIf { chatKey != null }) {
     InspectorRow(
         shown = inspectorShown,
         width = { twoPane?.inspectorWidth(paneLayout) ?: paneLayout.inspectorWidth },
@@ -1058,6 +1179,9 @@ internal fun RemoteScreen(
         inspector = inspectorContent,
     ) {
     Scaffold(
+        // Esc parks keyboard focus here, on the chat itself: clearing it would hand it to the
+        // first button (Back) while a keyboard is in use, and Enter would then press it.
+        modifier = if (chatKey != null) Modifier.focusRequester(chatFocus).focusTarget() else Modifier,
         containerColor = MaterialTheme.colorScheme.background,
         floatingActionButtonPosition = FabPosition.Center,
         floatingActionButton = {
@@ -1155,7 +1279,9 @@ internal fun RemoteScreen(
             if (key is RemoteNavKey.Chat && inspectorShown && twoPane != null) maxOf(readingInset, PANE_RESIZE_HANDLE_OVERHANG)
             else readingInset
         LazyColumn(
-            if (key is RemoteNavKey.Chat) Modifier.fillMaxSize().testTag("conversationList").then(underlay)
+            if (key is RemoteNavKey.Chat)
+                Modifier.fillMaxSize().testTag("conversationList").then(underlay)
+                    .onFocusChanged { conversationFocused = it.hasFocus }
             else Modifier.fillMaxSize(),
             state = listState,
             contentPadding =
@@ -1216,6 +1342,29 @@ internal fun RemoteScreen(
                                 maxLines = 1,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             )
+                        if (key is RemoteNavKey.Sessions && listPane == null && state.sessions.isNotEmpty()) {
+                            FloatingSurface(
+                                modifier = Modifier.offset(x = LIST_TO_HEADER_END_SHIFT).padding(end = 8.dp),
+                                shape = CircleShape,
+                            ) {
+                                IconButton(
+                                    onClick = {
+                                        if (sessionSearchOpen) sessionQuery = ""
+                                        else shortcutTargets?.requestSearch()
+                                        sessionSearchOpen = !sessionSearchOpen
+                                    },
+                                    modifier = Modifier.size(48.dp).testTag("sessionSearchToggle"),
+                                ) {
+                                    Icon(
+                                        if (sessionSearchOpen) Icons.Default.Close else Icons.Default.Search,
+                                        stringResource(
+                                            if (sessionSearchOpen) R.string.remote_session_search_close
+                                            else R.string.remote_session_search
+                                        ),
+                                    )
+                                }
+                            }
+                        }
                         if (key is RemoteNavKey.Sessions) {
                             val filterLabel = stringResource(R.string.remote_design_filter_sessions)
                             val activeCountLabel =
@@ -1692,7 +1841,7 @@ internal fun RemoteScreen(
                         }
                     }
                     is RemoteNavKey.Sessions -> {
-                        if (listPane != null && state.sessions.isNotEmpty())
+                        if (sessionSearchShown && state.sessions.isNotEmpty())
                             item(key = "session-search") {
                                 SessionSearchField(
                                     query = sessionQuery,
@@ -1808,6 +1957,8 @@ internal fun RemoteScreen(
                                     images = sentImages,
                                     projectImages = projectImages,
                                     copyButton = item.id == copyButtonId,
+                                    forkMenuRequested = item.id == forkMenuRequest,
+                                    onForkMenuRequestHandled = { forkMenuRequest = null },
                                 )
                             }
                         }
@@ -2152,6 +2303,7 @@ internal fun RemoteScreen(
                                 changeSettings = model::changeSettings,
                                 settingsSheetRequested = settingsSheetRequested,
                                 onSettingsSheetRequestHandled = { settingsSheetRequested = false },
+                                slashSuggestions = !composer.suggestionsClosed,
                             )
                         },
                         onRemoveAttachment = model::removeAttachment,
@@ -2198,6 +2350,7 @@ internal fun RemoteScreen(
             if (!sideInspector) toolContent?.invoke()
         }
         }
+    }
     }
     }
     val hideOfflineLabel = stringResource(R.string.remote_hide_offline_sessions)

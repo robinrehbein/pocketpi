@@ -194,7 +194,11 @@ internal class NavigationFakeRepository : RemoteRepository {
 
     override fun disconnect() {}
 
-    override fun refresh() {}
+    var refreshes = 0
+
+    override fun refresh() {
+        refreshes++
+    }
 
     override fun older() {}
 
@@ -235,7 +239,11 @@ internal class NavigationFakeRepository : RemoteRepository {
         prompts++
     }
 
-    override fun abort() {}
+    var aborts = 0
+
+    override fun abort() {
+        aborts++
+    }
 
     override fun answer(questionId: String, answer: JsonObject) {
         answers++
