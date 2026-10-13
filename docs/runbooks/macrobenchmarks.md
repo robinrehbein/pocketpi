@@ -17,8 +17,11 @@ debug/release builds. CI checks merged-manifest isolation. The fixture labels li
 
 The benchmark build type also replaces the relay: `RemoteApplication` builds its transport through
 `remoteTransport(context, scope)`, which `src/debug` and `src/release` (and the wear module) define
-as `SecureRemoteTransport`, and `src/benchmark` as `FakeRelayTransport`. The benchmark APK therefore
-never opens a socket; debug and release APKs contain no fake relay or fixture.
+as `SecureRemoteTransport`, and `src/benchmark` as `FakeRelayTransport`. In the benchmark APK the
+app's repository therefore talks only to the fake relay. The background and push clients
+(`BackgroundRemoteClient` for notification actions, completion and question upgrades) still build
+`SecureRemoteTransport`, but without Firebase configuration nothing reaches them. Debug and release
+APKs contain no fake relay or fixture; CI checks the debug APK's dex files for the fixture classes.
 
 ### Workloads (ten iterations each)
 
@@ -105,20 +108,37 @@ authentication). The profiles, with a fixed random seed per process:
 The fake relay can also stream the fixture's scripted answer (120 `message.upsert` events, 50 ms
 apart, with `session.status` running/idle and consecutive revisions) and fail the socket with
 `failed(true)`, so the repository reconnects. `ConnectedFlowActivity` takes them as the `command`
-extra (`stream`, `drop`) for later flow benchmarks; the three tests here do not use them.
+extra (`stream`, `drop`) for later flow benchmarks; the three tests here do not use them. Streamed
+events skip the latency profile and arrive at once, while replies wait a round trip, so a
+`session.snapshot` answered at revision R can arrive after events R+1 and later. A real relay keeps
+host frames in order; start a stream only once the chat's snapshot is in.
 
 Before its first iteration each test clears the app and starts `ConnectedFlowActivity` with the
 `prepare` extra. That pass pairs with the fixture Mac through `repository.pair()` (the real pairing
 path, with the fake relay approving), opens the cached chat, leaves a draft there and returns to the
 projects. The app's encrypted stores then hold a pairing, a draft and a navigation snapshot, as after
-a normal visit, and every cold start reads them back. The prepare pass is not measured.
+a normal visit, and every cold start reads them back. The pass always runs on the `lan` profile and
+reports `connected-flow-prepared` only once the navigation snapshot on disk names the cached chat
+and holds the refreshed quick chats; the harness fails at once on `connected-flow-failed`. The
+prepare pass is not measured.
+
+Over the app, `ConnectedFlowActivity` lays two 1 dp status nodes the harness waits for:
+`connected-flow-<macs|projects|sessions|chat>-<settled|busy>` (settled: connected, not loading and
+no request left with the fake relay) and, after a chat finished opening, `connected-flow-cache-hit`
+or `-miss`, read from the activation's diagnostics outcome. They recompose only when that status
+changes.
 
 - `coldStartToProjects` presses Home and lets Macrobenchmark kill the process and drop caches, then
   launches `ConnectedFlowActivity`. Today a cold start shows the Macs, so it taps the fixture Mac;
   once a cold start opens the last Mac's projects directly, the tap is skipped. `PocketPi.activate`
   then covers the restore activation plus the connect and `projects.list` behind the tap.
 - `openUncachedChat` and `openCachedChat` start a fresh process per iteration and navigate to the
-  session list outside the measurement. The cached variant opens and leaves the chat once first.
+  session list outside the measurement, then wait until it is settled, so no late reply lands in
+  the measured block. The cached variant opens and leaves the chat once first. Each iteration fails
+  unless the open reports `connected-flow-cache-miss` (uncached) or `-hit` (cached).
+- An uncached open leaves that chat in the navigation snapshot, and the next cold start would
+  restore it into the chat cache. `openUncachedChat` therefore runs the prepare pass again before
+  every iteration after the first, which stores the cached chat as the last one.
   Both still wait for `sessions.open` and `session.snapshot`; the cached one shows the cached
   messages while they are in flight. `PocketPi.activate` ends when the snapshot is published, so
   the difference between the two shows mostly in frame timing and in when the tail appears, not in

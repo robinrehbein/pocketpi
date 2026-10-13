@@ -4,6 +4,9 @@ import android.os.SystemClock
 import android.util.Log
 import kotlin.random.Random
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.*
 
 /**
@@ -42,6 +45,14 @@ internal class FakeRelayTransport(
         private set
 
     val isConnected: Boolean get() = connected != null
+
+    private val _inFlight = MutableStateFlow(0)
+
+    /**
+     * Requests sent and not yet answered or dropped. [ConnectedFlowActivity] reports the app as
+     * settled only at zero, so a benchmark's setup can wait out late replies before measuring.
+     */
+    val inFlight: StateFlow<Int> get() = _inFlight
 
     suspend fun fixture(): RelayFixture = fixture.await()
 
@@ -102,18 +113,23 @@ internal class FakeRelayTransport(
         checkNotNull(connected)
         val epoch = generation
         val started = now()
+        _inFlight.update { it + 1 }
         scope.launch {
-            val fixture = fixture()
-            val latency = latency(fixture)
-            val text = withContext(host) {
-                try {
-                    reply(fixture, payload)
-                } catch (_: Exception) {
-                    failure(payload.text("requestId"), "invalid_request")
-                }.toString()
+            try {
+                val fixture = fixture()
+                val latency = latency(fixture)
+                val text = withContext(host) {
+                    try {
+                        reply(fixture, payload)
+                    } catch (_: Exception) {
+                        failure(payload.text("requestId"), "invalid_request")
+                    }.toString()
+                }
+                delay((latency - (now() - started)).coerceAtLeast(0))
+                if (epoch == generation) deliver(text)
+            } finally {
+                _inFlight.update { it - 1 }
             }
-            delay((latency - (now() - started)).coerceAtLeast(0))
-            if (epoch == generation) deliver(text)
         }
     }
 
@@ -137,6 +153,11 @@ internal class FakeRelayTransport(
      * `message.upsert` per chunk every [StreamScript.intervalMs], the completed answer, a separate
      * completion marker and `session.status` idle, with consecutive revisions. A later snapshot of
      * the session includes the streamed messages.
+     *
+     * Unlike request replies, streamed events skip the latency profile and arrive at once. A real
+     * relay delivers host frames in order, but here a `session.snapshot` answered at revision R
+     * can reach the repository after events R+1 and later. Flow benchmarks that stream should
+     * start the stream only once the chat's snapshot is in.
      */
     fun stream(sessionId: String): Job {
         streaming?.cancel()

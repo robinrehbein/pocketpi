@@ -2,6 +2,8 @@ package de.joinnoah.pi.remote
 
 import android.app.Application
 import kotlin.random.Random
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -47,17 +49,26 @@ class FakeRelayTransportTest {
         val pairings: Pairings,
         val drafts: Drafts,
         val navigation: Navigation,
-    )
+        private val process: Job,
+    ) {
+        /** Ends this "process": nothing it started runs or writes any more. */
+        fun kill() = process.cancel()
+    }
 
-    private fun TestScope.harness(profile: String = "lte"): Harness {
+    /** One app process; pass an earlier harness's stores to start it as a cold start of that app. */
+    private fun TestScope.harness(
+        profile: String = "lte",
+        pairings: Pairings = Pairings(),
+        drafts: Drafts = Drafts(),
+        navigation: Navigation = Navigation(),
+    ): Harness {
         val dispatcher = StandardTestDispatcher(testScheduler)
-        val transport = FakeRelayTransport(backgroundScope, { fixture }, dispatcher) { testScheduler.currentTime }
+        val process = Job(backgroundScope.coroutineContext[Job])
+        val scope = CoroutineScope(backgroundScope.coroutineContext + process)
+        val transport = FakeRelayTransport(scope, { fixture }, dispatcher) { testScheduler.currentTime }
         transport.profile = profile
-        val pairings = Pairings()
-        val drafts = Drafts()
-        val navigation = Navigation()
         val repository = DefaultRemoteRepository(
-            pairings, drafts, transport, backgroundScope, dispatcher,
+            pairings, drafts, transport, scope, dispatcher,
             now = { testScheduler.currentTime },
             navigationStorage = navigation,
             jitter = { 0.5 },
@@ -65,24 +76,31 @@ class FakeRelayTransportTest {
         // RemoteApplication's lifecycle and network wiring; recovery needs both.
         repository.setValidatedNetwork("network")
         repository.setForeground(true)
-        return Harness(transport, repository, pairings, drafts, navigation)
+        return Harness(transport, repository, pairings, drafts, navigation, process)
     }
+
+    /** A cold start of [previous]'s app: same stores, new repository and relay connection. */
+    private fun TestScope.restart(previous: Harness, profile: String = "lte"): Harness {
+        previous.kill()
+        return harness(profile, previous.pairings, previous.drafts, previous.navigation)
+    }
+
+    /** The newest chat open's cache result, as ConnectedFlowActivity reports it to the benchmarks. */
+    private fun chatCache() = ConnectedFlowPreparation.lastChatCache()
 
     @Test
     fun pairingPrepareConnectsSnapshotsAndStoresLikeAVisit() = runTest {
         val harness = harness()
         val repository = harness.repository
-        val projects = RemoteSelection(fixture.routeId)
-        assertEquals(projects, repository.pair(fixture.pairingCode(Long.MAX_VALUE)))
+        assertTrue(ConnectedFlowPreparation.visit(repository, fixture, System.currentTimeMillis()))
         assertEquals(listOf(fixture.routeId), harness.pairings.hosts.map { it.routeId })
         assertEquals(fixture.hostName, harness.pairings.hosts.single().name)
         assertEquals(fixture.projects.map { it.text("id") }, repository.state.value.projects.map { it.text("id") })
-
-        assertEquals(fixture.prepare, repository.activate(fixture.prepare, ActivationMode.USER_OPEN))
-        repository.draft(fixture.prepareDraft)
-        assertEquals(projects, repository.activate(projects, ActivationMode.USER_OPEN))
-        repository.flush()
-        advanceTimeBy(2_000)
+        advanceTimeBy(5_000)
+        assertEquals(0, harness.transport.inFlight.value)
+        assertTrue(
+            ConnectedFlowPreparation.settled(fixture, repository.state.value, harness.navigation.snapshots[fixture.routeId])
+        )
         val draftKey = DraftKey(fixture.routeId, fixture.prepare.sessionId!!)
         assertEquals(fixture.prepareDraft, harness.drafts.values.getValue(draftKey).text)
         val snapshot = harness.navigation.snapshots.getValue(fixture.routeId)
@@ -147,6 +165,41 @@ class FakeRelayTransportTest {
         // The open either landed on the reconnected socket or fell back; it never hangs.
         assertTrue(opening.isCompleted)
         assertTrue(harness.repository.state.value.connected)
+    }
+
+    @Test
+    fun anotherPreparePassKeepsTheUncachedChatOutOfTheNextColdStartsCache() = runTest {
+        val project = RemoteSelection(fixture.routeId, "project-pocketpi")
+        val uncached = RemoteSelection(fixture.routeId, "project-pocketpi", "session-uncached")
+        // A cold start: restore the Mac's projects, open the project, then open the uncached chat.
+        suspend fun Harness.openUncached(): String? {
+            assertEquals(RemoteSelection(fixture.routeId), repository.activate(RemoteSelection(fixture.routeId)))
+            assertEquals(project, repository.activate(project, ActivationMode.USER_OPEN))
+            assertEquals(uncached, repository.activate(uncached, ActivationMode.USER_OPEN))
+            return chatCache()
+        }
+        Diagnostics.clear()
+        val prepared = harness()
+        assertTrue(ConnectedFlowPreparation.visit(prepared.repository, fixture, System.currentTimeMillis()))
+        advanceTimeBy(5_000)
+
+        val first = restart(prepared)
+        assertEquals("miss", first.openUncached())
+        // Benchmark iterations end on the chat; the snapshot then names it as the last chat.
+        advanceTimeBy(5_000)
+        assertEquals("session-uncached", first.navigation.snapshots.getValue(fixture.routeId).sessionId)
+
+        // Without another prepare pass, the next cold start restores that chat into the cache.
+        val unprepared = restart(first)
+        assertEquals("hit", unprepared.openUncached())
+
+        val again = restart(unprepared)
+        assertTrue(ConnectedFlowPreparation.visit(again.repository, fixture, System.currentTimeMillis()))
+        advanceTimeBy(5_000)
+        assertTrue(
+            ConnectedFlowPreparation.settled(fixture, again.repository.state.value, again.navigation.snapshots[fixture.routeId])
+        )
+        assertEquals("miss", restart(again).openUncached())
     }
 
     @Test

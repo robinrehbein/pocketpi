@@ -73,18 +73,25 @@ class ConnectedFlowBenchmarks {
     }
 
     /**
-     * Once per test: clear the app, then pair with the fixture Mac and visit the fixture chat
-     * through the production repository, so its stores hold a pairing, a draft and a navigation
-     * snapshot. Not measured.
+     * Clears the app when [clear] is set, then pairs with the fixture Mac (or reconnects to it) and
+     * visits the fixture chat through the production repository, so its stores hold a pairing, a
+     * draft and a navigation snapshot whose last chat is the cached chat. Not measured.
      */
+    private fun MacrobenchmarkScope.prepare(clear: Boolean) {
+        killProcess()
+        if (clear) check(device.executeShellCommand("pm clear $TARGET").trim() == "Success")
+        startActivityAndWait(connectedFlow(prepare = true))
+        check(device.wait(Until.hasObject(By.desc(Pattern.compile("connected-flow-(prepared|failed)"))), 120_000)) {
+            "Preparing the fixture Mac timed out"
+        }
+        check(device.hasObject(By.desc("connected-flow-prepared"))) { "Preparing the fixture Mac failed" }
+        killProcess()
+    }
+
+    /** Once per test: a cleared app, prepared as above. */
     private fun MacrobenchmarkScope.prepareOnce() {
         if (prepared) return
-        check(device.executeShellCommand("pm clear $TARGET").trim() == "Success")
-        startActivityAndWait(connectedFlow(prepare = true))
-        check(device.wait(Until.hasObject(By.desc("connected-flow-prepared")), 120_000)) {
-            "Preparing the fixture Mac failed"
-        }
-        killProcess()
+        prepare(clear = true)
         prepared = true
     }
 
@@ -95,20 +102,43 @@ class ConnectedFlowBenchmarks {
         check(device.wait(Until.hasObject(By.text(PROJECT)), 60_000))
     }
 
-    /** A fresh process on the fixture project's session list; no chat opened in it yet. */
+    /**
+     * Waits until ConnectedFlowActivity reports [screen] settled: connected, not loading and no
+     * request left with the fake relay, so no late reply lands in the measured block.
+     */
+    private fun MacrobenchmarkScope.waitSettled(screen: String) {
+        check(device.wait(Until.hasObject(By.desc("connected-flow-$screen-settled")), 60_000)) {
+            "The $screen screen did not settle"
+        }
+    }
+
+    /** A fresh process on the fixture project's settled session list; no chat opened in it yet. */
     private fun MacrobenchmarkScope.openSessions(chat: String) {
         killProcess()
         startActivityAndWait(connectedFlow())
         waitForProjects()
         checkNotNull(device.findObject(By.text(PROJECT))).click()
-        check(device.wait(Until.hasObject(By.text(chat)), 60_000))
+        waitSettled("sessions")
+        check(device.wait(Until.hasObject(By.text(chat)), 10_000))
         device.waitForIdle(1_000)
     }
 
-    private fun MacrobenchmarkScope.openChat(chat: String, tail: String) {
+    /**
+     * Opens [chat] and waits for its [tail], the newest message: it shows once the snapshot is in
+     * and the list follows it. Then checks that the open found the chat in the repository's chat
+     * cache exactly when [cached] says so, so neither scenario silently measures the other.
+     */
+    private fun MacrobenchmarkScope.openChat(chat: String, tail: String, cached: Boolean?) {
         checkNotNull(device.findObject(By.text(chat))).click()
-        // The tail is the newest message; it shows once the snapshot is in and the list follows it.
         check(device.wait(Until.hasObject(By.text(tail)), 60_000))
+        if (cached == null) return
+        check(device.wait(Until.hasObject(By.desc(Pattern.compile("connected-flow-cache-(hit|miss)"))), 10_000)) {
+            "The chat open reported no cache result"
+        }
+        val expected = "connected-flow-cache-" + if (cached) "hit" else "miss"
+        check(device.hasObject(By.desc(expected))) {
+            if (cached) "$chat was not in the chat cache" else "$chat came from the chat cache, not the host"
+        }
     }
 
     @Test
@@ -135,11 +165,14 @@ class ConnectedFlowBenchmarks {
         compilationMode = CompilationMode.None(),
         iterations = 10,
         setupBlock = {
-            prepareOnce()
+            // Each open below leaves the uncached chat in the stored navigation snapshot, and a
+            // cold start restores that chat into the chat cache. Every iteration after the first
+            // therefore prepares again, which stores the cached chat as the last one.
+            if (prepared) prepare(clear = false) else prepareOnce()
             openSessions(UNCACHED_CHAT)
         },
     ) {
-        openChat(UNCACHED_CHAT, UNCACHED_TAIL)
+        openChat(UNCACHED_CHAT, UNCACHED_TAIL, cached = false)
     }
 
     @Test
@@ -152,8 +185,8 @@ class ConnectedFlowBenchmarks {
             prepareOnce()
             openSessions(CACHED_CHAT)
             // Opening it once in this process puts the chat in the repository's chat cache.
-            openChat(CACHED_CHAT, CACHED_TAIL)
-            device.waitForIdle(1_000)
+            openChat(CACHED_CHAT, CACHED_TAIL, cached = null)
+            waitSettled("chat")
             // A first Back may only close the keyboard of the composer holding the draft.
             repeat(3) {
                 if (device.hasObject(By.text(CACHED_TAIL))) {
@@ -162,11 +195,12 @@ class ConnectedFlowBenchmarks {
                 }
             }
             check(!device.hasObject(By.text(CACHED_TAIL)))
+            waitSettled("sessions")
             check(device.wait(Until.hasObject(By.text(CACHED_CHAT)), 10_000))
             device.waitForIdle(1_000)
         },
     ) {
-        openChat(CACHED_CHAT, CACHED_TAIL)
+        openChat(CACHED_CHAT, CACHED_TAIL, cached = true)
     }
 
     private fun chatOpenMetrics() = listOf(
