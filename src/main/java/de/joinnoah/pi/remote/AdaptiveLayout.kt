@@ -82,6 +82,8 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.text.input.ImeAction
@@ -1101,14 +1103,16 @@ internal fun InspectorRow(
         Row(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
                 // A stripped chat keeps its usual width behind the strip, so nothing in it rewraps,
-                // and TalkBack skips it.
+                // and TalkBack skips it, as do Tab and focus requests from outside.
                 Box(
-                    if (stripped)
+                    (if (stripped)
                         Modifier.wrapContentWidth(Alignment.Start, unbounded = true)
                             .width(CHAT_PANE_MIN_WIDTH)
                             .fillMaxHeight()
                             .clearAndSetSemantics {}
-                    else Modifier.fillMaxSize()
+                    else Modifier.fillMaxSize())
+                        .focusProperties { if (stripped) onEnter = { cancelFocusChange() } }
+                        .focusGroup()
                 ) {
                     content()
                 }
