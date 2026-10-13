@@ -24,6 +24,11 @@ class RemoteRecovery {
     /** The last network that was available, kept while there is none. */
     private var lastIdentity: String? = null
     private var replacedWhileBackground = false
+    /**
+     * The app returned while no network was usable, as when Android unblocks a backgrounded app's
+     * network only after its return: the network's return is that resume.
+     */
+    private var resumeWaitsForNetwork = false
 
     /** Whether Android validated the current network. */
     var validated = false
@@ -32,6 +37,7 @@ class RemoteRecovery {
     fun foreground(value: Boolean): Signal? {
         val changed = foreground != value
         foreground = value
+        if (changed) resumeWaitsForNetwork = value && network == null && lastIdentity != null
         if (!changed || !value || network == null) return null
         return if (replacedWhileBackground) {
             replacedWhileBackground = false
@@ -59,11 +65,15 @@ class RemoteRecovery {
             if (replaced) replacedWhileBackground = true
             return null
         }
+        val resumed = resumeWaitsForNetwork
+        resumeWaitsForNetwork = false
         return when {
             replaced || replacedWhileBackground -> {
                 replacedWhileBackground = false
                 Signal.NETWORK_REPLACED
             }
+            // The resume of a return that found no network, now that there is one.
+            resumed -> Signal.FRESH_FOREGROUND
             // The same network came back after a short loss: the socket may well have survived.
             last != null -> Signal.NETWORK_REVALIDATED
             else -> Signal.FRESH_NETWORK

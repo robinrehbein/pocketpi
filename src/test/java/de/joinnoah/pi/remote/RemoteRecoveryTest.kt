@@ -136,4 +136,42 @@ class RemoteRecoveryTest {
         assertNull(recovery.network("other", path = "wlan0:192.168.1.6"))
         assertEquals(RemoteRecovery.Signal.FRESH_FOREGROUND, recovery.foreground(true))
     }
+
+    @Test
+    fun aNetworkUnblockedAfterTheReturnIsTheResume() {
+        val recovery = RemoteRecovery()
+
+        recovery.foreground(true)
+        recovery.network("wifi")
+        recovery.foreground(false)
+        // Blocked in the background, unblocked only after the app is back.
+        assertNull(recovery.network(null))
+        assertNull(recovery.foreground(true))
+
+        assertEquals(RemoteRecovery.Signal.FRESH_FOREGROUND, recovery.network("wifi"))
+        // Only once: a later loss and return of the same network is a revalidation again.
+        assertNull(recovery.network(null))
+        assertEquals(RemoteRecovery.Signal.NETWORK_REVALIDATED, recovery.network("wifi"))
+    }
+
+    @Test
+    fun anotherNetworkAfterANetworklessReturnIsStillAReplacement() {
+        val recovery = RemoteRecovery()
+
+        recovery.foreground(true)
+        recovery.network("wifi")
+        recovery.foreground(false)
+        assertNull(recovery.network(null))
+        assertNull(recovery.foreground(true))
+
+        assertEquals(RemoteRecovery.Signal.NETWORK_REPLACED, recovery.network("lte"))
+    }
+
+    @Test
+    fun theFirstNetworkAfterLaunchIsAFreshNetwork() {
+        val recovery = RemoteRecovery()
+
+        assertNull(recovery.foreground(true))
+        assertEquals(RemoteRecovery.Signal.FRESH_NETWORK, recovery.network("wifi"))
+    }
 }

@@ -6,6 +6,7 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.system.OsConstants
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -212,42 +213,13 @@ class RemoteApplication : Application() {
         )
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(
             object : ConnectivityManager.NetworkCallback() {
-                // Main thread only: each callback hops there before it reads or writes these.
-                private var current: Network? = null
-                private var usable = false
-                private var validated = false
-                private var blocked = false
-                private var links: String? = null
-                private var underlying: String? = null
+                // Main thread only: each callback hops there before it touches the tracker.
+                private val tracker = NetworkTracker()
 
-                /**
-                 * Reports the default network once it can carry traffic, validated or not, so a
-                 * network Android never validates still reconnects. Its path (interface, addresses
-                 * and a VPN's underlying networks) lets a moved route be probed, not torn down.
-                 */
-                private fun report() {
-                    val network = current
-                    if (network == null || !usable || blocked) repository.setNetwork(null, false)
-                    else
-                        repository.setNetwork(
-                            network.toString(),
-                            validated,
-                            links?.let { listOfNotNull(it, underlying).joinToString("|") },
-                        )
-                }
-
-                private fun change(network: Network, block: () -> Unit) {
+                private fun report(change: () -> NetworkTracker.Report?) {
                     scope.launch {
-                        if (current != network) {
-                            current = network
-                            usable = false
-                            validated = false
-                            blocked = false
-                            links = null
-                            underlying = null
-                        }
-                        block()
-                        report()
+                        val report = change() ?: return@launch
+                        repository.setNetwork(report.identity, report.validated, report.path)
                     }
                 }
 
@@ -263,32 +235,30 @@ class RemoteApplication : Application() {
                     val under =
                         if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) null
                         else VPN_UNDERLYING_TRANSPORTS.filter(capabilities::hasTransport).joinToString(",")
-                    change(network) {
-                        usable = internet && running
-                        validated = checked
-                        underlying = under
-                    }
+                    val identity = network.toString()
+                    report { tracker.capabilities(identity, internet, running, checked, under) }
                 }
 
                 override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
-                    val route =
-                        (properties.interfaceName ?: "") + ":" +
-                            properties.linkAddresses.mapNotNull { it.address.hostAddress }.sorted().joinToString(",")
-                    change(network) { links = route }
+                    // Temporary IPv6 addresses rotate on their own; they do not move the route.
+                    val addresses =
+                        properties.linkAddresses
+                            .filter { (it.flags and OsConstants.IFA_F_TEMPORARY) == 0 }
+                            .mapNotNull { it.address.hostAddress }
+                    val identity = network.toString()
+                    val name = properties.interfaceName
+                    report { tracker.links(identity, name, addresses) }
                 }
 
                 override fun onBlockedStatusChanged(network: Network, isBlocked: Boolean) {
-                    // Blocked (data saver, an always-on VPN without its tunnel) is as good as lost;
-                    // unblocked reports the network again, which retries at once.
-                    change(network) { blocked = isBlocked }
+                    // Blocked is as good as lost; unblocked reports the network again.
+                    val identity = network.toString()
+                    report { tracker.blocked(identity, isBlocked) }
                 }
 
                 override fun onLost(network: Network) {
-                    scope.launch {
-                        if (current != network) return@launch
-                        current = null
-                        repository.setNetwork(null, false)
-                    }
+                    val identity = network.toString()
+                    report { tracker.lost(identity) }
                 }
             }
         )

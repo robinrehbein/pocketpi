@@ -2836,31 +2836,49 @@ class DefaultRemoteRepository(
             cancelRecovery()
             return
         }
+        // How long the app was away picks the resume tier, also for a resume that waits for a
+        // deferred signal or for the network, which Android may unblock only after this return.
+        val away = backgroundedAt?.let { (now() - it).coerceAtLeast(0) }
+        resumeAway = away
         if (signal != null) {
-            // How long the app was away picks the resume tier, also for a resume deferred until later.
-            val away = backgroundedAt?.let { (now() - it).coerceAtLeast(0) }
-            resumeAway = away
             away?.let { Diagnostics.record(Diagnostics.Kind.RECOVERY, "foreground", it) }
-            if (away != null && away > RESUME_QUIET_AWAY_MILLIS) abandonActivationFromBefore()
-            onRecoverySignal(signal)
-            resetReconnect()
-            recover(signal)
+            resume(signal)
         }
         // After the tier: a reconnect it starts lists the jobs once ready, so this one does not.
         jobsController.setForeground(true)
     }
 
+    /** Acts on [signal]; [pathMoved]: the network in use only moved its route. */
+    private fun resume(signal: RemoteRecovery.Signal, pathMoved: Boolean = false) {
+        onRecoverySignal(signal)
+        // A moved route says nothing about the Mac, so a backoff under way keeps its count.
+        if (!pathMoved) resetReconnect()
+        if (
+            signal == RemoteRecovery.Signal.FRESH_FOREGROUND &&
+                (resumeAway ?: 0) > RESUME_QUIET_AWAY_MILLIS &&
+                abandonActivationFromBefore()
+        )
+            return
+        recover(signal)
+    }
+
     /**
-     * An activation that started before the app went to the background and still runs is likely
-     * stuck on a socket that died meanwhile: it is given up, and the resume picks a tier afresh.
+     * An activation that started before the app went to the background and still runs while the
+     * socket has been quiet is likely stuck on a socket that died meanwhile: the connection ends
+     * as stale, so the activation's requests fail and it returns through its usual error path (a
+     * user's open with the selection from before it), and the reconnect restores the selection.
+     * Returns whether it did; on a socket that still delivers frames the activation runs on, and
+     * the resume waits for it.
      */
-    private fun abandonActivationFromBefore() {
-        val started = activationStartedAt ?: return
-        if (!state.value.loading || activationBackgrounds == backgrounds) return
-        if (pairing?.isActive == true || hasPendingRecoveryWork()) return
+    private fun abandonActivationFromBefore(): Boolean {
+        val started = activationStartedAt ?: return false
+        if (!state.value.loading || activationBackgrounds == backgrounds || activeHost == null) return false
+        if (pairing?.isActive == true || hasPendingRecoveryWork()) return false
+        val quiet = lastInboundAt?.let { (now() - it).coerceAtLeast(0) } ?: Long.MAX_VALUE
+        if (state.value.connected && quiet < RESUME_LIVE_SOCKET_MILLIS) return false
         Diagnostics.record(Diagnostics.Kind.RECOVERY, "resume.abandon", (now() - started).coerceAtLeast(0))
-        cancelSelection()
-        activationStartedAt = null
+        failed(true, R.string.remote_connection_error, cause = FailureCause.STALE)
+        return true
     }
 
     /**
@@ -2872,6 +2890,7 @@ class DefaultRemoteRepository(
 
     override fun setNetwork(identity: String?, validated: Boolean, path: String?) {
         val wasValidated = recovery.validated
+        val wasWaiting = recovery.waitingForNetwork
         val signal = recovery.network(identity, validated, path)
         if (identity == null) {
             stopReconnectTimer()
@@ -2888,9 +2907,14 @@ class DefaultRemoteRepository(
             }
             return
         }
-        onRecoverySignal(signal)
-        resetReconnect()
-        recover(signal)
+        // A revalidation on a network that never went away is a moved route: the socket is worth
+        // a probe, but a reconnect that waits for its backoff keeps waiting.
+        val pathMoved = signal == RemoteRecovery.Signal.NETWORK_REVALIDATED && !wasWaiting
+        if (pathMoved && !state.value.connected) {
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "recover.network_revalidated", outcome = "backoff")
+            return
+        }
+        resume(signal, pathMoved)
     }
 
     /**
@@ -2964,11 +2988,13 @@ class DefaultRemoteRepository(
             }
             ResumeTier.RECONNECT -> {
                 stopReconnectTimer()
-                if (activeHost != null) {
-                    // Ends the socket or the attempt under way and retries at once; the retry
-                    // restores the selection while the last-known state stays on screen.
+                if (state.value.connected && activeHost != null) {
+                    // Ends the socket and retries at once; the retry restores the selection while
+                    // the last-known state stays on screen.
                     failed(true, R.string.remote_connection_error, cause = FailureCause.STALE)
                 } else {
+                    // Already offline, with no attempt under way (an activation defers this):
+                    // reconnect now instead of failing a connection that is already gone.
                     val epoch = selectionEpoch
                     startRecovery(activates = true) {
                         if (epoch == selectionEpoch && recovery.canRecover && reconnectEnabled)
