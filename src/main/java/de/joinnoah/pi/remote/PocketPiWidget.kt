@@ -91,7 +91,7 @@ private fun WidgetContent(snapshot: HomeSnapshot) {
             .background(GlanceTheme.colors.surface)
             .cornerRadius(20.dp)
             .padding(horizontal = 14.dp, vertical = 10.dp)
-            .clickable(actionStartIntent(appIntent(LocalContext.current))),
+            .clickable(actionStartIntent(LaunchIntents.app(LocalContext.current))),
     ) {
         if (!snapshot.paired) {
             Title(context.getString(R.string.remote_widget_not_paired))
@@ -168,7 +168,7 @@ private fun SessionRow(context: Context, session: HomeSession, modifier: GlanceM
         modifier
             .padding(vertical = 2.dp)
             .clickable(
-                actionStartIntent(sessionIntent(context, session.routeId, session.sessionId))
+                actionStartIntent(LaunchIntents.session(context, session.routeId, session.sessionId))
             )
             .semantics { contentDescription = "$title, $detail" },
         verticalAlignment = Alignment.CenterVertically,
