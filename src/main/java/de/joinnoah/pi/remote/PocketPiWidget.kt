@@ -1,6 +1,8 @@
 package de.joinnoah.pi.remote
 
 import android.content.Context
+import android.os.Build
+import android.text.format.DateFormat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -39,6 +41,8 @@ import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider as GlanceColor
+import java.util.Calendar
+import java.util.Date
 
 private val WidgetColors =
     ColorProviders(light = remoteColorScheme(false), dark = remoteColorScheme(true))
@@ -46,8 +50,9 @@ private val WidgetColors =
 private val WaitingTone = ColorProvider(day = WaitingLight, night = WaitingDark)
 
 // Responsive buckets: the launcher picks the largest one that fits, so rows never clip. They cover
-// 2x1 to 4x3 phone cells and the wide, tall cells of a tablet home screen.
-private val SIZES =
+// 2x1 to 4x3 phone cells and the wide, tall cells of a tablet home screen, where a widget of four
+// or more cells gets three columns.
+internal val SIZES =
     setOf(
         DpSize(180.dp, 80.dp),
         DpSize(180.dp, 130.dp),
@@ -57,7 +62,12 @@ private val SIZES =
         DpSize(400.dp, 130.dp),
         DpSize(400.dp, 175.dp),
         DpSize(520.dp, 240.dp),
+        DpSize(600.dp, 240.dp),
+        DpSize(600.dp, 400.dp),
     )
+
+/** From this width the freshness label says "Updated"; a narrower widget shows only the time. */
+private const val WIDGET_FRESHNESS_LABEL_DP = 260
 
 /**
  * "N sessions waiting for you" plus the sessions that need attention. It renders the app's stored
@@ -81,16 +91,17 @@ class PocketPiWidgetReceiver : GlanceAppWidgetReceiver() {
 }
 
 @Composable
-private fun WidgetContent(snapshot: HomeSnapshot) {
+internal fun WidgetContent(snapshot: HomeSnapshot, now: Long = System.currentTimeMillis()) {
     val context = RemoteNotifications.localized(LocalContext.current)
     val size = LocalSize.current
     val (columns, rows) =
         widgetLayout(size.width.value, size.height.value, context.resources.configuration.fontScale)
+    // The rows' own vertical padding spaces them from the header and from the bottom edge.
     Column(
         GlanceModifier.fillMaxSize()
             .background(GlanceTheme.colors.surface)
-            .cornerRadius(20.dp)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .launcherCorners()
+            .padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 2.dp)
             .clickable(actionStartIntent(LaunchIntents.app(LocalContext.current))),
     ) {
         if (!snapshot.paired) {
@@ -100,13 +111,27 @@ private fun WidgetContent(snapshot: HomeSnapshot) {
             return@Column
         }
         val waiting = snapshot.waitingCount()
-        Title(
-            if (waiting == 0) context.getString(R.string.remote_widget_none_waiting)
-            else context.resources.getQuantityString(R.plurals.remote_widget_waiting, waiting, waiting)
-        )
-        Spacer(GlanceModifier.height(6.dp))
+        Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Title(
+                if (waiting == 0) context.getString(R.string.remote_widget_none_waiting)
+                else context.resources.getQuantityString(R.plurals.remote_widget_waiting, waiting, waiting),
+                GlanceModifier.defaultWeight(),
+            )
+            snapshot.refreshedAt?.let { refreshedAt ->
+                val label = widgetFreshness(context, refreshedAt, now)
+                Spacer(GlanceModifier.width(8.dp))
+                Text(
+                    if (size.width.value >= WIDGET_FRESHNESS_LABEL_DP) label
+                    else widgetFreshness(context, refreshedAt, now, short = true),
+                    modifier = GlanceModifier.semantics { contentDescription = label },
+                    maxLines = 1,
+                    style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 12.sp),
+                )
+            }
+        }
         val sessions = widgetSessions(snapshot, rows * columns)
         if (sessions.isEmpty()) {
+            Spacer(GlanceModifier.height(6.dp))
             Detail(context.getString(R.string.remote_widget_empty), maxLines = 2)
             return@Column
         }
@@ -114,7 +139,7 @@ private fun WidgetContent(snapshot: HomeSnapshot) {
             sessions.forEach { SessionRow(context, it, GlanceModifier.fillMaxWidth()) }
         } else {
             Row(GlanceModifier.fillMaxWidth()) {
-                sessions.chunked(rows).take(2).forEachIndexed { index, column ->
+                sessions.chunked(rows).take(columns).forEachIndexed { index, column ->
                     if (index > 0) Spacer(GlanceModifier.width(12.dp))
                     Column(GlanceModifier.defaultWeight()) {
                         column.forEach { SessionRow(context, it, GlanceModifier.fillMaxWidth()) }
@@ -125,10 +150,36 @@ private fun WidgetContent(snapshot: HomeSnapshot) {
     }
 }
 
+/**
+ * When the widget's rows were last confirmed by the host: "Updated 14:02", or the date once that
+ * was before today. [short] leaves out the word, for a narrow widget.
+ */
+internal fun widgetFreshness(context: Context, refreshedAt: Long, now: Long, short: Boolean = false): String {
+    val format =
+        if (sameDay(refreshedAt, now)) DateFormat.getTimeFormat(context)
+        else DateFormat.getDateFormat(context)
+    val time = format.format(Date(refreshedAt))
+    return if (short) time else context.getString(R.string.remote_widget_updated, time)
+}
+
+private fun sameDay(first: Long, second: Long): Boolean {
+    val a = Calendar.getInstance().apply { timeInMillis = first }
+    val b = Calendar.getInstance().apply { timeInMillis = second }
+    return a.get(Calendar.YEAR) == b.get(Calendar.YEAR) &&
+        a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
+}
+
+/** The launcher's own widget corner radius; Glance rounds corners only from Android 12 on. */
+private fun GlanceModifier.launcherCorners(): GlanceModifier =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+        cornerRadius(android.R.dimen.system_app_widget_background_radius)
+    else this
+
 @Composable
-private fun Title(text: String) {
+private fun Title(text: String, modifier: GlanceModifier = GlanceModifier) {
     Text(
         text,
+        modifier = modifier,
         maxLines = 1,
         style =
             TextStyle(
@@ -164,9 +215,10 @@ private fun SessionRow(context: Context, session: HomeSession, modifier: GlanceM
     val detail =
         if (session.projectName.isBlank()) state
         else context.getString(R.string.remote_widget_row_detail, session.projectName, state)
+    // The vertical padding makes the row a 48 dp tap target (see widgetRowDp).
     Row(
         modifier
-            .padding(vertical = 2.dp)
+            .padding(vertical = WIDGET_ROW_PADDING_DP.dp)
             .clickable(
                 actionStartIntent(LaunchIntents.session(context, session.routeId, session.sessionId))
             )

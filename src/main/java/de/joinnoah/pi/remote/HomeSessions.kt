@@ -26,10 +26,17 @@ internal data class HomeSession(
 internal data class HomeSnapshot(
     val paired: Boolean = false,
     val sessions: List<HomeSession> = emptyList(),
+    /**
+     * When the host last confirmed these rows: a trusted merge of the app's state or a push about
+     * a known session, at a minute's resolution. The widget shows it as "Updated 14:02".
+     */
+    val refreshedAt: Long? = null,
 )
 
 internal const val MAX_HOME_SESSIONS = 40
 internal const val MAX_WIDGET_ROWS = 3
+/** Rows per column of the three-column tablet layout, which is tall enough for more. */
+internal const val MAX_LARGE_WIDGET_ROWS = 6
 internal const val MAX_SHORTCUTS = 4
 
 private fun HomeSession.key() = routeId to sessionId
@@ -43,14 +50,18 @@ private fun attention(status: String) =
 
 internal data class WidgetLayout(val columns: Int, val rows: Int)
 
-// Fixed paddings plus text lines that grow with the user's font scale.
-private const val WIDGET_HEADER_FIXED_DP = 26f
+// Fixed paddings plus text lines that grow with the user's font scale. A row's own 6 dp vertical
+// padding makes its tap target 48 dp at the default font size, and doubles as the gap below the
+// header, so the widget itself adds only 8 dp above the header and 2 dp below the last row.
+private const val WIDGET_HEADER_FIXED_DP = 10f
 private const val WIDGET_HEADER_TEXT_DP = 21f
-private const val WIDGET_ROW_FIXED_DP = 4f
+internal const val WIDGET_ROW_PADDING_DP = 6
+private const val WIDGET_ROW_FIXED_DP = 2f * WIDGET_ROW_PADDING_DP
 private const val WIDGET_ROW_TEXT_DP = 36f
 internal const val WIDGET_TWO_COLUMNS_DP = 400
+internal const val WIDGET_THREE_COLUMNS_DP = 600
 
-/** Height of one session row, about 40 dp at the default font size. */
+/** Height of one session row, 48 dp at the default font size. */
 internal fun widgetRowDp(fontScale: Float) = WIDGET_ROW_FIXED_DP + WIDGET_ROW_TEXT_DP * fontScale
 
 internal fun widgetHeaderDp(fontScale: Float) =
@@ -58,13 +69,19 @@ internal fun widgetHeaderDp(fontScale: Float) =
 
 /**
  * How many session rows fit a widget of this size at this font scale: as many as the height holds
- * (1 to 3), and two columns once it is tablet-wide, for up to six sessions.
+ * (1 to 3), and two columns once it is tablet-wide, for up to six sessions. The large tablet size
+ * has three columns of up to six rows each.
  */
 internal fun widgetLayout(widthDp: Float, heightDp: Float, fontScale: Float = 1f): WidgetLayout {
     val scale = fontScale.coerceIn(0.5f, 3f)
-    val rows =
-        ((heightDp - widgetHeaderDp(scale)) / widgetRowDp(scale)).toInt().coerceIn(1, MAX_WIDGET_ROWS)
-    val columns = if (widthDp >= WIDGET_TWO_COLUMNS_DP) 2 else 1
+    val columns =
+        when {
+            widthDp >= WIDGET_THREE_COLUMNS_DP -> 3
+            widthDp >= WIDGET_TWO_COLUMNS_DP -> 2
+            else -> 1
+        }
+    val maxRows = if (columns == 3) MAX_LARGE_WIDGET_ROWS else MAX_WIDGET_ROWS
+    val rows = ((heightDp - widgetHeaderDp(scale)) / widgetRowDp(scale)).toInt().coerceIn(1, maxRows)
     return WidgetLayout(columns, rows)
 }
 
@@ -117,6 +134,54 @@ private fun session(
     }
 
 /**
+ * What [mergeHomeSnapshot] and [closedHomeSessions] read of the app's state, and nothing else. The
+ * home surfaces update when this changes, so a streamed reply, a draft or a spinner never rewrites
+ * the snapshot, while a status or title change still reaches the widget in the middle of a run.
+ * Session and project objects keep only the fields the merge reads.
+ */
+internal data class HomeInputs(
+    /** The paired hosts in the app's state; empty until they are loaded. */
+    val hostRoutes: List<String> = emptyList(),
+    val selection: RemoteSelection = RemoteSelection(),
+    /** Connected to the selected host and settled, so its lists may add and update rows. */
+    val connectedToSelection: Boolean = false,
+    val project: JsonObject? = null,
+    val sessions: List<JsonObject> = emptyList(),
+    /** [sessions] came from a sessions.list on the current connection, not from a cache. */
+    val sessionsFresh: Boolean = false,
+    val projectChats: List<ProjectChatSummary> = emptyList(),
+)
+
+private val HOME_SESSION_FIELDS = setOf("id", "origin", "title", "status", "updatedAt")
+private val HOME_PROJECT_FIELDS = setOf("id", "name")
+
+private fun JsonObject.only(fields: Set<String>) =
+    if (keys.all { it in fields }) this else JsonObject(filterKeys { it in fields })
+
+internal fun homeInputs(state: RemoteState): HomeInputs {
+    val routeId = state.selection.routeId
+    return HomeInputs(
+        hostRoutes = state.hosts.map { it.routeId },
+        selection = state.selection,
+        connectedToSelection =
+            state.connected && !state.loading && routeId != null && state.host?.routeId == routeId,
+        project = state.project?.only(HOME_PROJECT_FIELDS),
+        sessions = state.sessions.map { it.only(HOME_SESSION_FIELDS) },
+        sessionsFresh = state.sessionsFresh,
+        projectChats =
+            state.projectChats.map { it.copy(session = it.session.only(HOME_SESSION_FIELDS)) },
+    )
+}
+
+internal fun mergeHomeSnapshot(
+    previous: HomeSnapshot,
+    state: RemoteState,
+    paired: Boolean,
+    pairedRoutes: Set<String>,
+    now: Long,
+): HomeSnapshot = mergeHomeSnapshot(previous, homeInputs(state), paired, pairedRoutes, now)
+
+/**
  * Folds the app's current state into the home snapshot. Only a connected, settled state is trusted
  * to add, update or remove sessions; an offline app keeps the last known rows.
  *
@@ -125,10 +190,13 @@ private fun session(
  * - verified project chats update rows across projects, and a row that was waiting or running but
  *   is no longer among its project's most active chats is no longer shown as active;
  * - the open chat counts as used now.
+ *
+ * A trusted state also marks the rows as refreshed now, at a minute's resolution unless they
+ * changed, so a connected app does not rewrite the snapshot for every update.
  */
 internal fun mergeHomeSnapshot(
     previous: HomeSnapshot,
-    state: RemoteState,
+    state: HomeInputs,
     paired: Boolean,
     pairedRoutes: Set<String>,
     now: Long,
@@ -136,7 +204,7 @@ internal fun mergeHomeSnapshot(
     val rows = linkedMapOf<Pair<String, String>, HomeSession>()
     previous.sessions.filter { it.routeId in pairedRoutes }.forEach { rows[it.key()] = it }
     val routeId = state.selection.routeId
-    val trusted = state.connected && !state.loading && routeId != null && state.host?.routeId == routeId
+    val trusted = state.connectedToSelection
     if (trusted) {
         val route = routeId!!
         val verified = state.projectChats.filter { it.verified }
@@ -182,7 +250,10 @@ internal fun mergeHomeSnapshot(
                     .thenByDescending { maxOf(it.updatedAt ?: 0L, it.openedAt ?: 0L) }
             )
             .take(MAX_HOME_SESSIONS)
-    return HomeSnapshot(paired, sessions)
+    val refreshedAt =
+        if (trusted && (sessions != previous.sessions || now - (previous.refreshedAt ?: 0L) >= 60_000)) now
+        else previous.refreshedAt
+    return HomeSnapshot(paired, sessions, refreshedAt)
 }
 
 internal fun shortcutId(routeId: String, sessionId: String) = "session:$routeId:$sessionId"
@@ -213,11 +284,14 @@ internal fun shortcutSignatureEntry(
  * missing from its full, trusted session list. Falling out of the snapshot's size cap or out of the
  * project chats' top rows is not evidence.
  */
-internal fun closedHomeSessions(previous: HomeSnapshot, state: RemoteState): Set<String> {
+internal fun closedHomeSessions(previous: HomeSnapshot, state: RemoteState): Set<String> =
+    closedHomeSessions(previous, homeInputs(state))
+
+internal fun closedHomeSessions(previous: HomeSnapshot, state: HomeInputs): Set<String> {
     val routeId = state.selection.routeId ?: return emptySet()
     val projectId = state.selection.projectId ?: return emptySet()
     val trusted =
-        state.connected && !state.loading && state.sessionsFresh && state.host?.routeId == routeId &&
+        state.connectedToSelection && state.sessionsFresh &&
             state.project?.optionalText("id") == projectId
     if (!trusted) return emptySet()
     val live =
@@ -282,10 +356,22 @@ internal fun HomeSnapshot.withStatus(routeId: String, sessionId: String, status:
         }
     )
 
+/** [withStatus] from a push, which is news from the host when the widget knows the session. */
+internal fun HomeSnapshot.withPush(
+    routeId: String,
+    sessionId: String,
+    status: String,
+    now: Long,
+): HomeSnapshot =
+    if (sessions.none { it.routeId == routeId && it.sessionId == sessionId }) this
+    else withStatus(routeId, sessionId, status).copy(refreshedAt = now)
+
 internal fun HomeSnapshot.json(): JsonObject =
     Wire.objectOf(
         "version" to 1,
         "paired" to paired,
+        // Optional, so a version without it still reads the snapshot.
+        "refreshedAt" to refreshedAt,
         "sessions" to JsonArray(
             sessions.map {
                 Wire.objectOf(
@@ -319,5 +405,6 @@ internal fun homeSnapshot(value: JsonObject): HomeSnapshot {
                 item["openedAt"]?.jsonPrimitive?.longOrNull,
             )
         },
+        value["refreshedAt"]?.jsonPrimitive?.longOrNull,
     )
 }
