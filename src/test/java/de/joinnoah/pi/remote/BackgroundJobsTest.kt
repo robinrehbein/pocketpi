@@ -276,7 +276,15 @@ class BackgroundJobsTest {
             selection = RemoteSelection("route", "project", "s"),
             session = Wire.objectOf("id" to "s", "origin" to "tui"),
         )
-        val controller = BackgroundJobsController(scope, source, { state }, { block -> state = block(state) })
+        var recoveryStarting = false
+        val controller =
+            BackgroundJobsController(
+                scope,
+                source,
+                { state },
+                { block -> state = block(state) },
+                recoveryStarting = { recoveryStarting },
+            )
         val view get() = state.jobs?.view
     }
 
@@ -625,6 +633,28 @@ class BackgroundJobsTest {
         harness.controller.setForeground(true)
         runCurrent()
         assertEquals(afterReopen + 1, harness.source.lists.size)
+    }
+
+    @Test
+    fun returningToTheForegroundLeavesTheListToAStartingRecovery() = runTest {
+        val harness = Harness(backgroundScope)
+        harness.source.list = { emptyList() }
+        harness.controller.refresh()
+        runCurrent()
+        val listed = harness.source.lists.size
+
+        // The recovery's activation lists the jobs again; a second list would be wasted.
+        harness.controller.setForeground(false)
+        harness.recoveryStarting = true
+        harness.controller.setForeground(true)
+        runCurrent()
+        assertEquals(listed, harness.source.lists.size)
+
+        harness.controller.setForeground(false)
+        harness.recoveryStarting = false
+        harness.controller.setForeground(true)
+        runCurrent()
+        assertEquals(listed + 1, harness.source.lists.size)
     }
 
     @Test

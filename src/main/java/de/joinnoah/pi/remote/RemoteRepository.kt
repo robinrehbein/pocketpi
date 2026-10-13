@@ -187,7 +187,15 @@ interface RemoteRepository {
 
     fun setForeground(foreground: Boolean) {}
 
-    fun setValidatedNetwork(identity: String?) {}
+    /** A validated default network, or none: [setNetwork] for callers that only see validation. */
+    fun setValidatedNetwork(identity: String?) = setNetwork(identity, validated = identity != null)
+
+    /**
+     * The default network once it can carry traffic, or null when there is none. [validated] says
+     * whether Android validated it; one that never validates still allows reconnects. [path]
+     * fingerprints its route, so a route that moves on the same network is probed, not torn down.
+     */
+    fun setNetwork(identity: String?, validated: Boolean, path: String? = null) {}
 
     fun refresh()
 

@@ -2,8 +2,10 @@ package de.joinnoah.pi.remote
 
 import android.app.Application
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.os.Build
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -16,7 +18,6 @@ import kotlinx.coroutines.flow.map
 
 class RemoteApplication : Application() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var validatedNetwork: String? = null
     private lateinit var pushRegistration: PushRegistration
     lateinit var repository: RemoteRepository
         private set
@@ -211,28 +212,94 @@ class RemoteApplication : Application() {
         )
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(
             object : ConnectivityManager.NetworkCallback() {
-                override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                // Main thread only: each callback hops there before it reads or writes these.
+                private var current: Network? = null
+                private var usable = false
+                private var validated = false
+                private var blocked = false
+                private var links: String? = null
+                private var underlying: String? = null
+
+                /**
+                 * Reports the default network once it can carry traffic, validated or not, so a
+                 * network Android never validates still reconnects. Its path (interface, addresses
+                 * and a VPN's underlying networks) lets a moved route be probed, not torn down.
+                 */
+                private fun report() {
+                    val network = current
+                    if (network == null || !usable || blocked) repository.setNetwork(null, false)
+                    else
+                        repository.setNetwork(
+                            network.toString(),
+                            validated,
+                            links?.let { listOfNotNull(it, underlying).joinToString("|") },
+                        )
+                }
+
+                private fun change(network: Network, block: () -> Unit) {
                     scope.launch {
-                        val identity = network.toString()
-                        if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
-                            validatedNetwork = identity
-                            repository.setValidatedNetwork(identity)
-                        } else if (validatedNetwork == identity) {
-                            validatedNetwork = null
-                            repository.setValidatedNetwork(null)
+                        if (current != network) {
+                            current = network
+                            usable = false
+                            validated = false
+                            blocked = false
+                            links = null
+                            underlying = null
                         }
+                        block()
+                        report()
                     }
+                }
+
+                override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                    val internet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    val running =
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.P ||
+                            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
+                    val checked = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    // A VPN carries the transports of the networks underneath it (the list of
+                    // those networks is no public API), so roaming between Wi-Fi and LTE keeps the
+                    // VPN's network and changes these.
+                    val under =
+                        if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) null
+                        else VPN_UNDERLYING_TRANSPORTS.filter(capabilities::hasTransport).joinToString(",")
+                    change(network) {
+                        usable = internet && running
+                        validated = checked
+                        underlying = under
+                    }
+                }
+
+                override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
+                    val route =
+                        (properties.interfaceName ?: "") + ":" +
+                            properties.linkAddresses.mapNotNull { it.address.hostAddress }.sorted().joinToString(",")
+                    change(network) { links = route }
+                }
+
+                override fun onBlockedStatusChanged(network: Network, isBlocked: Boolean) {
+                    // Blocked (data saver, an always-on VPN without its tunnel) is as good as lost;
+                    // unblocked reports the network again, which retries at once.
+                    change(network) { blocked = isBlocked }
                 }
 
                 override fun onLost(network: Network) {
                     scope.launch {
-                        if (validatedNetwork == network.toString()) {
-                            validatedNetwork = null
-                            repository.setValidatedNetwork(null)
-                        }
+                        if (current != network) return@launch
+                        current = null
+                        repository.setNetwork(null, false)
                     }
                 }
             }
         )
     }
 }
+
+/** Transports a VPN's network takes over from the networks it runs on. */
+private val VPN_UNDERLYING_TRANSPORTS =
+    listOf(
+        NetworkCapabilities.TRANSPORT_CELLULAR,
+        NetworkCapabilities.TRANSPORT_WIFI,
+        NetworkCapabilities.TRANSPORT_ETHERNET,
+        NetworkCapabilities.TRANSPORT_BLUETOOTH,
+    )
