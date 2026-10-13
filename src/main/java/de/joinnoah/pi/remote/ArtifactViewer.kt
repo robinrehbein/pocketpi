@@ -200,7 +200,9 @@ internal fun ArtifactViewer(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     else
-                        key(generation) {
+                        // A dark mode switch no longer recreates the activity: a new view draws the
+                        // page in the new colors, while rotation and resizing keep the loaded one.
+                        key(generation, dark) {
                             val page = remember { ArtifactPage(kind, text, dark) }
                             AndroidView(
                                 factory = { ctx ->

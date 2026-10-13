@@ -16,10 +16,10 @@ test; it publishes as soon as the checks pass.
 ## First-release setup
 
 1. Confirm that [Android CI](../../.github/workflows/ci.yml) passes for the exact `main` commit.
-   Require its `Unit tests and debug builds`, `Android Lint`, `Benchmark isolation` and
-   `Emulator tests` jobs before merging. CI checks resource parity, unit tests, the debug APKs,
-   lint, benchmark isolation, and API 36 instrumentation tests. It has no Play or release-signing
-   access.
+   Require its `Unit tests and debug builds`, `Android Lint`, `Benchmark isolation`,
+   `Emulator tests` and `Tablet emulator tests` jobs before merging. CI checks resource parity,
+   unit tests, the debug APKs, lint, benchmark isolation, and API 36 instrumentation tests on a
+   phone and a tablet. It has no Play or release-signing access.
 2. Complete the new Play app's store listing, app-content declarations, privacy link, reviewer
    access, countries, and tester lists. Create Internal Testing and Closed Alpha. Use `alpha` for
    the default Closed Alpha track.

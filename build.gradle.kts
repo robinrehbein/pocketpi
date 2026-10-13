@@ -204,6 +204,12 @@ android {
                     apiLevel = 36
                     systemImageSource = "aosp"
                 }
+                // CI runs only the tests annotated with @LargeScreen on it.
+                create("pixelTabletApi36") {
+                    device = "Pixel Tablet"
+                    apiLevel = 36
+                    systemImageSource = "aosp"
+                }
             }
         }
     }

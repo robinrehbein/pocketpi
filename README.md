@@ -30,11 +30,15 @@ phone-only release; watch release artifacts require their own unused Play versio
 
 [`Android CI`](.github/workflows/ci.yml) checks the exact head commit of each pull request
 into `main` and each commit pushed to `main`. The workflow uses JDK 25, Android SDK platform
-37 and build tools 37.0.0, and runs four parallel jobs: `Unit tests and debug builds` (English
+37 and build tools 37.0.0, and runs five parallel jobs: `Unit tests and debug builds` (English
 and German resource keys, phone and watch unit tests and debug APKs), `Android Lint` (phone and
 watch, against the committed lint baselines), `Benchmark isolation` (benchmark APKs and fixture
-isolation) and `Emulator tests` (the managed API 36 instrumentation tests, with the AVD and its
-boot snapshot cached). GitHub-hosted Linux must provide `/dev/kvm` for the emulator job. A failing
+isolation), `Emulator tests` (the managed API 36 phone instrumentation tests, with the AVD and its
+boot snapshot cached) and `Tablet emulator tests` (the tests annotated `@LargeScreen` on a managed
+API 36 Pixel Tablet). Both emulator jobs share one cached API 36 system image, and each caches only
+its own AVD and boot snapshot; push runs on `main` save these entries. After a change to them, check
+the repository's Actions cache usage against GitHub's 10 GB limit. GitHub-hosted Linux must provide
+`/dev/kvm` for both emulator jobs. A failing
 job uploads its Gradle reports and test results as a `pocketpi-*` artifact. Every action is pinned
 to a commit SHA; Dependabot proposes action and Gradle dependency updates weekly.
 
@@ -208,7 +212,8 @@ Instrumentation tests run against the production navigation with a fake host con
 back navigation, restored state and notification routing. Separate device tests exercise Android
 Keystore and encrypted file recreation. With an attached emulator, run
 `./gradlew connectedDebugAndroidTest`. For the managed API 36 device used by CI, run
-`./gradlew pixel2Api36DebugAndroidTest`.
+`./gradlew pixel2Api36DebugAndroidTest`; for CI's tablet subset, run
+`./gradlew pixelTabletApi36DebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.annotation=de.joinnoah.pi.remote.LargeScreen`.
 
 Unit tests consume the fifteen JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
 of `packages/pi-remote/protocol/fixtures/` from noah-monorepo commit
