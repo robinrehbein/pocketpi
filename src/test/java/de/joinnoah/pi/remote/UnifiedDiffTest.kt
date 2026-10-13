@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -141,5 +142,34 @@ class UnifiedDiffTest {
 
         """.trimIndent()
         assertEquals(git, unifiedDiff("a", original, edited)!!.replace("+++ b/a", "+++ b/b"))
+    }
+
+    @Test
+    fun aFullyChangedLongFileIsTooLargeQuicklyInsteadOfBlowingUp() {
+        val original = (1..5_000).joinToString("") { "old line $it\n" }
+        val edited = (1..5_000).joinToString("") { "new line $it\n" }
+        val started = System.nanoTime()
+        assertEquals(LineDiff.TooLarge, boundedUnifiedDiff("a", original, edited))
+        assertEquals(EditorPrompt.TooLarge, editorPrompt("a", original, edited))
+        val millis = (System.nanoTime() - started) / 1_000_000
+        assertTrue("took $millis ms", millis < 1_000)
+    }
+
+    @Test
+    fun onlyInsertionsNeedNoSearchAndStayExact() {
+        val original = "a\nb\n"
+        val edited = "a\n" + (1..3_000).joinToString("") { "$it\n" } + "b\n"
+        val diff = boundedUnifiedDiff("f", original, edited, maxEdits = 10) as LineDiff.Text
+        assertEquals(unifiedDiff("f", original, edited), diff.text)
+        assertTrue(diff.text.startsWith("--- a/f\n+++ b/f\n@@ -1,2 +1,3002 @@\n a\n+1\n"))
+    }
+
+    @Test
+    fun aSmallBoundStillDiffsSmallChanges() {
+        val original = (1..100).joinToString("") { "$it\n" }
+        val edited = original.replace("50\n", "fifty\n")
+        assertEquals(LineDiff.Text(unifiedDiff("f", original, edited)!!), boundedUnifiedDiff("f", original, edited, maxEdits = 2))
+        assertEquals(LineDiff.TooLarge, boundedUnifiedDiff("f", original, edited, maxEdits = 1))
+        assertEquals(LineDiff.Same, boundedUnifiedDiff("f", original, original))
     }
 }

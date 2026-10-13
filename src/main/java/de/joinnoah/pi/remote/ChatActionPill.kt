@@ -168,4 +168,6 @@ internal fun filesActions(model: ChatViewModel, focusComposer: () -> Unit) =
         onDiscardEditor = model::discardFileEditor,
         onReloadAfterConflict = model::reloadFileAfterConflict,
         onEditorPrompt = model::fileEditorPrompt,
+        onConfirmLeave = model::confirmFileEditorLeave,
+        onCancelLeave = model::cancelFileEditorLeave,
     )

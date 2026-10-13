@@ -662,12 +662,15 @@ class ProjectFilesLoaderTest {
 
     @Test
     fun anotherSessionOrABrowserWithoutEditorIsClosedOnActivation() = runTest {
-        val transport = editorTransport()
-        val repository = editing(transport)
-        repository.updateFileEditorText("unsaved\n")
-        repository.activate(RemoteSelection("host", "project", "other"))
+        // An unchanged editor is dropped with its session.
+        val plainTransport = editorTransport()
+        val plain = editing(plainTransport)
+        plain.activate(RemoteSelection("host", "project", "other"))
         runCurrent()
-        assertNull(repository.state.value.files)
+        assertNull(plain.state.value.files)
+        plain.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        assertNull(plain.state.value.files)
 
         val browsingTransport = editorTransport()
         val browsing = opened(browsingTransport)
@@ -676,6 +679,213 @@ class ProjectFilesLoaderTest {
         browsing.activate(RemoteSelection("host", "project", sessionId))
         runCurrent()
         assertNull(browsing.state.value.files)
+    }
+
+    @Test
+    fun anUnsavedEditIsParkedWithItsSessionAndComesBack() = runTest {
+        val held = mutableListOf<JsonObject>()
+        val transport = editorTransport { held += it; null }
+        val repository = editing(transport)
+        repository.updateFileEditorText("unsaved\n")
+        // A save still runs when another session opens without asking (a notification tap).
+        repository.saveFileEditor()
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertNull(repository.state.value.files)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        val editor = checkNotNull(repository.state.value.files?.editor)
+        assertEquals("unsaved\n", editor.text)
+        assertTrue(editor.changed)
+        // Its reply never came, so it waits for Retry instead of spinning.
+        assertFalse(editor.saving)
+        assertEquals(FilesFailure.OFFLINE, editor.saveFailure)
+        repository.saveFileEditor()
+        runCurrent()
+        assertEquals(2, held.size)
+        assertEquals(held[0].text("requestId"), held[1].text("requestId"))
+    }
+
+    @Test
+    fun aSaveCutOffByASelectionChangeEndsAndRetriesUnderItsRequestId() = runTest {
+        val held = mutableListOf<JsonObject>()
+        val transport = editorTransport { held += it; null }
+        val repository = editing(transport)
+        repository.updateFileEditorText("mine\n")
+        repository.saveFileEditor()
+        runCurrent()
+        assertTrue(checkNotNull(repository.state.value.files?.editor).saving)
+        // Navigation cancels the open requests while the save's coroutine lives on.
+        repository.cancelSelection()
+        runCurrent()
+        var editor = checkNotNull(repository.state.value.files?.editor)
+        assertFalse(editor.saving)
+        assertEquals(FilesFailure.OFFLINE, editor.saveFailure)
+        repository.saveFileEditor()
+        runCurrent()
+        assertEquals(2, held.size)
+        assertEquals(held[0].text("requestId"), held[1].text("requestId"))
+        transport.result(held[1], written(held[1]))
+        runCurrent()
+        editor = checkNotNull(repository.state.value.files?.editor)
+        assertFalse(editor.changed)
+        assertNull(editor.unconfirmed)
+        // Other text is a new save with a new ID.
+        repository.updateFileEditorText("again\n")
+        repository.saveFileEditor()
+        runCurrent()
+        assertNotEquals(held[1].text("requestId"), held[2].text("requestId"))
+    }
+
+    @Test
+    fun aHostErrorForgetsTheRequestId() = runTest {
+        val transport = editorTransport()
+        transport.failure = { request -> if (request.text("type") == "session.files.write") "busy" else null }
+        val repository = editing(transport)
+        repository.updateFileEditorText("mine\n")
+        repository.saveFileEditor()
+        runCurrent()
+        repository.saveFileEditor()
+        runCurrent()
+        val ids = writes(transport).map { it.text("requestId") }
+        assertEquals(2, ids.size)
+        assertNotEquals(ids[0], ids[1])
+    }
+
+    @Test
+    fun aConflictWithOurOwnTextCountsAsSaved() = runTest {
+        var hostContent = "hello\n"
+        val transport = Transport(writeCapabilities) { request ->
+            when (request.text("type")) {
+                // The write reached the host, but its reply was lost: a retry finds the file changed.
+                "session.files.write" -> null.also { hostContent = request.text("content") }
+                "session.files.read" -> page(request, hostContent, hostContent.encodeToByteArray().size)
+                else -> listing(request, "main.ts")
+            }
+        }
+        val repository = editing(transport)
+        repository.updateFileEditorText("mine\n")
+        repository.saveFileEditor()
+        runCurrent()
+        repository.cancelSelection()
+        runCurrent()
+        transport.failure = { request -> if (request.text("type") == "session.files.write") "conflict" else null }
+        // The host's ledger may be gone; the text it holds still proves the save.
+        repository.saveFileEditor()
+        runCurrent()
+        val saved = checkNotNull(repository.state.value.files?.editor)
+        assertFalse(saved.conflict)
+        assertNull(saved.saveFailure)
+        assertFalse(saved.changed)
+        assertEquals(1L, saved.savedAt)
+        assertEquals("mine\n", repository.state.value.files?.file?.content)
+
+        // Other text on the host is a real conflict.
+        hostContent = "theirs\n"
+        repository.updateFileEditorText("mine again\n")
+        repository.saveFileEditor()
+        runCurrent()
+        val conflicted = checkNotNull(repository.state.value.files?.editor)
+        assertTrue(conflicted.conflict)
+        assertEquals(FilesFailure.CONFLICT, conflicted.saveFailure)
+    }
+
+    @Test
+    fun aTextTooLargeForOneFrameIsNotSent() = runTest {
+        val transport = editorTransport()
+        val repository = editing(transport)
+        // Quotes turn into \" in JSON: short enough in characters, too long once encoded.
+        repository.updateFileEditorText("\"".repeat(MAX_FILES_CONTENT_JSON_BYTES / 2 + 1))
+        repository.saveFileEditor()
+        runCurrent()
+        assertEquals(FilesFailure.TOO_LARGE, repository.state.value.files?.editor?.saveFailure)
+        assertTrue(writes(transport).isEmpty())
+    }
+
+    @Test
+    fun aSaveBeforeTheCapabilitiesAreKnownIsOffline() = runTest {
+        // Just after a reconnect: connected, but projects.list has not told the capabilities yet.
+        var state =
+            RemoteState(
+                connected = true,
+                capabilitiesKnown = false,
+                selection = RemoteSelection("host", "project", sessionId),
+                files = FilesState(sessionId, loading = false, editor = FileEditor("a.kt", version, "a\n", "b\n")),
+            )
+        val loader =
+            ProjectFilesLoader(
+                backgroundScope,
+                object : FileSource {
+                    override suspend fun filesList(sessionId: String, path: String, after: String?) = error("unused")
+
+                    override suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?) = error("unused")
+
+                    override suspend fun filesWrite(sessionId: String, path: String, baseVersion: String, content: String, requestId: String) =
+                        error("must not be sent")
+                },
+                { state },
+                { state = it(state) },
+            )
+        loader.saveEditor()
+        runCurrent()
+        assertEquals(FilesFailure.OFFLINE, state.files?.editor?.saveFailure)
+        assertFalse(checkNotNull(state.files?.editor).saving)
+    }
+
+    @Test
+    fun aLaterFailureClearsTheConflict() = runTest {
+        val transport = editorTransport()
+        transport.failure = { request -> if (request.text("type") == "session.files.write") "conflict" else null }
+        val repository = editing(transport)
+        repository.updateFileEditorText("mine\n")
+        repository.saveFileEditor()
+        runCurrent()
+        assertTrue(checkNotNull(repository.state.value.files?.editor).conflict)
+        transport.failure = { request -> if (request.text("type") == "session.files.write") "busy" else null }
+        repository.saveFileEditor()
+        runCurrent()
+        val editor = checkNotNull(repository.state.value.files?.editor)
+        assertFalse(editor.conflict)
+        assertEquals(FilesFailure.BUSY, editor.saveFailure)
+    }
+
+    @Test
+    fun filesAndChangesNeverDropAnUnsavedEdit() = runTest {
+        val transport = editorTransport()
+        val repository = editing(transport)
+        repository.updateFileEditorText("mine\n")
+        // Files again while the editor shows: nothing happens.
+        repository.openFiles()
+        runCurrent()
+        assertEquals("mine\n", repository.state.value.files?.editor?.text)
+        // Changes ask first; keeping the edit cancels them.
+        repository.openChanges()
+        runCurrent()
+        assertEquals(EditorLeave.CHANGES, repository.state.value.files?.editor?.leaveRequest)
+        assertNull(repository.state.value.changes)
+        repository.cancelFileEditorLeave()
+        assertNull(repository.state.value.files?.editor?.leaveRequest)
+        assertNull(repository.state.value.changes)
+        // Discarding runs them.
+        repository.openChanges()
+        repository.confirmFileEditorLeave()
+        runCurrent()
+        assertNull(repository.state.value.files)
+        assertNotNull(repository.state.value.changes)
+    }
+
+    @Test
+    fun theCursorStartsAtThePickedLine() = runTest {
+        val transport = Transport(writeCapabilities) { request ->
+            if (request.text("type") == "session.files.read") page(request, "one\ntwo\nthree\n", 14) else listing(request, "a.kt")
+        }
+        val repository = opened(transport)
+        repository.openFilesFile("a.kt")
+        runCurrent()
+        repository.selectFileLines(LineSelection(3, 2))
+        repository.startFileEditing()
+        assertEquals(4, repository.state.value.files?.editor?.cursor)
     }
 
     @Test

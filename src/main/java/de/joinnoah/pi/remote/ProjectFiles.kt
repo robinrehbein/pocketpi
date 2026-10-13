@@ -19,7 +19,7 @@ internal const val FILES_CAPABILITY = "session.files.v1"
 internal const val FILES_WRITE_CAPABILITY = "session.files.write.v1"
 
 private const val MAX_FILES_LIST_ENTRIES = 500
-private const val MAX_FILES_CONTENT_JSON_BYTES = 192 * 1024
+internal const val MAX_FILES_CONTENT_JSON_BYTES = 192 * 1024
 private const val MAX_FILES_PATH_BYTES = 4096
 private const val MAX_SAFE_INTEGER = 9_007_199_254_740_991L
 
@@ -74,6 +74,8 @@ enum class FilesFailure {
     BUSY,
     /** A save found the file changed since it was read (`conflict`). */
     CONFLICT,
+    /** The edited text is over [MAX_FILES_CONTENT_JSON_BYTES], so a save would not fit one frame. */
+    TOO_LARGE,
     FAILED,
 }
 
@@ -127,7 +129,8 @@ data class OpenFile(
 
 /**
  * The open file while it is edited. [original] is the text of [baseVersion], the last version
- * read or saved; [text] is what the editor shows now.
+ * read or saved; [text] is the editor's text as the UI last handed it over, and [latestText]
+ * what the field shows right now.
  */
 data class FileEditor(
     val path: String,
@@ -137,13 +140,41 @@ data class FileEditor(
     val saving: Boolean = false,
     /** Why the last save failed; the edit stays. */
     val saveFailure: FilesFailure? = null,
-    /** The last save found a newer file on the host; only a reload or discard clears it. */
+    /** The last save found a newer file on the host; a later save or other failure clears it. */
     val conflict: Boolean = false,
     /** Counts successful saves, so the UI can confirm each one. */
     val savedAt: Long = 0,
+    /** Where the cursor starts: the start of the first line picked in the file view, else 0. */
+    val cursor: Int = 0,
+    /** The last save the host never answered; a retry of the same text resends its request ID. */
+    val unconfirmed: PendingWrite? = null,
+    /** What waits for the user to discard the unsaved edit; the editor asks first. */
+    val leaveRequest: EditorLeave? = null,
+    val buffer: EditorBuffer = EditorBuffer(),
 ) {
-    val changed: Boolean get() = text != original
+    /** The field's text when the UI has one, else [text]. Not observable; read it on demand. */
+    val latestText: String get() = buffer.text() ?: text
+
+    val changed: Boolean get() = latestText != original
 }
+
+/**
+ * A `session.files.write` whose reply was lost. The host answers a repeated [requestId] from its
+ * ledger, so resending it cannot write twice or conflict with itself.
+ */
+data class PendingWrite(val requestId: String, val baseVersion: String, val content: String)
+
+/** An action that would drop an unsaved edit and so waits for the discard prompt. */
+enum class EditorLeave {
+    /** Opening the changes pane, which takes the files pane's place. */
+    CHANGES,
+}
+
+/** Whether [content] fits a `session.files.write` frame: at most [MAX_FILES_CONTENT_JSON_BYTES] as a JSON string. */
+internal fun filesContentFits(content: String): Boolean =
+    content.length <= MAX_FILES_CONTENT_JSON_BYTES &&
+        Wire.json.encodeToString(JsonPrimitive.serializer(), JsonPrimitive(content)).encodeToByteArray().size <=
+        MAX_FILES_CONTENT_JSON_BYTES
 
 /**
  * The file browser of the selected session. Like [ChangesState] it lives in [RemoteState], so
@@ -322,7 +353,7 @@ internal fun fileQuotePrompt(intro: String, reference: String, text: String, lan
 sealed interface EditorPrompt {
     data class Ready(val text: String) : EditorPrompt
 
-    /** The diff is over [MAX_FILE_QUOTE_BYTES]; nothing goes to the composer. */
+    /** The diff is over [MAX_FILE_QUOTE_BYTES] or too long to compute; nothing goes to the composer. */
     data object TooLarge : EditorPrompt
 }
 
@@ -332,10 +363,16 @@ internal fun editorPromptIntro(path: String): String =
 
 /**
  * [intro] and the diff of [original] to [edited] in a `diff` fence, or null when nothing changed.
- * A diff above [MAX_FILE_QUOTE_BYTES] is [EditorPrompt.TooLarge].
+ * A diff above [MAX_FILE_QUOTE_BYTES], or one too long to compute ([MAX_DIFF_EDITS]), is
+ * [EditorPrompt.TooLarge].
  */
 internal fun editorPrompt(path: String, original: String, edited: String, intro: String = editorPromptIntro(path)): EditorPrompt? {
-    val diff = unifiedDiff(path, original, edited) ?: return null
+    val diff =
+        when (val result = boundedUnifiedDiff(path, original, edited)) {
+            LineDiff.Same -> return null
+            LineDiff.TooLarge -> return EditorPrompt.TooLarge
+            is LineDiff.Text -> result.text
+        }
     if (diff.encodeToByteArray().size > MAX_FILE_QUOTE_BYTES) return EditorPrompt.TooLarge
     val body = diff.removeSuffix("\n")
     val fence = codeFence(body)

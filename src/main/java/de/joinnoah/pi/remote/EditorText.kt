@@ -19,28 +19,62 @@ internal data class LineEdit(
 }
 
 /**
- * One level of indentation for [text]: a tab when most indented lines start with one, otherwise
- * four spaces.
+ * One level of indentation for [text]: a tab when more indented lines start with one than with a
+ * space, otherwise two or four spaces, whichever step between the indentation of neighbouring
+ * lines is more common. Four spaces when nothing tells.
  */
 internal fun indentUnit(text: String): String {
     var tabs = 0
-    var spaces = 0
-    var lineStart = true
-    for (char in text) {
-        if (lineStart) {
-            if (char == '\t') tabs++ else if (char == ' ') spaces++
+    var spaced = 0
+    var twos = 0
+    var fours = 0
+    var previous = 0
+    var start = 0
+    while (start < text.length) {
+        val end = text.indexOf('\n', start).let { if (it < 0) text.length else it }
+        var spaces = 0
+        while (start + spaces < end && text[start + spaces] == ' ') spaces++
+        var rest = start + spaces
+        while (rest < end && text[rest] == '\r') rest++
+        when {
+            start < end && text[start] == '\t' -> tabs++
+            // Blank lines say nothing about the step.
+            rest == end -> {}
+            else -> {
+                if (spaces > 0) spaced++
+                when (kotlin.math.abs(spaces - previous)) {
+                    2 -> twos++
+                    4 -> fours++
+                }
+                previous = spaces
+            }
         }
-        lineStart = char == '\n'
+        start = end + 1
     }
-    return if (tabs > spaces) "\t" else "    "
+    return when {
+        tabs > spaced -> "\t"
+        twos > fours -> "  "
+        else -> "    "
+    }
+}
+
+/** The offset where the 1-based [line] of [text] starts; the end of the text past its last line. */
+internal fun lineStartOffset(text: String, line: Int): Int {
+    var offset = 0
+    repeat(line - 1) {
+        val newline = text.indexOf('\n', offset)
+        if (newline < 0) return text.length
+        offset = newline + 1
+    }
+    return offset
 }
 
 /**
  * Indents ([outdent] false) or outdents the lines touched by the selection [selectionStart] to
  * [selectionEnd] by [unit]. A collapsed selection indents by inserting [unit] at the cursor. A
  * selection that ends at the start of a line leaves that line alone. Outdent removes one tab, or
- * up to one unit of leading spaces, from each line. Empty lines are not indented. Null when
- * nothing changes.
+ * up to one unit of leading spaces, from each line. Empty lines, a CRLF file's blank lines
+ * included, are not indented. Null when nothing changes.
  */
 internal fun indentLines(text: String, selectionStart: Int, selectionEnd: Int, unit: String, outdent: Boolean): LineEdit? {
     val from = minOf(selectionStart, selectionEnd).coerceIn(0, text.length)
@@ -61,7 +95,7 @@ internal fun indentLines(text: String, selectionStart: Int, selectionEnd: Int, u
     var offset = 0
     for (line in region.split('\n')) {
         when {
-            !outdent && line.isNotEmpty() -> {
+            !outdent && line.isNotEmpty() && line != "\r" -> {
                 changes += offset to unit.length
                 out.append(unit).append(line)
             }

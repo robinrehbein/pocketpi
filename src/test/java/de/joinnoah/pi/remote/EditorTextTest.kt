@@ -70,6 +70,10 @@ class EditorTextTest {
         assertEquals("\t", indentUnit("fun a() {\n\tb()\n\tc()\n  d\n}\n"))
         assertEquals("    ", indentUnit("fun a() {\n    b()\n\tc()\n    d\n}\n"))
         assertEquals("    ", indentUnit(""))
+        // Two-space files, CRLF ones included; a two-level close (a step of four) does not outvote them.
+        assertEquals("  ", indentUnit("a {\n  b {\n    c\n  }\n  d {\n    e\n  }\n}\n"))
+        assertEquals("  ", indentUnit("a {\r\n  b {\r\n    c\r\n}\r\n"))
+        assertEquals("    ", indentUnit("a {\n    b {\n        c\n    }\n}\n"))
     }
 
     @Test
@@ -111,5 +115,20 @@ class EditorTextTest {
         // Never outside the text, even when it shrank to nothing.
         assertTrue(spansFor(highlight, "").isEmpty())
         assertEquals(listOf(TextSpan(0, 2, style)), spansFor(highlight, "aa"))
+    }
+
+    @Test
+    fun blankCrlfLinesAreNotIndented() {
+        val text = "a\r\n\r\nb\r\n"
+        val edit = checkNotNull(indentLines(text, 0, text.length, "  ", outdent = false))
+        assertEquals("  a\r\n\r\n  b\r\n", edit.applyTo(text))
+    }
+
+    @Test
+    fun aLineStartsWhereItsLineBreakEnds() {
+        assertEquals(0, lineStartOffset("one\ntwo\n", 1))
+        assertEquals(4, lineStartOffset("one\ntwo\n", 2))
+        assertEquals(8, lineStartOffset("one\ntwo\n", 3))
+        assertEquals(8, lineStartOffset("one\ntwo\n", 9))
     }
 }

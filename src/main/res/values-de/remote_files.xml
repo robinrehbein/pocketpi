@@ -83,11 +83,12 @@
     <string name="remote_files_editor_conflict_title">Datei auf dem Computer geändert</string>
     <string name="remote_files_editor_conflict_text">%1$s wurde geändert, seit du die Datei geöffnet hast. Deine Änderung ist deshalb nicht gespeichert. Lade die Datei neu und verwirf deine Änderung, oder sende sie als Diff an den Agenten.</string>
     <string name="remote_files_editor_reload">Neu laden</string>
-    <string name="remote_files_editor_indent">Einrücken</string>
-    <string name="remote_files_editor_outdent">Ausrücken</string>
+    <string name="remote_files_editor_indent">Einzug vergrößern</string>
+    <string name="remote_files_editor_outdent">Einzug verkleinern</string>
     <string name="remote_files_editor_keys">Code-Tasten</string>
     <string name="remote_files_save_failed_offline">Du bist offline. Deine Änderung bleibt erhalten; speichere nach dem Verbinden erneut.</string>
     <string name="remote_files_save_failed_unsupported">Dieser Computer nimmt keine gespeicherten Dateien vom Handy an.</string>
     <string name="remote_files_save_failed_invalid_path">Diese Datei kann nicht über pi Remote gespeichert werden.</string>
+    <string name="remote_files_save_failed_too_large">Die Datei ist jetzt größer als 192 KB und lässt sich nicht über pi Remote speichern. Kürze sie oder ändere sie am Computer.</string>
     <string name="remote_files_save_failed">Die Datei konnte nicht gespeichert werden. Deine Änderung bleibt erhalten.</string>
 </resources>

@@ -93,8 +93,14 @@ internal class FilesActions(
     val onSaveEditor: () -> Unit = {},
     val onDiscardEditor: () -> Unit = {},
     val onReloadAfterConflict: () -> Unit = {},
-    /** The edit as a diff prompt, given an intro; send its text with [onSend]. Null when unchanged. */
+    /**
+     * The edit as a diff prompt, given an intro; send its text with [onSend]. Null when unchanged.
+     * Called off the main thread.
+     */
     val onEditorPrompt: (intro: String?) -> EditorPrompt? = { null },
+    /** Discards the edit and runs what waited for it ([FileEditor.leaveRequest]). */
+    val onConfirmLeave: () -> Unit = {},
+    val onCancelLeave: () -> Unit = {},
 )
 
 /**
@@ -185,6 +191,7 @@ private fun failureText(failure: FilesFailure): Int =
         FilesFailure.FORBIDDEN -> R.string.remote_files_failure_forbidden
         FilesFailure.BUSY -> R.string.remote_files_failure_busy
         FilesFailure.CONFLICT -> R.string.remote_files_failure_conflict
+        FilesFailure.TOO_LARGE -> R.string.remote_files_save_failed_too_large
         FilesFailure.FAILED -> R.string.remote_files_failure_failed
     }
 

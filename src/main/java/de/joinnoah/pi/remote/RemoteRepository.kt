@@ -295,10 +295,16 @@ interface RemoteRepository {
     /**
      * `session.files.write`: replaces [path] with [content] when its version is still
      * [baseVersion]; only with [FILES_WRITE_CAPABILITY]. Throws [RemoteRequestException], with
-     * code `conflict` when the file changed.
+     * code `conflict` when the file changed. A [requestId] sent before gets the host's first
+     * answer again, so a retry after a lost reply cannot write twice.
      */
-    suspend fun filesWrite(sessionId: String, path: String, baseVersion: String, content: String): FileWritten =
-        throw RemoteRequestException("unsupported")
+    suspend fun filesWrite(
+        sessionId: String,
+        path: String,
+        baseVersion: String,
+        content: String,
+        requestId: String = Wire.random(),
+    ): FileWritten = throw RemoteRequestException("unsupported")
 
     /**
      * The bytes of an image this device sent in [sessionId]'s chat, from memory or read from the
@@ -411,6 +417,12 @@ interface RemoteRepository {
 
     /** After a conflict: drops the edit and reads the file again. */
     fun reloadFileAfterConflict() {}
+
+    /** Discards the unsaved edit and runs the action that waited for it ([FileEditor.leaveRequest]). */
+    fun confirmFileEditorLeave() {}
+
+    /** Keeps editing; the action that waited for the discard prompt is dropped. */
+    fun cancelFileEditorLeave() {}
 
     /**
      * The composer text that hands the edit to the agent as a diff, with [intro] (default

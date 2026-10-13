@@ -44,12 +44,14 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -72,9 +74,13 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.testTag
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
@@ -86,10 +92,14 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** How long typing must pause before the colours are computed again. */
 private const val HIGHLIGHT_DELAY_MS = 150L
+
+/** How long typing must pause before the text goes to the view model; a save or leave sends it at once. */
+private const val PUSH_DELAY_MS = 500L
 
 /** How long "Saved" stays in the footer. */
 private const val SAVED_NOTICE_MS = 2_000L
@@ -105,55 +115,101 @@ private class LayoutHolder {
 }
 
 /**
+ * The editor's text field, kept with its [FileEditor] in the loader's state rather than in the
+ * composition: the text, cursor and undo history survive recomposition, the phone/tablet switch
+ * and a session parked for later, and a save reads what is typed without waiting for a push. It
+ * is transient UI state, so every buffer equals every other and none is ever saved.
+ */
+class EditorBuffer {
+    private var field: TextFieldState? = null
+
+    /** The field, made on first use from [text] with the cursor at [cursor]. */
+    internal fun state(text: String, cursor: Int): TextFieldState =
+        field ?: TextFieldState(text, TextRange(cursor.coerceIn(0, text.length))).also { field = it }
+
+    /** The field's text, or null before the editor first showed. */
+    internal fun text(): String? = field?.text?.toString()
+
+    override fun equals(other: Any?): Boolean = other is EditorBuffer
+
+    override fun hashCode(): Int = 0
+}
+
+/**
  * The open file as editable text. It replaces the file view in [FilesPane], in the phone overlay
- * and the tablet inspector alike. The text starts from [FileEditor.text] and every change goes to
- * [FilesActions.onEditorText]; a save that sets a new original never resets what is typed. Back
- * closes find first, then asks before it drops unsaved changes.
+ * and the tablet inspector alike. The text lives in [FileEditor.buffer] and reaches
+ * [FilesActions.onEditorText] after a pause in typing and before every save, prompt or leave; a
+ * save that sets a new original never resets what is typed. Back closes find first, then asks
+ * before it drops unsaved changes, as does anything else that would ([FileEditor.leaveRequest]).
  */
 @Composable
 internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Modifier = Modifier) {
-    // Seeded once per editor (FilesPane keys this by path); the loader's copy follows the field.
-    val textState = remember { TextFieldState(editor.text) }
+    val textState = editor.buffer.state(editor.text, editor.cursor)
     val current by rememberUpdatedState(editor)
     val intro by rememberUpdatedState(stringResource(R.string.remote_files_editor_intro, editor.path))
     val currentActions by rememberUpdatedState(actions)
+    val scope = rememberCoroutineScope()
     val language = remember(editor.path) { languageFor(editor.path) }
     val colors = syntaxColors()
-    val unit = remember { indentUnit(editor.original) }
+    val unit = remember(textState) { indentUnit(editor.original) }
     var findOpen by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var matchIndex by remember { mutableIntStateOf(-1) }
-    var discardAsked by remember { mutableStateOf(false) }
+    // What Discard does in the prompt this editor opened itself (Back, Reload); null when closed.
+    var discardThen by remember { mutableStateOf<(() -> Unit)?>(null) }
     var conflictDismissed by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<EditorNotice?>(null) }
     var focused by remember { mutableStateOf(false) }
+    var preparing by remember { mutableStateOf(false) }
     var highlight by remember { mutableStateOf<TextHighlight?>(null) }
+    var changed by remember(textState) { mutableStateOf(!textState.text.contentEquals(editor.original)) }
+    var lineCount by remember(textState) { mutableIntStateOf(lineCountOf(textState.text)) }
+    var numbers by remember(textState) { mutableStateOf(lineNumbers(lineCount)) }
     val editorFocus = remember { FocusRequester() }
     val findFocus = remember { FocusRequester() }
     val requester = remember { BringIntoViewRequester() }
     val layout = remember { LayoutHolder() }
 
-    LaunchedEffect(textState) {
-        snapshotFlow { textState.text.toString() }.collect { currentActions.onEditorText(it) }
-    }
-    LaunchedEffect(textState) { snapshotFlow { textState.text.toString() }.collect { notice = null } }
-    // Colours follow the text after a pause; a result for text that changed meanwhile is dropped.
+    fun flush() = currentActions.onEditorText(textState.text.toString())
+
+    // One watcher of the text: the change mark and the gutter at once, the colours after a short
+    // pause and the view model's copy after a longer one. Nothing here scans the text on the main
+    // thread, and a newer text cancels the work for an older one.
     LaunchedEffect(textState, language, colors) {
-        if (language == null) {
-            highlight = null
-            return@LaunchedEffect
-        }
         var first = true
-        snapshotFlow { textState.text.toString() }.collectLatest { text ->
-            if (!first) delay(HIGHLIGHT_DELAY_MS)
+        snapshotFlow { textState.text to current.original }.collectLatest { (text, original) ->
+            val typed = !first
             first = false
-            val spans = withContext(Dispatchers.Default) { highlightSpans(text, language, colors) }
-            if (text.contentEquals(textState.text)) highlight = TextHighlight(text, spans)
+            if (typed) notice = null
+            if (text.length != original.length) changed = true
+            val (lines, same) = withContext(Dispatchers.Default) {
+                lineCountOf(text) to (text.length == original.length && text.contentEquals(original))
+            }
+            changed = !same
+            if (lines != lineCount) {
+                lineCount = lines
+                numbers = withContext(Dispatchers.Default) { lineNumbers(lines) }
+            }
+            if (language != null) {
+                if (typed) delay(HIGHLIGHT_DELAY_MS)
+                val shown = text.toString()
+                highlight = TextHighlight(shown, withContext(Dispatchers.Default) { highlightSpans(shown, language, colors) })
+            } else highlight = null
+            if (typed) {
+                delay(PUSH_DELAY_MS)
+                currentActions.onEditorText(text.toString())
+            }
         }
     }
-    // Keeps the cursor visible while typing or moving it, once the new text is laid out.
+    DisposableEffect(textState) { onDispose { flush() } }
+    // Keeps the cursor visible while typing or moving it, once the new text is laid out. A new
+    // editor starts at the top: only a cursor placed further in is scrolled to at first.
     LaunchedEffect(textState) {
+        var initial = true
         snapshotFlow { textState.selection }.collectLatest { selection ->
+            val skip = initial && selection.end == 0
+            initial = false
+            if (skip) return@collectLatest
             withFrameNanos {}
             val result = layout.get?.invoke() ?: return@collectLatest
             val offset = selection.end.coerceIn(0, result.layoutInput.text.length)
@@ -176,30 +232,41 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
             }
         }
 
-    fun flush() = currentActions.onEditorText(textState.text.toString())
-
-    fun changed() = !textState.text.contentEquals(current.original)
+    // Exact, for the moments that decide something; [changed] may trail by a frame.
+    fun changedNow() = !textState.text.contentEquals(current.original)
 
     fun save() {
+        if (!changedNow()) return
         flush()
         currentActions.onSaveEditor()
     }
 
     fun sendToAgent() {
+        if (preparing) return
         flush()
-        when (val prompt = currentActions.onEditorPrompt(intro)) {
-            is EditorPrompt.Ready -> if (!currentActions.onSend(prompt.text)) notice = EditorNotice.PREFILL_FAILED
-            EditorPrompt.TooLarge -> notice = EditorNotice.TOO_LARGE
-            null -> {}
+        preparing = true
+        scope.launch {
+            try {
+                // The diff of a large file takes a while; it never blocks typing.
+                when (val prompt = withContext(Dispatchers.Default) { currentActions.onEditorPrompt(intro) }) {
+                    is EditorPrompt.Ready -> if (!currentActions.onSend(prompt.text)) notice = EditorNotice.PREFILL_FAILED
+                    EditorPrompt.TooLarge -> notice = EditorNotice.TOO_LARGE
+                    null -> {}
+                }
+            } finally {
+                preparing = false
+            }
         }
     }
 
     fun leaveEditor() {
-        if (changed()) discardAsked = true
-        else {
-            flush()
-            currentActions.onDiscardEditor()
-        }
+        flush()
+        if (changedNow()) discardThen = currentActions.onDiscardEditor else currentActions.onDiscardEditor()
+    }
+
+    fun reload() {
+        flush()
+        if (changedNow()) discardThen = currentActions.onReloadAfterConflict else currentActions.onReloadAfterConflict()
     }
 
     fun selectMatch(index: Int) {
@@ -279,8 +346,6 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
     LaunchedEffect(editor.saving) { if (editor.saving) conflictDismissed = false }
 
     val style = monoTextStyle()
-    val lineCount by remember { derivedStateOf { textState.text.count { it == '\n' } + 1 } }
-    val numbers = remember(lineCount) { (1..lineCount).joinToString("\n") }
     val numberWidth = rememberLineNumberWidth(lineCount, style)
     val gutterWidth = maxOf(numberWidth, 32.dp) + 16.dp
     val maxWidth = with(LocalDensity.current) { MAX_CODE_CONTENT_WIDTH_PX.toDp() }
@@ -288,7 +353,7 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
     Column(modifier.fillMaxSize().onPreviewKeyEvent(::paneKey).testTag("filesEditor")) {
         EditorHeader(
             editor = editor,
-            changed = editor.changed,
+            changed = changed,
             canUndo = textState.undoState.canUndo,
             canRedo = textState.undoState.canRedo,
             onBack = ::leaveEditor,
@@ -310,9 +375,14 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
             val viewportWidth = this.maxWidth
             val viewportHeight = this.maxHeight
             Row(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("filesEditorScroll")) {
+                // The numbers only mirror the text; a screen reader skips them.
                 Text(
                     numbers,
-                    Modifier.padding(vertical = 8.dp).padding(horizontal = 8.dp).width(gutterWidth - 16.dp).testTag("filesEditorGutter"),
+                    Modifier.padding(vertical = 8.dp)
+                        .padding(horizontal = 8.dp)
+                        .width(gutterWidth - 16.dp)
+                        .testTag("filesEditorGutter")
+                        .clearAndSetSemantics {},
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = style,
                     textAlign = TextAlign.End,
@@ -344,39 +414,35 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
         if (focused && !hardwareKeyboardAttached()) AccessoryRow(onIndent = ::indent, onInsert = ::insert)
         EditorFooter(
             editor = editor,
+            changed = changed,
             notice = notice,
             onFind = ::openFind,
             onSend = ::sendToAgent,
             onRetry = ::save,
-            onReload = currentActions.onReloadAfterConflict,
+            onReload = ::reload,
         )
     }
 
-    if (discardAsked)
-        AlertDialog(
-            onDismissRequest = { discardAsked = false },
-            title = { Text(stringResource(R.string.remote_files_editor_discard_title)) },
-            text = { Text(stringResource(R.string.remote_files_editor_discard_text, editor.path.substringAfterLast('/'))) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        discardAsked = false
-                        currentActions.onDiscardEditor()
-                    },
-                    modifier = Modifier.testTag("filesEditorDiscard"),
-                ) { Text(stringResource(R.string.remote_files_editor_discard)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { discardAsked = false }, modifier = Modifier.testTag("filesEditorKeep")) {
-                    Text(stringResource(R.string.remote_files_editor_keep))
-                }
-            },
-        )
-    if (editor.conflict && !editor.saving && !conflictDismissed)
+    val fileName = editor.path.substringAfterLast('/')
+    val discard = discardThen
+    when {
+        discard != null ->
+            EditorDiscardDialog(
+                fileName,
+                onDiscard = {
+                    discardThen = null
+                    discard()
+                },
+                onKeep = { discardThen = null },
+            )
+        editor.leaveRequest != null ->
+            EditorDiscardDialog(fileName, onDiscard = currentActions.onConfirmLeave, onKeep = currentActions.onCancelLeave)
+    }
+    if (editor.conflict && !editor.saving && !conflictDismissed && discard == null)
         AlertDialog(
             onDismissRequest = { conflictDismissed = true },
             title = { Text(stringResource(R.string.remote_files_editor_conflict_title)) },
-            text = { Text(stringResource(R.string.remote_files_editor_conflict_text, editor.path.substringAfterLast('/'))) },
+            text = { Text(stringResource(R.string.remote_files_editor_conflict_text, fileName)) },
             confirmButton = {
                 Row {
                     TextButton(onClick = currentActions.onReloadAfterConflict, modifier = Modifier.testTag("filesEditorConflictReload")) {
@@ -398,6 +464,35 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
             },
         )
 }
+
+/** Asks before unsaved changes to [fileName] are dropped. */
+@Composable
+internal fun EditorDiscardDialog(fileName: String, onDiscard: () -> Unit, onKeep: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onKeep,
+        title = { Text(stringResource(R.string.remote_files_editor_discard_title)) },
+        text = { Text(stringResource(R.string.remote_files_editor_discard_text, fileName)) },
+        confirmButton = {
+            TextButton(onClick = onDiscard, modifier = Modifier.testTag("filesEditorDiscard")) {
+                Text(stringResource(R.string.remote_files_editor_discard))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onKeep, modifier = Modifier.testTag("filesEditorKeep")) {
+                Text(stringResource(R.string.remote_files_editor_keep))
+            }
+        },
+    )
+}
+
+/** Lines of [text]: one more than its line breaks. */
+private fun lineCountOf(text: CharSequence): Int {
+    var count = 1
+    for (index in text.indices) if (text[index] == '\n') count++
+    return count
+}
+
+private fun lineNumbers(count: Int): String = (1..count).joinToString("\n")
 
 @Composable
 private fun EditorHeader(
@@ -423,9 +518,15 @@ private fun EditorHeader(
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f, fill = false)) {
+                    val name = editor.path.substringAfterLast('/')
+                    // The dot is for the eye; a screen reader hears "Unsaved changes" instead.
                     Text(
-                        editor.path.substringAfterLast('/') + if (changed) " •" else "",
-                        Modifier.testTag("filesEditorTitle").semantics { if (changed) stateDescription = changedLabel },
+                        name + if (changed) " •" else "",
+                        Modifier.clearAndSetSemantics {
+                            testTag = "filesEditorTitle"
+                            text = AnnotatedString(name)
+                            if (changed) stateDescription = changedLabel
+                        },
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -527,8 +628,13 @@ private fun AccessoryRow(onIndent: (Boolean) -> Unit, onInsert: (String) -> Unit
     ) {
         val indent = stringResource(R.string.remote_files_editor_indent)
         val outdent = stringResource(R.string.remote_files_editor_outdent)
-        TextButton(onClick = { onIndent(false) }, Modifier.semantics { contentDescription = indent }) { Text("⇥") }
-        TextButton(onClick = { onIndent(true) }, Modifier.semantics { contentDescription = outdent }) { Text("⇤") }
+        // Each button says its name once: the arrow glyphs are not read.
+        TextButton(onClick = { onIndent(false) }, Modifier.semantics { contentDescription = indent }) {
+            Text("⇥", Modifier.clearAndSetSemantics {})
+        }
+        TextButton(onClick = { onIndent(true) }, Modifier.semantics { contentDescription = outdent }) {
+            Text("⇤", Modifier.clearAndSetSemantics {})
+        }
         for (key in ACCESSORY_KEYS)
             TextButton(onClick = { onInsert(key) }, Modifier.testTag("filesEditorKey:$key")) {
                 Text(key, fontFamily = FontFamily.Monospace)
@@ -539,6 +645,7 @@ private fun AccessoryRow(onIndent: (Boolean) -> Unit, onInsert: (String) -> Unit
 @Composable
 private fun EditorFooter(
     editor: FileEditor,
+    changed: Boolean,
     notice: EditorNotice?,
     onFind: () -> Unit,
     onSend: () -> Unit,
@@ -572,7 +679,7 @@ private fun EditorFooter(
                         TextButton(onClick = onReload, modifier = Modifier.testTag("filesEditorReload")) {
                             Text(stringResource(R.string.remote_files_editor_reload))
                         }
-                    else if (failure != FilesFailure.UNSUPPORTED && failure != FilesFailure.INVALID_PATH)
+                    else if (failure !in NOT_RETRYABLE)
                         TextButton(onClick = onRetry, modifier = Modifier.testTag("filesEditorRetry")) {
                             Text(stringResource(R.string.remote_files_retry))
                         }
@@ -601,12 +708,15 @@ private fun EditorFooter(
             IconButton(onClick = onFind, modifier = Modifier.testTag("filesEditorFind")) {
                 Icon(Icons.Default.Search, stringResource(R.string.remote_files_editor_find))
             }
-            Button(onClick = onSend, enabled = editor.changed, modifier = Modifier.weight(1f).testTag("filesEditorSend")) {
+            Button(onClick = onSend, enabled = changed, modifier = Modifier.weight(1f).testTag("filesEditorSend")) {
                 Text(stringResource(R.string.remote_files_editor_send), textAlign = TextAlign.Center)
             }
         }
     }
 }
+
+/** Save failures a retry cannot fix. */
+private val NOT_RETRYABLE = setOf(FilesFailure.UNSUPPORTED, FilesFailure.INVALID_PATH, FilesFailure.TOO_LARGE)
 
 private fun saveFailureText(failure: FilesFailure): Int =
     when (failure) {
@@ -617,5 +727,6 @@ private fun saveFailureText(failure: FilesFailure): Int =
         FilesFailure.FORBIDDEN -> R.string.remote_files_failure_forbidden
         FilesFailure.BUSY -> R.string.remote_files_failure_busy
         FilesFailure.CONFLICT -> R.string.remote_files_failure_conflict
+        FilesFailure.TOO_LARGE -> R.string.remote_files_save_failed_too_large
         FilesFailure.FAILED -> R.string.remote_files_save_failed
     }

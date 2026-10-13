@@ -7,12 +7,42 @@ package de.joinnoah.pi.remote
  */
 
 /**
- * A unified diff of [original] to [edited] for [path] with [context] lines around each change, or
- * null when both are equal.
+ * Most changed lines [boundedUnifiedDiff] searches for. Myers keeps one row per edit, so time and
+ * memory grow with the square of this; a diff this long is far above [MAX_FILE_QUOTE_BYTES] for
+ * any ordinary code.
  */
-fun unifiedDiff(path: String, original: String, edited: String, context: Int = 3): String? {
-    if (original == edited) return null
-    val edits = diffLines(splitLines(original), splitLines(edited))
+internal const val MAX_DIFF_EDITS = 2_000
+
+/** What [boundedUnifiedDiff] found. */
+internal sealed interface LineDiff {
+    data object Same : LineDiff
+
+    /** More than the bound of changed lines; no diff was built. */
+    data object TooLarge : LineDiff
+
+    data class Text(val text: String) : LineDiff
+}
+
+/**
+ * A unified diff of [original] to [edited] for [path] with [context] lines around each change, or
+ * null when both are equal. It has no bound; the editor uses [boundedUnifiedDiff].
+ */
+fun unifiedDiff(path: String, original: String, edited: String, context: Int = 3): String? =
+    (boundedUnifiedDiff(path, original, edited, context, maxEdits = Int.MAX_VALUE) as? LineDiff.Text)?.text
+
+/**
+ * [unifiedDiff], or [LineDiff.TooLarge] as soon as the edit script needs more than [maxEdits]
+ * changed lines (a run of only insertions or only deletions is never too large: it needs no search).
+ */
+internal fun boundedUnifiedDiff(
+    path: String,
+    original: String,
+    edited: String,
+    context: Int = 3,
+    maxEdits: Int = MAX_DIFF_EDITS,
+): LineDiff {
+    if (original == edited) return LineDiff.Same
+    val edits = diffLines(splitLines(original), splitLines(edited), maxEdits) ?: return LineDiff.TooLarge
     // oldBefore[i] and newBefore[i]: lines of each side before edits[i].
     val oldBefore = IntArray(edits.size + 1)
     val newBefore = IntArray(edits.size + 1)
@@ -31,7 +61,7 @@ fun unifiedDiff(path: String, original: String, edited: String, context: Int = 3
         c++
         hunk(out, edits, oldBefore, newBefore, maxOf(0, first - context), minOf(edits.size, last + context + 1))
     }
-    return out.toString()
+    return LineDiff.Text(out.toString())
 }
 
 private enum class Op(val prefix: Char) { KEEP(' '), DELETE('-'), INSERT('+') }
@@ -68,8 +98,11 @@ private fun splitLines(text: String): List<String> {
     return lines
 }
 
-/** The edit script from [a] to [b], with deletions before insertions in each run of changes. */
-private fun diffLines(a: List<String>, b: List<String>): List<Edit> {
+/**
+ * The edit script from [a] to [b], with deletions before insertions in each run of changes; null
+ * when it needs more than [maxEdits] changed lines.
+ */
+private fun diffLines(a: List<String>, b: List<String>, maxEdits: Int): List<Edit>? {
     var prefix = 0
     while (prefix < a.size && prefix < b.size && a[prefix] == b[prefix]) prefix++
     var suffix = 0
@@ -83,7 +116,14 @@ private fun diffLines(a: List<String>, b: List<String>): List<Edit> {
     val inserted = ArrayList<Edit>()
     var x = 0
     var y = 0
-    for (op in myers(middleA, middleB)) {
+    val ops =
+        when {
+            // Only insertions or only deletions: nothing to search.
+            middleA.isEmpty() -> List(middleB.size) { Op.INSERT }
+            middleB.isEmpty() -> List(middleA.size) { Op.DELETE }
+            else -> myers(middleA, middleB, maxEdits) ?: return null
+        }
+    for (op in ops) {
         when (op) {
             Op.DELETE -> deleted += Edit(op, middleA[x++])
             Op.INSERT -> inserted += Edit(op, middleB[y++])
@@ -100,15 +140,21 @@ private fun diffLines(a: List<String>, b: List<String>): List<Edit> {
     return edits
 }
 
-/** Myers' greedy shortest edit script from [a] to [b], one [Op] per step. */
-private fun myers(a: List<String>, b: List<String>): List<Op> {
+/**
+ * Myers' greedy shortest edit script from [a] to [b], one [Op] per step; null when it needs more
+ * than [maxEdits] edits. Each step keeps only the diagonals it can reach, so the trace holds
+ * about D² numbers for D edits, not D × (N + M).
+ */
+private fun myers(a: List<String>, b: List<String>, maxEdits: Int): List<Op>? {
     val n = a.size
     val m = b.size
     val offset = n + m + 1
     val v = IntArray(2 * offset + 1)
+    // trace[d] is v[-d-1..d+1] as it was before step d; backtracking reads no further out.
     val trace = ArrayList<IntArray>()
     search@ for (d in 0..n + m) {
-        trace += v.copyOf()
+        if (d > maxEdits) return null
+        trace += v.copyOfRange(offset - d - 1, offset + d + 2)
         for (k in -d..d step 2) {
             var x = if (k == -d || (k != d && v[offset + k - 1] < v[offset + k + 1])) v[offset + k + 1] else v[offset + k - 1] + 1
             var y = x - k
@@ -122,9 +168,10 @@ private fun myers(a: List<String>, b: List<String>): List<Op> {
     var y = m
     for (d in trace.indices.reversed()) {
         val before = trace[d]
+        val shift = d + 1
         val k = x - y
-        val prevK = if (k == -d || (k != d && before[offset + k - 1] < before[offset + k + 1])) k + 1 else k - 1
-        val prevX = before[offset + prevK]
+        val prevK = if (k == -d || (k != d && before[shift + k - 1] < before[shift + k + 1])) k + 1 else k - 1
+        val prevX = before[shift + prevK]
         val prevY = prevX - prevK
         while (x > prevX && y > prevY) { ops += Op.KEEP; x--; y-- }
         if (d > 0) ops += if (x == prevX) Op.INSERT else Op.DELETE

@@ -56,6 +56,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -919,5 +920,67 @@ class TwoPaneNavigationTest {
         org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
         compose.waitForIdle()
         assertEquals(RemoteSelection("host", "project", "s2"), repository.activations.last().first)
+    }
+
+    // ---- Code editor ---------------------------------------------------------------------
+
+    private fun openEditor(text: String) {
+        val file = OpenFile("src/Main.kt", loading = false, version = "v1", size = 6, content = "hello\n")
+        repository.state.value =
+            repository.state.value.copy(
+                files = FilesState("s1", loading = false, file = file, editor = FileEditor(file.path, "v1", file.content, text))
+            )
+        compose.waitForIdle()
+    }
+
+    private fun ctrl(tag: String, key: Key) {
+        compose.onNodeWithTag(tag).performClick()
+        compose.onNodeWithTag(tag).performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(key) } }
+        compose.waitForIdle()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun anOpenEditorKeepsTheShortcutKeys() {
+        render(hardwareKeyboard = true)
+        openEditor("hello\n")
+        val count = repository.activations.size
+        ctrl("composerField", Key.DirectionDown)
+        assertEquals(count, repository.activations.size)
+        ctrl("composerField", Key.N)
+        assertEquals(0, repository.createdSessions)
+        ctrl("composerField", Key.F)
+        compose.onNodeWithTag("sessionSearch").assertIsNotFocused()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.AltLeft) { pressKey(Key.DirectionDown) } }
+        compose.waitForIdle()
+        assertEquals(count, repository.activations.size)
+        // Without the editor the same keys work again.
+        repository.state.value = repository.state.value.copy(files = null)
+        compose.waitForIdle()
+        ctrl("composerField", Key.DirectionDown)
+        assertEquals(RemoteSelection("host", "project", "s2"), repository.activations.last().first)
+        ctrl("composerField", Key.N)
+        assertEquals(1, repository.createdSessions)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun anotherSessionAsksBeforeItDropsAnUnsavedEdit() {
+        render(hardwareKeyboard = true)
+        openEditor("changed\n")
+        val count = repository.activations.size
+        compose.onNodeWithText("Second session").performClick()
+        compose.waitForIdle()
+        assertEquals(count, repository.activations.size)
+        compose.onNodeWithTag("filesEditorKeep").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("filesEditorDiscard").assertDoesNotExist()
+        assertEquals(count, repository.activations.size)
+        assertEquals("changed\n", repository.state.value.files?.editor?.text)
+        compose.onNodeWithText("Second session").performClick()
+        compose.onNodeWithTag("filesEditorDiscard").performClick()
+        compose.waitForIdle()
+        assertEquals(RemoteSelection("host", "project", "s2"), repository.activations.last().first)
+        assertNull(repository.state.value.files?.editor)
     }
 }
