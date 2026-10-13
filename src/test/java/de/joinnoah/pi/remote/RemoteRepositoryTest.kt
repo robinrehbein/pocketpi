@@ -2198,7 +2198,7 @@ class RemoteRepositoryTest {
         repository.setForeground(true)
         repository.setValidatedNetwork("wifi")
         val activation = async { repository.activate(RemoteSelection("host", "project", "session")) }
-        advanceTimeBy(30_001)
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS + 1)
         runCurrent()
         activation.await()
         assertFalse(repository.state.value.connected)
@@ -2300,6 +2300,79 @@ class RemoteRepositoryTest {
                 it.text("type") == "session.snapshot" && it.text("sessionId") == "first"
             },
         )
+    }
+
+    @Test
+    fun connectGivesUpJustAfterTheTransportHandshakeTimeout() = runTest {
+        val transport = Transport().also { configure(it) }
+        transport.readyOnConnect = false
+        val repository = repository(transport)
+        val selection = RemoteSelection("host", "project", "session")
+
+        val stalled = async { repository.activate(selection) }
+        runCurrent()
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS - 1)
+        runCurrent()
+        assertFalse(stalled.isCompleted)
+        assertTrue(repository.state.value.loading)
+
+        advanceTimeBy(1)
+        runCurrent()
+        assertTrue(stalled.isCompleted)
+        assertFalse(repository.state.value.connected)
+        assertEquals(R.string.remote_connection_error, repository.state.value.error)
+        // Well before the 30 s the wait used to be, and only just after the transport's 20 s.
+        assertEquals(HANDSHAKE_TIMEOUT_MILLIS + 2_000, currentTime)
+    }
+
+    @Test
+    fun requestsRecordTypeDurationSizeAndTimeout() = runTest {
+        Diagnostics.clear()
+        Diagnostics.clock = { testScheduler.currentTime }
+        try {
+            val transport = Transport().also { configure(it) }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", "session"))
+            val normal = transport.response
+            transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+            repository.draft("keep this")
+            repository.prompt()
+            runCurrent()
+            advanceTimeBy(30_000)
+            runCurrent()
+
+            val requests = Diagnostics.report().entries.filter { it.kind == Diagnostics.Kind.REQUEST }
+            val prompt = requests.single { it.label == "session.prompt" }
+            assertEquals("timeout", prompt.outcome)
+            assertEquals(30_000L, prompt.durationMs)
+            assertTrue(prompt.bytes > 0)
+            val listed = requests.single { it.label == "sessions.list" }
+            assertEquals("ok", listed.outcome)
+            assertEquals(0L, listed.durationMs)
+            val stats = Diagnostics.report().requests.single { it.type == "session.prompt" }
+            assertEquals(1, stats.timeouts)
+            // Labels are protocol words only; the draft text never reaches the record.
+            assertFalse(Diagnostics.export().contains("keep this"))
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun requestFailuresRecordTheHostErrorCode() = runTest {
+        Diagnostics.clear()
+        try {
+            val transport = Transport().also { configure(it) }
+            transport.failure = { if (it.text("type") == "sessions.list") "not_found" else null }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", "session"))
+
+            val listed = Diagnostics.report().entries.first { it.label == "sessions.list" }
+            assertEquals("error.not_found", listed.outcome)
+            assertTrue(Diagnostics.report().activations.any { it.label == "activate.restore" })
+        } finally {
+            Diagnostics.clear()
+        }
     }
 
     @Test

@@ -40,7 +40,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
                 intent.getStringExtra(RemoteNotifications.EXTRA_ANSWER)?.let {
                     try {
                         Wire.parse(it, 64 * 1024).jsonObject
-                    } catch (_: Exception) {
+                    } catch (swallowed: Exception) {
+                        Diagnostics.caught("notificationAction.onReceive", swallowed)
                         null
                     }
                 }
@@ -70,7 +71,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
                         answer,
                     )
                 }
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("notificationAction.onReceive.2", swallowed)
                 // Never crash the process after the answer may already be sent; the notification
                 // keeps its last state and the session shows the truth.
             } finally {
@@ -89,7 +91,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
         val host =
             try {
                 PairingStore(context).load().find { it.routeId == routeId }
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("notificationAction.answer", swallowed)
                 null
             } ?: return AnswerOutcome.FAILED
         var error: Throwable? = null
@@ -102,6 +105,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    Diagnostics.caught("notificationAction.answer.2", e)
                     error = e
                 }
                 true
