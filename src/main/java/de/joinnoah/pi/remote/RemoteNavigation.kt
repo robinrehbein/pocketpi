@@ -820,6 +820,7 @@ internal class RemoteNavigator(
             Shortcut.HISTORY,
             Shortcut.EXPAND_INSPECTOR,
             Shortcut.TOGGLE_INSPECTOR,
+            Shortcut.REVIEW,
             Shortcut.RENAME,
             Shortcut.FORK -> {
                 val target = (top as? RemoteNavKey.Chat)?.let(targets::chat) ?: return false
@@ -1069,6 +1070,7 @@ internal fun RemoteNavigation(
         // Recomputed on every size change: rotation, split-screen resizes and DeX windows.
         val layout = paneLayout(maxWidth, maxHeight)
         val paneStore = remember(context) { PaneLayoutStore(context.applicationContext) }
+        val codeWrap = remember(paneStore) { CodeWrapState(paneStore) }
         // A cold start shows the list as the user left it in this bucket from the first frame on.
         val twoPane =
             rememberSaveable(saver = TwoPaneState.Saver) { TwoPaneState(memos = paneStore.load()).apply { adopt(layout) } }
@@ -1135,6 +1137,7 @@ internal fun RemoteNavigation(
         CompositionLocalProvider(
             LocalChatViewportPositions provides chatViewports,
             LocalPaneLayout provides layout,
+            LocalCodeWrap provides codeWrap,
             LocalTwoPane provides twoPane.takeIf { layout.twoPane },
             LocalHardwareKeyboard provides hardwareKeyboard,
             LocalEditorFocus provides navigator.editorFocus,
@@ -1206,8 +1209,13 @@ private fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets
     // The editor keeps its keys, apart from F6 and its alias, which leave it for the next pane.
     if (editing && shortcut != Shortcut.NEXT_REGION && shortcut != Shortcut.PREVIOUS_REGION) return false
     if (shortcut != null) return shortcut(shortcut, twoPane, targets, repeat = native.repeatCount > 0, unhandled = unhandled)
+    if (!unhandled || chat == null) return false
+    // In review mode its single-letter keys are review's own and never type into the composer;
+    // a text field with focus takes them before they get here.
+    reviewKey(event)?.let { key -> if (chat.reviewKey(key)) return true }
     // Over Files, Changes, a tool detail or the jobs the composer is hidden: no typing into it.
-    if (!unhandled || chat == null || chat.composerCovered) return false
+    // Review mode only strips the chat; any other key there ends it and types into the composer.
+    if (chat.composerCovered && !chat.reviewing()) return false
     val text =
         typedText(
             native.unicodeChar,
@@ -1216,6 +1224,7 @@ private fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets
             native.isMetaPressed,
             altGr = altGrOnly(native.metaState),
         ) ?: return false
+    if (chat.composerCovered && !chat.leaveReviewToType()) return false
     chat.type(text)
     return true
 }

@@ -7,6 +7,39 @@ import org.junit.Test
 
 class SessionStateTest {
     @Test
+    fun questionsFollowSnapshotOpenAndCloseWithSessionAndRevisionFencing() {
+        val timeline = Timeline("one")
+        val initial = Wire.objectOf("id" to "initial", "kind" to "confirm")
+        val opened = Wire.objectOf("id" to "opened", "kind" to "input")
+        timeline.snapshot(Wire.objectOf(
+            "sessionId" to "one", "revision" to 3, "status" to "idle",
+            "messages" to kotlinx.serialization.json.JsonArray(emptyList()),
+            "pendingQuestions" to kotlinx.serialization.json.JsonArray(listOf(initial)),
+        ))
+        assertEquals(listOf(initial), timeline.questions)
+        fun event(session: String, revision: Long, kind: String) = Wire.objectOf(
+            "sessionId" to session, "revision" to revision, "kind" to kind,
+            "question" to opened, "questionId" to "initial",
+        )
+        timeline.event(event("two", 4, "question.open"))
+        timeline.event(event("one", 2, "question.open"))
+        assertEquals(listOf(initial), timeline.questions)
+        timeline.event(event("one", 4, "question.open"))
+        assertEquals(listOf(initial, opened), timeline.questions)
+        timeline.event(event("two", 5, "question.closed"))
+        timeline.event(event("one", 3, "question.closed"))
+        assertEquals(listOf(initial, opened), timeline.questions)
+        timeline.event(event("one", 5, "question.closed"))
+        assertEquals(listOf(opened), timeline.questions)
+        timeline.snapshot(Wire.objectOf(
+            "sessionId" to "one", "revision" to 6, "status" to "idle",
+            "messages" to kotlinx.serialization.json.JsonArray(emptyList()),
+            "pendingQuestions" to kotlinx.serialization.json.JsonArray(emptyList()),
+        ))
+        assertTrue(timeline.questions.isEmpty())
+    }
+
+    @Test
     fun staleOrOtherSessionEventsNeverReachCurrentConversation() {
         val timeline = Timeline("one")
         timeline.snapshot(

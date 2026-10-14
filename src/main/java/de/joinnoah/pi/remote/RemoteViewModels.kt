@@ -47,6 +47,7 @@ internal open class DestinationViewModel(
                     uncertain = false,
                     followUps = emptyList(),
                     answering = emptySet(),
+                    questionBlocks = emptyMap(),
                     toolOutput = null,
                     changes = null,
                     compaction = null,
@@ -400,6 +401,13 @@ internal class ChatViewModel(
 
     fun openFilesFile(path: String?) = active { repository.openFilesFile(path) }
 
+    /** [RemoteRepository.openFileAt]; false when nothing opened (a path outside the session folder, or an editor open). */
+    fun openFileAt(path: String, lines: LineSelection?, exclusive: Boolean = true): Boolean {
+        var opened = false
+        active { opened = repository.openFileAt(path, lines, exclusive) }
+        return opened
+    }
+
     fun loadMoreFiles() = active(repository::loadMoreFiles)
 
     fun reloadFiles() = active(repository::reloadFiles)
@@ -453,6 +461,31 @@ internal class ChatViewModel(
             }
         }
         return done
+    }
+
+    /**
+     * Sends [prompt] as it is when the composer is empty and the chat takes a prompt now; else it
+     * goes into the composer after what is typed there, as [prefillPrompt] does, so nothing the
+     * user typed, quoted or attached is sent along unseen.
+     */
+    fun askNow(prompt: String): PromptHandoff {
+        var handoff: PromptHandoff? = null
+        active {
+            val current = repository.state.value
+            if (
+                current.draft.isNotBlank() || current.quote != null || current.attachments.isNotEmpty() ||
+                    !current.connected || current.sending || current.questions.isNotEmpty() ||
+                    current.status != "idle" || prompt.toByteArray().size > 128 * 1024
+            )
+                return@active
+            repository.draft(prompt)
+            if (repository.state.value.draft != prompt) return@active
+            repository.prompt()
+            // A prompt the repository would not send stays in the composer.
+            handoff = if (repository.state.value.sending) PromptHandoff.SENT else PromptHandoff.PREFILLED
+        }
+        handoff?.let { return it }
+        return if (prefillPrompt(prompt)) PromptHandoff.PREFILLED else PromptHandoff.FAILED
     }
 
     /** Moves the review into the composer; the comments are cleared only once the draft holds it. */
@@ -512,4 +545,12 @@ internal class SettingsViewModel(
     fun setSwipeStartToEnd(action: SwipeAction) = settings.setSwipeStartToEnd(action)
 
     fun setEnterSends(enabled: Boolean) = settings.setEnterSends(enabled)
+}
+
+/** Where [ChatViewModel.askNow] put a prompt. */
+internal enum class PromptHandoff {
+    SENT,
+    /** In the composer, for the user to send. */
+    PREFILLED,
+    FAILED,
 }

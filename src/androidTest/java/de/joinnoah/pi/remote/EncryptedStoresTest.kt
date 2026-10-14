@@ -238,9 +238,11 @@ class EncryptedStoresTest {
         try {
             recoversFrom { _, _, _ ->
                 EncryptedFileStore.forgetCachedKeys()
-                // The next read meets an invalidated key; the write after it makes a new one.
+                // The next read meets an invalidated key on its load and on the retry; the write
+                // after it makes a new one.
+                var refusals = 0
                 EncryptedFileStore.loadKey = {
-                    EncryptedFileStore.loadKey = original
+                    if (++refusals == 2) EncryptedFileStore.loadKey = original
                     throw KeyPermanentlyInvalidatedException()
                 }
             }

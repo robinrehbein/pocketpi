@@ -56,7 +56,12 @@ internal enum class Shortcut(val group: ShortcutGroup, val listed: Boolean = tru
     HELP(ShortcutGroup.NAVIGATION),
     EXPAND_INSPECTOR(ShortcutGroup.PANES),
     TOGGLE_INSPECTOR(ShortcutGroup.PANES),
+    REVIEW(ShortcutGroup.PANES),
     OTHER_BUSY_ACTION(ShortcutGroup.COMPOSER),
+    SELECT_ALL_LINES(ShortcutGroup.PANES),
+    COPY_LINES(ShortcutGroup.PANES),
+    ZOOM_IN(ShortcutGroup.PANES),
+    ZOOM_OUT(ShortcutGroup.PANES),
     REFRESH(ShortcutGroup.NAVIGATION),
     RENAME(ShortcutGroup.CHAT),
     FORK(ShortcutGroup.CHAT),
@@ -78,7 +83,10 @@ internal enum class KeyContext(val parent: KeyContext?) {
     CHAT(GLOBAL),
 
     /** Keyboard focus is in the chat's composer. */
-    COMPOSER(CHAT);
+    COMPOSER(CHAT),
+
+    /** Keyboard focus is in a code pane (Files or Changes). It acts on the lines there, not on the chat. */
+    CODE(GLOBAL);
 
     fun includes(other: KeyContext): Boolean = generateSequence(this) { it.parent }.any { it == other }
 }
@@ -133,12 +141,29 @@ internal val KEYMAP: List<KeyBinding> =
         KeyBinding(Shortcut.HISTORY, Key.H, ctrl = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_history),
         KeyBinding(Shortcut.EXPAND_INSPECTOR, Key.B, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_expand_inspector),
         KeyBinding(Shortcut.TOGGLE_INSPECTOR, Key.Backslash, ctrl = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_toggle_inspector),
+        KeyBinding(Shortcut.REVIEW, Key.D, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_review),
         KeyBinding(Shortcut.RENAME, Key.F2, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_rename),
         KeyBinding(Shortcut.RENAME, Key.R, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_rename),
         KeyBinding(Shortcut.FORK, Key.N, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_fork),
         KeyBinding(Shortcut.OTHER_BUSY_ACTION, Key.Enter, alt = true, context = KeyContext.COMPOSER, labelRes = R.string.remote_keymap_other_busy_action),
         KeyBinding(Shortcut.OTHER_BUSY_ACTION, Key.NumPadEnter, alt = true, context = KeyContext.COMPOSER, labelRes = R.string.remote_keymap_other_busy_action),
+        KeyBinding(Shortcut.SELECT_ALL_LINES, Key.A, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_select_all),
+        KeyBinding(Shortcut.COPY_LINES, Key.C, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_copy_lines),
+        KeyBinding(Shortcut.ZOOM_IN, Key.Equals, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_IN, Key.Equals, ctrl = true, shift = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_IN, Key.Plus, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_IN, Key.Plus, ctrl = true, shift = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_IN, Key.NumPadAdd, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_OUT, Key.Minus, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_out),
+        KeyBinding(Shortcut.ZOOM_OUT, Key.NumPadSubtract, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_out),
     )
+
+/** The shortcuts a focused code pane takes itself: they select, copy and zoom its lines. */
+internal val CODE_SHORTCUTS: Set<Shortcut> = setOf(Shortcut.SELECT_ALL_LINES, Shortcut.COPY_LINES, Shortcut.ZOOM_IN, Shortcut.ZOOM_OUT)
+
+/** The code pane shortcut [event] is, or null. Only a code pane with focus asks for these. */
+internal fun resolveCodeShortcut(event: KeyEvent): Shortcut? =
+    resolveShortcut(event, KeyContext.CODE)?.takeIf { it in CODE_SHORTCUTS }
 
 /**
  * The shortcut [key] with exactly these modifiers runs in [context], or null. Callers pass Meta
@@ -168,6 +193,37 @@ private fun typedWithCtrl(event: KeyEvent): Int {
     val ctrlMeta = android.view.KeyEvent.META_CTRL_MASK or android.view.KeyEvent.META_META_MASK
     return runCatching { native.getUnicodeChar(native.metaState and ctrlMeta.inv()) }.getOrDefault(0)
 }
+
+/**
+ * The keys of review mode ([TwoPaneState.reviewing]). They are single letters, so unlike [KEYMAP]
+ * they act only while review mode is on and no text field has focus; then they never reach the
+ * composer.
+ */
+internal enum class ReviewKey {
+    NEXT_FILE,
+    PREVIOUS_FILE,
+    NEXT_HUNK,
+    PREVIOUS_HUNK,
+    COMMENT,
+    USE_REVIEW,
+}
+
+/** The review key [key] is without any modifier: n/p files, j/k changes, c comment, Enter. */
+internal fun reviewKey(key: Key, ctrl: Boolean, alt: Boolean, shift: Boolean, meta: Boolean = false): ReviewKey? {
+    if (ctrl || alt || shift || meta) return null
+    return when (key) {
+        Key.N -> ReviewKey.NEXT_FILE
+        Key.P -> ReviewKey.PREVIOUS_FILE
+        Key.J -> ReviewKey.NEXT_HUNK
+        Key.K -> ReviewKey.PREVIOUS_HUNK
+        Key.C -> ReviewKey.COMMENT
+        Key.Enter, Key.NumPadEnter -> ReviewKey.USE_REVIEW
+        else -> null
+    }
+}
+
+internal fun reviewKey(event: KeyEvent): ReviewKey? =
+    reviewKey(event.key, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed, event.isMetaPressed)
 
 /** How long a first Esc waits for the second one that stops pi. */
 internal const val ESCAPE_STOP_WINDOW_MILLIS = 1500L
@@ -210,6 +266,9 @@ internal class EscapeGesture(private val windowMillis: Long = ESCAPE_STOP_WINDOW
 
 /** The one thing an Esc in a chat does, closest first. */
 internal enum class EscapeStep {
+    /** Review mode ends and the panes get their widths back, before anything else. */
+    LEAVE_REVIEW,
+
     /** Slash suggestions or the prompt prediction. Menus and dialogs are windows of their own. */
     CLOSE_TRANSIENT,
 
@@ -243,8 +302,10 @@ internal fun escapeStep(
     composerFocused: Boolean,
     composerBlank: Boolean,
     running: Boolean,
+    reviewing: Boolean = false,
 ): EscapeStep =
     when {
+        reviewing -> EscapeStep.LEAVE_REVIEW
         transientOpen -> EscapeStep.CLOSE_TRANSIENT
         selectionActive -> EscapeStep.CLEAR_SELECTION
         paneOpen -> EscapeStep.CLOSE_PANE
@@ -361,6 +422,37 @@ internal class ChatKeyTarget {
     /** Runs a chat shortcut ([KeyContext.CHAT]); false when it does not apply now. */
     var shortcut: (Shortcut) -> Boolean = { false }
 
+    /** Review mode is on ([TwoPaneState.reviewing]): Esc leaves it first, and [ReviewKey]s act. */
+    var reviewing: () -> Boolean = { false }
+    var leaveReview: () -> Unit = {}
+
+    /**
+     * A printable key review mode does not use: review mode ends, so the chat comes back from
+     * its strip, and the composer gets focus. False where that does not uncover the composer.
+     */
+    var leaveReviewToType: () -> Boolean = { false }
+
+    /** The Changes pane's handler of review keys while it shows; false when a key did nothing. */
+    private var reviewHandler: ((ReviewKey) -> Boolean)? = null
+
+    fun addReviewHandler(handler: (ReviewKey) -> Boolean) {
+        reviewHandler = handler
+    }
+
+    fun removeReviewHandler(handler: (ReviewKey) -> Boolean) {
+        if (reviewHandler === handler) reviewHandler = null
+    }
+
+    /**
+     * A review key nothing on screen took: used up by review mode, also where it did nothing, so
+     * it never types into the composer. False outside review mode or with a text field focused.
+     */
+    fun reviewKey(key: ReviewKey): Boolean {
+        if (!reviewing() || composerFocused || questionFieldFocused) return false
+        reviewHandler?.invoke(key)
+        return true
+    }
+
     /** The open panes' Back actions, oldest first, as [PaneBackHandler] registered them. */
     private val panes = mutableListOf<() -> Unit>()
 
@@ -385,12 +477,13 @@ internal class ChatKeyTarget {
     fun escape(nowMillis: Long) {
         val fieldFocused = composerFocused || questionFieldFocused
         val fieldBlank = if (questionFieldFocused) questionFieldBlank else composerBlank
-        val step = escapeStep(transientOpen(), selectionActive(), paneOpen, fieldFocused, fieldBlank, running)
+        val step = escapeStep(transientOpen(), selectionActive(), paneOpen, fieldFocused, fieldBlank, running, reviewing())
         if (step != EscapeStep.STOP_GESTURE) {
             escape.reset()
             stopHint = false
         }
         when (step) {
+            EscapeStep.LEAVE_REVIEW -> leaveReview()
             EscapeStep.CLOSE_TRANSIENT -> closeTransient()
             EscapeStep.CLEAR_SELECTION -> clearSelection()
             EscapeStep.CLOSE_PANE -> closeTopPane()

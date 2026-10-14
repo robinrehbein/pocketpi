@@ -7,8 +7,31 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 
-internal fun inlineMarkdown(text: String, linkColor: Color): AnnotatedString =
-    parseInline(text, linkColor, 0, true)
+/**
+ * [text] styled, with its links. With [files], a `path:line` the agent wrote (in code or prose)
+ * links to the file in Files too, if it has a known source extension or a tool used that path.
+ */
+internal fun inlineMarkdown(text: String, linkColor: Color, files: FileOpener? = null): AnnotatedString =
+    parseInline(text, linkColor, 0, true, files)
+
+/** Characters that end a `path:line` in prose; the reference itself never holds them. */
+private const val FILE_REFERENCE_END = "`*[]<>()\"',;"
+
+/** Where a `path:line` may start in prose: after a space, an opening bracket or a quote. */
+private fun fileReferenceBoundary(text: String, index: Int): Boolean =
+    index == 0 || text[index - 1].isWhitespace() || text[index - 1] in "([{\"'"
+
+/** The `path:line` at [index] of [text] in prose, as its text and what it names. */
+private fun proseFileReference(text: String, index: Int, files: FileOpener): Pair<String, FileReference>? {
+    if (!fileReferenceBoundary(text, index)) return null
+    val first = text[index]
+    if (!first.isLetterOrDigit() && first !in "._~/@") return null
+    var end = index
+    while (end < text.length && !text[end].isWhitespace() && text[end] !in FILE_REFERENCE_END) end++
+    val candidate = text.substring(index, end).trimEnd('.', '!', '?', ':')
+    if (':' !in candidate) return null
+    return fileReference(candidate, files::knows)?.let { candidate to it }
+}
 
 private val escapable = "\\`*_{}[]<>()#+-.!|"
 
@@ -60,11 +83,27 @@ private fun codeEnd(text: String, start: Int, run: String): Int {
     return -1
 }
 
-private fun parseInline(text: String, color: Color, depth: Int, links: Boolean): AnnotatedString = buildAnnotatedString {
+private fun parseInline(text: String, color: Color, depth: Int, links: Boolean, files: FileOpener? = null): AnnotatedString = buildAnnotatedString {
     if (depth >= 32) { append(text); return@buildAnnotatedString }
     fun link(label: AnnotatedString, url: String) {
         withLink(LinkAnnotation.Url(url)) {
             withStyle(SpanStyle(color = color, textDecoration = TextDecoration.Underline)) { append(label) }
+        }
+    }
+    val fileLinks = files?.takeIf { links }
+    fun fileLink(label: String, reference: FileReference, code: Boolean) {
+        val opener = checkNotNull(fileLinks)
+        val target = LinkAnnotation.Clickable("file:${reference.path}:${reference.lines.first}") {
+            opener.perform(opener.action(reference.path, reference.lines))
+        }
+        withLink(target) {
+            withStyle(
+                SpanStyle(
+                    color = color,
+                    textDecoration = TextDecoration.Underline,
+                    fontFamily = if (code) FontFamily.Monospace else null,
+                )
+            ) { append(label) }
         }
     }
     var index = 0
@@ -77,7 +116,10 @@ private fun parseInline(text: String, color: Color, depth: Int, links: Boolean):
             val run = delimiterRun(text, index)
             val end = codeEnd(text, index + run.length, run)
             if (end >= 0) {
-                withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(text.substring(index + run.length, end)) }
+                val code = text.substring(index + run.length, end)
+                val reference = fileLinks?.let { opener -> fileReference(code.trim(), opener::knows) }
+                if (reference != null) fileLink(code, reference, code = true)
+                else withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(code) }
                 index = end + run.length; continue
             }
             append(run); index += run.length; continue
@@ -138,7 +180,7 @@ private fun parseInline(text: String, color: Color, depth: Int, links: Boolean):
                     fontWeight = if (delimiter.length >= 2) FontWeight.Bold else null,
                     fontStyle = if (delimiter.length != 2) FontStyle.Italic else null,
                 )
-                withStyle(style) { append(parseInline(text.substring(index + delimiter.length, end), color, depth + 1, links)) }
+                withStyle(style) { append(parseInline(text.substring(index + delimiter.length, end), color, depth + 1, links, files)) }
                 index = end + delimiter.length; continue
             }
         }
@@ -156,6 +198,13 @@ private fun parseInline(text: String, color: Color, depth: Int, links: Boolean):
             val url = text.substring(index, end).trimEnd('.', ',', '!', '?', ';', ':')
             link(AnnotatedString(url), url)
             index += url.length; continue
+        }
+        if (fileLinks != null) {
+            val found = proseFileReference(text, index, fileLinks)
+            if (found != null) {
+                fileLink(found.first, found.second, code = false)
+                index += found.first.length; continue
+            }
         }
         append(char)
         index++

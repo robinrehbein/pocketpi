@@ -41,6 +41,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 internal const val EXTRA_PROFILE = "profile"
 internal const val EXTRA_PREPARE = "prepare"
 internal const val EXTRA_COMMAND = "command"
+internal const val EXTRA_STREAM_INTERVAL = "streamIntervalMs"
 
 /**
  * Benchmark-only entry to the normal app UI on the fake relay. It hosts [RemoteApp] with the
@@ -53,7 +54,8 @@ internal const val EXTRA_COMMAND = "command"
  *   navigation snapshot on disk holds that chat and the refreshed quick chats, so the pairing,
  *   draft and snapshot sit in the app's real stores as after a normal visit, whatever the profile.
  * - `command`: `drop` fails the socket (the repository reconnects); `stream` streams the fixture
- *   answer into the open chat. Send it again with FLAG_ACTIVITY_SINGLE_TOP to reach this activity.
+ *   answer into the open chat (`streamIntervalMs` replaces the fixture's chunk interval). Send it
+ *   again with FLAG_ACTIVITY_SINGLE_TOP to reach this activity.
  *   A drop starts a [FlowFreshness] mark, as does every return of the process to the foreground.
  *
  * Over the app it lays 1 dp nodes whose content descriptions the benchmarks wait for:
@@ -145,6 +147,17 @@ class ConnectedFlowActivity : ComponentActivity() {
         apply(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // As MainActivity: a running session stays live in the background (LiveRunService).
+        LiveRun.onResume()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (!isChangingConfigurations) LiveRun.onPause(this)
+    }
+
     override fun onStop() {
         // As MainActivity: drafts reach the disk when the app leaves the screen.
         lifecycleScope.launch {
@@ -167,7 +180,10 @@ class ConnectedFlowActivity : ComponentActivity() {
                 ConnectedFlowRelay.freshness(app.repository)?.mark(FlowFreshness.Cause.DROP)
                 relay.drop()
             }
-            "stream" -> app.repository.state.value.selection.sessionId?.let(relay::stream)
+            "stream" -> {
+                val interval = intent.getLongExtra(EXTRA_STREAM_INTERVAL, 0L).takeIf { it > 0 }
+                app.repository.state.value.selection.sessionId?.let { relay.stream(it, interval) }
+            }
         }
     }
 
