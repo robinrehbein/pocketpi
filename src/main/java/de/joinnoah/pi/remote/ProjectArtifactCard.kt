@@ -9,7 +9,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draganddrop.DragAndDropTransferData
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -223,12 +222,16 @@ internal fun ProjectArtifactCard(path: String, source: ProjectImageSource, modif
 }
 
 /** The page at [path] as an HTML file another app can take, written to the drag folder. */
-internal suspend fun dragArtifact(context: Context, path: String, html: String): DragAndDropTransferData {
-    val uri = withContext(Dispatchers.IO) {
-        storeDragFile(context, ArtifactStorage.safeName(path, "html"), html.toByteArray(Charsets.UTF_8))
+internal suspend fun dragArtifact(context: Context, path: String, html: String): DragPayload =
+    withContext(Dispatchers.IO) {
+        dragFile(
+            context,
+            path.substringAfterLast('/'),
+            ArtifactStorage.safeName(path, "html"),
+            html.toByteArray(Charsets.UTF_8),
+            "text/html",
+        )
     }
-    return fileTransfer(path.substringAfterLast('/'), uri, "text/html")
-}
 
 /** A closed ```mermaid fence in assistant text: a live thumbnail of the diagram, the viewer on a tap. */
 @Composable

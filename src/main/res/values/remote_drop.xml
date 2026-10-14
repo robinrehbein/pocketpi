@@ -4,6 +4,10 @@
     <!-- Covers the chat while an image, a file or text dragged from another app hovers over it. -->
     <string name="remote_drop_to_attach">Drop to attach</string>
     <!-- The composer's + menu: attaches the image or file on the clipboard, as Ctrl+V does. -->
-    <string name="remote_drop_paste_image">Paste image</string>
+    <string name="remote_drop_paste_image">Paste image or file</string>
+    <!-- A short toast after "Paste image or file" when the clipboard holds only text or nothing. -->
     <string name="remote_drop_clipboard_empty">The clipboard holds no image or file</string>
+    <!-- An error after a drop or a paste while a message is being sent or attachments are being
+         imported; nothing was attached. -->
+    <string name="remote_attachments_busy">Wait until sending or importing finishes, then attach again.</string>
 </resources>

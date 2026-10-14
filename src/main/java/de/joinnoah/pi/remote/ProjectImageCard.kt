@@ -10,7 +10,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draganddrop.DragAndDropTransferData
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -158,11 +157,12 @@ internal fun ProjectImageCard(alt: String, path: String, source: ProjectImageSou
 }
 
 /** The image at [path] as a file another app can take, written to the drag folder; null when unreadable. */
-private suspend fun dragImage(context: Context, source: ProjectImageSource, path: String): DragAndDropTransferData? {
+private suspend fun dragImage(context: Context, source: ProjectImageSource, path: String): DragPayload? {
     val image = source.read(source.sessionId, path, false) as? ProjectImageResult.Loaded ?: return null
     val mime = MediaMime.fromWire(image.mimeType) ?: return null
-    val uri = withContext(Dispatchers.IO) { storeDragFile(context, ImageStorage.safeName(path, mime), image.bytes) }
-    return fileTransfer(path.substringAfterLast('/'), uri, image.mimeType)
+    return withContext(Dispatchers.IO) {
+        dragFile(context, path.substringAfterLast('/'), ImageStorage.safeName(path, mime), image.bytes, image.mimeType)
+    }
 }
 
 @Composable

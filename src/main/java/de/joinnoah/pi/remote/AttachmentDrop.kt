@@ -5,6 +5,7 @@ import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -37,8 +38,18 @@ internal data class ClipPart(val uri: String?, val mimeType: String?, val text: 
 /** What a clip brings to the chat: attachments to import as one batch, and text for the draft. */
 internal data class ClipIntake(val attachments: List<Picked>, val text: String)
 
-/** Image types the importer scales into a JPEG; other images (SVG) go in as files. */
-private fun decodableImage(mimeType: String) = mimeType.startsWith("image/") && mimeType != "image/svg+xml"
+/**
+ * Image types the importer scales into a JPEG: those BitmapFactory decodes on [sdk]. Other images
+ * go in as files, unchanged: SVG, TIFF, PSD, RAW, HEIF before Android 9, AVIF before Android 12,
+ * and GIF, which a JPEG would flatten to its first frame.
+ */
+internal fun decodableImage(mimeType: String, sdk: Int = Build.VERSION.SDK_INT): Boolean =
+    when (mimeType.lowercase()) {
+        "image/jpeg", "image/jpg", "image/pjpeg", "image/png", "image/webp", "image/bmp", "image/x-ms-bmp" -> true
+        "image/heic", "image/heif" -> sdk >= Build.VERSION_CODES.P
+        "image/avif" -> sdk >= Build.VERSION_CODES.S
+        else -> false
+    }
 
 /**
  * Splits clip [parts] into attachments and text. A content URI becomes an attachment, imported as
@@ -86,9 +97,13 @@ internal fun ClipData.parts(typeOf: (Uri) -> String?): List<ClipPart> {
 internal fun mayHoldAttachments(mimeTypes: List<String>): Boolean =
     mimeTypes.any { !it.startsWith("text/") || it == ClipDescription.MIMETYPE_TEXT_URILIST }
 
-/** A drag the chat takes: images, text and other files (`application/…`). */
-internal fun acceptsDrop(mimeTypes: Set<String>): Boolean =
-    mimeTypes.any { type -> listOf("image/", "text/", "application/").any { type.startsWith(it, ignoreCase = true) } }
+/**
+ * A drag the chat takes: images, text and other files (`application/…`) from another app. A drag
+ * with a [localState] started in PocketPi ([OwnDrag]) and is meant for another app.
+ */
+internal fun acceptsDrop(localState: Any?, mimeTypes: Set<String>): Boolean =
+    localState == null &&
+        mimeTypes.any { type -> listOf("image/", "text/", "application/").any { type.startsWith(it, ignoreCase = true) } }
 
 /** Ctrl+V and Shift+Insert paste; Ctrl+Shift+V pastes plain text, so it stays the field's. */
 internal fun isPasteKey(key: Key, down: Boolean, ctrl: Boolean, alt: Boolean, shift: Boolean): Boolean =

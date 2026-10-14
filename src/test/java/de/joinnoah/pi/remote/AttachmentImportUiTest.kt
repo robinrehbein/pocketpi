@@ -34,6 +34,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -157,11 +159,19 @@ class AttachmentImportUiTest {
             }
     }
 
-    private fun dragEvent(action: Int, x: Float, y: Float, clip: ClipData?, description: ClipDescription, grants: Grants? = null): DragEvent {
+    private fun dragEvent(
+        action: Int,
+        x: Float,
+        y: Float,
+        clip: ClipData?,
+        description: ClipDescription,
+        grants: Grants? = null,
+        localState: Any? = null,
+    ): DragEvent {
         val obtain =
             DragEvent::class.java.declaredMethods.single { it.name == "obtain" && it.parameterCount == 12 }
         return obtain.invoke(
-            null, action, x, y, 0f, 0f, 0, null, description, clip, null, grants?.binder, action == DragEvent.ACTION_DROP,
+            null, action, x, y, 0f, 0f, 0, localState, description, clip, null, grants?.binder, action == DragEvent.ACTION_DROP,
         ) as DragEvent
     }
 
@@ -184,6 +194,32 @@ class AttachmentImportUiTest {
             listener.onDrag(view, dragEvent(DragEvent.ACTION_DRAG_ENDED, x, y, null, description))
         }
         compose.waitForIdle()
+    }
+
+    @Test
+    fun dragThatStartsInTheAppIsLeftToOtherApps() {
+        render()
+        val view = checkNotNull(composeView())
+        val listener = dragListener(view)
+        val x = view.width / 2f
+        val y = view.height / 2f
+        val clip = pathTransfer("docs/screen.png").data.clipData
+        val description = clip.description
+        compose.runOnIdle {
+            listener.onDrag(view, dragEvent(DragEvent.ACTION_DRAG_STARTED, x, y, null, description, localState = OwnDrag))
+            listener.onDrag(view, dragEvent(DragEvent.ACTION_DRAG_ENTERED, x, y, null, description, localState = OwnDrag))
+            listener.onDrag(view, dragEvent(DragEvent.ACTION_DRAG_LOCATION, x, y, null, description, localState = OwnDrag))
+        }
+        compose.waitForIdle()
+        // The chat does not cover itself with the scrim, and the drop attaches nothing.
+        compose.onNodeWithTag("dropScrim").assertDoesNotExist()
+        compose.runOnIdle {
+            listener.onDrag(view, dragEvent(DragEvent.ACTION_DROP, x, y, clip, description, localState = OwnDrag))
+            listener.onDrag(view, dragEvent(DragEvent.ACTION_DRAG_ENDED, x, y, null, description, localState = OwnDrag))
+        }
+        compose.waitForIdle()
+        assertEquals("", shownText())
+        assertTrue(repository.batches.isEmpty())
     }
 
     private fun clip(vararg uris: Uri, types: Array<String>): ClipData =
@@ -269,19 +305,35 @@ class AttachmentImportUiTest {
 
     @Test
     fun dragSourcesBuildTextForAPathAndAUriForAnArtifact() {
-        val path = pathTransfer("src/main/App.kt")
+        val path = pathTransfer("src/main/App.kt").data
+        assertSame(OwnDrag, path.localState)
         assertEquals(ClipDescription.MIMETYPE_TEXT_PLAIN, path.clipData.description.getMimeType(0))
         assertEquals("src/main/App.kt", path.clipData.getItemAt(0).text.toString())
         assertEquals(View.DRAG_FLAG_GLOBAL, path.flags)
         assertFalse(path.flags and View.DRAG_FLAG_GLOBAL_URI_READ != 0)
 
         val context = compose.activity
-        val artifact = runBlocking { dragArtifact(context, "site/report page.html", "<html>report</html>") }
+        val payload = runBlocking { dragArtifact(context, "site/report page.html", "<html>report</html>") }
+        val artifact = payload.data
+        assertSame(OwnDrag, artifact.localState)
         val uri = artifact.clipData.getItemAt(0).uri
         assertEquals("${context.packageName}.exports", uri.authority)
         assertEquals("text/html", artifact.clipData.description.getMimeType(0))
         assertEquals(View.DRAG_FLAG_GLOBAL or View.DRAG_FLAG_GLOBAL_URI_READ, artifact.flags)
-        val file = File(File(context.cacheDir, DragStorage.DIRECTORY), "report-page.html")
+        val file = checkNotNull(payload.file)
+        assertEquals("report-page.html", file.name)
+        assertEquals(File(context.cacheDir, DragStorage.DIRECTORY), file.parentFile!!.parentFile)
         assertEquals("<html>report</html>", file.readText())
+        assertTrue(payload.ready)
+
+        // Another page with the same name keeps its own file and URI.
+        val other = runBlocking { dragArtifact(context, "docs/report page.html", "<html>docs</html>") }
+        assertNotEquals(uri, other.data.clipData.getItemAt(0).uri)
+        assertEquals("<html>report</html>", file.readText())
+        assertEquals("<html>docs</html>", checkNotNull(other.file).readText())
+
+        // Once the rotation deleted the file, the drag knows it is not ready.
+        file.delete()
+        assertFalse(payload.ready)
     }
 }

@@ -271,7 +271,7 @@ internal fun ChatComposer(
     onPickPhotos: () -> Unit = {},
     onPickFiles: () -> Unit = {},
     /**
-     * Takes the images and files a paste brings (Ctrl+V, or "Paste image" in the + menu) as one
+     * Takes the images and files a paste brings (Ctrl+V, or "Paste image or file" in the + menu) as one
      * batch; null leaves every paste to the field.
      */
     onPasteAttachments: ((List<Picked>) -> Unit)? = null,
@@ -460,6 +460,7 @@ internal fun ChatComposer(
                 if (draft.insert(typed)) voiceInput.userEdited(draft.text)
                 focusRequester?.let { runCatching { it.requestFocus() } }
             }
+            keyTarget.draftEdited = { voiceInput.userEdited(draft.text) }
         }
         LaunchedEffect(keyTarget, running) { if (!running) keyTarget.stopHint = false }
     }

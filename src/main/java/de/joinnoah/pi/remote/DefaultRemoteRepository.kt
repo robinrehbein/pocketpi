@@ -4295,13 +4295,12 @@ class DefaultRemoteRepository(
     /** Starts importing [batch] one URI after another, or returns null when it is refused. */
     private fun startImport(selection: RemoteSelection, batch: List<Picked>, onDone: () -> Unit): Job? {
         val importer = attachmentImporter ?: return null
-        if (
-            selection != state.value.selection ||
-                state.value.loading ||
-                state.value.importingAttachments ||
-                state.value.sending
-        )
+        if (selection != state.value.selection || state.value.loading) return null
+        // A drop or a paste arrives while the + button is disabled: say why nothing is attached.
+        if (state.value.importingAttachments || state.value.sending) {
+            reportError(R.string.remote_attachments_busy)
             return null
+        }
         if (ATTACHMENTS_CAPABILITY !in state.value.capabilities) {
             reportError(R.string.remote_attachments_unsupported)
             return null

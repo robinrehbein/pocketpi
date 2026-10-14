@@ -160,10 +160,12 @@ class AttachmentImporterTest {
         assertFalse(isPasteKey(v, down = true, ctrl = true, alt = false, shift = true))
         assertFalse(isPasteKey(v, down = true, ctrl = true, alt = true, shift = false))
         assertFalse(isPasteKey(v, down = true, ctrl = false, alt = false, shift = false))
-        assertTrue(acceptsDrop(setOf("image/png")))
-        assertTrue(acceptsDrop(setOf("text/plain")))
-        assertTrue(acceptsDrop(setOf("application/pdf")))
-        assertFalse(acceptsDrop(setOf("video/mp4")))
+        assertTrue(acceptsDrop(null, setOf("image/png")))
+        assertTrue(acceptsDrop(null, setOf("text/plain")))
+        assertTrue(acceptsDrop(null, setOf("application/pdf")))
+        assertFalse(acceptsDrop(null, setOf("video/mp4")))
+        // A drag that starts in PocketPi is meant for another app.
+        assertFalse(acceptsDrop(OwnDrag, setOf("image/png")))
     }
 
     @Test
@@ -198,5 +200,37 @@ class AttachmentImporterTest {
         assertEquals(1, released)
         assertFalse(acceptChatDrop(listOf(ClipPart(null, null, " ")), { _, _ -> fail() }, { true }) { released++ })
         assertEquals(2, released)
+    }
+
+    @Test
+    fun onlyImagesBitmapFactoryDecodesImportAsPhotos() {
+        for (type in listOf("image/jpeg", "image/png", "IMAGE/WEBP", "image/bmp"))
+            assertTrue(type, decodableImage(type, sdk = 26))
+        // TIFF, PSD and RAW never decode; a GIF would lose its animation.
+        for (type in listOf("image/tiff", "image/vnd.adobe.photoshop", "image/x-adobe-dng", "image/gif", "image/svg+xml"))
+            assertFalse(type, decodableImage(type, sdk = 36))
+        assertFalse(decodableImage("image/heic", sdk = 27))
+        assertTrue(decodableImage("image/heic", sdk = 28))
+        assertTrue(decodableImage("image/heif", sdk = 28))
+        assertFalse(decodableImage("image/avif", sdk = 30))
+        assertTrue(decodableImage("image/avif", sdk = 31))
+        // A PSD dropped with a PDF and a PNG goes in as a file, so it cannot fail the batch.
+        assertEquals(
+            listOf(
+                Picked("content://docs/art.psd", photo = false),
+                Picked("content://docs/spec.pdf", photo = false),
+                Picked("content://docs/shot.png", photo = true),
+                Picked("content://docs/loop.gif", photo = false),
+            ),
+            clipIntake(
+                listOf(
+                    ClipPart("content://docs/art.psd", "image/vnd.adobe.photoshop", null),
+                    ClipPart("content://docs/spec.pdf", "application/pdf", null),
+                    ClipPart("content://docs/shot.png", "image/png", null),
+                    ClipPart("content://docs/loop.gif", "image/gif", null),
+                ),
+                textFiles = true,
+            ).attachments,
+        )
     }
 }

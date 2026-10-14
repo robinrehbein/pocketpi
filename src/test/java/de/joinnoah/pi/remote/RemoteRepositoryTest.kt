@@ -1159,6 +1159,8 @@ class RemoteRepositoryTest {
         runCurrent()
         assertTrue(reads.isEmpty())
         assertEquals(2, done)
+        // A drop or a paste reaches this while the + button is disabled: it says why.
+        assertEquals(R.string.remote_attachments_busy, repository.state.value.error)
 
         // Another chat's batch is refused too, and given back as well.
         repository.importAttachments(selection.copy(sessionId = "other"), listOf(Picked("content:x", false))) { done++ }

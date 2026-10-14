@@ -834,7 +834,7 @@ internal fun RemoteScreen(
         if (chatKey == null || chatModel == null || composerDraft == null) Modifier
         else {
             val target =
-                remember(chatModel, composerDraft, activity) {
+                remember(chatModel, composerDraft, activity, chatKeyTarget) {
                     object : DragAndDropTarget {
                         override fun onEntered(event: DragAndDropEvent) {
                             dropHovered = true
@@ -858,13 +858,25 @@ internal fun RemoteScreen(
                             return acceptChatDrop(
                                 clip.parts(context.contentResolver::getType),
                                 attach = { items, onDone -> chatModel.acceptAttachments(chatKey.selection(), items, onDone) },
-                                insertText = { text -> composerDraft.insert(text).also { if (it) composerDraft.flush() } },
+                                insertText = { text ->
+                                    composerDraft.insert(text).also {
+                                        if (it) {
+                                            composerDraft.flush()
+                                            chatKeyTarget.draftEdited()
+                                        }
+                                    }
+                                },
                                 release = { permissions?.release() },
                             )
                         }
                     }
                 }
-            Modifier.dragAndDropTarget(shouldStartDragAndDrop = { acceptsDrop(it.mimeTypes()) }, target = target)
+            Modifier.dragAndDropTarget(
+                // A drag from PocketPi itself (an image card, a file tile) is meant for another
+                // app: the chat neither covers itself nor takes it.
+                shouldStartDragAndDrop = { acceptsDrop(it.toAndroidDragEvent().localState, it.mimeTypes()) },
+                target = target,
+            )
         }
     var scan by rememberSaveable { mutableStateOf(false) }
     var paste by rememberSaveable(key) { mutableStateOf(false) }
