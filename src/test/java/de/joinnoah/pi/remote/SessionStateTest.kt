@@ -7,6 +7,39 @@ import org.junit.Test
 
 class SessionStateTest {
     @Test
+    fun questionsFollowSnapshotOpenAndCloseWithSessionAndRevisionFencing() {
+        val timeline = Timeline("one")
+        val initial = Wire.objectOf("id" to "initial", "kind" to "confirm")
+        val opened = Wire.objectOf("id" to "opened", "kind" to "input")
+        timeline.snapshot(Wire.objectOf(
+            "sessionId" to "one", "revision" to 3, "status" to "idle",
+            "messages" to kotlinx.serialization.json.JsonArray(emptyList()),
+            "pendingQuestions" to kotlinx.serialization.json.JsonArray(listOf(initial)),
+        ))
+        assertEquals(listOf(initial), timeline.questions)
+        fun event(session: String, revision: Long, kind: String) = Wire.objectOf(
+            "sessionId" to session, "revision" to revision, "kind" to kind,
+            "question" to opened, "questionId" to "initial",
+        )
+        timeline.event(event("two", 4, "question.open"))
+        timeline.event(event("one", 2, "question.open"))
+        assertEquals(listOf(initial), timeline.questions)
+        timeline.event(event("one", 4, "question.open"))
+        assertEquals(listOf(initial, opened), timeline.questions)
+        timeline.event(event("two", 5, "question.closed"))
+        timeline.event(event("one", 3, "question.closed"))
+        assertEquals(listOf(initial, opened), timeline.questions)
+        timeline.event(event("one", 5, "question.closed"))
+        assertEquals(listOf(opened), timeline.questions)
+        timeline.snapshot(Wire.objectOf(
+            "sessionId" to "one", "revision" to 6, "status" to "idle",
+            "messages" to kotlinx.serialization.json.JsonArray(emptyList()),
+            "pendingQuestions" to kotlinx.serialization.json.JsonArray(emptyList()),
+        ))
+        assertTrue(timeline.questions.isEmpty())
+    }
+
+    @Test
     fun staleOrOtherSessionEventsNeverReachCurrentConversation() {
         val timeline = Timeline("one")
         timeline.snapshot(
@@ -498,5 +531,97 @@ class SnapshotFencingTest {
         assertFalse(timeline.event(Wire.objectOf("revision" to 1, "kind" to "host.future")))
         assertEquals(0L, timeline.revision)
         assertFalse(timeline.unknownKindSeen)
+    }
+}
+
+class TimelineIndexTest {
+    private fun message(id: String, text: String = id) = Wire.objectOf("id" to id, "role" to "assistant", "text" to text)
+
+    private fun snapshot(revision: Long, vararg messages: kotlinx.serialization.json.JsonObject, cursor: String? = null) =
+        Wire.objectOf(
+            "sessionId" to "session",
+            "revision" to revision,
+            "status" to "running",
+            "messages" to kotlinx.serialization.json.JsonArray(messages.toList()),
+            "pendingQuestions" to kotlinx.serialization.json.JsonArray(emptyList()),
+            "nextCursor" to cursor,
+        )
+
+    private fun upsert(timeline: Timeline, message: kotlinx.serialization.json.JsonObject) =
+        assertFalse(
+            timeline.event(
+                Wire.objectOf(
+                    "sessionId" to "session",
+                    "revision" to timeline.revision + 1,
+                    "kind" to "message.upsert",
+                    "message" to message,
+                )
+            )
+        )
+
+    /** Every ID maps to its first position, as a scan from the start finds it. */
+    private fun assertIndexed(timeline: Timeline, vararg absent: String) {
+        for (message in timeline.messages) {
+            val id = message.text("id")
+            assertEquals(id, timeline.messages.indexOfFirst { it.text("id") == id }, timeline.messageIndex(id))
+        }
+        for (id in absent) assertEquals(id, -1, timeline.messageIndex(id))
+    }
+
+    private fun ids(timeline: Timeline) = timeline.messages.map { it.text("id") }
+
+    @Test
+    fun idIndexFollowsInsertReplaceAndSnapshots() {
+        val timeline = Timeline("session")
+        assertIndexed(timeline, "a")
+        timeline.snapshot(snapshot(8, message("c"), message("d"), cursor = "before-c"))
+        assertIndexed(timeline, "a", "e")
+
+        upsert(timeline, message("e"))
+        assertEquals(listOf("c", "d", "e"), ids(timeline))
+        assertIndexed(timeline)
+        upsert(timeline, message("d", "streamed"))
+        assertEquals(listOf("c", "d", "e"), ids(timeline))
+        assertEquals("streamed", timeline.messages[1].text("text"))
+        assertIndexed(timeline)
+
+        // An older page moves every loaded message back.
+        timeline.snapshot(snapshot(8, message("a"), message("b")), older = true)
+        assertEquals(listOf("a", "b", "c", "d", "e"), ids(timeline))
+        assertIndexed(timeline)
+        upsert(timeline, message("e", "after the page"))
+        upsert(timeline, message("f"))
+        assertEquals("after the page", timeline.messages[4].text("text"))
+        assertEquals(listOf("a", "b", "c", "d", "e", "f"), ids(timeline))
+        assertIndexed(timeline)
+
+        // A resync keeps the prefix before its page and drops what the page no longer holds.
+        timeline.snapshot(snapshot(20, message("c"), message("g")))
+        assertEquals(listOf("a", "b", "c", "g"), ids(timeline))
+        assertIndexed(timeline, "d", "e", "f")
+        upsert(timeline, message("d"))
+        assertEquals(listOf("a", "b", "c", "g", "d"), ids(timeline))
+        assertIndexed(timeline, "e", "f")
+
+        // A resync that does not overlap replaces everything.
+        timeline.snapshot(snapshot(30, message("x")))
+        assertEquals(listOf("x"), ids(timeline))
+        assertIndexed(timeline, "a", "b", "c", "d", "g")
+
+        timeline.beginSnapshotEpoch("idle")
+        assertIndexed(timeline, "x")
+        upsert(timeline, message("pending"))
+        assertEquals(listOf("pending"), ids(timeline))
+        assertIndexed(timeline)
+    }
+
+    @Test
+    fun duplicateIdsInAPageReplaceTheFirstOccurrence() {
+        val timeline = Timeline("session")
+        timeline.snapshot(snapshot(1, message("a"), message("b"), message("a", "second")))
+        assertEquals(0, timeline.messageIndex("a"))
+        upsert(timeline, message("a", "updated"))
+        assertEquals(listOf("updated", "b", "second"), timeline.messages.map { it.text("text") })
+        assertIndexed(timeline)
     }
 }

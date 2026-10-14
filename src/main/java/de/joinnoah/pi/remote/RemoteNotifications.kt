@@ -38,6 +38,8 @@ internal object RemoteNotifications {
     /** The one channel of earlier versions; deleted on startup. */
     const val LEGACY_CHANNEL = "pi_remote"
     const val SYNC_CHANNEL = "pi_remote_sync"
+    /** The ongoing notification of [LiveRunService] while a run is kept live in the background. */
+    const val LIVE_RUN_CHANNEL = "pi_remote_live_run"
     const val REPLY_KEY = "reply"
     const val ACTION_ANSWER = "de.joinnoah.pi.remote.action.ANSWER"
     /** An inline reply to a completion: a new prompt for the idle session. */
@@ -57,6 +59,8 @@ internal object RemoteNotifications {
     private const val STUCK_ID = 3
     /** The group summary of a Mac, under [summaryTag]. */
     internal const val SUMMARY_ID = 4
+    /** [LiveRunService]'s notification; untagged, so it never counts as a child of a Mac's group. */
+    internal const val LIVE_RUN_ID = 5
     private const val AGENT_KEY = "pi"
 
     /**
@@ -70,10 +74,10 @@ internal object RemoteNotifications {
     }
 
     /**
-     * Creates the two channels and removes [LEGACY_CHANNEL], the single channel earlier versions
-     * used for everything. A channel's importance and sound are the user's settings and can't be
-     * migrated, so the old one is deleted instead of being split. Idempotent, so it runs on every
-     * startup.
+     * Creates the questions and updates channels and the live-run channel, and removes
+     * [LEGACY_CHANNEL], the single channel earlier versions used for everything. A channel's
+     * importance and sound are the user's settings and can't be migrated, so the old one is
+     * deleted instead of being split. Idempotent, so it runs on every startup.
      */
     fun createChannel(context: Context) {
         val localized = localized(context)
@@ -98,6 +102,19 @@ internal object RemoteNotifications {
                 .apply {
                     description =
                         localized.getString(R.string.remote_notification_channel_updates_help)
+                }
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(
+                    LIVE_RUN_CHANNEL,
+                    localized.getString(R.string.remote_live_run_channel),
+                    // Shown in the shade and the status bar without a sound: it updates while pi
+                    // works and must never alert.
+                    NotificationManager.IMPORTANCE_LOW,
+                )
+                .apply {
+                    description = localized.getString(R.string.remote_live_run_channel_help)
+                    setShowBadge(false)
                 }
         )
         manager.deleteNotificationChannel(LEGACY_CHANNEL)
@@ -502,6 +519,79 @@ internal object RemoteNotifications {
         // Keeps what was typed in view, so nothing is lost when it has to be written again.
         if (text != null) builder.setRemoteInputHistory(arrayOf<CharSequence>(text))
         post(context, routeId, sessionId, builder.build())
+    }
+
+    /**
+     * [LiveRunService]'s ongoing notification: the session, what pi does right now and the time
+     * since the run started, as a chronometer. From Android 16 it asks to be promoted to a Live
+     * Update, which takes ProgressStyle; how long a run takes is unknown, so its progress is
+     * indeterminate. Below, it is a plain ongoing notification.
+     *
+     * [actions] adds Stop. Android 12+ holds back a foreground service's first notification for
+     * a few seconds, so a quick look at another app shows nothing, but not one with an action:
+     * the service adds Stop only once it has run that long.
+     */
+    fun liveRun(
+        context: Context,
+        content: LiveRunContent,
+        actions: Boolean,
+        sdk: Int = Build.VERSION.SDK_INT,
+    ): android.app.Notification {
+        val localized = localized(context)
+        val working = localized.getString(R.string.remote_live_run_working_title)
+        val tool = content.tool
+        val text =
+            when {
+                content.waiting -> localized.getString(R.string.remote_live_run_waiting)
+                tool != null -> {
+                    val name =
+                        tool.label?.let(localized::getString)
+                            ?: localized.getString(R.string.remote_live_run_tool, tool.name)
+                    tool.detail?.let { localized.getString(R.string.remote_live_run_tool_detail, name, it) } ?: name
+                }
+                else -> localized.getString(R.string.remote_live_run_working)
+            }
+        val target = content.target
+        val builder =
+            NotificationCompat.Builder(context, LIVE_RUN_CHANNEL)
+                .setSmallIcon(R.drawable.ic_remote)
+                .setContentTitle(content.title ?: working)
+                .setContentText(text)
+                .setSubText(content.project)
+                .setContentIntent(
+                    if (target != null) LaunchIntents.open(context, target.routeId, target.sessionId)
+                    else LaunchIntents.openApp(context)
+                )
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setSilent(true)
+                .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setWhen(content.startedAt)
+                .setShowWhen(true)
+                .setUsesChronometer(true)
+                // Android 14+ lets the user swipe it away, which ends the service like Stop.
+                .setDeleteIntent(LiveRunService.pendingIntent(context, LiveRunService.ACTION_DISMISSED))
+                .setPublicVersion(
+                    NotificationCompat.Builder(context, LIVE_RUN_CHANNEL)
+                        .setSmallIcon(R.drawable.ic_remote)
+                        .setContentTitle(working)
+                        .setWhen(content.startedAt)
+                        .setShowWhen(true)
+                        .setUsesChronometer(true)
+                        .build()
+                )
+        if (actions)
+            builder.addAction(
+                0,
+                localized.getString(R.string.remote_live_run_stop),
+                LiveRunService.pendingIntent(context, LiveRunService.ACTION_STOP),
+            )
+        if (sdk >= 36)
+            builder
+                .setStyle(NotificationCompat.ProgressStyle().setProgressIndeterminate(true))
+                .setRequestPromotedOngoing(true)
+        return builder.build()
     }
 
     /** True while the session's notification is still showing (not dismissed or opened). */

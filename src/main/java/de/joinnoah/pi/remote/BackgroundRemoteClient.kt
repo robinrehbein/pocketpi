@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -9,14 +10,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import okhttp3.OkHttpClient
 
-// One client for all background connections, so each notification doesn't start new thread pools.
-private val backgroundHttp by lazy {
-    OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
+// One client for all background connections, derived from the app's, so each notification
+// starts no thread pools of its own.
+internal val backgroundHttp: OkHttpClient by lazy {
+    baseHttpClient.newBuilder().pingInterval(20, TimeUnit.SECONDS).build()
 }
 
 /** A host rejected a command with this protocol error code (for example `already_resolved`). */
@@ -24,7 +31,8 @@ internal class RemoteCommandException(val code: String) : Exception(code)
 
 internal class RemoteConnectionException : Exception("Connection failed")
 
-internal fun interface RemoteCommands {
+/** Sends one command to a Mac and returns its result data; a host error throws. */
+fun interface RemoteCommands {
     suspend fun request(type: String, vararg fields: Pair<String, Any?>): JsonObject
 }
 
@@ -32,7 +40,7 @@ internal fun interface RemoteCommands {
  * [RemoteCommands] that can also send under a request ID the caller chose: the mutation ID the host
  * deduplicates a command on, so the same command sent twice under it runs at most once.
  */
-internal interface MutationCommands : RemoteCommands {
+interface MutationCommands : RemoteCommands {
     suspend fun mutate(requestId: String, type: String, vararg fields: Pair<String, Any?>): JsonObject
 }
 
@@ -143,8 +151,11 @@ internal suspend fun RemoteCommands.pendingQuestions(sessionId: String): List<Js
         data.array("pendingQuestions").take(16)
     }
 
-/** A session's title and project. */
-internal data class SessionName(val title: String?, val project: String?)
+/**
+ * A session's title and project. [projectId] lets a tap on its notification open the chat without
+ * walking the projects again.
+ */
+internal data class SessionName(val title: String?, val project: String?, val projectId: String? = null)
 
 /** What a notification names a session by. Every field is optional: a host may not know it. */
 internal data class SessionLabel(
@@ -152,6 +163,8 @@ internal data class SessionLabel(
     val project: String?,
     /** The last words of the session's final assistant message, for a completion. */
     val preview: String?,
+    /** The project the session was found in, kept with its name; never shown. */
+    val projectId: String? = null,
 )
 
 /**
@@ -161,10 +174,14 @@ internal data class SessionLabel(
  */
 private const val MAX_LABEL_PROJECTS = 24
 
+/** At most this many `sessions.list` requests of one walk are in flight at a time. */
+internal const val LABEL_WALK_PARALLELISM = 4
+
 /**
  * Finds a session's title and project, and for [withPreview] the end of its last answer. The host
- * lists sessions per project, so this walks the projects until one holds [sessionId]. A missing
- * title is not an error; a failing connection is.
+ * lists sessions per project, so this reads the projects' lists, [LABEL_WALK_PARALLELISM] at a time,
+ * until one holds [sessionId]; the reads still waiting then never go out. A missing title is not an
+ * error; a failing connection is.
  */
 internal suspend fun RemoteCommands.sessionLabel(
     sessionId: String,
@@ -185,19 +202,49 @@ internal suspend fun RemoteCommands.sessionLabel(
                 }
             }
         else null
-    var title: String? = known?.title
-    var project: String? = known?.project
-    if (known == null) for (candidate in request("projects.list").array("items").take(MAX_LABEL_PROJECTS)) {
-        val projectId = candidate.optionalText("id") ?: continue
-        val found =
-            request("sessions.list", "projectId" to projectId)
-                .array("items")
-                .find { it.optionalText("id") == sessionId } ?: continue
-        title = found.optionalText("title")?.trim()?.takeIf { it.isNotEmpty() }
-        project = candidate.optionalText("name")?.trim()?.takeIf { it.isNotEmpty() }
-        break
+    val found = if (known == null) findSession(sessionId) else null
+    SessionLabel(
+        title = known?.title ?: found?.second?.optionalText("title")?.trim()?.takeIf { it.isNotEmpty() },
+        project = known?.project ?: found?.first?.optionalText("name")?.trim()?.takeIf { it.isNotEmpty() },
+        preview = preview?.await(),
+        projectId = known?.projectId ?: found?.first?.optionalText("id"),
+    )
+}
+
+/** The project holding [sessionId] and its row there, or null when none of the first projects does. */
+private suspend fun RemoteCommands.findSession(sessionId: String): Pair<JsonObject, JsonObject>? = coroutineScope {
+    val projects =
+        request("projects.list").array("items").take(MAX_LABEL_PROJECTS).filter { it.optionalText("id") != null }
+    val permits = Semaphore(LABEL_WALK_PARALLELISM)
+    val hit = CompletableDeferred<Pair<JsonObject, JsonObject>?>()
+    val failure = AtomicReference<Exception?>(null)
+    val reads =
+        projects.map { project ->
+            launch {
+                permits.withPermit {
+                    if (hit.isCompleted) return@withPermit
+                    try {
+                        val row =
+                            request("sessions.list", "projectId" to project.text("id"))
+                                .array("items")
+                                .find { it.optionalText("id") == sessionId }
+                        if (row != null) hit.complete(project to row)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        failure.compareAndSet(null, e)
+                    }
+                }
+            }
+        }
+    launch {
+        reads.joinAll()
+        hit.complete(null)
     }
-    SessionLabel(title, project, preview?.await())
+    val result = hit.await()
+    coroutineContext.cancelChildren()
+    // Without a hit, a failed read fails the walk, as a failing connection fails the whole lookup.
+    result ?: failure.get()?.let { throw it }
 }
 
 private suspend fun RemoteCommands.snapshotMessages(sessionId: String): List<JsonObject> =
