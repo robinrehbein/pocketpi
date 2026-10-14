@@ -77,14 +77,18 @@
   finds its message without a scan, and replaces only that message's instance. The chat screen's
   `ConversationPresenter` keeps each message's items while the message is the same instance and
   what it reads from the others (its calls' outputs, whether a call shows it, the pending reply,
-  being last) is unchanged; a streamed delta rebuilds the items of the message it changed. The
-  touched files, error count, rewind targets and subagent cards are summed from each message's
-  share, the subagent strip is rebuilt only when its cards or the session list change, and the
-  scrollbar markers are classified again only from the first changed item on. Unchanged values
-  keep their instance, so the chat's composables skip. `ConversationPresenterTest` checks random
-  event sequences against a full `conversationItems` recompute; if `Timeline` ever copied
-  unchanged messages, the presenter would stay correct but rebuild everything again, so keep
-  instances there. The `PocketPi.conversationItems` trace section covers the presenter's pass.
+  being last) is unchanged; a streamed delta rebuilds the items of the message it changed. Only
+  the items are incremental: the touched files, error count, rewind targets and subagent cards are
+  still a linear pass per delta, but one that sums each message's cached share instead of decoding
+  messages again, so a chat with thousands of tool calls still hashes and sorts its touches on Main
+  for every delta. The subagent strip is rebuilt only when its cards or the session list change,
+  and the scrollbar markers are classified again only from the first changed item on. Unchanged
+  values keep their instance, so the chat's composables skip. `ConversationPresenterTest` checks
+  random event sequences (upserts, resyncs, older pages and shorter resyncs that drop messages)
+  against a full `conversationItems` recompute; if `Timeline` ever copied unchanged messages, the
+  presenter would stay correct but rebuild everything again, so keep instances there. The
+  `PocketPi.conversationItems` trace section now covers the presenter's pass, so traces from
+  before and after this change measure different code under the same name.
 - Count the touched files' lines per chat: `TouchedLineCache` keeps each edit's added and removed
   lines by item ID and diffs only edits that are new or changed, however many the chat holds. The
   count runs on `Dispatchers.Default`, checks for cancellation before each item and yields after

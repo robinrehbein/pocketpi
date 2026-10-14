@@ -725,8 +725,7 @@ class ConversationPresenterTest {
         )
 
     /** A message for [id], whose role is fixed by the ID like on a real host. */
-    private fun randomMessage(random: Random, id: Int, version: Int): JsonObject {
-        val messageId = "m$id"
+    private fun randomMessage(random: Random, id: Int, version: Int, messageId: String = "m$id"): JsonObject {
         return when (id % 3) {
             0 -> text(messageId, "user", "question $version")
             1 -> {
@@ -773,8 +772,20 @@ class ConversationPresenterTest {
             var active = false
             var previous: ConversationPresentation? = null
             var version = 0
+            var snapshotRevision = hostRevision
+            var fresh = 0
+            fun resync(page: List<JsonObject>) {
+                snapshotRevision = ++hostRevision
+                timeline.snapshot(
+                    Wire.objectOf(
+                        "sessionId" to "session", "revision" to snapshotRevision, "status" to "running",
+                        "messages" to JsonArray(page), "pendingQuestions" to JsonArray(emptyList()),
+                    )
+                )
+            }
+            fun copy(message: JsonObject) = Json.parseToJsonElement(message.toString()).jsonObject
             repeat(40) { step ->
-                val action = random.nextInt(10)
+                val action = random.nextInt(13)
                 var replacedUser: String? = null
                 when {
                     action < 7 -> {
@@ -784,16 +795,28 @@ class ConversationPresenterTest {
                         timeline.upsert(randomMessage(random, id, ++version))
                     }
                     action < 9 -> active = !active
-                    else -> {
-                        // A resync decodes fresh instances of the same messages.
-                        val copies = timeline.messages.map { Json.parseToJsonElement(it.toString()).jsonObject }
-                        hostRevision++
+                    // A resync decodes fresh instances of the same messages.
+                    action < 10 -> resync(timeline.messages.map(::copy))
+                    action < 11 -> {
+                        // An older page puts fresh messages before the others and shifts every index.
+                        val older = List(1 + random.nextInt(3)) {
+                            val id = random.nextInt(12)
+                            randomMessage(random, id, ++version, messageId = "o${fresh++}-$id")
+                        }
                         timeline.snapshot(
                             Wire.objectOf(
-                                "sessionId" to "session", "revision" to hostRevision, "status" to "running",
-                                "messages" to JsonArray(copies), "pendingQuestions" to JsonArray(emptyList()),
-                            )
+                                "sessionId" to "session", "revision" to snapshotRevision,
+                                "messages" to JsonArray(older), "nextCursor" to null,
+                            ),
+                            older = true,
                         )
+                    }
+                    else -> {
+                        // A shorter resync that does not overlap: messages leave, and which one is
+                        // last or the pending reply changes.
+                        val kept = timeline.messages.filter { random.nextInt(3) > 0 }.map(::copy)
+                        val id = random.nextInt(12)
+                        resync(listOf(randomMessage(random, id, ++version, messageId = "r${fresh++}-$id")) + kept)
                     }
                 }
                 val builtBefore = presenter.built
