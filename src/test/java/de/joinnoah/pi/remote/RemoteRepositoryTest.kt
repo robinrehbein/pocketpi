@@ -6373,6 +6373,16 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun anExplicitDifferentReasonDoesNotUseTheLegacyTimeoutMessage() = runTest {
+        val transport = Transport()
+        val repository = answering(transport, "internal", "Command outcome unknown; refresh before retrying")
+        transport.failureReason = { "definite_failure" }
+        answerQuestion(repository)
+        assertTrue(repository.state.value.questionBlocks.isEmpty())
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+    }
+
+    @Test
     fun uncertainAnswerClearsOnTheNextSnapshotThatStillHasTheQuestion() = runTest {
         val transport = Transport()
         val repository = answering(transport, "uncertain")
