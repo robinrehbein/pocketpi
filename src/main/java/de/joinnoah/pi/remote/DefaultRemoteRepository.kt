@@ -554,10 +554,14 @@ class DefaultRemoteRepository(
             val loadedNavigation = async(io) {
                 runCatching { navigationStorage?.load().orEmpty() }
             }
-            val loadedDrafts = async(io) { runCatching { draftStorage.load() } }
+            val loadedDrafts = async(io) { runCatching { draftStorage.load() to draftStorage.takeReset() } }
+            // A store found unreadable was reset to empty (see EncryptedFileStore), so pairing and
+            // typing work again; the user is told once.
+            var pairingsReset = false
             val hosts =
                 try {
-                    withContext(io) { pairings.load() }.also { pairingsLoaded = true }
+                    withContext(io) { pairings.load().also { pairingsReset = pairings.takeReset() } }
+                        .also { pairingsLoaded = true }
                 } catch (swallowed: Exception) {
                     Diagnostics.caught("repo.loadPairings", swallowed)
                     // The Hosts screen says so once the error card is gone, instead of loading.
@@ -569,15 +573,19 @@ class DefaultRemoteRepository(
                 update {
                     it.copy(hosts = hosts.filterNot { host -> host.routeId in removedRoutes }, hostsLoaded = true)
                 }
+                if (pairingsReset) reportError(R.string.remote_storage_pairings_reset)
             }
             try {
-                drafts.putAll(loadedDrafts.await().getOrThrow().mapValues { (_, value) ->
+                val (storedDrafts, draftsReset) = loadedDrafts.await().getOrThrow()
+                drafts.putAll(storedDrafts.mapValues { (_, value) ->
                     value.copy(followUps = value.followUps.map { entry ->
                         if (entry.status in setOf("pending", "accepted")) entry.copy(status = "uncertain") else entry
                     })
                 })
                 persistedAttachmentIds = journalAttachmentIds(drafts)
                 draftsAvailable = true
+                // The attachment cleanup below then removes the blobs no remaining draft references.
+                if (draftsReset && !pairingsReset) reportError(R.string.remote_storage_drafts_reset)
             } catch (e: Exception) {
                 Diagnostics.caught("repo.loadDrafts", e)
                 storageFailure = e
@@ -3606,6 +3614,8 @@ class DefaultRemoteRepository(
             R.string.remote_device_paused -> "paused"
             R.string.remote_denied -> "denied"
             R.string.remote_storage_error -> "storage_error"
+            R.string.remote_storage_pairings_reset -> "pairings_reset"
+            R.string.remote_storage_drafts_reset -> "drafts_reset"
             R.string.remote_pairing_timeout -> "pairing_timeout"
             else -> "other"
         }

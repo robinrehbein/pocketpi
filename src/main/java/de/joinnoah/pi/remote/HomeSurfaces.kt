@@ -34,8 +34,8 @@ internal class HomeSurfaces(
     private val context: Context,
     private val scope: CoroutineScope,
     private val pairings: PairingStorage,
+    private val file: EncryptedFileStore = context.stores.home,
 ) {
-    private val file = EncryptedFileStore(context, "home-sessions.enc", "pi-remote-home-v1")
     private val mutex = Mutex()
     private var loaded = false
     private val shortcutMutex = Mutex()

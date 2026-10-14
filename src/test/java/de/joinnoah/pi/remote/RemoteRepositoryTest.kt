@@ -21,12 +21,17 @@ class RemoteRepositoryTest {
         /** Runs once after the next save, as if during the write. */
         var afterSave: (() -> Unit)? = null
 
+        /** The next load found the store unreadable and reset it, as EncryptedFileStore does. */
+        var reset = false
+
         override fun load() = hosts
 
         override fun save(hosts: List<PairedHost>) {
             this.hosts = hosts
             afterSave?.also { afterSave = null }?.invoke()
         }
+
+        override fun takeReset() = reset.also { reset = false }
     }
 
     private class Drafts : DraftStorage {
@@ -7625,6 +7630,93 @@ class RemoteRepositoryTest {
         assertEquals(R.string.remote_storage_error, repository.state.value.error)
         repository.disconnect()
         assertTrue(repository.state.value.hostsUnreadable)
+    }
+
+    @Test
+    fun aResetPairingStoreSaysSoOnceAndPairingWorksAgain() = runTest {
+        try {
+            val transport = Transport().also { configure(it) }
+            val pairings = Pairings(emptyList()).apply { reset = true }
+            val repository = repository(transport, hosts = emptyList(), pairings = pairings)
+            repository.setForeground(true)
+            repository.setValidatedNetwork("wifi")
+            runCurrent()
+            assertEquals(R.string.remote_storage_pairings_reset, repository.state.value.error)
+            assertTrue(repository.state.value.hostsLoaded)
+            assertFalse(repository.state.value.hostsUnreadable)
+
+            val pairing = async { repository.pair(pairingCode()) }
+            runCurrent()
+            transport.listener.approval()
+            val paired = PairedHost(transport.pairing!!.text("routeId"), "https://relay.test", "device", "secret", "Mac")
+            transport.listener.persistPairing(paired)
+            transport.listener.paired(paired)
+            runCurrent()
+            assertEquals(RemoteSelection(paired.routeId), pairing.await())
+            assertEquals(listOf(paired), pairings.hosts)
+            assertNotEquals(R.string.remote_storage_pairings_reset, repository.state.value.error)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun aResetDraftStoreRemovesOrphanedAttachmentsAndKeepsTyping() = runTest {
+        val transport = Transport().also { configure(it) }
+        val orphan = localFile(id = "OOOOOOOOOOOOOOOOOOOOOO")
+        val attachments = Attachments().apply { bytes[orphan.id] = ByteArray(1) }
+        val drafts = object : DraftStorage {
+            var values = emptyMap<DraftKey, StoredDraft>()
+            private var reset = true
+
+            override fun load() = values
+
+            override fun save(drafts: Map<DraftKey, StoredDraft>) {
+                values = drafts.toMap()
+            }
+
+            override fun takeReset() = reset.also { reset = false }
+        }
+        val repository =
+            DefaultRemoteRepository(
+                Pairings(listOf(host)),
+                drafts,
+                transport,
+                backgroundScope,
+                StandardTestDispatcher(testScheduler),
+                attachmentStorage = attachments,
+                now = { testScheduler.currentTime },
+                jitter = { 0.5 },
+            )
+        runCurrent()
+        assertEquals(R.string.remote_storage_drafts_reset, repository.state.value.error)
+        assertEquals(listOf(orphan.id), attachments.removed)
+        assertTrue(attachments.bytes.isEmpty())
+
+        repository.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+        runCurrent()
+        repository.draft("new text")
+        runCurrent()
+        repository.flush()
+        assertEquals("new text", drafts.values.values.single().text)
+    }
+
+    @Test
+    fun aReadableDraftStoreKeepsTheAttachmentsItsDraftsReference() = runTest {
+        val transport = Transport().also { configure(it) }
+        val referenced = localFile(id = "RRRRRRRRRRRRRRRRRRRRRR")
+        val orphan = localFile(id = "OOOOOOOOOOOOOOOOOOOOOO")
+        val attachments = Attachments().apply {
+            bytes[referenced.id] = ByteArray(1)
+            bytes[orphan.id] = ByteArray(1)
+        }
+        val drafts = Drafts().apply {
+            values = mapOf(DraftKey("host", "session") to StoredDraft(attachments = listOf(referenced)))
+        }
+        val repository = repository(transport, drafts = drafts, attachmentStorage = attachments)
+        runCurrent()
+        assertNull(repository.state.value.error)
+        assertEquals(setOf(referenced.id), attachments.bytes.keys)
     }
 
     @Test
