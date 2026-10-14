@@ -55,6 +55,8 @@ class RemoteApplication : Application() {
         Thread { runCatching { ArtifactStorage.clear(cacheDir) } }.start()
         // So are files dragged into other apps.
         Thread { runCatching { DragStorage.clear(cacheDir) } }.start()
+        // Camera captures the import is done with are deleted then; this catches the rest.
+        Thread { runCatching { PhotoCapture.sweep(cacheDir) } }.start()
         settings = DefaultSettingsRepository(this)
         appLock = AppLock(AppLockStore(this), deviceSecure = { deviceSecure(this) })
         val attachments = AttachmentStore(this)

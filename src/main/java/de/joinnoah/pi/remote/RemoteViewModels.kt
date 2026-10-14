@@ -467,6 +467,17 @@ internal class ChatViewModel(
         acceptAttachments(selection, uris.map { Picked(it, photo) }) {}
 
     /**
+     * Imports [uris] into this chat's draft once it can take them, and reports whether it took
+     * them. [done] runs once the import no longer reads them: it ended, was refused, the result
+     * was replaced by a newer one before it started, or this chat closed first.
+     */
+    fun acceptAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean, done: () -> Unit): Boolean {
+        if (selection != key.selection() || uris.isEmpty() || cleared) return false
+        acceptAttachments(selection, uris.map { Picked(it, photo) }, done)
+        return true
+    }
+
+    /**
      * Imports a mixed batch of images and files into [selection]'s draft once that chat is shown
      * and loaded, as one run (see [RemoteRepository.importAttachments]). [onDone] runs exactly
      * once: after the import read every URI or refused the batch, when a later batch replaces this

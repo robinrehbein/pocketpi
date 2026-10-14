@@ -19,6 +19,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -261,6 +263,68 @@ class AttachmentImportUiTest {
                 } catch (_: CancellationException) {}
             }
             assertTrue(context.noBackupFilesDir.listFiles().orEmpty().isEmpty())
+        }
+    }
+
+    /**
+     * A repository with one chat whose attachment import runs the real importer, as the share
+     * hand-off ([deliverShare]) drives it.
+     */
+    private class ShareChatRepository(private val importer: AttachmentImporter, chat: RemoteSelection) : RemoteRepository {
+        override val state = kotlinx.coroutines.flow.MutableStateFlow(RemoteState(selection = chat, capabilities = setOf(ATTACHMENTS_CAPABILITY)))
+        private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+
+        override fun importAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) {
+            if (selection != state.value.selection || !state.value.connected) return
+            state.value = state.value.copy(importingAttachments = true)
+            scope.launch {
+                val imported = uris.map { importer.import(Uri.parse(it), photo) }
+                state.value = state.value.copy(attachments = state.value.attachments + imported, importingAttachments = false)
+            }
+        }
+
+        override suspend fun activate(selection: RemoteSelection, mode: ActivationMode) = selection
+        override suspend fun createSession(routeId: String, projectId: String) = RemoteSelection(routeId, projectId)
+        override suspend fun openNotification(routeId: String, sessionId: String): RemoteSelection? = null
+        override fun cancelSelection() {}
+        override suspend fun pair(text: String): RemoteSelection? = null
+        override fun remove(routeId: String) {}
+        override fun disconnect() {}
+        override fun refresh() {}
+        override fun older() {}
+        override fun draft(text: String) {
+            state.value = state.value.copy(draft = text)
+        }
+        override fun quote(messageId: String?) {}
+        override fun prompt() {}
+        override fun abort() {}
+        override fun answer(questionId: String, answer: kotlinx.serialization.json.JsonObject) {}
+        override fun dismissError() {}
+        override fun reportError(resource: Int) {}
+        override fun setPushToken(token: String?) {}
+    }
+
+    @Test
+    fun aSharedImageLandsInTheChosenSessionsDraftAfterItConnected() = isolated { context, store ->
+        selected(context, image(800, 600)) { uri ->
+            val chat = RemoteSelection("route", "project", "session")
+            val repository = ShareChatRepository(AttachmentImporter(context, store), chat)
+            runBlocking {
+                val delivery =
+                    async(kotlinx.coroutines.Dispatchers.Default) {
+                        deliverShare(repository, SharedContent("Look at this", listOf(SharedFile(uri, image = true))), chat)
+                    }
+                // Still connecting: the text is in, the image waits.
+                kotlinx.coroutines.withTimeout(5_000) { repository.state.first { it.draft == "Look at this" } }
+                kotlinx.coroutines.delay(200)
+                assertTrue(repository.state.value.attachments.isEmpty())
+                repository.state.value = repository.state.value.copy(connected = true)
+                assertTrue(kotlinx.coroutines.withTimeout(10_000) { delivery.await() })
+            }
+            val attachment = repository.state.value.attachments.single()
+            assertEquals("image", attachment.kind)
+            assertEquals("image/jpeg", attachment.mimeType)
+            assertEquals(attachment.size.toInt(), store.read(attachment).size)
         }
     }
 }

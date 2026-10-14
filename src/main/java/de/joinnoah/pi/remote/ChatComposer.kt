@@ -275,6 +275,8 @@ internal fun ChatComposer(
      * batch; null leaves every paste to the field.
      */
     onPasteAttachments: ((List<Picked>) -> Unit)? = null,
+    /** Takes a photo for the draft; null where there is no camera. */
+    onTakePhoto: (() -> Unit)? = null,
     voiceEngine: VoiceRecognitionEngine? = null,
     voicePermissionGrantedOverride: Boolean? = null,
     focusRequester: FocusRequester? = null,
@@ -633,6 +635,15 @@ internal fun ChatComposer(
                                     onPickFiles()
                                 },
                             )
+                            if (onTakePhoto != null)
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.remote_take_photo)) },
+                                    onClick = {
+                                        addMenu = false
+                                        onTakePhoto()
+                                    },
+                                    modifier = Modifier.testTag("takePhoto"),
+                                )
                             if (onPasteAttachments != null)
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.remote_drop_paste_image)) },
