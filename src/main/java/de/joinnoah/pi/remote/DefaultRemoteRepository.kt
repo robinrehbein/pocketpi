@@ -1524,6 +1524,7 @@ class DefaultRemoteRepository(
                 loading = false,
                 sending = false,
                 answering = emptySet(),
+                questionBlocks = emptyMap(),
                 configurationLoading = false,
                 configurationChanging = false,
                 contextLoading = false,
@@ -2215,6 +2216,7 @@ class DefaultRemoteRepository(
         val t = timeline ?: return@trace
         val previous = state.value.status
         if (t.status != previous) state.value.selection.sessionId?.let(::dropStaleChildControl)
+        val open = t.questions.map { it.text("id") }.toSet()
         update {
             // Before its first snapshot the Timeline holds no messages yet: what is on screen (a
             // cached or the last-known chat) stays until the snapshot replaces it.
@@ -2227,6 +2229,9 @@ class DefaultRemoteRepository(
                 it.copy(
                     messages = t.messages,
                     questions = t.questions,
+                    // A question that closed (here or elsewhere) is no longer being answered.
+                    answering = it.answering.filter { id -> id in open }.toSet(),
+                    questionBlocks = it.questionBlocks.filterKeys { id -> id in open },
                     status = t.status,
                     nextCursor = t.nextCursor,
                     compaction = t.compaction,
@@ -2287,6 +2292,15 @@ class DefaultRemoteRepository(
             current.snapshot(data, older)
             current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
             publishTimeline(persist = !older)
+            // A fresh snapshot is the host's word on what is still open, so an uncertain answer is
+            // settled either way.
+            if (!older)
+                update {
+                    it.copy(
+                        questionBlocks =
+                            it.questionBlocks.filterValues { block -> block != QuestionBlock.UNCERTAIN }
+                    )
+                }
             // The chat on screen is read again, also when the activation after a reconnect failed
             // to read it and a later refresh did.
             if (!older && state.value.connected) staleReplaced()
@@ -2499,6 +2513,7 @@ class DefaultRemoteRepository(
                 followUps = stored.followUps,
                 sending = false,
                 answering = emptySet(),
+                questionBlocks = emptyMap(),
                 status =
                     if (state.value.connected && activeHost?.routeId == selection.routeId)
                         cachedChat?.status ?: session?.text("status") ?: "offline"
@@ -3514,6 +3529,7 @@ class DefaultRemoteRepository(
                 pairingDeadline = null,
                 sending = false,
                 answering = emptySet(),
+                questionBlocks = emptyMap(),
                 advisorLoading = false,
                 advisorChanging = false,
                 providerAuth = it.providerAuth.offline(),
@@ -6417,13 +6433,53 @@ class DefaultRemoteRepository(
                 questionId in state.value.answering
         )
             return
+        if (questionId in state.value.questionBlocks) return
         update { it.copy(answering = it.answering + questionId) }
-        action(
-            "question.answer",
-            "sessionId" to sessionId,
-            "questionId" to questionId,
-            "answer" to answer,
-        )
+        val epoch = selectionEpoch
+        scope.launch {
+            try {
+                request(
+                    "question.answer",
+                    epoch,
+                    "sessionId" to sessionId,
+                    "questionId" to questionId,
+                    "answer" to answer,
+                )
+            } catch (_: CancellationException) {} catch (e: Exception) {
+                if (epoch == selectionEpoch) answerFailed(sessionId, questionId, e)
+            } finally {
+                if (epoch == selectionEpoch)
+                    update { it.copy(answering = it.answering - questionId) }
+                resumeDeferredRecovery()
+            }
+        }
+    }
+
+    private fun answerFailed(sessionId: String, questionId: String, error: Exception) {
+        // A close that arrived while the answer was in flight already settled the card.
+        if (state.value.questions.none { it.text("id") == questionId }) return
+        when (questionAnswerFailure(error)) {
+            QuestionAnswerFailure.ANSWERED_ELSEWHERE -> {
+                timeline?.takeIf { it.sessionId == sessionId }?.dropQuestion(questionId)
+                publishTimeline()
+                reportError(R.string.remote_question_answered_elsewhere)
+            }
+            QuestionAnswerFailure.UNSUPPORTED ->
+                update {
+                    it.copy(questionBlocks = it.questionBlocks + (questionId to QuestionBlock.LOCAL_ONLY))
+                }
+            QuestionAnswerFailure.UNCERTAIN ->
+                update {
+                    it.copy(
+                        questionBlocks =
+                            it.questionBlocks +
+                                (questionId to
+                                    (it.questionBlocks[questionId] ?: QuestionBlock.UNCERTAIN))
+                    )
+                }
+            QuestionAnswerFailure.OFFLINE -> reportError(R.string.remote_question_session_offline)
+            QuestionAnswerFailure.OTHER -> reportError(R.string.remote_request_error)
+        }
     }
 
     private fun action(type: String, vararg fields: Pair<String, Any?>) {
@@ -7380,6 +7436,16 @@ class DefaultRemoteRepository(
     override fun openFilesDir(path: String) = filesLoader.openDir(path)
 
     override fun openFilesFile(path: String?) = filesLoader.openFile(path)
+
+    override fun openFileAt(path: String, lines: LineSelection?, exclusive: Boolean): Boolean {
+        // An open editor stays, as with openFiles; its own prompt guards the unsaved edit. Nothing
+        // opens then, so the caller says so (it copies the path) rather than showing that editor.
+        val current = state.value
+        if (!isSessionPath(path)) return false
+        if (current.files?.takeIf { it.sessionId == current.selection.sessionId }?.editor != null) return false
+        if (exclusive) changesLoader.close()
+        return filesLoader.openAt(path, lines)
+    }
 
     override fun loadMoreFiles() = filesLoader.loadMore()
 

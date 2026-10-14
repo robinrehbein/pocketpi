@@ -125,6 +125,8 @@ data class OpenFile(
     /** The file changed while its next page loaded, so it was read again from the start. */
     val reopened: Boolean = false,
     val selection: LineSelection? = null,
+    /** The line the view scrolls to once it is loaded: the file was opened at it from the chat. */
+    val revealLine: Int? = null,
 )
 
 /**

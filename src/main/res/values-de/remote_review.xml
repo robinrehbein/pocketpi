@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Review mode (Changes header, Ctrl+Shift+D): the window gives the changes its whole width. -->
+    <string name="remote_review_enter">Review</string>
+    <string name="remote_keymap_review">Änderungen im ganzen Fenster prüfen</string>
+    <!-- The keys that only act in review mode, while no text field has focus. -->
+    <string name="remote_review_keys_files">Nächste oder vorige Datei im Review</string>
+    <string name="remote_review_keys_hunks">Nächste oder vorige Änderung im Review</string>
+    <string name="remote_review_keys_comment">Fokussierte Zeile im Review kommentieren</string>
+    <string name="remote_review_keys_use">Review-Kommentare im Review übernehmen</string>
+    <!-- The narrow file list beside a diff or a file. -->
+    <string name="remote_review_file_list">Geänderte Dateien</string>
+    <string name="remote_review_split_old">Vorher</string>
+    <string name="remote_review_split_new">Nachher</string>
+    <!-- Header actions and the overflow menu that holds them on narrow panes. -->
+    <string name="remote_review_wrap_lines">Zeilen umbrechen</string>
+    <string name="remote_review_more_actions">Weitere Aktionen</string>
+    <string name="remote_review_menu_back">Zurück</string>
+    <!-- The project and its branch under the Changes title. -->
+    <string name="remote_review_subtitle">%1$s · %2$s</string>
+    <!-- The Ship menu: prompts that go into the composer and are never sent on their own. -->
+    <string name="remote_ship_menu">Ausliefern</string>
+    <string name="remote_ship_commit">Alle Änderungen committen mit Nachricht…</string>
+    <string name="remote_ship_commit_push">Committen und pushen</string>
+    <string name="remote_ship_branch">Branch erstellen…</string>
+    <string name="remote_ship_pull_request">PR gegen %1$s öffnen</string>
+    <string name="remote_ship_rebase">Auf %1$s rebasen</string>
+    <string name="remote_ship_prompt_commit">"Committe alle Änderungen mit dieser Nachricht: "</string>
+    <string name="remote_ship_prompt_commit_push">Committe alle Änderungen mit einer passenden Nachricht und pushe den Branch.</string>
+    <string name="remote_ship_prompt_branch">"Erstelle einen neuen Branch für die aktuellen Änderungen und wechsle zu ihm. Nenne ihn: "</string>
+    <string name="remote_ship_prompt_pull_request">Pushe den Branch und öffne einen Pull Request gegen %1$s. Fasse die Änderungen in der Beschreibung zusammen.</string>
+    <string name="remote_ship_prompt_rebase">Hole den aktuellen Stand und rebase den aktuellen Branch auf %1$s. Hör auf und sag mir Bescheid, wenn es Konflikte gibt.</string>
+</resources>

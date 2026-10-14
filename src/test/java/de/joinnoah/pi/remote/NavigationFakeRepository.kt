@@ -116,13 +116,34 @@ internal class NavigationFakeRepository : RemoteRepository {
         state.value = state.value.copy(changes = null, files = filesOnOpen(checkNotNull(state.value.selection.sessionId)))
     }
 
+    /** The files [openChanges] lists. */
+    var changedFiles: List<GitFile> = emptyList()
+
+    /** The host never answers [openChanges]: the pane never opens. */
+    var changesNeverOpen = false
+
     override fun openChanges() {
+        if (changesNeverOpen) return
         val sessionId = checkNotNull(state.value.selection.sessionId)
         state.value =
             state.value.copy(
                 files = null,
-                changes = ChangesState(sessionId, loading = false, status = GitStatus(GitBase.SESSION, "Q2hhbmdlc1NuYXBzaG90MQ"), log = GitLog()),
+                changes =
+                    ChangesState(
+                        sessionId,
+                        loading = false,
+                        status = GitStatus(GitBase.SESSION, "Q2hhbmdlc1NuYXBzaG90MQ", changedFiles),
+                        log = GitLog(),
+                    ),
             )
+    }
+
+    val openedChangesFiles = mutableListOf<String?>()
+
+    override fun openChangesFile(path: String?) {
+        openedChangesFiles += path
+        val changes = state.value.changes ?: return
+        state.value = state.value.copy(changes = changes.copy(file = path))
     }
 
     // Beside the chat both stay open, each in its own inspector tab.
@@ -135,7 +156,7 @@ internal class NavigationFakeRepository : RemoteRepository {
     var sharedChangesOpens = 0
 
     override fun openChanges(exclusive: Boolean) {
-        if (exclusive) return openChanges()
+        if (exclusive || changesNeverOpen) return openChanges()
         sharedChangesOpens++
         val files = state.value.files
         openChanges()
@@ -153,6 +174,20 @@ internal class NavigationFakeRepository : RemoteRepository {
     override fun openFilesFile(path: String?) {
         val files = state.value.files ?: return
         state.value = state.value.copy(files = files.copy(file = path?.let { OpenFile(it, loading = false) }))
+    }
+
+    /** Every [openFileAt]: the path and the lines. */
+    val filesOpenedAt = mutableListOf<Pair<String, LineSelection?>>()
+
+    // Like the real repository: the file's folder, the file as [filesOnOpen] has it, and the lines.
+    override fun openFileAt(path: String, lines: LineSelection?, exclusive: Boolean): Boolean {
+        if (!super.openFileAt(path, lines, exclusive)) return false
+        filesOpenedAt += path to lines
+        val files = state.value.files ?: return true
+        val known = filesOnOpen(files.sessionId).file?.takeIf { it.path == path } ?: OpenFile(path, loading = false)
+        state.value =
+            state.value.copy(files = files.copy(path = parentPath(path), file = known.copy(selection = lines, revealLine = lines?.first)))
+        return true
     }
 
     override fun selectFileLines(selection: LineSelection?) {
@@ -318,8 +353,18 @@ internal class NavigationFakeRepository : RemoteRepository {
         toolOutputRequests += toolCallId
     }
 
+    /** Whether [prompt] sends the draft, like the real repository, instead of only counting. */
+    var sendsPrompts = false
+
+    /** The drafts [prompt] sent while [sendsPrompts]. */
+    val sentPrompts = mutableListOf<String>()
+
     override fun prompt() {
         prompts++
+        if (sendsPrompts) {
+            sentPrompts += state.value.draft
+            state.value = state.value.copy(draft = "", sending = true)
+        }
     }
 
     var aborts = 0

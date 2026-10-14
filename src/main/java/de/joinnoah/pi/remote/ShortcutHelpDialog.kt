@@ -59,8 +59,9 @@ internal data class ShortcutEntry(
 )
 
 /**
- * Keys that act inside the composer or a file list rather than through [KEYMAP] (see
- * [composerEnter], [composerKey], [openOnRight] and [parentOnLeft]); the lists show them too.
+ * Keys that act inside the composer, a file list or review mode rather than through [KEYMAP] (see
+ * [composerEnter], [composerKey], [openOnRight], [parentOnLeft] and [reviewKey]); the lists show
+ * them too.
  */
 private val FIELD_KEYS: List<ShortcutEntry> =
     listOf(
@@ -82,6 +83,11 @@ private val FIELD_KEYS: List<ShortcutEntry> =
             KeyContext.CHAT,
             listOf(KeyChord(Key.Backspace), KeyChord(Key.DirectionLeft)),
         ),
+        // Review mode's own keys ([reviewKey]).
+        ShortcutEntry(R.string.remote_review_keys_files, ShortcutGroup.PANES, KeyContext.CHAT, listOf(KeyChord(Key.N), KeyChord(Key.P))),
+        ShortcutEntry(R.string.remote_review_keys_hunks, ShortcutGroup.PANES, KeyContext.CHAT, listOf(KeyChord(Key.J), KeyChord(Key.K))),
+        ShortcutEntry(R.string.remote_review_keys_comment, ShortcutGroup.PANES, KeyContext.CHAT, listOf(KeyChord(Key.C))),
+        ShortcutEntry(R.string.remote_review_keys_use, ShortcutGroup.PANES, KeyContext.CHAT, listOf(KeyChord(Key.Enter))),
     )
 
 /**

@@ -954,6 +954,7 @@ private fun QuestionComposer(
                         question = question,
                         enabled = state.connected && questionId !in state.answering,
                         pending = questionId in state.answering,
+                        block = state.questionBlocks[questionId],
                         onAnswer = { answer -> onAnswer(questionId, answer) },
                     )
                 }

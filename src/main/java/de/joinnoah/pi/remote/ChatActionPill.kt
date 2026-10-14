@@ -172,9 +172,15 @@ internal fun changesActions(model: ChatViewModel, flushComposer: () -> Unit = {}
 
 /**
  * Wires [FilesPane] to [model]; a prefilled quote moves focus to the composer via [focusComposer].
- * [flushComposer] first hands the composer's typing to the draft the prefill extends.
+ * [flushComposer] first hands the composer's typing to the draft the prefill extends. A question
+ * sent at once keeps the file open where it shows [besideChat], so the answer comes in beside it.
  */
-internal fun filesActions(model: ChatViewModel, flushComposer: () -> Unit = {}, focusComposer: () -> Unit) =
+internal fun filesActions(
+    model: ChatViewModel,
+    flushComposer: () -> Unit = {},
+    besideChat: () -> Boolean = { false },
+    focusComposer: () -> Unit,
+) =
     FilesActions(
         onClose = model::closeFiles,
         onOpenDir = model::openFilesDir,
@@ -192,6 +198,21 @@ internal fun filesActions(model: ChatViewModel, flushComposer: () -> Unit = {}, 
                     model.closeFiles()
                     focusComposer()
                 }
+            }
+        },
+        onAsk = { prompt ->
+            flushComposer()
+            when (model.askNow(prompt)) {
+                PromptHandoff.SENT -> {
+                    if (!besideChat()) model.closeFiles()
+                    true
+                }
+                PromptHandoff.PREFILLED -> {
+                    model.closeFiles()
+                    focusComposer()
+                    true
+                }
+                PromptHandoff.FAILED -> false
             }
         },
         onStartEditing = model::startFileEditing,

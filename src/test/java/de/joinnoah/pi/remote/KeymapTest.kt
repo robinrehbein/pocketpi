@@ -222,4 +222,25 @@ class KeymapTest {
         targets.unregister(chat, second)
         assertNull(targets.chat(chat))
     }
+
+    @Test
+    fun reviewModeHasItsShortcutAndItsLetters() {
+        assertEquals(Shortcut.REVIEW, ctrl(Key.D, shift = true))
+        assertNull(ctrl(Key.D, shift = true, context = KeyContext.GLOBAL))
+        assertEquals(ReviewKey.NEXT_FILE, reviewKey(Key.N, ctrl = false, alt = false, shift = false))
+        assertEquals(ReviewKey.PREVIOUS_FILE, reviewKey(Key.P, ctrl = false, alt = false, shift = false))
+        assertEquals(ReviewKey.NEXT_HUNK, reviewKey(Key.J, ctrl = false, alt = false, shift = false))
+        assertEquals(ReviewKey.PREVIOUS_HUNK, reviewKey(Key.K, ctrl = false, alt = false, shift = false))
+        assertEquals(ReviewKey.COMMENT, reviewKey(Key.C, ctrl = false, alt = false, shift = false))
+        assertEquals(ReviewKey.USE_REVIEW, reviewKey(Key.Enter, ctrl = false, alt = false, shift = false))
+        assertEquals(ReviewKey.USE_REVIEW, reviewKey(Key.NumPadEnter, ctrl = false, alt = false, shift = false))
+        // With any modifier the letters stay what they were: Ctrl+N a new session, Shift+N a capital.
+        assertNull(reviewKey(Key.N, ctrl = true, alt = false, shift = false))
+        assertNull(reviewKey(Key.N, ctrl = false, alt = false, shift = true))
+        assertNull(reviewKey(Key.J, ctrl = false, alt = true, shift = false))
+        assertNull(reviewKey(Key.K, ctrl = false, alt = false, shift = false, meta = true))
+        assertNull(reviewKey(Key.X, ctrl = false, alt = false, shift = false))
+        // None of them is a plain key of the keymap, which would act outside review mode.
+        for (key in listOf(Key.N, Key.P, Key.J, Key.K, Key.C)) assertNull(plain(key, KeyContext.COMPOSER))
+    }
 }
