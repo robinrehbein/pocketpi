@@ -6,6 +6,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
@@ -16,7 +17,11 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
+import androidx.navigation3.runtime.NavKey
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
@@ -68,7 +73,9 @@ class PairingUiTest {
         clock = 120_000L
         compose.mainClock.advanceTimeBy(500)
         compose.onNodeWithTag("pairingCountdown").assertDoesNotExist()
-        compose.onNodeWithTag("pairingTimedOut").assertTextEquals(label(R.string.remote_pairing_timeout))
+        compose.onNodeWithTag("pairingTimedOut")
+            .assertTextEquals(label(R.string.remote_pairing_timeout))
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
         compose.onNodeWithTag("cancelPairing").assertExists()
     }
 
@@ -165,6 +172,55 @@ class PairingUiTest {
         compose.onNodeWithTag("removePairing").assertExists()
         compose.onNodeWithTag("pairAgain").assert(hasText(label(R.string.remote_pair_again))).performClick()
         compose.onNodeWithTag("cameraMessage").assertExists()
+    }
+
+    @Test
+    fun pairAgainOnAProjectListOpensTheScanner() {
+        LastRouteStore(context()).save("studio")
+        render(
+            RemoteState(
+                hosts = listOf(studio, laptop),
+                hostsLoaded = true,
+                host = studio,
+                selection = RemoteSelection("studio"),
+                error = R.string.remote_device_revoked,
+                deniedRouteId = "studio",
+                // The Mac already asks its user: the wait shows on the hosts page only.
+                pairingDeadline = Diagnostics.now() + 120_000L,
+            )
+        )
+        // The cold start opened the studio's projects, not the hosts page.
+        compose.runOnIdle { assertEquals(RemoteSelection("studio"), repository.activations.last().first) }
+        compose.onNodeWithTag("pairingWaitCard").assertDoesNotExist()
+        compose.onNodeWithTag("pairAgain").performClick()
+        compose.onNodeWithTag("cameraMessage").assertExists()
+        // The code dialog behind Paste is PairingCodeDialogTest's: Robolectric never settles with its
+        // text field over the whole app. Where the pairing then goes is the next test's.
+    }
+
+    /** A pairing started on a project list or in a chat moves to the hosts page, where PairingWaitCard shows. */
+    @Test
+    fun aPairingStartedAwayFromTheHostsPageMovesThere() = runTest {
+        for (from in listOf(
+            listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("studio")),
+            listOf(
+                RemoteNavKey.Hosts,
+                RemoteNavKey.Projects("studio"),
+                RemoteNavKey.Sessions("studio", "project"),
+                RemoteNavKey.Chat("studio", "project", "session"),
+            ),
+        )) {
+            val stack = from.toMutableList<NavKey>()
+            val navigator = RemoteNavigator(repository, stack, backgroundScope)
+            navigator.pair("code")
+            runCurrent()
+            assertEquals(listOf<NavKey>(RemoteNavKey.Hosts), stack)
+        }
+        // A pairing from the hosts page stays there.
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        RemoteNavigator(repository, stack, backgroundScope).pair("code")
+        runCurrent()
+        assertEquals(listOf<NavKey>(RemoteNavKey.Hosts), stack)
     }
 
     @Test

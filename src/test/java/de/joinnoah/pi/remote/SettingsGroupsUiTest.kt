@@ -39,7 +39,7 @@ class SettingsGroupsUiTest {
 
     private fun context(): Context = ApplicationProvider.getApplicationContext()
 
-    private fun label(id: Int) = compose.activity.getString(id)
+    private fun label(id: Int, vararg args: Any) = compose.activity.getString(id, *args)
 
     @Before
     fun twoMacsAndNoLastOne() {
@@ -118,7 +118,7 @@ class SettingsGroupsUiTest {
     @Test
     fun devicesListThePairedMacsAndExplainTheWatch() {
         scrollTo("settingsWatch")
-        compose.onNodeWithTag("settingsWatch").assert(hasText(label(R.string.remote_settings_watch_help)))
+        compose.onNodeWithTag("settingsWatch").assert(hasText(label(R.string.remote_settings_watch_help, label(R.string.wear_pair))))
         val paired = compose.activity.resources.getQuantityString(R.plurals.remote_settings_paired_count, 2, 2)
         compose.onNodeWithTag("settingsPairedMacs").assert(hasText(paired)).performClick()
         compose.waitForIdle()

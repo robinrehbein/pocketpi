@@ -710,14 +710,22 @@ internal class RemoteNavigator(
         }
     }
 
-    fun pair(text: String) {
-        val current = invalidate()
-        activation = scope.launch {
-            val selection = repository.pair(text)
-            if (current == request && selection != null) replace(selection, keepSettings = false)
-            if (selection != null) onPaired()
+    /**
+     * Pairs with the Mac of [text]. The wait for the Mac's approval shows on the computers page
+     * (PairingWaitCard), so a pairing started elsewhere, such as an error card's "Pair again" on a
+     * project list or in a chat, opens that page first.
+     */
+    fun pair(text: String) =
+        leavingEditor(RemoteNavKey.Hosts.selection()) {
+            if (stack.lastOrNull() != RemoteNavKey.Hosts)
+                replace(RemoteNavKey.Hosts.selection(), keepSettings = false, keepStackedChats = false)
+            val current = invalidate()
+            activation = scope.launch {
+                val selection = repository.pair(text)
+                if (current == request && selection != null) replace(selection, keepSettings = false)
+                if (selection != null) onPaired()
+            }
         }
-    }
 
     /**
      * The session a tapped notification is opening while its project is still unknown here; the

@@ -45,7 +45,7 @@
         <item quantity="other">%d Macs paired</item>
     </plurals>
     <string name="remote_settings_watch">Watch</string>
-    <string name="remote_settings_watch_help">Open PocketPi on your watch and tap \"Pair Mac\". This phone then scans the Mac\'s QR code for the watch, and the watch gets a pairing of its own.</string>
+    <string name="remote_settings_watch_help">Open PocketPi on your watch and tap \"%1$s\". This phone then scans the Mac\'s QR code for the watch, and the watch gets a pairing of its own.</string>
 
     <!-- Settings: about. -->
     <string name="remote_settings_version">Version %1$s (%2$d)</string>

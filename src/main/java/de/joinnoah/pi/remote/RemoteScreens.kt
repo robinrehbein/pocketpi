@@ -3223,10 +3223,11 @@ internal fun RemoteScreen(
                                     Text(stringResource(error), Modifier.weight(1f))
                                 }
                                 ReconnectCountdown(state.reconnectAt)
-                                Row(
+                                // Close, Remove and Pair again do not fit a phone's card in one row; they wrap.
+                                FlowRow(
                                     Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                                    verticalAlignment = Alignment.CenterVertically,
+                                    itemVerticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     TextButton(
                                         onClick = model::dismissError,
@@ -3244,6 +3245,17 @@ internal fun RemoteScreen(
                                             ) {
                                                 Text(stringResource(R.string.remote_remove))
                                             }
+                                        }
+                                    // As on the list pages: the scanned code pairs from the computers page.
+                                    if (error == R.string.remote_device_revoked)
+                                        FilledTonalButton(
+                                            onClick = {
+                                                model.dismissError()
+                                                scan = true
+                                            },
+                                            modifier = Modifier.testTag("pairAgain"),
+                                        ) {
+                                            Text(stringResource(R.string.remote_pair_again))
                                         }
                                     if (!state.loading && error in RETRYABLE_ERRORS)
                                         FilledTonalButton(

@@ -91,6 +91,8 @@ internal fun PaneHeader(
     actions: List<PaneAction> = emptyList(),
     /** Takes the title's focus, so TalkBack lands on it when the header opens. */
     titleFocus: FocusRequester? = null,
+    /** False greys out the back or close button, for a step that must not be left halfway. */
+    leaveEnabled: Boolean = true,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         val reloadWidth = if (onReload == null) 0.dp else 60.dp
@@ -104,7 +106,7 @@ internal fun PaneHeader(
                 Row(Modifier.padding(start = 8.dp, end = 20.dp), verticalAlignment = Alignment.CenterVertically) {
                     // Esc runs the same step as this button (see PaneBackHandler).
                     ShortcutTooltip(if (nested) backLabel else closeLabel, Shortcut.ESCAPE) {
-                        IconButton(onClick = if (nested) onBack else onClose, Modifier.size(48.dp).testTag(if (nested) "${tag}Back" else "${tag}Close")) {
+                        IconButton(onClick = if (nested) onBack else onClose, enabled = leaveEnabled, modifier = Modifier.size(48.dp).testTag(if (nested) "${tag}Back" else "${tag}Close")) {
                             Icon(if (nested) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Close, if (nested) backLabel else closeLabel)
                         }
                     }

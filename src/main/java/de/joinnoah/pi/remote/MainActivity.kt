@@ -261,6 +261,32 @@ private fun Bundle.target(prefix: String): NotificationTarget? {
     return NotificationTarget(route, session, getBoolean("${prefix}Jobs"), getString("${prefix}JobId"))
 }
 
+/**
+ * Sets the system bars' icons for the app's mode ([dark]), not the device's. enableEdgeToEdge's
+ * automatic style follows the configuration, which a forced mode changes only from API 31 on
+ * (see applyAppNightMode); below it, dark icons would sit on a dark screen. Up to API 28 the
+ * navigation bar draws its own scrim, which follows the mode too.
+ */
+@Suppress("DEPRECATION")
+@Composable
+internal fun SystemBarsAppearance(dark: Boolean) {
+    val activity = LocalActivity.current
+    val view = LocalView.current
+    SideEffect {
+        activity?.window?.let { window ->
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !dark
+                isAppearanceLightNavigationBars = !dark
+            }
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+                window.navigationBarColor =
+                    if (dark) AndroidColor.argb(0x80, 0x1B, 0x1B, 0x1B)
+                    else AndroidColor.argb(0xE6, 0xFF, 0xFF, 0xFF)
+            }
+        }
+    }
+}
+
 @Suppress("DEPRECATION")
 @Composable
 internal fun RemoteApp(
@@ -280,7 +306,6 @@ internal fun RemoteApp(
     val dark = preferences.themeMode.isDark(isSystemInDarkTheme())
     val activity = LocalActivity.current
     val context = LocalContext.current
-    val view = LocalView.current
     val colors = remember(context, dark, preferences.theme) { appColorScheme(context, dark, preferences.theme) }
     val windowInfo = LocalWindowInfo.current
     val uriHandler =
@@ -305,19 +330,7 @@ internal fun RemoteApp(
         activity?.window?.setBackgroundDrawable(windowBackground.toArgb().toDrawable())
         onDispose {}
     }
-    SideEffect {
-        activity?.window?.let { window ->
-            WindowCompat.getInsetsController(window, view).apply {
-                isAppearanceLightStatusBars = !dark
-                isAppearanceLightNavigationBars = !dark
-            }
-            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
-                window.navigationBarColor =
-                    if (dark) AndroidColor.argb(0x80, 0x1B, 0x1B, 0x1B)
-                    else AndroidColor.argb(0xE6, 0xFF, 0xFF, 0xFF)
-            }
-        }
-    }
+    SystemBarsAppearance(dark)
     CompositionLocalProvider(LocalUriHandler provides uriHandler) {
         MaterialTheme(
             colorScheme = colors,

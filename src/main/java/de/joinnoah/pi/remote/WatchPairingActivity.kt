@@ -35,12 +35,11 @@ class WatchPairingActivity : ComponentActivity() {
             var scan by remember { mutableStateOf(false) }
             // The app's palette and mode, like every other PocketPi screen.
             val preferences by (application as RemoteApplication).settings.state.collectAsState()
-            val systemDark = isSystemInDarkTheme()
+            val dark = preferences.themeMode.isDark(isSystemInDarkTheme())
+            SystemBarsAppearance(dark)
             MaterialTheme(
                 colorScheme =
-                    remember(preferences.themeMode, preferences.theme, systemDark) {
-                        appColorScheme(this@WatchPairingActivity, preferences.themeMode.isDark(systemDark), preferences.theme)
-                    },
+                    remember(dark, preferences.theme) { appColorScheme(this@WatchPairingActivity, dark, preferences.theme) },
                 typography = RemoteTypography,
                 shapes = RemoteShapes,
             ) {
@@ -59,6 +58,8 @@ class WatchPairingActivity : ComponentActivity() {
                             onBack = { if (!sending) finish() },
                             onClose = { if (!sending) finish() },
                             onReload = null,
+                            // The code is on its way: the screen closes by itself once it arrived.
+                            leaveEnabled = !sending,
                         )
                         Column(
                             Modifier.padding(horizontal = 24.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),

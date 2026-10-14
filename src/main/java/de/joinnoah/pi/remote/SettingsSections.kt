@@ -111,7 +111,7 @@ internal fun DevicesSection(pairedMacs: Int, onPairedMacs: () -> Unit) {
         SettingsRow(
             Icons.Default.Watch,
             stringResource(R.string.remote_settings_watch),
-            stringResource(R.string.remote_settings_watch_help),
+            stringResource(R.string.remote_settings_watch_help, stringResource(R.string.wear_pair)),
             Modifier.semantics(mergeDescendants = true) {}.testTag("settingsWatch"),
         )
     }

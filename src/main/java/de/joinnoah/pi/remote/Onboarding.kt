@@ -43,7 +43,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -124,7 +126,11 @@ internal fun PairingWaitCard(deadline: Long, onCancel: () -> Unit, now: () -> Lo
                     style = MaterialTheme.typography.labelLarge,
                 )
             } else {
-                Text(stringResource(R.string.remote_pairing_timeout), Modifier.testTag("pairingTimedOut"))
+                // Announced as it replaces the countdown, so TalkBack users learn the wait ran out.
+                Text(
+                    stringResource(R.string.remote_pairing_timeout),
+                    Modifier.testTag("pairingTimedOut").semantics { liveRegion = LiveRegionMode.Polite },
+                )
             }
             TextButton(
                 onClick = onCancel,

@@ -59,8 +59,8 @@ internal enum class CameraAccess {
 }
 
 /**
- * [deniedBefore] says a request was refused earlier. Android shows no rationale before the first
- * request either, so only together they mean that it stopped asking.
+ * [deniedBefore] says that Android stopped asking after an earlier request (see [cameraAnswer]).
+ * Android shows no rationale before the first request either, so only together they mean that.
  */
 internal fun cameraAccess(granted: Boolean, cameraError: Boolean, deniedBefore: Boolean, rationale: Boolean): CameraAccess =
     when {
@@ -70,11 +70,41 @@ internal fun cameraAccess(granted: Boolean, cameraError: Boolean, deniedBefore: 
         else -> CameraAccess.ASK
     }
 
+/** What the answer to a camera request says about Android's prompt. */
+internal enum class CameraAnswer {
+    GRANTED,
+
+    /** Refused once, or the prompt was dismissed without an answer: Android asks again. */
+    ASK_AGAIN,
+
+    /** Refused after Android had explained the request: it stops asking. */
+    STOPPED_ASKING,
+
+    /** Android had stopped asking and showed no prompt: only the app's settings help. */
+    NO_PROMPT,
+}
+
+/**
+ * Reads a camera request's answer. [rationaleBefore] and [rationaleAfter] are Android's rationale
+ * flag around the request; [stoppedBefore] is the stored [CameraDenials] state. Android 11 and
+ * later count a prompt dismissed with Back or a tap outside as no answer: the rationale stays off
+ * on both sides, as it does when no prompt showed at all. Only a denial for good, which leaves the
+ * rationale off after it was on, tells the two apart, so it is stored.
+ */
+internal fun cameraAnswer(granted: Boolean, rationaleBefore: Boolean, rationaleAfter: Boolean, stoppedBefore: Boolean): CameraAnswer =
+    when {
+        granted -> CameraAnswer.GRANTED
+        rationaleAfter -> CameraAnswer.ASK_AGAIN
+        rationaleBefore -> CameraAnswer.STOPPED_ASKING
+        stoppedBefore -> CameraAnswer.NO_PROMPT
+        else -> CameraAnswer.ASK_AGAIN
+    }
+
 /** Opens this app's page in the system settings, where a permission denied for good is granted. */
 internal fun appDetailsSettingsIntent(packageName: String): Intent =
     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
 
-/** Whether the camera request was refused before, across scanner openings and app runs. */
+/** Whether Android stopped asking for the camera, across scanner openings and app runs. */
 internal object CameraDenials {
     private const val PREFERENCES = "qr_scanner"
     private const val DENIED_KEY = "camera_denied"
@@ -84,7 +114,7 @@ internal object CameraDenials {
 
     fun deniedBefore(context: Context): Boolean = preferences(context).getBoolean(DENIED_KEY, false)
 
-    fun record(context: Context, granted: Boolean) = preferences(context).edit { putBoolean(DENIED_KEY, !granted) }
+    fun record(context: Context, denied: Boolean) = preferences(context).edit { putBoolean(DENIED_KEY, denied) }
 }
 
 @Composable
@@ -100,12 +130,19 @@ fun QrScanner(onCode: (String) -> Unit, onClose: () -> Unit, onPaste: () -> Unit
     var deniedBefore by remember { mutableStateOf(CameraDenials.deniedBefore(context)) }
     var rationale by remember { mutableStateOf(showsRationale()) }
     var cameraError by remember { mutableStateOf(false) }
+    var rationaleAtRequest by remember { mutableStateOf(false) }
     val permission =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
             granted = it
-            deniedBefore = !it
             rationale = showsRationale()
-            CameraDenials.record(context, it)
+            when (cameraAnswer(it, rationaleAtRequest, rationale, deniedBefore)) {
+                CameraAnswer.GRANTED, CameraAnswer.ASK_AGAIN -> deniedBefore = false
+                CameraAnswer.STOPPED_ASKING -> deniedBefore = true
+                // Some OEM builds have no per-app settings screen.
+                CameraAnswer.NO_PROMPT ->
+                    runCatching { context.startActivity(appDetailsSettingsIntent(context.packageName)) }
+            }
+            CameraDenials.record(context, deniedBefore)
         }
     // Back from the app's settings, where the camera may have been allowed.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
@@ -113,7 +150,7 @@ fun QrScanner(onCode: (String) -> Unit, onClose: () -> Unit, onPaste: () -> Unit
         rationale = showsRationale()
         if (granted && deniedBefore) {
             deniedBefore = false
-            CameraDenials.record(context, true)
+            CameraDenials.record(context, false)
         }
     }
     val access = cameraAccess(granted, cameraError, deniedBefore, rationale)
@@ -175,11 +212,12 @@ fun QrScanner(onCode: (String) -> Unit, onClose: () -> Unit, onPaste: () -> Unit
                         if (access != CameraAccess.ERROR) {
                             Spacer(Modifier.height(12.dp))
                             Button(
+                                // Asks Android first even when it had stopped asking: a dismissed
+                                // prompt or "Ask every time" in the settings brings the prompt back.
+                                // The app's settings open only when no prompt shows.
                                 onClick = {
-                                    if (access == CameraAccess.SETTINGS)
-                                        // Some OEM builds have no per-app settings screen.
-                                        runCatching { context.startActivity(appDetailsSettingsIntent(context.packageName)) }
-                                    else permission.launch(Manifest.permission.CAMERA)
+                                    rationaleAtRequest = showsRationale()
+                                    permission.launch(Manifest.permission.CAMERA)
                                 },
                                 modifier = Modifier.testTag("allowCamera"),
                             ) {
