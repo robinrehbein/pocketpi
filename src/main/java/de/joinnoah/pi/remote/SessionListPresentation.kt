@@ -64,28 +64,35 @@ internal data class QuickChats(
     val waiting: List<ProjectChatSummary>,
     val running: List<ProjectChatSummary>,
     val recent: List<ProjectChatSummary>,
-    /** Whether a running or recent group holds more chats than [QUICK_CHAT_LIMIT], so "Show all" has more to show. */
-    val expandable: Boolean,
+    /** Whether the running group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
+    val runningExpandable: Boolean,
+    /** Whether the recent group holds more chats than [QUICK_CHAT_LIMIT], so its "Show all" has more to show. */
+    val recentExpandable: Boolean,
 )
 
 /**
  * The quick chats of a Mac's Projects page: every waiting chat, and the running and the recent ones up to
- * [QUICK_CHAT_LIMIT] each unless [showAll]. A chat counts as waiting or running only on a connected Mac
- * and once verified; all others are recent.
+ * [QUICK_CHAT_LIMIT] each, unless their group is shown in full ([showRunningAll], [showRecentAll]). A chat
+ * counts as waiting or running only on a connected Mac and once verified; all others are recent.
  */
-internal fun quickChats(chats: List<ProjectChatSummary>, connected: Boolean, showAll: Boolean): QuickChats {
+internal fun quickChats(
+    chats: List<ProjectChatSummary>,
+    connected: Boolean,
+    showRunningAll: Boolean,
+    showRecentAll: Boolean,
+): QuickChats {
     val waiting = chats.filter { it.verified && connected && it.session.text("status") == "waiting" }
     val running = chats.filter { it.verified && connected && it.session.text("status") == "running" }
     val recent =
         chats.filter {
             !it.verified || !connected || it.session.text("status") !in setOf("waiting", "running")
         }
-    val limit = if (showAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT
     return QuickChats(
         waiting = waiting,
-        running = running.take(limit),
-        recent = recent.take(limit),
-        expandable = running.size > QUICK_CHAT_LIMIT || recent.size > QUICK_CHAT_LIMIT,
+        running = running.take(if (showRunningAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
+        recent = recent.take(if (showRecentAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT),
+        runningExpandable = running.size > QUICK_CHAT_LIMIT,
+        recentExpandable = recent.size > QUICK_CHAT_LIMIT,
     )
 }
 

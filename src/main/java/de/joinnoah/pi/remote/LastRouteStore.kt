@@ -18,11 +18,14 @@ internal class LastRouteStore(private val preferences: SharedPreferences) {
     /** The stored route ID, or null when none is stored or the stored value is not a route ID. */
     fun load(): String? = preferences.getString(KEY_ROUTE, null)?.takeIf { isOpaqueId(it) }
 
-    /** Remembers [routeId] as the Mac opened last, and when it was opened. */
-    fun save(routeId: String, now: Long = System.currentTimeMillis()) {
+    /**
+     * Remembers [routeId] as the Mac opened last. When it was opened is kept only for [used] opens: a restore
+     * or a reconnect is not the user opening the Mac again.
+     */
+    fun save(routeId: String, now: Long = System.currentTimeMillis(), used: Boolean = true) {
         preferences.edit {
             putString(KEY_ROUTE, routeId)
-            putLong(usedKey(routeId), now)
+            if (used) putLong(usedKey(routeId), now)
         }
     }
 

@@ -256,7 +256,7 @@ internal class RemoteNavigator(
             if (current != request) return@launch
             // The Mac of a page the user is on is the one a cold launch opens again (see coldStart).
             if (key is RemoteNavKey.Projects || key is RemoteNavKey.Sessions || key is RemoteNavKey.Chat)
-                canonical.routeId?.let { lastRoute?.save(it) }
+                canonical.routeId?.let { lastRoute?.save(it, used = mode == ActivationMode.USER_OPEN) }
             val chat = canonical.keys().lastOrNull() as? RemoteNavKey.Chat
             // The restored chat's own session is gone (offline, or otherwise dropped by the host).
             // Walk the stacked ancestors closest first, actually re-activating each through the
@@ -1319,6 +1319,7 @@ internal fun RemoteNavigation(
                         enablePush,
                         disablePush,
                         pushSettings.notificationsDecided,
+                        { settings.markNotificationPromptShown() },
                     )
                 }
             }
@@ -1393,6 +1394,7 @@ private fun RemoteNavDisplay(
     enablePush: () -> Unit,
     disablePush: () -> Unit,
     pushDecided: Boolean,
+    onNotificationDenied: () -> Unit,
 ) {
     NavDisplay(
         backStack = stack,
@@ -1408,7 +1410,7 @@ private fun RemoteNavDisplay(
                 entry<RemoteNavKey.Hosts> { key ->
                     val model = viewModel { HostsViewModel(repository) }
                     CenteredPage {
-                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided)
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
                     }
                 }
                 entry<RemoteNavKey.Projects>(metadata = { key -> navKeyMetadata(key) }) { key ->
@@ -1416,7 +1418,7 @@ private fun RemoteNavDisplay(
                     val column = LocalProjectsColumn.current
                     if (column == null)
                         CenteredPage {
-                            RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided)
+                            RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
                         }
                     else {
                         // Keeps the full column's scroll position while the strip stands in for it.
@@ -1427,13 +1429,13 @@ private fun RemoteNavDisplay(
                             }
                         else
                             holder.SaveableStateProvider("column") {
-                                RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided)
+                                RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
                             }
                     }
                 }
                 entry<RemoteNavKey.Sessions>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { SessionsViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
                 }
                 entry<RemoteNavKey.FolderBrowser>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { FolderBrowserViewModel(repository, key) }
@@ -1451,7 +1453,7 @@ private fun RemoteNavDisplay(
                 }
                 entry<RemoteNavKey.Chat>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ChatViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
                 }
                 entry<RemoteNavKey.Settings>(
                     metadata =
@@ -1464,7 +1466,7 @@ private fun RemoteNavDisplay(
                 ) { key ->
                     val model = viewModel { SettingsViewModel(repository, settings) }
                     CenteredPage {
-                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided)
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
                     }
                 }
             },

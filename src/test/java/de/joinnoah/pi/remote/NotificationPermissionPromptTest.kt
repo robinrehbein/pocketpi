@@ -86,6 +86,17 @@ class NotificationPermissionPromptTest {
     }
 
     @Test
+    fun aDenialOnTheCardIsAnAnswerToo() {
+        val settings = FakeSettingsRepository()
+
+        // The card's own permission request, denied: the card's denial is recorded like the pairing's.
+        settings.markNotificationPromptShown()
+
+        assertTrue(settings.state.value.notificationsDecided)
+        assertFalse(showsNotificationCard(true, false, settings.state.value.notificationsDecided, dismissed = false))
+    }
+
+    @Test
     fun switchingPushOffInTheAppHidesTheCardForGood() {
         val settings = FakeSettingsRepository().apply { setPushEnabled(true); setPushEnabled(false) }
 

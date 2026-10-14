@@ -7,6 +7,18 @@
     <string name="remote_projects_show_all">Show all</string>
     <string name="remote_projects_show_fewer">Show fewer</string>
     <string name="remote_host_last_used">Last used %1$s</string>
+    <plurals name="remote_host_last_used_minutes">
+        <item quantity="one">Last used %d minute ago</item>
+        <item quantity="other">Last used %d minutes ago</item>
+    </plurals>
+    <plurals name="remote_host_last_used_hours">
+        <item quantity="one">Last used %d hour ago</item>
+        <item quantity="other">Last used %d hours ago</item>
+    </plurals>
+    <plurals name="remote_host_last_used_days">
+        <item quantity="one">Last used %d day ago</item>
+        <item quantity="other">Last used %d days ago</item>
+    </plurals>
     <string name="remote_host_last_used_just_now">Last used just now</string>
     <string name="remote_host_tap_to_connect">Tap to connect</string>
     <string name="remote_notification_not_now">Not now</string>

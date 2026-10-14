@@ -24,6 +24,8 @@ import androidx.test.core.app.ApplicationProvider
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -76,6 +78,7 @@ class EmptyStateUiTest {
         chats: List<ProjectChatSummary> = emptyList(),
         capabilities: Set<String> = emptySet(),
         sessions: List<JsonObject> = emptyList(),
+        pushConfigured: Boolean = false,
     ) {
         repository.state.value =
             RemoteState(
@@ -92,7 +95,7 @@ class EmptyStateUiTest {
             )
         compose.setContent {
             MaterialTheme {
-                RemoteNavigation(repository, settings, false, {})
+                RemoteNavigation(repository, settings, pushConfigured, {})
             }
         }
         compose.waitForIdle()
@@ -143,6 +146,10 @@ class EmptyStateUiTest {
         compose.onNodeWithText(label(R.string.remote_empty_sessions_title)).assertIsDisplayed()
         compose.onNodeWithTag("emptyNewSession").assertIsDisplayed()
         compose.onNodeWithTag("extendedNewSession").assertIsDisplayed()
+
+        compose.onNodeWithTag("emptyNewSession").performClick()
+        compose.waitForIdle()
+        assertEquals(1, repository.createdSessions)
     }
 
     @Test
@@ -172,25 +179,57 @@ class EmptyStateUiTest {
     }
 
     @Test
-    fun quickAccessShowsAllBeyondThreeChats() {
+    fun quickAccessShowsAllBeyondThreeChatsAndFoldsBack() {
         val recent = (1..4).map { chat("r$it", "idle") }
         render(projects = listOf(project("p1", "Alpha")), chats = recent)
 
         compose.onNodeWithText("Session r3").assertIsDisplayed()
         compose.onAllNodesWithText("Session r4").assertCountEquals(0)
 
-        compose.onNodeWithTag("quickChatsShowAll").performClick()
+        compose.onNodeWithTag("quickChatsShowAllRecent").performClick()
         compose.waitForIdle()
 
         compose.onNodeWithText("Session r4").assertIsDisplayed()
         compose.onNodeWithText(label(R.string.remote_projects_show_fewer)).assertIsDisplayed()
+
+        compose.onNodeWithTag("quickChatsShowAllRecent").performClick()
+        compose.waitForIdle()
+
+        compose.onAllNodesWithText("Session r4").assertCountEquals(0)
+        compose.onNodeWithText(label(R.string.remote_projects_show_all)).assertIsDisplayed()
+    }
+
+    @Test
+    fun theShowAllOfTheWorkingGroupSitsUnderItsOwnChatsAndExpandsOnlyThem() {
+        val running = (1..4).map { chat("w$it", "running") }
+        render(projects = listOf(project("p1", "Alpha")), chats = running)
+
+        compose.onAllNodesWithTag("quickChatsShowAllRecent").assertCountEquals(0)
+        compose.onAllNodesWithText("Session w4").assertCountEquals(0)
+
+        compose.onNodeWithTag("quickChatsShowAllRunning").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithText("Session w4").assertIsDisplayed()
     }
 
     @Test
     fun quickAccessHasNoShowAllWhileThreeChatsFit() {
         render(projects = listOf(project("p1", "Alpha")), chats = (1..3).map { chat("r$it", "idle") })
 
-        compose.onAllNodesWithTag("quickChatsShowAll").assertCountEquals(0)
+        compose.onAllNodesWithTag("quickChatsShowAllRecent").assertCountEquals(0)
+        compose.onAllNodesWithTag("quickChatsShowAllRunning").assertCountEquals(0)
+    }
+
+    @Test
+    fun notNowHidesTheNotificationCardAndTheChoiceIsKept() {
+        render(projects = listOf(project("p1", "Alpha")), pushConfigured = true)
+
+        compose.onNodeWithTag("notificationNotNow").performClick()
+        compose.waitForIdle()
+
+        compose.onAllNodesWithTag("notificationNotNow").assertCountEquals(0)
+        assertTrue(LastRouteStore(context()).notificationCardDismissed("studio"))
     }
 
     @Test

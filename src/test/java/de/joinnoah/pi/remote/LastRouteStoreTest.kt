@@ -98,4 +98,14 @@ class LastRouteStoreTest {
         assertFalse(LastRouteStore(context).notificationCardDismissed("a"))
         assertTrue(LastRouteStore(context).notificationCardDismissed("b"))
     }
+
+    @Test
+    fun aRestoreRemembersTheMacButIsNoOpen() {
+        val store = LastRouteStore(context)
+
+        store.save("a", now = 100L, used = false)
+
+        assertEquals("a", LastRouteStore(context).load())
+        assertNull(LastRouteStore(context).lastUsedAt("a"))
+    }
 }

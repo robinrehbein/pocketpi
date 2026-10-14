@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import android.content.Context
 import android.text.format.DateUtils
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -17,6 +18,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -40,6 +42,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -51,18 +54,23 @@ internal fun HostCard(
     onOpen: () -> Unit,
     onRemove: () -> Unit,
 ) {
+    // The minutes of "Last used" move on, so the clock is read again each minute during the first hour.
+    // Otherwise a card that stays composed would keep "just now" until it recomposes.
+    val now by
+        produceState(System.currentTimeMillis(), lastUsedAt) {
+            if (lastUsedAt != null && System.currentTimeMillis() - lastUsedAt < DateUtils.HOUR_IN_MILLIS)
+                repeat(MINUTES_PER_HOUR) {
+                    delay(DateUtils.MINUTE_IN_MILLIS)
+                    value = System.currentTimeMillis()
+                }
+        }
     // The relay is in the Mac's connection details; the card says what the user can do with the Mac.
-    val now = System.currentTimeMillis()
+    val context = LocalContext.current
     val status =
         when {
             connected -> stringResource(R.string.remote_connected)
             lastUsedAt == null -> stringResource(R.string.remote_host_tap_to_connect)
-            now - lastUsedAt < DateUtils.MINUTE_IN_MILLIS -> stringResource(R.string.remote_host_last_used_just_now)
-            else ->
-                stringResource(
-                    R.string.remote_host_last_used,
-                    DateUtils.getRelativeTimeSpanString(lastUsedAt, now, DateUtils.MINUTE_IN_MILLIS).toString(),
-                )
+            else -> lastUsedStatus(context, lastUsedAt, now)
         }
     OutlinedCard(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -89,6 +97,32 @@ internal fun HostCard(
                 Icon(Icons.Default.DeleteOutline, stringResource(R.string.remote_remove))
             }
         }
+    }
+}
+
+private const val MINUTES_PER_HOUR = 60
+
+/**
+ * When a Mac was last used, for a host card: "just now", then minutes, hours and days in words that fit
+ * mid-sentence (plurals per language, so German stays "vor 5 Minuten"), and the date once it is a week old.
+ * A time in the future (the clock moved back) reads as just now.
+ */
+internal fun lastUsedStatus(context: Context, lastUsedAt: Long, now: Long): String {
+    val resources = context.resources
+    val minutes = (now - lastUsedAt) / DateUtils.MINUTE_IN_MILLIS
+    val hours = minutes / MINUTES_PER_HOUR
+    val days = hours / 24
+    return when {
+        minutes < 1 -> resources.getString(R.string.remote_host_last_used_just_now)
+        minutes < MINUTES_PER_HOUR ->
+            resources.getQuantityString(R.plurals.remote_host_last_used_minutes, minutes.toInt(), minutes.toInt())
+        hours < 24 -> resources.getQuantityString(R.plurals.remote_host_last_used_hours, hours.toInt(), hours.toInt())
+        days < 7 -> resources.getQuantityString(R.plurals.remote_host_last_used_days, days.toInt(), days.toInt())
+        else ->
+            resources.getString(
+                R.string.remote_host_last_used,
+                DateUtils.formatDateTime(context, lastUsedAt, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_ABBREV_MONTH),
+            )
     }
 }
 

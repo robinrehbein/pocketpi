@@ -95,7 +95,6 @@ import androidx.compose.ui.res.stringResource
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
@@ -223,6 +222,8 @@ internal fun RemoteScreen(
     disablePush: () -> Unit = {},
     /** Whether the user already answered for push (see [RemoteSettings.notificationsDecided]). */
     pushDecided: Boolean = false,
+    /** Records a denial of the notification permission as the user's answer, so no card offers it again. */
+    onNotificationDenied: () -> Unit = {},
 ) {
     val state by model.state.collectAsStateWithLifecycle()
     // The first list the user came for is on screen: the time to full display that startup
@@ -1243,7 +1244,10 @@ internal fun RemoteScreen(
     val notificationPermission =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             notificationGranted = granted
-            if (!granted) notificationDenied = true
+            if (!granted) {
+                notificationDenied = true
+                onNotificationDenied()
+            }
             if (granted) enablePush()
         }
     fun enableNotifications() {
@@ -1256,8 +1260,9 @@ internal fun RemoteScreen(
     var notificationCardDismissed by remember(cardRouteId) {
         mutableStateOf(cardRouteId != null && navigator.notificationCardDismissed(cardRouteId))
     }
-    // Quick access shows a few chats per group, and "Show all" lifts that until it is toggled back.
-    var quickChatsShowAll by rememberSaveable { mutableStateOf(false) }
+    // Quick access shows a few chats per group. Each group's "Show all" lifts that for its own group.
+    var runningShowAll by rememberSaveable { mutableStateOf(false) }
+    var recentShowAll by rememberSaveable { mutableStateOf(false) }
     val title =
         stringResource(
             if (settings) R.string.remote_settings
@@ -1923,12 +1928,18 @@ internal fun RemoteScreen(
                     enabled = !state.loading,
                     onClick = { navigator.openFolders(key.routeId) },
                 )
-            // An empty session list names its one action beside the list, so its button stands out.
+            // An empty session list names its one action beside the list, so its button stands out. It keeps this
+            // shape while the list loads, so the button does not jump when the list arrives; disabled, it is greyed.
             val newSessionEnabled = state.connected && !state.loading && !navigator.mutating
-            if (key is RemoteNavKey.Sessions && state.sessions.isEmpty() && !state.loading) {
+            if (key is RemoteNavKey.Sessions && state.sessions.isEmpty()) {
+                val labelColor =
+                    if (newSessionEnabled) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
                 FloatingSurface(
                     shape = RoundedCornerShape(28.dp),
-                    color = MaterialTheme.colorScheme.primary,
+                    color =
+                        if (newSessionEnabled) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.surfaceContainerHighest,
                 ) {
                     Row(
                         Modifier
@@ -1939,16 +1950,15 @@ internal fun RemoteScreen(
                                 role = Role.Button,
                                 onClick = { navigator.createSession(key.routeId, key.projectId) },
                             )
-                            .padding(horizontal = 20.dp)
-                            .alpha(if (newSessionEnabled) 1f else 0.38f),
+                            .padding(horizontal = 20.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary)
+                        Icon(Icons.Default.Add, contentDescription = null, tint = labelColor)
                         Spacer(Modifier.width(ButtonDefaults.IconSpacing))
                         Text(
                             stringResource(R.string.remote_new_session),
                             style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onPrimary,
+                            color = labelColor,
                         )
                     }
                 }
@@ -2552,12 +2562,13 @@ internal fun RemoteScreen(
                             // the running ones. Then the shared projects, then the recent chats. Beside an open
                             // project the chats hide, as before.
                             // Every waiting chat leads, since the heading promises all of them; running and recent
-                            // chats are capped at three each until "Show all" (see quickChats).
+                            // chats are capped at three each until their "Show all" (see quickChats).
                             val quick =
                                 quickChats(
                                     if (projectSelected) emptyList() else state.projectChats,
                                     state.connected,
-                                    showAll = quickChatsShowAll,
+                                    showRunningAll = runningShowAll,
+                                    showRecentAll = recentShowAll,
                                 )
                             val waitingChats = quick.waiting
                             val runningChats = quick.running
@@ -2576,6 +2587,14 @@ internal fun RemoteScreen(
                                 }
                                 projectChatRows(runningChats, routeMarks, state.connected, !state.loading) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
+                                }
+                                // Directly under the group it expands, so it is not far down the page.
+                                if (quick.runningExpandable) item(key = "project_chats_running_show_all") {
+                                    QuickChatsShowAll(
+                                        expanded = runningShowAll,
+                                        tag = "quickChatsShowAllRunning",
+                                        onClick = { runningShowAll = !runningShowAll },
+                                    )
                                 }
                             }
                             if (state.projects.isEmpty()) {
@@ -2648,17 +2667,11 @@ internal fun RemoteScreen(
                                 projectChatRows(recentChats, routeMarks, state.connected, !state.loading) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
-                            }
-                            if (quick.expandable) item(key = "project_chats_show_all") {
-                                TextButton(
-                                    onClick = { quickChatsShowAll = !quickChatsShowAll },
-                                    modifier = Modifier.testTag("quickChatsShowAll"),
-                                ) {
-                                    Text(
-                                        stringResource(
-                                            if (quickChatsShowAll) R.string.remote_projects_show_fewer
-                                            else R.string.remote_projects_show_all,
-                                        )
+                                if (quick.recentExpandable) item(key = "project_chats_recent_show_all") {
+                                    QuickChatsShowAll(
+                                        expanded = recentShowAll,
+                                        tag = "quickChatsShowAllRecent",
+                                        onClick = { recentShowAll = !recentShowAll },
                                     )
                                 }
                             }
@@ -3788,6 +3801,14 @@ private fun MacOverflow(
                 modifier = Modifier.testTag("macRemove"),
             )
         }
+    }
+}
+
+/** Under a quick-chat group: lifts its three-chat limit, or folds it back. */
+@Composable
+private fun QuickChatsShowAll(expanded: Boolean, tag: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.testTag(tag)) {
+        Text(stringResource(if (expanded) R.string.remote_projects_show_fewer else R.string.remote_projects_show_all))
     }
 }
 
