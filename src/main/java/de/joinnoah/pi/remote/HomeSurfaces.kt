@@ -9,11 +9,17 @@ import androidx.glance.appwidget.updateAll
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.transform
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -72,16 +78,17 @@ internal class HomeSurfaces(
             mutable.value
         }
 
-    @OptIn(FlowPreview::class)
     fun observe(state: StateFlow<RemoteState>) {
         scope.launch {
-            state.debounce(750).collect { current ->
+            // The stored snapshot already shows the last rows: let the app's start settle first.
+            delay(HOME_UPDATE_INTERVAL_MS)
+            homeUpdates(state).collect { current ->
                 try {
                     // Pairing the same Mac again makes it known again.
-                    forgotten.removeAll(current.hosts.map { it.routeId }.toSet())
+                    forgotten.removeAll(current.hostRoutes.toSet())
                     update { previous ->
                         val routes =
-                            (if (current.hosts.isNotEmpty()) current.hosts.map { it.routeId }.toSet()
+                            (if (current.hostRoutes.isNotEmpty()) current.hostRoutes.toSet()
                             else storedRoutes()) - forgotten
                         pairedRoutes = routes
                         closed += closedHomeSessions(previous, current)
@@ -118,7 +125,9 @@ internal class HomeSurfaces(
 
     fun onPush(payload: PushPayload) {
         val status = if (payload.event == PushEvent.QUESTION) "waiting" else "idle"
-        launchUpdate { it.withStatus(payload.routeId, payload.sessionId, status) }
+        launchUpdate {
+            it.withPush(payload.routeId, payload.sessionId, status, System.currentTimeMillis())
+        }
     }
 
     fun onAnswered(routeId: String, sessionId: String) {
@@ -317,6 +326,49 @@ internal class HomeSurfaces(
             false
         }
 }
+
+/** The longest the widget and the shortcuts trail the app's state, also while pi streams. */
+internal const val HOME_UPDATE_INTERVAL_MS = 750L
+
+/** How often a connected app folds its unchanged state in again, which refreshes the widget's time. */
+internal const val HOME_REFRESH_INTERVAL_MS = 60_000L
+
+/**
+ * What the home surfaces fold in from [state]: a change of [HomeInputs] at once, then at most one
+ * every [intervalMs], always ending with the latest. A debounce on the whole state, which every
+ * streamed delta resets, would hold back a status change until the run is over.
+ *
+ * While the app is connected to the selected host, the same inputs come again every
+ * [refreshIntervalMs], so the widget's "Updated" time follows the host's confirmation about once
+ * a minute instead of stopping at the last change.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+internal fun homeUpdates(
+    state: Flow<RemoteState>,
+    intervalMs: Long = HOME_UPDATE_INTERVAL_MS,
+    refreshIntervalMs: Long = HOME_REFRESH_INTERVAL_MS,
+): Flow<HomeInputs> =
+    flow {
+            var last: Pair<RemoteState, HomeInputs>? = null
+            state.collect { current ->
+                val inputs = homeInputs(current, last)
+                last = current to inputs
+                emit(inputs)
+            }
+        }
+        .distinctUntilChanged()
+        .transformLatest { inputs ->
+            emit(inputs)
+            while (inputs.connectedToSelection) {
+                delay(refreshIntervalMs)
+                emit(inputs)
+            }
+        }
+        .conflate()
+        .transform {
+            emit(it)
+            delay(intervalMs)
+        }
 
 /** The route and session of a [shortcutId]. */
 internal fun shortcutTarget(id: String): Pair<String, String>? {
