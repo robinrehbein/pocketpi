@@ -57,6 +57,10 @@ internal enum class InspectorTab(@StringRes val labelRes: Int) {
     TOOL(R.string.remote_inspector_tab_tool),
     HISTORY(R.string.remote_inspector_tab_history),
     ARTIFACT(R.string.remote_inspector_tab_artifact),
+    /** The session's artifacts (`/artifacts`); the one opened shows in [ARTIFACT]. */
+    GALLERY(R.string.remote_inspector_tab_gallery),
+    /** The files the chat changed or read. */
+    TOUCHED(R.string.remote_inspector_tab_touched),
 }
 
 /**
