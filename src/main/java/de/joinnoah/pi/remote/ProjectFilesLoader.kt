@@ -264,9 +264,9 @@ internal class ProjectFilesLoader(
 
     /**
      * Opens the browser at the session folder, or at its folder [path] with [file] open: the
-     * browser as a return to the session left it.
+     * browser as a return to the session left it. [lines] are picked in [file] and scrolled to.
      */
-    fun open(path: String = "", file: String? = null) {
+    fun open(path: String = "", file: String? = null, lines: LineSelection? = null) {
         stopList()
         stopFile()
         stopPreviews()
@@ -289,13 +289,24 @@ internal class ProjectFilesLoader(
                     loading = failure == null && known == null,
                     listing = known,
                     failure = failure,
-                    file = opened?.let(::OpenFile),
+                    file = opened?.let { OpenFile(it, selection = lines, revealLine = lines?.first) },
                 )
             )
         }
         if (failure != null) return
         if (known != null) relist(sessionId, path, revalidate = true) else list(sessionId, path, after = null)
         if (opened != null) read(sessionId, opened, 0, null, reopen = false)
+    }
+
+    /**
+     * Opens the browser at the folder of [path] with the file open, [lines] picked and in view:
+     * a file the chat named. False, with nothing opened, when [path] is not relative to the session
+     * folder; `session.files.*` reads nothing outside it.
+     */
+    fun openAt(path: String, lines: LineSelection?): Boolean {
+        if (!isSessionPath(path)) return false
+        open(parentPath(path), path, lines)
+        return true
     }
 
     fun close() {
@@ -570,25 +581,39 @@ internal class ProjectFilesLoader(
                 val chunk = source.filesRead(sessionId, path, offset, version)
                 if (!active()) return@launch
                 writeFile(sessionId, path) { file ->
-                    when {
-                        offset == 0L ->
-                            OpenFile(
-                                path,
-                                loading = false,
-                                version = chunk.version,
-                                size = chunk.size,
-                                content = chunk.content,
-                                binary = chunk.binary,
-                                tooLarge = chunk.tooLarge,
-                                nextOffset = chunk.nextOffset,
-                                reopened = file.reopened,
-                            )
-                        // The host decides per page: a later binary page makes the whole file binary.
-                        chunk.binary ->
-                            file.copy(binary = true, content = "", nextOffset = null, moreLoading = false, selection = null)
-                        else ->
-                            file.copy(content = file.content + chunk.content, nextOffset = chunk.nextOffset, moreLoading = false)
-                    }
+                    val read =
+                        when {
+                            offset == 0L ->
+                                OpenFile(
+                                    path,
+                                    loading = false,
+                                    version = chunk.version,
+                                    size = chunk.size,
+                                    content = chunk.content,
+                                    binary = chunk.binary,
+                                    tooLarge = chunk.tooLarge,
+                                    nextOffset = chunk.nextOffset,
+                                    reopened = file.reopened,
+                                    // Lines picked before the text came are those the chat opened it at.
+                                    selection = file.selection,
+                                    revealLine = file.revealLine,
+                                )
+                            // The host decides per page: a later binary page makes the whole file binary.
+                            chunk.binary ->
+                                file.copy(binary = true, content = "", nextOffset = null, moreLoading = false, selection = null)
+                            else ->
+                                file.copy(content = file.content + chunk.content, nextOffset = chunk.nextOffset, moreLoading = false)
+                        }
+                    revealed(read)
+                }
+                // The lines the chat opened the file at lie further on: read on to them.
+                val file = files()?.file?.takeIf { it.path == path }
+                val wanted = file?.revealLine?.let { file.selection?.last ?: it }
+                val next = file?.nextOffset
+                if (file != null && wanted != null && next != null && !file.binary && lineCount(file.content) < wanted) {
+                    writeFile(sessionId, path) { it.copy(moreLoading = true, moreFailure = null) }
+                    // Once only: a file that keeps changing shows the failure instead of reading again and again.
+                    read(sessionId, path, next, chunk.version, reopen = !file.reopened)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -597,8 +622,11 @@ internal class ProjectFilesLoader(
                 if (!active()) return@launch
                 val reason = failure(e)
                 if (offset > 0 && reason == FilesFailure.NOT_FOUND && reopen) {
-                    // "File changed; reopen": the pages so far belong to the old version.
-                    writeFile(sessionId, path) { OpenFile(path, reopened = true) }
+                    // "File changed; reopen": the pages so far belong to the old version. Lines the
+                    // chat opened it at are still wanted; the read on from the start reaches them.
+                    writeFile(sessionId, path) {
+                        OpenFile(path, reopened = true, selection = it.selection.takeIf { _ -> it.revealLine != null }, revealLine = it.revealLine)
+                    }
                     read(sessionId, path, 0, null, reopen = false)
                     return@launch
                 }
@@ -607,6 +635,25 @@ internal class ProjectFilesLoader(
                     else it.copy(moreLoading = false, moreFailure = reason)
                 }
             }
+        }
+    }
+
+    /** Lines a final line end does not start; see [fileLines]. */
+    private fun lineCount(content: String): Int =
+        if (content.isEmpty()) 0 else content.count { it == '\n' } + if (content.endsWith('\n')) 0 else 1
+
+    /**
+     * [file] once it is read whole: the lines it was opened at are cut to the lines it has, and
+     * dropped when it has none of them.
+     */
+    private fun revealed(file: OpenFile): OpenFile {
+        val selection = file.selection
+        if (file.revealLine == null || selection == null || file.loading || file.nextOffset != null) return file
+        val count = lineCount(file.content)
+        return when {
+            file.binary || file.tooLarge || selection.first > count -> file.copy(selection = null, revealLine = null)
+            selection.last > count -> file.copy(selection = LineSelection(selection.first, count.takeIf { it > selection.first }))
+            else -> file
         }
     }
 

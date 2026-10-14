@@ -16,6 +16,7 @@ import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import okhttp3.OkHttpClient
 
 class RemoteApplication : Application() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -53,6 +54,8 @@ class RemoteApplication : Application() {
         Thread { runCatching { ImageStorage.clear(cacheDir) } }.start()
         // Opened or shared artifacts are copies of project files too.
         Thread { runCatching { ArtifactStorage.clear(cacheDir) } }.start()
+        // So are files dragged into other apps.
+        Thread { runCatching { DragStorage.clear(cacheDir) } }.start()
         // Camera captures the import is done with are deleted then; this catches the rest.
         Thread { runCatching { PhotoCapture.sweep(cacheDir) } }.start()
         settings = DefaultSettingsRepository(this)
@@ -62,7 +65,10 @@ class RemoteApplication : Application() {
         val importer = AttachmentImporter(this, attachments)
         repository =
             DefaultRemoteRepository(
-                PairingStore(this),
+                // Pushes check their route in the cache this keeps, without decrypting the store.
+                RouteCachingPairings(PairingStore(this), PairedRouteCache(this)) { hosts ->
+                    hosts.forEach(RemoteNotifications::rememberHost)
+                },
                 DraftStore(this),
                 remoteTransport(this, scope),
                 scope,
@@ -73,6 +79,7 @@ class RemoteApplication : Application() {
                 },
                 onRecoverySignal = { onPushRecoverySignal() },
                 onUnpaired = ::onUnpaired,
+                projectHint = ::sessionProjectHint,
             )
         observeRecovery()
         predictions = PromptPredictions(this, scope, PairingStore(this))
@@ -139,6 +146,14 @@ class RemoteApplication : Application() {
         RemoteNotifications.cancelRoute(this, routeId)
     }
 
+    /**
+     * Where the home snapshot or the label worker last saw a session, for a tapped notification
+     * whose session the repository's caches do not hold.
+     */
+    private suspend fun sessionProjectHint(routeId: String, sessionId: String): String? =
+        home.load().sessions.find { it.routeId == routeId && it.sessionId == sessionId }?.projectId
+            ?: CompletionUpgrades.names.get(routeId, sessionId)?.projectId
+
     /** A push arrived for a paired host; called on the messaging worker thread. */
     internal fun onPushEvent(payload: PushPayload) {
         home.onPush(payload)
@@ -158,9 +173,6 @@ class RemoteApplication : Application() {
     internal fun onRepliedInBackground(routeId: String, sessionId: String) {
         home.onAnswered(routeId, sessionId)
     }
-
-    /** The app's own connection, for background work that may use it while it is healthy. */
-    internal fun healthyConnection(): DefaultRemoteRepository? = repository as? DefaultRemoteRepository
 
     /** True unless the host was unpaired in this process or is missing from loaded pairings. */
     internal fun isPaired(routeId: String): Boolean =
@@ -279,6 +291,14 @@ class RemoteApplication : Application() {
         )
     }
 }
+
+/**
+ * The process's one OkHttp client. The relay sockets ([SecureRemoteTransport]'s default and
+ * [BackgroundRemoteClient]'s) and the artifact CDN derive their clients from it with
+ * `newBuilder()`, so they share its dispatcher, connection pool and threads and set only their own
+ * timeouts, ping interval and cache. Built on first use; the wear app uses it too.
+ */
+internal val baseHttpClient: OkHttpClient by lazy { OkHttpClient() }
 
 /** Transports a VPN's network takes over from the networks it runs on. */
 private val VPN_UNDERLYING_TRANSPORTS =

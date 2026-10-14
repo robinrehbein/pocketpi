@@ -5,7 +5,6 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.scan
 import kotlinx.coroutines.flow.stateIn
@@ -48,6 +47,7 @@ internal open class DestinationViewModel(
                     uncertain = false,
                     followUps = emptyList(),
                     answering = emptySet(),
+                    questionBlocks = emptyMap(),
                     toolOutput = null,
                     changes = null,
                     compaction = null,
@@ -274,11 +274,11 @@ internal class ChatViewModel(
 
     fun recordChatAction(action: ChatAction) = settings.recordChatAction(action)
 
-    private data class PickerResult(
+    /** A picked, dropped or pasted batch waiting for its chat; identity matters, so not a data class. */
+    private class PickerResult(
         val selection: RemoteSelection,
-        val uris: List<String>,
-        val photo: Boolean,
-        val done: (() -> Unit)? = null,
+        val items: List<Picked>,
+        val onDone: () -> Unit,
     )
 
     private val pendingPicker = MutableStateFlow<PickerResult?>(null)
@@ -287,11 +287,11 @@ internal class ChatViewModel(
         viewModelScope.launch {
             combine(repository.state, pendingPicker) { state, result -> state to result }
                 .collect { (state, result) ->
-                    if (result != null && !state.loading && state.selection == result.selection) {
-                        pendingPicker.value = null
-                        repository.importAttachments(result.selection, result.uris, result.photo)
-                        result.done?.let(::afterImport)
-                    }
+                    if (
+                        result != null && !state.loading && state.selection == result.selection &&
+                            pendingPicker.compareAndSet(result, null)
+                    )
+                        repository.importAttachments(result.selection, result.items, result.onDone)
                 }
         }
     }
@@ -401,6 +401,13 @@ internal class ChatViewModel(
 
     fun openFilesFile(path: String?) = active { repository.openFilesFile(path) }
 
+    /** [RemoteRepository.openFileAt]; false when nothing opened (a path outside the session folder, or an editor open). */
+    fun openFileAt(path: String, lines: LineSelection?, exclusive: Boolean = true): Boolean {
+        var opened = false
+        active { opened = repository.openFileAt(path, lines, exclusive) }
+        return opened
+    }
+
     fun loadMoreFiles() = active(repository::loadMoreFiles)
 
     fun reloadFiles() = active(repository::reloadFiles)
@@ -456,6 +463,31 @@ internal class ChatViewModel(
         return done
     }
 
+    /**
+     * Sends [prompt] as it is when the composer is empty and the chat takes a prompt now; else it
+     * goes into the composer after what is typed there, as [prefillPrompt] does, so nothing the
+     * user typed, quoted or attached is sent along unseen.
+     */
+    fun askNow(prompt: String): PromptHandoff {
+        var handoff: PromptHandoff? = null
+        active {
+            val current = repository.state.value
+            if (
+                current.draft.isNotBlank() || current.quote != null || current.attachments.isNotEmpty() ||
+                    !current.connected || current.sending || current.questions.isNotEmpty() ||
+                    current.status != "idle" || prompt.toByteArray().size > 128 * 1024
+            )
+                return@active
+            repository.draft(prompt)
+            if (repository.state.value.draft != prompt) return@active
+            repository.prompt()
+            // A prompt the repository would not send stays in the composer.
+            handoff = if (repository.state.value.sending) PromptHandoff.SENT else PromptHandoff.PREFILLED
+        }
+        handoff?.let { return it }
+        return if (prefillPrompt(prompt)) PromptHandoff.PREFILLED else PromptHandoff.FAILED
+    }
+
     /** Moves the review into the composer; the comments are cleared only once the draft holds it. */
     fun useReview(prompt: String): Boolean {
         if (!prefillPrompt(prompt)) return false
@@ -464,25 +496,37 @@ internal class ChatViewModel(
         return true
     }
 
+    fun acceptAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) =
+        acceptAttachments(selection, uris.map { Picked(it, photo) }) {}
+
     /**
      * Imports [uris] into this chat's draft once it can take them, and reports whether it took
-     * them. [done] runs once the import no longer reads them: it ended, was refused, or the
-     * result was replaced by a newer one before it started.
+     * them. [done] runs once the import no longer reads them: it ended, was refused, the result
+     * was replaced by a newer one before it started, or this chat closed first.
      */
-    fun acceptAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean, done: (() -> Unit)? = null): Boolean {
+    fun acceptAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean, done: () -> Unit): Boolean {
         if (selection != key.selection() || uris.isEmpty() || cleared) return false
-        pendingPicker.getAndUpdate { PickerResult(selection, uris, photo, done) }?.done?.invoke()
+        acceptAttachments(selection, uris.map { Picked(it, photo) }, done)
         return true
     }
 
-    /** Runs [done] when the import [acceptAttachments] just started has ended, or at once when none started. */
-    private fun afterImport(done: () -> Unit) {
-        if (!repository.state.value.importingAttachments) return done()
-        // Left for the next sweep (PhotoCapture) when the chat closes first.
-        viewModelScope.launch {
-            repository.state.first { !it.importingAttachments }
-            done()
+    /**
+     * Imports a mixed batch of images and files into [selection]'s draft once that chat is shown
+     * and loaded, as one run (see [RemoteRepository.importAttachments]). [onDone] runs exactly
+     * once: after the import read every URI or refused the batch, when a later batch replaces this
+     * one before it started, or when this chat closes first. A drop releases its grants there.
+     */
+    fun acceptAttachments(selection: RemoteSelection, items: List<Picked>, onDone: () -> Unit) {
+        if (selection != key.selection() || items.isEmpty() || cleared) {
+            onDone()
+            return
         }
+        pendingPicker.getAndUpdate { PickerResult(selection, items, onDone) }?.onDone?.invoke()
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        pendingPicker.getAndUpdate { null }?.onDone?.invoke()
     }
 }
 
@@ -501,4 +545,12 @@ internal class SettingsViewModel(
     fun setSwipeStartToEnd(action: SwipeAction) = settings.setSwipeStartToEnd(action)
 
     fun setEnterSends(enabled: Boolean) = settings.setEnterSends(enabled)
+}
+
+/** Where [ChatViewModel.askNow] put a prompt. */
+internal enum class PromptHandoff {
+    SENT,
+    /** In the composer, for the user to send. */
+    PREFILLED,
+    FAILED,
 }

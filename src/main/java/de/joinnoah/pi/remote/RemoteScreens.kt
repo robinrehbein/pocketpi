@@ -6,9 +6,15 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.mimeTypes
+import androidx.compose.ui.draganddrop.toAndroidDragEvent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -37,6 +43,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
@@ -65,6 +72,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.focus.onFocusChanged
@@ -103,6 +112,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.first
 
 private data class AbortRunTarget(val sessionId: String, val questionIds: Set<String>)
@@ -122,8 +132,11 @@ private const val PENDING_QUESTION_MARKER = "__pending_question__"
 private val HISTORY_BUTTON_MIN_HEADER = 600.dp
 private const val CHILD_REFRESH_ATTEMPTS = 12
 private const val CHILD_REFRESH_INTERVAL_MILLIS = 5_000L
+private const val TOUCHED_LINES_STREAMING_MILLIS = 1_000L
 private const val JUMP_HIGHLIGHT_MILLIS = 2_000L
 private const val COMPACTION_TICK_MILLIS = 30_000L
+/** How long review mode waits for the Changes pane Ctrl+Shift+D opened for it. */
+private const val REVIEW_OPEN_GRACE_MILLIS = 2_000L
 private const val PRIVACY_POLICY_URL = "https://robinrehbein.de/privacy"
 private val LIST_TO_HEADER_END_SHIFT = 4.dp
 
@@ -274,8 +287,12 @@ internal fun RemoteScreen(
         }
     val sessionActive =
         state.connected && !state.loading && state.status in setOf("running", "waiting")
-    val conversation =
-        remember(state.messages, sessionActive) { conversationItems(state.messages, sessionActive) }
+    // Built per message: a streamed delta rebuilds the items of the message it changed, and what
+    // is derived below reuses the rest (docs/runbooks/performance.md).
+    val presenter = remember(key) { ConversationPresenter() }
+    val presentation =
+        remember(presenter, state.messages, sessionActive) { presenter.present(state.messages, sessionActive) }
+    val conversation = presentation.items
     val thinkingDisplay = chatPreferences?.thinkingDisplay ?: "status"
     val thinkingActive = state.connected && !state.loading && state.status == "running"
     val visibleConversation =
@@ -329,29 +346,40 @@ internal fun RemoteScreen(
                 )
             }
         }
-    val touched = remember(conversation) { touchedFiles(conversation) }
-    // Diffing every edit can take a moment in a long chat; keep it off the main thread.
+    val touched = presentation.touchedFiles
+    // Off the main thread, diffing only edits that are new or changed. While pi streams, the
+    // counts follow at most every TOUCHED_LINES_STREAMING_MILLIS, from the latest conversation.
+    val touchedLineCache = remember(key) { TouchedLineCache() }
+    val latestConversation by rememberUpdatedState(conversation)
+    val streamingNow by rememberUpdatedState(sessionActive)
     val touchedLines by
-        produceState<TouchedLineCounts?>(null, conversation) {
-            value = withContext(Dispatchers.Default) { touchedLineCounts(conversation) }
+        produceState<TouchedLineCounts?>(null, touchedLineCache) {
+            snapshotFlow { latestConversation }.conflate().collect { items ->
+                value = withContext(Dispatchers.Default) { touchedLineCache.counts(items) }
+                if (streamingNow) delay(TOUCHED_LINES_STREAMING_MILLIS)
+            }
         }
-    val errorCount = remember(conversation) { conversation.count(::isErrorItem) }
+    val errorCount = presentation.errorCount
     val children =
         remember(chatKey, state.sessions, state.connected, state.loading, state.stale) {
             if (chatKey == null) emptyList()
             else sessionListItems(state.sessions, state.connected, state.loading, state.stale)
         }
     val strip =
-        remember(chatKey, conversation, children) {
+        remember(chatKey, presentation, children) {
             if (chatKey == null) SubagentStrip(emptyList(), 0, emptySet(), 0)
-            else subagentStrip(conversation, children, chatKey.sessionId)
+            else presenter.subagentStrip(presentation, children, chatKey.sessionId)
         }
     var onlyErrorsShown by rememberSaveable(key) { mutableStateOf(false) }
     val shownItems =
         remember(visibleConversation, onlyErrorsShown) {
             if (onlyErrorsShown) onlyErrors(visibleConversation) else visibleConversation
         }
-    val forkableIds = remember(shownItems) { forkableBubbleIds(shownItems) }
+    // Bubbles are always visible, so only the error filter narrows the conversation's set.
+    val forkableIds =
+        remember(presentation, shownItems, onlyErrorsShown) {
+            if (onlyErrorsShown) forkableBubbleIds(shownItems) else presentation.forkableBubbleIds
+        }
     val forkReady = state.connected && !state.loading && !navigator.mutating && forkStopped(state)
     val forkStopFirst = forkRunning(state)
     // The same instance while nothing it holds changes, so the bubbles that get it can skip.
@@ -368,7 +396,7 @@ internal fun RemoteScreen(
     val questionPending = state.questions.isNotEmpty()
     val markers =
         remember(shownItems, questionPending) {
-            timelineMarkers(shownItems) +
+            presenter.timelineMarkers(shownItems) +
                 if (questionPending)
                     listOf(TimelineMarker(PENDING_QUESTION_MARKER, TimelineMarkerKind.QUESTION, shownItems.size))
                 else emptyList()
@@ -642,6 +670,32 @@ internal fun RemoteScreen(
     // The panes show beside the chat, or would if the user had not hidden them (Ctrl+\); set
     // once the tabs are known below, read by the actions.
     val panesBesideNow = remember { mutableStateOf(false) }
+    // A file the chat names (a tool card, a touched file, a diff line, a path:line in pi's text)
+    // opens in Files at its lines, as a tab beside the chat or over it on a phone.
+    val copyPath = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_path))
+    val copyPathNow by rememberUpdatedState(copyPath)
+    val openFileNow by rememberUpdatedState<(FileTarget) -> Unit> { target ->
+        val chat = chatModel
+        if (chat != null) {
+            if (chat.openFileAt(target.path, target.lines, exclusive = !sideCapable)) {
+                showTab(InspectorTab.FILES)
+                // Over the chat the tool detail is drawn above Files and would hide it.
+                if (!panesBesideNow.value) closeTool()
+            } else {
+                // Files keeps an open editor, so nothing shows; the copy says the tap landed.
+                copyPathNow(target.path)
+            }
+        }
+    }
+    val toolPaths = remember(touched) { (touched.changed + touched.read).map { it.path } }
+    val folderHints = remember(state.session, state.project, toolPaths) { sessionFolderHints(state.session, state.project, toolPaths) }
+    val canOpenFiles = chatModel != null && canBrowseFiles(state)
+    val chatFileOpener = remember(key) { FileOpener(folderHints, canOpenFiles, { openFileNow(it) }, { copyPathNow(it) }) }
+    SideEffect {
+        chatFileOpener.hints = folderHints
+        chatFileOpener.canOpen = canOpenFiles
+    }
+    val fileOpener = chatFileOpener.takeIf { chatKey != null && chatModel != null }
     /**
      * Ctrl+Shift+G, E, J, Ctrl+H and the history button: open [tab], or switch to it where it is
      * open behind another tab or hidden; the tab already shown, or a pane over the chat, closes.
@@ -686,8 +740,8 @@ internal fun RemoteScreen(
         if (composerFocusRequest == 0) return@LaunchedEffect
         // A prompt filled in or a composer asked for behind the strip: the chat comes back first,
         // so the user sees what they type into.
-        if (chatStripped) {
-            twoPane?.inspectorExpanded = false
+        if (chatStripped && twoPane?.inspectorExpanded == true) {
+            if (twoPane.reviewing) twoPane.leaveReview() else twoPane.inspectorExpanded = false
             withTimeoutOrNull(1_000) { snapshotFlow { chatStripped }.first { !it } }
         }
         withFrameNanos { }
@@ -821,6 +875,57 @@ internal fun RemoteScreen(
                 )
             }
             attachmentSelection = null
+        }
+    // Images, files and text dragged onto the chat from another app.
+    var dropHovered by remember(key) { mutableStateOf(false) }
+    val activity = LocalActivity.current
+    val chatDrop =
+        if (chatKey == null || chatModel == null || composerDraft == null) Modifier
+        else {
+            val target =
+                remember(chatModel, composerDraft, activity, chatKeyTarget) {
+                    object : DragAndDropTarget {
+                        override fun onEntered(event: DragAndDropEvent) {
+                            dropHovered = true
+                        }
+
+                        override fun onExited(event: DragAndDropEvent) {
+                            dropHovered = false
+                        }
+
+                        override fun onEnded(event: DragAndDropEvent) {
+                            dropHovered = false
+                        }
+
+                        override fun onDrop(event: DragAndDropEvent): Boolean {
+                            dropHovered = false
+                            val dragEvent = event.toAndroidDragEvent()
+                            val clip = dragEvent.clipData ?: return false
+                            // The URIs stay readable only while the permissions are held: they go
+                            // back once the import read every one.
+                            val permissions = runCatching { activity?.requestDragAndDropPermissions(dragEvent) }.getOrNull()
+                            return acceptChatDrop(
+                                clip.parts(context.contentResolver::getType),
+                                attach = { items, onDone -> chatModel.acceptAttachments(chatKey.selection(), items, onDone) },
+                                insertText = { text ->
+                                    composerDraft.insert(text).also {
+                                        if (it) {
+                                            composerDraft.flush()
+                                            chatKeyTarget.draftEdited()
+                                        }
+                                    }
+                                },
+                                release = { permissions?.release() },
+                            )
+                        }
+                    }
+                }
+            Modifier.dragAndDropTarget(
+                // A drag from PocketPi itself (an image card, a file tile) is meant for another
+                // app: the chat neither covers itself nor takes it.
+                shouldStartDragAndDrop = { acceptsDrop(it.toAndroidDragEvent().localState, it.mimeTypes()) },
+                target = target,
+            )
         }
     // The file the camera app writes, kept across a process restart behind the camera.
     var photoCapture by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1232,7 +1337,7 @@ internal fun RemoteScreen(
                 FilesPane(
                     files,
                     remember(chatModel, composerDraft) {
-                        filesActions(checkNotNull(chatModel), { composerDraft?.flush() }) { composerFocusRequest++ }
+                        filesActions(checkNotNull(chatModel), { composerDraft?.flush() }, { panesBesideNow.value }) { composerFocusRequest++ }
                     },
                     Modifier.fillMaxSize(),
                     projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
@@ -1426,7 +1531,12 @@ internal fun RemoteScreen(
                     onSelect = { inspectorTabs = inspectorTabs.open(it) },
                     onClose = ::closeTab,
                     expanded = twoPane?.inspectorExpanded == true,
-                    onExpand = { twoPane?.let { it.inspectorExpanded = !it.inspectorExpanded } },
+                    onExpand = {
+                        twoPane?.let {
+                            // Review mode holds the pane wide; narrowing it ends review mode.
+                            if (it.reviewing) it.leaveReview() else it.inspectorExpanded = !it.inspectorExpanded
+                        }
+                    },
                     // An unsaved edit closes through its own prompt in the pane.
                     closable = { tab -> tab != InspectorTab.FILES || filesOpen?.editor?.changed != true },
                 )
@@ -1441,7 +1551,8 @@ internal fun RemoteScreen(
     val paneOverChat =
         chatKey != null && chatModel != null && !panesBeside &&
             (jobsOpen || changesOpen != null || filesOpen != null || openTool != null)
-    val composerCovered = paneOverChat || (chatKey != null && inspectorShown && chatStripped)
+    // The strip reports itself a frame late; a pane no longer expanded gives the chat back at once.
+    val composerCovered = paneOverChat || (chatKey != null && inspectorShown && chatStripped && twoPane?.inspectorExpanded == true)
     if (chatKey != null)
         LaunchedEffect(chatKey, hardwareKeyboard) {
             if (!hardwareKeyboard || questionPending || chatDialogOpen || composerCovered || touchExplorationEnabled(context))
@@ -1474,6 +1585,8 @@ internal fun RemoteScreen(
                 if (chatFocusParked) composerFocusRequest++
             }
         }
+    // Ctrl+Shift+D entered review mode while Changes was still opening for it.
+    var reviewOpening by remember(key) { mutableStateOf(false) }
     /** A chat shortcut from the keyboard ([KeyContext.CHAT]); false when it does not apply now. */
     fun chatShortcut(shortcut: Shortcut): Boolean {
         val chat = chatModel ?: return false
@@ -1491,7 +1604,22 @@ internal fun RemoteScreen(
             Shortcut.EXPAND_INSPECTOR -> {
                 val pane = twoPane ?: return false
                 if (!inspectorShown || tabs.open.isEmpty()) return false
-                pane.inspectorExpanded = !pane.inspectorExpanded
+                if (pane.reviewing) pane.leaveReview() else pane.inspectorExpanded = !pane.inspectorExpanded
+                true
+            }
+            Shortcut.REVIEW -> {
+                val pane = twoPane ?: return false
+                if (pane.reviewing) {
+                    pane.leaveReview()
+                    return true
+                }
+                if (!canViewChanges(state)) return false
+                if (changesOpen == null) {
+                    if (!state.connected) return false
+                    openInspector(InspectorTab.CHANGES)
+                    reviewOpening = true
+                } else showTab(InspectorTab.CHANGES)
+                pane.enterReview()
                 true
             }
             Shortcut.TOGGLE_INSPECTOR -> {
@@ -1570,8 +1698,34 @@ internal fun RemoteScreen(
                 if (conversationFocused) parkFocus() else chatModel?.selectFileLines(null)
             }
             chatKeyTarget.shortcut = ::chatShortcut
+            chatKeyTarget.reviewing = { twoPane?.reviewing == true }
+            chatKeyTarget.leaveReview = { twoPane?.leaveReview() }
+            chatKeyTarget.leaveReviewToType = leave@{
+                val pane = twoPane
+                if (pane?.reviewing != true || paneOverChat) return@leave false
+                pane.leaveReview()
+                // Uncovered from now on, so keys typed before the next frame reach the draft too.
+                chatKeyTarget.composerCovered = false
+                composerFocusRequest++
+                true
+            }
         }
     }
+    // Review mode lives in the Changes pane: it ends once that closes, or another tab takes its place.
+    val reviewable = changesOpen != null && (!panesBeside || (inspectorShown && (tabs.active ?: tabs.open.firstOrNull()) == InspectorTab.CHANGES))
+    if (chatKey != null && twoPane != null)
+        LaunchedEffect(twoPane, reviewable, twoPane.reviewing) {
+            if (reviewable || !twoPane.reviewing) {
+                reviewOpening = false
+                return@LaunchedEffect
+            }
+            // Changes opening for review mode gets a moment to show; one that never does ends it.
+            if (reviewOpening) {
+                delay(REVIEW_OPEN_GRACE_MILLIS)
+                reviewOpening = false
+            }
+            twoPane.leaveReview()
+        }
     // F6 into the chat goes to the composer, or with a question to the chat itself; a pane over
     // the chat is a region of its own.
     val chatRegion =
@@ -1589,6 +1743,7 @@ internal fun RemoteScreen(
         LocalChatKeyTarget provides chatKeyTarget.takeIf { chatKey != null },
         LocalFocusRegionChildren provides regionChildren,
         LocalInspectorViewers provides inspectorViewers.takeIf { chatKey != null && sideCapable },
+        LocalFileOpener provides fileOpener,
     ) {
     InspectorRow(
         shown = inspectorShown,
@@ -1603,17 +1758,19 @@ internal fun RemoteScreen(
                     ChatStrip(
                         chatStatusColor(state.status, state.connected),
                         stringResource(chatStatusLabel(state)),
-                        onShowChat = { pane.inspectorExpanded = false },
+                        onShowChat = { if (pane.reviewing) pane.leaveReview() else pane.inspectorExpanded = false },
                     )
                 }
             },
         onChatStripped = { chatStripped = it },
+        review = twoPane?.reviewing == true,
     ) {
     Scaffold(
         // Esc parks keyboard focus here, on the chat itself: clearing it would hand it to the
         // first button (Back) while a keyboard is in use, and Enter would then press it. It is
         // focusable only while parked, so Tab and the initial focus never stop on it. Enter on
-        // it is used up: Compose would move focus into the first button (Back) instead.
+        // it is used up: Compose would move focus into the first button (Back) instead. In review
+        // mode it is review's "Use review" ([ReviewKey]).
         modifier =
             if (chatKey != null)
                 chatRegion.focusRequester(chatFocus)
@@ -1623,7 +1780,11 @@ internal fun RemoteScreen(
                         if (chatFocused && !it.isFocused) chatFocusParked = false
                         chatFocused = it.isFocused
                     }
-                    .onKeyEvent { chatFocused && it.key in FOCUS_ENTER_KEYS }
+                    .onKeyEvent {
+                        if (!chatFocused || it.key !in FOCUS_ENTER_KEYS) return@onKeyEvent false
+                        if (it.type == KeyEventType.KeyDown && twoPane?.reviewing == true) chatKeyTarget.reviewKey(ReviewKey.USE_REVIEW)
+                        true
+                    }
                     .focusProperties { canFocus = chatFocusParked }
                     .focusTarget()
             else Modifier,
@@ -1709,7 +1870,7 @@ internal fun RemoteScreen(
     ) { insets ->
         BoxWithConstraints(
             if (key is RemoteNavKey.Chat)
-                Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).imePadding()
+                Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).imePadding().then(chatDrop)
             else Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)
         ) {
         // While the tool detail covers the chat, the chat below must not be reachable by TalkBack.
@@ -2068,6 +2229,8 @@ internal fun RemoteScreen(
                         }
                     }
                 item { PredictionSettingsSection() }
+                // Only the wide layout has widths and columns to reset.
+                twoPane?.let { item { LayoutSettingsSection(it) } }
                 item {
                     Section(stringResource(R.string.remote_notifications)) {
                         val hint =
@@ -2530,6 +2693,17 @@ internal fun RemoteScreen(
                                         stringResource(R.string.remote_settings),
                                     )
                                 }
+                                // The full projects column kept beside a chat shrinks back to the strip.
+                                if (projectsColumn?.canCollapse == true && twoPane != null)
+                                    IconButton(
+                                        onClick = { twoPane.projectsExpanded = false },
+                                        modifier = Modifier.size(48.dp).testTag("collapseProjects"),
+                                    ) {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.MenuOpen,
+                                            stringResource(R.string.remote_projects_collapse),
+                                        )
+                                    }
                             }
                         }
                 }
@@ -2814,6 +2988,7 @@ internal fun RemoteScreen(
                             attachmentSelection = state.selection
                             filePicker.launch(arrayOf("*/*"))
                         },
+                        onPasteAttachments = { items -> chatKey?.let { chatModel?.acceptAttachments(it.selection(), items) {} } },
                         onTakePhoto =
                             if (!hasCamera) null
                             else {
@@ -2844,6 +3019,7 @@ internal fun RemoteScreen(
             if (!panesBeside) toolContent?.invoke()
             }
             }
+            if (dropHovered) DropScrim()
         }
         }
     }
@@ -2883,7 +3059,9 @@ internal fun RemoteScreen(
             },
         )
     if (touchedSheet && key is RemoteNavKey.Chat && !panesBeside)
-        TouchedFilesSheet(touched, onDismiss = { touchedSheet = false }, onOpen = ::jumpTo)
+        CompositionLocalProvider(LocalFileOpener provides fileOpener) {
+            TouchedFilesSheet(touched, onDismiss = { touchedSheet = false }, onOpen = ::jumpTo)
+        }
     // The open viewer popped out of its tab, or where its pane would cover the chat.
     if (chatKey != null && viewerSlot.viewer != null && (viewerSlot.poppedOut || !panesBeside))
         InspectorViewerDialog(viewerSlot) {
@@ -3467,6 +3645,32 @@ internal fun SharePickBanner(onCancel: () -> Unit) {
             TextButton(onClick = onCancel, modifier = Modifier.testTag("sharePickCancel")) {
                 Text(stringResource(R.string.remote_cancel))
             }
+        }
+    }
+}
+
+/** Puts the column widths, the hidden session list and the expanded inspector back to their defaults. */
+@Composable
+private fun LayoutSettingsSection(twoPane: TwoPaneState) {
+    val context = LocalContext.current
+    val done = stringResource(R.string.remote_layout_reset_done)
+    Section(stringResource(R.string.remote_layout_title), Modifier.testTag("layoutSettings")) {
+        Text(
+            stringResource(R.string.remote_layout_help),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TextButton(
+            onClick = {
+                twoPane.resetLayout()
+                Toast.makeText(context, done, Toast.LENGTH_SHORT).show()
+            },
+            enabled = twoPane.customized,
+            modifier = Modifier.testTag("resetLayout"),
+        ) {
+            Icon(Icons.Default.Restore, contentDescription = null)
+            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+            Text(stringResource(R.string.remote_layout_reset))
         }
     }
 }

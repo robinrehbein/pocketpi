@@ -445,6 +445,7 @@ private fun ConversationMessageContent(
                                             CompositionLocalProvider(
                                                 LocalProjectImageSource provides projectImages.takeIf { !outgoing },
                                                 LocalLinkTargets provides linkTargets,
+                                                LocalFileOpener provides LocalFileOpener.current.takeIf { !outgoing },
                                             ) {
                                                 SelectionContainer(selection) {
                                                     MarkdownText(item.text)
@@ -597,6 +598,8 @@ private fun ConversationMessageContent(
             // Beside the chat the tool's own tab shows all of its output instead of the peek dialog.
             val peekInTab = openTool?.takeIf { LocalInspectorViewers.current != null }?.let { open -> { open(item) } }
             val diff = remember(item.arguments, item.details) { toolDiff(item) }
+            // A read, edit or write opens its file in Files at the lines it worked on.
+            val fileTarget = remember(item.name, item.arguments, item.details) { toolFileTarget(item) }
             val summary = item.summary
             val command = remember(item.name, item.arguments) { toolCommand(item.name, item.arguments) }
             val toolMenu: (androidx.compose.ui.geometry.Offset?) -> List<MenuItem> = {
@@ -699,6 +702,7 @@ private fun ConversationMessageContent(
                                     diff?.let { DiffCounts(it) }
                                 }
                         }
+                        fileTarget?.let { OpenInFilesButton(it.path, it.lines) }
                         when (state) {
                             R.string.remote_tool_error ->
                                 Icon(

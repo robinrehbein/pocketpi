@@ -314,13 +314,16 @@ internal enum class DiffLineMenuAction(@StringRes val label: Int) {
     COMMENT(R.string.remote_changes_comment_add),
     COPY_LINE(R.string.remote_menu_copy_line),
     COPY_HUNK(R.string.remote_menu_copy_hunk),
+    OPEN_FILE(R.string.remote_open_files_open_line),
 }
 
-internal fun diffLineMenuActions(commentable: Boolean): List<DiffLineMenuAction> =
+/** [openable]: the line has a place in the file as it is now, and Files can show it. */
+internal fun diffLineMenuActions(commentable: Boolean, openable: Boolean = false): List<DiffLineMenuAction> =
     buildList {
         if (commentable) add(DiffLineMenuAction.COMMENT)
         add(DiffLineMenuAction.COPY_LINE)
         add(DiffLineMenuAction.COPY_HUNK)
+        if (openable) add(DiffLineMenuAction.OPEN_FILE)
     }
 
 /**

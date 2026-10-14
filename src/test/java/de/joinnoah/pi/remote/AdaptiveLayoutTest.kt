@@ -566,4 +566,231 @@ class AdaptiveLayoutTest {
             }
         )
     }
+
+    @Test
+    fun reviewModeTakesTheWindowAndGivesBackWhatItChanged() {
+        val state = TwoPaneState()
+        state.adopt(paneLayout(1280.dp, TALL))
+        state.window = 1280.dp
+        state.resizeInspector(paneLayout(1280.dp, TALL), 500.dp)
+        val memos = state.memos
+        state.enterReview()
+        assertTrue(state.reviewing)
+        assertTrue(state.listCollapsed)
+        assertTrue(state.inspectorExpanded)
+        // A second request changes nothing, so leaving still knows the state from before.
+        state.enterReview()
+        state.leaveReview()
+        assertFalse(state.reviewing)
+        assertFalse(state.listCollapsed)
+        assertFalse(state.inspectorExpanded)
+        // The dragged widths were never touched.
+        assertEquals(memos, state.memos)
+        // A list that had made way for the inspector keeps making way, and comes back with it.
+        state.autoCollapseList()
+        state.enterReview()
+        state.leaveReview()
+        assertTrue(state.listCollapsed)
+        assertTrue(state.autoCollapsed)
+        state.restoreList()
+        assertFalse(state.listCollapsed)
+    }
+
+    @Test
+    fun closingTheInspectorOrAnotherBucketEndsReviewMode() {
+        val state = TwoPaneState()
+        state.adopt(paneLayout(800.dp, 1280.dp))
+        state.autoCollapseList()
+        state.enterReview()
+        // The inspector closed: review mode ends first, then the list comes back.
+        state.restoreList()
+        assertFalse(state.reviewing)
+        assertFalse(state.listCollapsed)
+        state.enterReview()
+        state.adopt(paneLayout(1280.dp, 800.dp))
+        assertFalse(state.reviewing)
+        assertFalse(state.inspectorExpanded)
+    }
+
+    @Test
+    fun aListChosenInReviewModeStaysAfterIt() {
+        val state = TwoPaneState()
+        state.adopt(paneLayout(1280.dp, TALL))
+        state.enterReview()
+        state.listCollapsed = false
+        state.leaveReview()
+        assertFalse(state.listCollapsed)
+        state.enterReview()
+        state.listCollapsed = true
+        state.leaveReview()
+        assertTrue(state.listCollapsed)
+        assertEquals(true, state.memos[paneLayout(1280.dp, TALL).sizeKey()]?.listCollapsed)
+    }
+
+    @Test
+    fun reviewModeSurvivesRecreation() {
+        val state = TwoPaneState()
+        state.enterReview()
+        val scope = androidx.compose.runtime.saveable.SaverScope { true }
+        val restored = TwoPaneState.Saver.restore(with(TwoPaneState.Saver) { scope.save(state) }!!)!!
+        assertTrue(restored.reviewing)
+        assertTrue(restored.inspectorExpanded)
+        restored.leaveReview()
+        assertFalse(restored.listCollapsed)
+        assertFalse(restored.inspectorExpanded)
+        // State saved by an older version has no review mode.
+        assertFalse(TwoPaneState.Saver.restore(listOf(true, -1f, -1f, "", false, false, "{}"))!!.reviewing)
+    }
+
+    @Test
+    fun resetLayoutForgetsWidthsAndHiddenListsButLeavesRoomForTheInspector() {
+        val layout = paneLayout(1300.dp, TALL)
+        val state = TwoPaneState()
+        assertFalse(state.customized)
+        state.window = 1300.dp
+        state.adopt(layout)
+        state.resizeList(layout, 420.dp)
+        state.resizeInspector(layout, 500.dp)
+        state.listCollapsed = true
+        state.inspectorExpanded = true
+        assertTrue(state.customized)
+        state.resetLayout()
+        assertFalse(state.customized)
+        assertTrue(state.memos.isEmpty())
+        assertFalse(state.listCollapsed)
+        assertFalse(state.inspectorExpanded)
+        assertEquals(layout.listWidth, state.listWidth(layout))
+        assertEquals(layout.inspectorWidth, state.inspectorWidth(layout))
+        // A list that only made way for the open inspector is no change of the user's to undo.
+        state.autoCollapseList()
+        assertFalse(state.customized)
+        state.resetLayout()
+        assertTrue(state.listCollapsed)
+        state.restoreList()
+        assertFalse(state.listCollapsed)
+    }
+
+    @Test
+    fun projectsColumnKeptBesideAChatIsRememberedPerBucketAndReset() {
+        val wide = paneLayout(1300.dp, TALL)
+        val narrow = paneLayout(800.dp, TALL)
+        val state = TwoPaneState()
+        state.adopt(wide)
+        state.projectsExpanded = true
+        assertTrue(state.customized)
+        assertEquals(true, state.memos[wide.sizeKey()]?.projectsExpanded)
+        // Another bucket has its own choice, and coming back restores this one.
+        state.adopt(narrow)
+        assertFalse(state.projectsExpanded)
+        state.adopt(wide)
+        assertTrue(state.projectsExpanded)
+        val scope = androidx.compose.runtime.saveable.SaverScope { true }
+        assertTrue(TwoPaneState.Saver.restore(with(TwoPaneState.Saver) { scope.save(state) }!!)!!.projectsExpanded)
+        state.projectsExpanded = false
+        assertTrue(state.memos.isEmpty())
+        state.projectsExpanded = true
+        state.resetLayout()
+        assertFalse(state.projectsExpanded)
+        assertFalse(state.customized)
+    }
+
+    @Test
+    fun fullProjectsColumnDecidesTheInspectorForTheRoomItLeaves() {
+        // Tab S11 landscape: beside the strip the inspector opens beside the list.
+        val landscape = paneLayout(1205.dp, TALL)
+        assertTrue(landscape.inspectorBesideList)
+        val kept = checkNotNull(projectsColumnLayout(1205.dp, landscape))
+        // Beside the full column it would leave the chat under its minimum: the list makes way.
+        assertFalse(kept.inspectorBesideList)
+        assertTrue(kept.autoCollapseList)
+        assertEquals(landscape.sizeKey(), kept.sizeKey())
+        // Once the list has made way, the chat keeps its minimum beside the narrowest inspector.
+        val room = 1205.dp - landscape.projectsWidth - PANE_DIVIDER_WIDTH
+        assertTrue(room - landscape.inspectorMinWidth - PANE_DIVIDER_WIDTH >= CHAT_PANE_MIN_WIDTH)
+        // Where the narrowest list and the chat no longer fit beside it, the strip stays.
+        val portrait = paneLayout(800.dp, TALL)
+        assertNull(projectsColumnLayout(800.dp, portrait))
+        assertNull(projectsColumnLayout(400.dp, PaneLayout.Phone))
+        // 280 dp of projects, a divider, 400 dp of chat, a divider and a 300 dp inspector need 982 dp.
+        val wide = paneLayout(1300.dp, TALL)
+        assertNull(projectsColumnLayout(981.dp, wide))
+        assertTrue(projectsColumnLayout(982.dp, wide) != null)
+        // Without an inspector beside the chat, the narrowest list is what has to fit: 922 dp.
+        val overlay = wide.copy(inspector = InspectorMode.OVERLAY)
+        assertNull(projectsColumnLayout(921.dp, overlay))
+        assertTrue(projectsColumnLayout(922.dp, overlay) != null)
+    }
+
+    @Test
+    fun aListShownAgainIsNoLayoutToReset() {
+        val layout = paneLayout(1300.dp, TALL)
+        val state = TwoPaneState()
+        state.adopt(layout)
+        state.listCollapsed = true
+        assertTrue(state.customized)
+        state.listCollapsed = false
+        assertFalse(state.customized)
+    }
+
+    @Test
+    fun reviewModeLeavesTheKeptProjectsColumnAsItWas() {
+        val layout = paneLayout(1280.dp, TALL)
+        val state = TwoPaneState()
+        state.window = 1280.dp
+        state.adopt(layout)
+        state.projectsExpanded = true
+        state.enterReview()
+        // The scene hides the column while reviewing; the choice to keep it stays.
+        assertTrue(state.projectsExpanded)
+        state.leaveReview()
+        assertTrue(state.projectsExpanded)
+        assertEquals(true, state.memos[layout.sizeKey()]?.projectsExpanded)
+    }
+
+    @Test
+    fun resetLayoutInReviewModeHoldsAfterIt() {
+        val layout = paneLayout(1280.dp, TALL)
+        val state = TwoPaneState()
+        state.window = 1280.dp
+        state.adopt(layout)
+        state.projectsExpanded = true
+        state.listCollapsed = true
+        state.enterReview()
+        assertTrue(state.customized)
+        state.resetLayout()
+        // Review mode's own hidden list and wide inspector are no customization.
+        assertFalse(state.customized)
+        assertTrue(state.reviewing)
+        assertFalse(state.projectsExpanded)
+        state.leaveReview()
+        assertFalse(state.listCollapsed)
+        assertFalse(state.inspectorExpanded)
+        assertFalse(state.customized)
+    }
+
+    @Test
+    fun theSaverKeepsTheProjectsColumnAndReviewModeApart() {
+        val state = TwoPaneState()
+        state.adopt(paneLayout(1280.dp, TALL))
+        state.projectsExpanded = true
+        state.enterReview()
+        val scope = androidx.compose.runtime.saveable.SaverScope { true }
+        val saved = with(TwoPaneState.Saver) { scope.save(state) } as List<*>
+        // Index 7 is the projects column, as released before review mode.
+        assertEquals(true, saved[7])
+        val restored = TwoPaneState.Saver.restore(saved)!!
+        assertTrue(restored.projectsExpanded)
+        assertTrue(restored.reviewing)
+        restored.leaveReview()
+        assertTrue(restored.projectsExpanded)
+        assertFalse(restored.inspectorExpanded)
+        // State saved by the release with the kept column and without review mode.
+        val released = TwoPaneState.Saver.restore(listOf(false, -1f, -1f, "", false, false, "{}", true))!!
+        assertTrue(released.projectsExpanded)
+        assertFalse(released.reviewing)
+        // And by an older version still.
+        val older = TwoPaneState.Saver.restore(listOf(false, -1f, -1f, "", false, false, "{}"))!!
+        assertFalse(older.projectsExpanded)
+        assertFalse(older.reviewing)
+    }
 }

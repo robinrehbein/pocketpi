@@ -6,6 +6,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -146,7 +147,8 @@ internal fun rememberDiffRowStyle(lines: List<DiffLine>, showLineNumbers: Boolea
 
 /**
  * One diff line: old and new line numbers, a '+', '-' or ' ' prefix, and the text. Rows of one
- * diff share [scroll] so they move sideways together. An empty hunk line is a divider.
+ * diff share [scroll] so they move sideways together; with [wrap] long lines break instead. An
+ * empty hunk line is a divider.
  */
 @Composable
 internal fun DiffRow(
@@ -154,6 +156,7 @@ internal fun DiffRow(
     rowStyle: DiffRowStyle,
     scroll: ScrollState,
     modifier: Modifier = Modifier,
+    wrap: Boolean = false,
 ) {
     if (line.kind == DiffKind.HUNK && line.text.isEmpty()) {
         HorizontalDivider(modifier.padding(vertical = 4.dp))
@@ -166,38 +169,47 @@ internal fun DiffRow(
             DiffKind.HUNK -> null to rowStyle.muted
             DiffKind.CONTEXT -> null to LocalContentColor.current
         }
-    val prefix =
-        when (line.kind) {
-            DiffKind.ADDED -> "+"
-            DiffKind.REMOVED -> "-"
-            DiffKind.CONTEXT -> " "
-            DiffKind.HUNK -> ""
-        }
+    val prefix = diffPrefix(line.kind)
     Row(modifier.fillMaxWidth().then(if (container != null) Modifier.background(container) else Modifier).semantics(mergeDescendants = true) {}) {
         if (rowStyle.numbered) {
             GutterNumber(line.oldLine, rowStyle.numberWidth, rowStyle.text, rowStyle.muted)
             GutterNumber(line.newLine, rowStyle.numberWidth, rowStyle.text, rowStyle.muted)
         }
-        Text(
-            prefix,
-            Modifier.width(rowStyle.charWidth + 8.dp).padding(start = 4.dp),
-            color = content,
-            style = rowStyle.text,
-            maxLines = 1,
-        )
-        Box(Modifier.weight(1f).horizontalScroll(scroll)) {
-            Text(
-                line.text.take(MAX_CODE_LINE_CHARS),
-                Modifier.width(rowStyle.contentWidth),
-                color = content,
-                style = rowStyle.text,
-                softWrap = false,
-                maxLines = 1,
-                overflow = TextOverflow.Clip,
-            )
-        }
+        DiffLineText(line, prefix, content, rowStyle, scroll, wrap)
     }
 }
+
+/** The '+', '-' or ' ' [prefix] and the text of [line]; [wrap] breaks long lines instead of scrolling sideways. */
+@Composable
+internal fun RowScope.DiffLineText(line: DiffLine, prefix: String, content: Color, rowStyle: DiffRowStyle, scroll: ScrollState, wrap: Boolean) {
+    Text(
+        prefix,
+        Modifier.width(rowStyle.charWidth + 8.dp).padding(start = 4.dp),
+        color = content,
+        style = rowStyle.text,
+        maxLines = 1,
+    )
+    Box(Modifier.weight(1f).then(if (wrap) Modifier else Modifier.horizontalScroll(scroll))) {
+        Text(
+            line.text.take(MAX_CODE_LINE_CHARS),
+            if (wrap) Modifier else Modifier.width(rowStyle.contentWidth),
+            color = content,
+            style = rowStyle.text,
+            softWrap = wrap,
+            maxLines = if (wrap) Int.MAX_VALUE else 1,
+            overflow = TextOverflow.Clip,
+        )
+    }
+}
+
+/** The '+', '-' or ' ' a diff line starts with; nothing for a hunk header. */
+internal fun diffPrefix(kind: DiffKind): String =
+    when (kind) {
+        DiffKind.ADDED -> "+"
+        DiffKind.REMOVED -> "-"
+        DiffKind.CONTEXT -> " "
+        DiffKind.HUNK -> ""
+    }
 
 /**
  * A unified diff. The gutter shows old and new line numbers and a '+', '-' or ' ' prefix, so the
@@ -229,7 +241,7 @@ internal fun DiffView(
 }
 
 @Composable
-private fun GutterNumber(number: Int?, width: Dp, style: TextStyle, color: Color) {
+internal fun GutterNumber(number: Int?, width: Dp, style: TextStyle, color: Color) {
     Text(
         number?.toString().orEmpty(),
         Modifier.padding(start = 4.dp, end = 4.dp).width(width),

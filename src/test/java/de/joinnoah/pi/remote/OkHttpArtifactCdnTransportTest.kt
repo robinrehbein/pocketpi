@@ -11,7 +11,10 @@ import okio.Buffer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -42,6 +45,28 @@ class OkHttpArtifactCdnTransportTest {
         val bytes = java.io.ByteArrayOutputStream()
         GZIPOutputStream(bytes).use { it.write(ByteArray(size) { 'a'.code.toByte() }) }
         return Buffer().write(bytes.toByteArray())
+    }
+
+    @Test fun theAppsClientsShareOneDispatcherAndPoolButKeepTheirOwnSettings() {
+        val cdn = OkHttpArtifactCdnTransport(cache).client
+        for (client in listOf(foregroundHttp, backgroundHttp, cdn)) {
+            assertSame(baseHttpClient.dispatcher, client.dispatcher)
+            assertSame(baseHttpClient.connectionPool, client.connectionPool)
+        }
+        assertNotSame(foregroundHttp, backgroundHttp)
+        // The relay sockets ping; the CDN has its own timeouts, TLS only and a cache.
+        assertEquals(20_000, foregroundHttp.pingIntervalMillis)
+        assertEquals(20_000, backgroundHttp.pingIntervalMillis)
+        assertEquals(0, cdn.pingIntervalMillis)
+        assertEquals(TimeUnit.SECONDS.toMillis(ARTIFACT_CDN_CONNECT_TIMEOUT_SECONDS).toInt(), cdn.connectTimeoutMillis)
+        assertEquals(TimeUnit.SECONDS.toMillis(ARTIFACT_CDN_READ_TIMEOUT_SECONDS).toInt(), cdn.readTimeoutMillis)
+        assertEquals(TimeUnit.SECONDS.toMillis(ARTIFACT_CDN_CALL_TIMEOUT_SECONDS).toInt(), cdn.callTimeoutMillis)
+        assertEquals(listOf(ConnectionSpec.MODERN_TLS), cdn.connectionSpecs)
+        assertFalse(cdn.followRedirects)
+        assertNotNull(cdn.cache)
+        assertNull(foregroundHttp.cache)
+        assertNull(baseHttpClient.cache)
+        assertEquals(0, foregroundHttp.callTimeoutMillis)
     }
 
     @Test fun theRequestCarriesOnlyTheExpectedHeaders() {

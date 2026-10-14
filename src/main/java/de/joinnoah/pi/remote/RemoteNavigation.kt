@@ -42,6 +42,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -129,6 +130,7 @@ internal class RemoteNavigator(
     private fun invalidate(): Long {
         // Another navigation began before the created chat's screen took it.
         freshSession = null
+        openingNotification = null
         forkLatestRequest = null
         consumePendingNotification?.invoke()
         consumePendingNotification = null
@@ -553,8 +555,17 @@ internal class RemoteNavigator(
     }
 
     /**
+     * The session a tapped notification is opening while its project is still unknown here; the
+     * layout shows that it is opening over the previous screen until the Mac said where it is.
+     */
+    var openingNotification: Pair<String, String>? by mutableStateOf(null)
+        private set
+
+    /**
      * Opens the session of a tapped notification. With [jobs] it then opens that session's
-     * background jobs, and [jobId]'s output on top when given.
+     * background jobs, and [jobId]'s output on top when given. When the app already knows the
+     * session's project, its chat is on screen at once (cached content, read-only, while it opens);
+     * otherwise [openingNotification] says so until the Mac has been asked.
      */
     fun notification(
         routeId: String,
@@ -582,9 +593,22 @@ internal class RemoteNavigator(
         }
         consumePendingNotification = consumeOnce
         val operation = scope.launch {
+            // What was on screen before the chat was pushed early; a failed open returns to it.
+            var before: List<RemoteNavKey>? = null
+            val projectId = repository.notificationProject(routeId, sessionId)
+            if (current != request) return@launch
+            if (projectId != null) {
+                before = stack.filterIsInstance<RemoteNavKey>()
+                replace(RemoteSelection(routeId, projectId, sessionId), keepSettings = false, keepStackedChats = false)
+            } else openingNotification = routeId to sessionId
             val selection = repository.openNotification(routeId, sessionId)
             if (current == request) {
-                if (selection != null) replace(selection, keepSettings = false) else restore()
+                openingNotification = null
+                if (selection != null) replace(selection, keepSettings = false)
+                else {
+                    before?.let { setStack(it, keepSettings = false) }
+                    restore()
+                }
                 // Only once the session itself is open, since the jobs belong to the selection.
                 if (
                     jobs &&
@@ -796,6 +820,7 @@ internal class RemoteNavigator(
             Shortcut.HISTORY,
             Shortcut.EXPAND_INSPECTOR,
             Shortcut.TOGGLE_INSPECTOR,
+            Shortcut.REVIEW,
             Shortcut.RENAME,
             Shortcut.FORK -> {
                 val target = (top as? RemoteNavKey.Chat)?.let(targets::chat) ?: return false
@@ -1024,7 +1049,9 @@ internal fun RemoteNavigation(
     }
     val chatViewports = rememberSaveable(saver = ChatViewportPositions.Saver) { ChatViewportPositions() }
     LaunchedEffect(navigator) {
-        navigator.restore()
+        // A tapped notification opens its own session; restoring the previous screen first would
+        // only connect and load what the tap replaces. Its open restores when it fails.
+        if (notification == null) navigator.restore()
         repository.state.collect { navigator.reconcile(it) }
     }
     LaunchedEffect(notification, navigator) {
@@ -1043,6 +1070,7 @@ internal fun RemoteNavigation(
         // Recomputed on every size change: rotation, split-screen resizes and DeX windows.
         val layout = paneLayout(maxWidth, maxHeight)
         val paneStore = remember(context) { PaneLayoutStore(context.applicationContext) }
+        val codeWrap = remember(paneStore) { CodeWrapState(paneStore) }
         // A cold start shows the list as the user left it in this bucket from the first frame on.
         val twoPane =
             rememberSaveable(saver = TwoPaneState.Saver) { TwoPaneState(memos = paneStore.load()).apply { adopt(layout) } }
@@ -1109,6 +1137,7 @@ internal fun RemoteNavigation(
         CompositionLocalProvider(
             LocalChatViewportPositions provides chatViewports,
             LocalPaneLayout provides layout,
+            LocalCodeWrap provides codeWrap,
             LocalTwoPane provides twoPane.takeIf { layout.twoPane },
             LocalHardwareKeyboard provides hardwareKeyboard,
             LocalEditorFocus provides navigator.editorFocus,
@@ -1118,9 +1147,11 @@ internal fun RemoteNavigation(
             Column(
                 // While something in the layout has focus (the composer, the search field), the
                 // shortcuts run here, before that field sees the keys.
-                if (shortcuts)
+                (if (shortcuts)
                     Modifier.fillMaxSize().onPreviewKeyEvent { navigator.key(it, activeTwoPane, targets, unhandled = false) }
-                else Modifier.fillMaxSize()
+                else Modifier.fillMaxSize())
+                    // The opening notification covers the screen beneath; TalkBack must not reach it either.
+                    .then(if (navigator.openingNotification != null) Modifier.clearAndSetSemantics {} else Modifier)
             ) {
                 // The banner takes the status bar; the screens below it no longer pad for it.
                 val pickInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top)
@@ -1143,6 +1174,7 @@ internal fun RemoteNavigation(
                     )
                 }
             }
+            if (navigator.openingNotification != null) NotificationOpening()
             targets.help?.let { context ->
                 ShortcutHelpDialog(context) { targets.help = null }
             }
@@ -1177,8 +1209,13 @@ private fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets
     // The editor keeps its keys, apart from F6 and its alias, which leave it for the next pane.
     if (editing && shortcut != Shortcut.NEXT_REGION && shortcut != Shortcut.PREVIOUS_REGION) return false
     if (shortcut != null) return shortcut(shortcut, twoPane, targets, repeat = native.repeatCount > 0, unhandled = unhandled)
+    if (!unhandled || chat == null) return false
+    // In review mode its single-letter keys are review's own and never type into the composer;
+    // a text field with focus takes them before they get here.
+    reviewKey(event)?.let { key -> if (chat.reviewKey(key)) return true }
     // Over Files, Changes, a tool detail or the jobs the composer is hidden: no typing into it.
-    if (!unhandled || chat == null || chat.composerCovered) return false
+    // Review mode only strips the chat; any other key there ends it and types into the composer.
+    if (chat.composerCovered && !chat.reviewing()) return false
     val text =
         typedText(
             native.unicodeChar,
@@ -1187,6 +1224,7 @@ private fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets
             native.isMetaPressed,
             altGr = altGrOnly(native.metaState),
         ) ?: return false
+    if (chat.composerCovered && !chat.leaveReviewToType()) return false
     chat.type(text)
     return true
 }
@@ -1233,7 +1271,7 @@ private fun RemoteNavDisplay(
                         val holder = rememberSaveableStateHolder()
                         if (column.strip)
                             holder.SaveableStateProvider("strip") {
-                                ProjectStrip(key, model, navigator, column.selectedProjectId)
+                                ProjectStrip(key, model, navigator, column.selectedProjectId, column.canExpand)
                             }
                         else
                             holder.SaveableStateProvider("column") {

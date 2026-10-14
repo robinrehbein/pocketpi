@@ -231,6 +231,8 @@ internal class FakeRelayTransport(
 
     private fun deliver(text: String) {
         try {
+            // As the real transport does: the receipt first, then the parsed frame.
+            listener.inbound()
             listener.message(Wire.parse(text))
         } catch (e: CancellationException) {
             throw e
