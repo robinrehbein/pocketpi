@@ -1466,4 +1466,9 @@ private class RepositorySteps(private val repository: RemoteRepository) : NewSes
     override fun draft(selection: RemoteSelection, text: String) = repository.draft(selection, text)
 
     override fun send() = repository.prompt()
+
+    override fun modelNotSet(promptKept: Boolean) =
+        repository.reportError(
+            if (promptKept) R.string.remote_new_session_model_failed_kept else R.string.remote_new_session_model_failed
+        )
 }

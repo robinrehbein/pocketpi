@@ -59,6 +59,9 @@ internal interface NewSessionSteps {
     fun draft(selection: RemoteSelection, text: String)
 
     fun send()
+
+    /** The chosen model could not be set; [promptKept] says the first message waits in the draft. */
+    fun modelNotSet(promptKept: Boolean)
 }
 
 /** How long a new chat may take to report its models before the model is left alone. */
@@ -73,7 +76,8 @@ internal const val NEW_SESSION_MODEL_CHANGE_WAIT_MILLIS = 15_000L
  * then send the first prompt. The caller has navigated to the chat already, so this runs behind a
  * visible, usable chat. Every step runs only while the new chat is still the selected one, so a
  * navigation that lands elsewhere never gets the model or the prompt. When the model cannot be set,
- * the prompt stays in the draft instead of going out with another model. A message the user typed
+ * the prompt stays in the draft instead of going out with another model, and the user is told
+ * ([NewSessionSteps.modelNotSet]). A message the user typed
  * meanwhile is kept below the prompt and is not sent with it. A create that opened no session
  * ([created] without a session id) does nothing.
  */
@@ -89,6 +93,7 @@ internal suspend fun finishNewSession(
     if (model != null) {
         modelReady = steps.selected() == created && steps.awaitModels(created) &&
             steps.selected() == created && steps.setModel(model)
+        if (!modelReady && steps.selected() == created) steps.modelNotSet(promptKept = choice.prompt.isNotBlank())
     }
     if (choice.prompt.isBlank() || steps.selected() != created) return
     val typed = steps.draftText(created)

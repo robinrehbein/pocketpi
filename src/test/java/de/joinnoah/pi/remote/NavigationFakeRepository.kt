@@ -290,9 +290,25 @@ internal class NavigationFakeRepository : RemoteRepository {
         RemoteSelection(routeId, projectId, "created")
     }
 
+    /** The create, model and prompt calls in the order they came, for the new-session steps. */
+    val sessionSteps = mutableListOf<String>()
+
     override suspend fun createSession(routeId: String, projectId: String): RemoteSelection {
         createdSessions++
+        sessionSteps += "create"
         return create(routeId, projectId)
+    }
+
+    /** Whether [setModel] applies the model to the selected chat's configuration, as the host would. */
+    var appliesModels = true
+
+    override fun setModel(provider: String, id: String) {
+        sessionSteps += "model:$provider/$id"
+        if (!appliesModels) return
+        state.value.configuration?.let { configuration ->
+            val model = configuration.models.firstOrNull { it.provider == provider && it.id == id } ?: return
+            state.value = state.value.copy(configuration = configuration.copy(model = model))
+        }
     }
 
     val notificationRequests = mutableListOf<Pair<String, String>>()
@@ -361,6 +377,7 @@ internal class NavigationFakeRepository : RemoteRepository {
 
     override fun prompt() {
         prompts++
+        sessionSteps += "prompt"
         if (sendsPrompts) {
             sentPrompts += state.value.draft
             state.value = state.value.copy(draft = "", sending = true)
