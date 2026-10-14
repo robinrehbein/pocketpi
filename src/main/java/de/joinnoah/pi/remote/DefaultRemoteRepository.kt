@@ -6997,6 +6997,15 @@ class DefaultRemoteRepository(
 
     override fun openFilesFile(path: String?) = filesLoader.openFile(path)
 
+    override fun openFileAt(path: String, lines: LineSelection?, exclusive: Boolean): Boolean {
+        // An open editor stays, as with openFiles; its own prompt guards the unsaved edit.
+        val current = state.value
+        if (!isSessionPath(path)) return false
+        if (current.files?.takeIf { it.sessionId == current.selection.sessionId }?.editor != null) return true
+        if (exclusive) changesLoader.close()
+        return filesLoader.openAt(path, lines)
+    }
+
     override fun loadMoreFiles() = filesLoader.loadMore()
 
     override fun reloadFiles() = filesLoader.reload()

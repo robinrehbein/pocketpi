@@ -171,6 +171,20 @@ internal class NavigationFakeRepository : RemoteRepository {
         state.value = state.value.copy(files = files.copy(file = path?.let { OpenFile(it, loading = false) }))
     }
 
+    /** Every [openFileAt]: the path and the lines. */
+    val filesOpenedAt = mutableListOf<Pair<String, LineSelection?>>()
+
+    // Like the real repository: the file's folder, the file as [filesOnOpen] has it, and the lines.
+    override fun openFileAt(path: String, lines: LineSelection?, exclusive: Boolean): Boolean {
+        if (!super.openFileAt(path, lines, exclusive)) return false
+        filesOpenedAt += path to lines
+        val files = state.value.files ?: return true
+        val known = filesOnOpen(files.sessionId).file?.takeIf { it.path == path } ?: OpenFile(path, loading = false)
+        state.value =
+            state.value.copy(files = files.copy(path = parentPath(path), file = known.copy(selection = lines, revealLine = lines?.first)))
+        return true
+    }
+
     override fun selectFileLines(selection: LineSelection?) {
         val files = state.value.files ?: return
         val file = files.file ?: return

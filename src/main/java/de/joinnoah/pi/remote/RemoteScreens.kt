@@ -649,6 +649,26 @@ internal fun RemoteScreen(
             InspectorTab.TOUCHED -> touchedSheet = false
         }
     }
+    // A file the chat names (a tool card, a touched file, a diff line, a path:line in pi's text)
+    // opens in Files at its lines, as a tab beside the chat or over it on a phone.
+    val copyPath = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_path))
+    val copyPathNow by rememberUpdatedState(copyPath)
+    val openFileNow by rememberUpdatedState<(FileTarget) -> Unit> { target ->
+        val chat = chatModel
+        if (chat != null) {
+            showTab(InspectorTab.FILES)
+            chat.openFileAt(target.path, target.lines, exclusive = !sideCapable)
+        }
+    }
+    val toolPaths = remember(touched) { (touched.changed + touched.read).map { it.path } }
+    val folderHints = remember(state.session, state.project, toolPaths) { sessionFolderHints(state.session, state.project, toolPaths) }
+    val canOpenFiles = chatModel != null && canBrowseFiles(state)
+    val chatFileOpener = remember(key) { FileOpener(folderHints, canOpenFiles, { openFileNow(it) }, { copyPathNow(it) }) }
+    SideEffect {
+        chatFileOpener.hints = folderHints
+        chatFileOpener.canOpen = canOpenFiles
+    }
+    val fileOpener = chatFileOpener.takeIf { chatKey != null && chatModel != null }
     // The panes show beside the chat, or would if the user had not hidden them (Ctrl+\); set
     // once the tabs are known below, read by the actions.
     val panesBesideNow = remember { mutableStateOf(false) }
@@ -1293,7 +1313,7 @@ internal fun RemoteScreen(
                 FilesPane(
                     files,
                     remember(chatModel, composerDraft) {
-                        filesActions(checkNotNull(chatModel), { composerDraft?.flush() }) { composerFocusRequest++ }
+                        filesActions(checkNotNull(chatModel), { composerDraft?.flush() }, { panesBesideNow.value }) { composerFocusRequest++ }
                     },
                     Modifier.fillMaxSize(),
                     projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
@@ -1699,6 +1719,7 @@ internal fun RemoteScreen(
         LocalChatKeyTarget provides chatKeyTarget.takeIf { chatKey != null },
         LocalFocusRegionChildren provides regionChildren,
         LocalInspectorViewers provides inspectorViewers.takeIf { chatKey != null && sideCapable },
+        LocalFileOpener provides fileOpener,
     ) {
     InspectorRow(
         shown = inspectorShown,
@@ -3000,7 +3021,9 @@ internal fun RemoteScreen(
             },
         )
     if (touchedSheet && key is RemoteNavKey.Chat && !panesBeside)
-        TouchedFilesSheet(touched, onDismiss = { touchedSheet = false }, onOpen = ::jumpTo)
+        CompositionLocalProvider(LocalFileOpener provides fileOpener) {
+            TouchedFilesSheet(touched, onDismiss = { touchedSheet = false }, onOpen = ::jumpTo)
+        }
     // The open viewer popped out of its tab, or where its pane would cover the chat.
     if (chatKey != null && viewerSlot.viewer != null && (viewerSlot.poppedOut || !panesBeside))
         InspectorViewerDialog(viewerSlot) {
