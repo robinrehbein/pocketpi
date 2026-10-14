@@ -64,6 +64,7 @@ class RemoteRepositoryTest {
         var response: (JsonObject) -> JsonObject? = { null }
         var failure: (JsonObject) -> String? = { null }
         var failureMessage: (JsonObject) -> String? = { null }
+        var failureReason: (JsonObject) -> String? = { null }
 
         /** Delivers [payload] as the real transport does: receipt is reported before the payload. */
         fun deliver(payload: JsonObject) {
@@ -98,7 +99,7 @@ class RemoteRepositoryTest {
                         "type" to "result",
                         "requestId" to payload.text("requestId"),
                         "ok" to false,
-                        "error" to Wire.objectOf("code" to code, "message" to (failureMessage(payload) ?: code)),
+                        "error" to Wire.objectOf("code" to code, "message" to (failureMessage(payload) ?: code), "reason" to failureReason(payload)),
                     )
                 )
                 return
@@ -6356,6 +6357,19 @@ class RemoteRepositoryTest {
             assertTrue(code, repository.state.value.questions.isEmpty())
             assertTrue(code, repository.state.value.questionBlocks.isEmpty())
         }
+    }
+
+    @Test
+    fun structuredUnknownAnswerIgnoresTheHostMessageAndDoesNotRetry() = runTest {
+        val transport = Transport()
+        val repository = answering(transport, "internal", "Owner reply unavailable")
+        transport.failureReason = { "outcome_unknown" }
+        answerQuestion(repository)
+        assertEquals(mapOf("q" to QuestionBlock.UNCERTAIN), repository.state.value.questionBlocks)
+        assertEquals(listOf(openQuestion), repository.state.value.questions)
+        assertNull(repository.state.value.error)
+        answerQuestion(repository)
+        assertEquals(1, transport.sent.count { it.text("type") == "question.answer" })
     }
 
     @Test

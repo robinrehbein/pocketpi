@@ -30,7 +30,9 @@ internal fun questionAnswerFailure(error: Throwable): QuestionAnswerFailure {
         request.code == "unsupported" -> QuestionAnswerFailure.UNSUPPORTED
         request.code == "uncertain" ||
             (request.code == "internal" &&
-                request.hostMessage?.startsWith(OUTCOME_UNKNOWN) == true) ->
+                (request.reason == "outcome_unknown" ||
+                    // Compatibility with hosts predating structured outcome reasons.
+                    (request.reason == null && request.hostMessage?.startsWith(OUTCOME_UNKNOWN) == true))) ->
             QuestionAnswerFailure.UNCERTAIN
         request.code == "offline" -> QuestionAnswerFailure.OFFLINE
         else -> QuestionAnswerFailure.OTHER
