@@ -37,6 +37,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
@@ -2068,6 +2069,8 @@ internal fun RemoteScreen(
                         }
                     }
                 item { PredictionSettingsSection() }
+                // Only the wide layout has widths and columns to reset.
+                twoPane?.let { item { LayoutSettingsSection(it) } }
                 item {
                     Section(stringResource(R.string.remote_notifications)) {
                         val hint =
@@ -2530,6 +2533,17 @@ internal fun RemoteScreen(
                                         stringResource(R.string.remote_settings),
                                     )
                                 }
+                                // The full projects column kept beside a chat shrinks back to the strip.
+                                if (projectsColumn?.canCollapse == true && twoPane != null)
+                                    IconButton(
+                                        onClick = { twoPane.projectsExpanded = false },
+                                        modifier = Modifier.size(48.dp).testTag("collapseProjects"),
+                                    ) {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.MenuOpen,
+                                            stringResource(R.string.remote_projects_collapse),
+                                        )
+                                    }
                             }
                         }
                 }
@@ -3467,6 +3481,32 @@ internal fun SharePickBanner(onCancel: () -> Unit) {
             TextButton(onClick = onCancel, modifier = Modifier.testTag("sharePickCancel")) {
                 Text(stringResource(R.string.remote_cancel))
             }
+        }
+    }
+}
+
+/** Puts the column widths, the hidden session list and the expanded inspector back to their defaults. */
+@Composable
+private fun LayoutSettingsSection(twoPane: TwoPaneState) {
+    val context = LocalContext.current
+    val done = stringResource(R.string.remote_layout_reset_done)
+    Section(stringResource(R.string.remote_layout_title), Modifier.testTag("layoutSettings")) {
+        Text(
+            stringResource(R.string.remote_layout_help),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TextButton(
+            onClick = {
+                twoPane.resetLayout()
+                Toast.makeText(context, done, Toast.LENGTH_SHORT).show()
+            },
+            enabled = twoPane.customized,
+            modifier = Modifier.testTag("resetLayout"),
+        ) {
+            Icon(Icons.Default.Restore, contentDescription = null)
+            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+            Text(stringResource(R.string.remote_layout_reset))
         }
     }
 }

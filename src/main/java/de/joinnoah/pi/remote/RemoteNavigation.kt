@@ -1233,7 +1233,7 @@ private fun RemoteNavDisplay(
                         val holder = rememberSaveableStateHolder()
                         if (column.strip)
                             holder.SaveableStateProvider("strip") {
-                                ProjectStrip(key, model, navigator, column.selectedProjectId)
+                                ProjectStrip(key, model, navigator, column.selectedProjectId, column.canExpand)
                             }
                         else
                             holder.SaveableStateProvider("column") {
