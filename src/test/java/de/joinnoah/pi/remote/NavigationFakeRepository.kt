@@ -322,6 +322,12 @@ internal class NavigationFakeRepository : RemoteRepository {
 
     override suspend fun pair(text: String): RemoteSelection? = pairResult
 
+    var cancelledPairings = 0
+
+    override fun cancelPairing() {
+        cancelledPairings++
+    }
+
     override fun cancelSelection() {}
 
     val removed = mutableListOf<String>()

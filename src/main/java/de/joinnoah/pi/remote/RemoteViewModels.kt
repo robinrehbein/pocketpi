@@ -185,7 +185,10 @@ internal open class DestinationViewModel(
 }
 
 internal class HostsViewModel(repository: RemoteRepository) :
-    DestinationViewModel(repository, RemoteNavKey.Hosts)
+    DestinationViewModel(repository, RemoteNavKey.Hosts) {
+    /** Gives up the pairing waiting for the Mac's approval; see [RemoteRepository.cancelPairing]. */
+    fun cancelPairing() = repository.cancelPairing()
+}
 
 internal class ActivityViewModel(repository: RemoteRepository, key: RemoteNavKey.Activity) :
     DestinationViewModel(repository, key)
@@ -551,6 +554,9 @@ internal class SettingsViewModel(
     fun setSwipeStartToEnd(action: SwipeAction) = settings.setSwipeStartToEnd(action)
 
     fun setEnterSends(enabled: Boolean) = settings.setEnterSends(enabled)
+
+    /** The same setting as the session filter's switch ([SessionsViewModel.setHideOfflineSessions]). */
+    fun setHideOfflineSessions(hide: Boolean) = settings.setHideOfflineSessions(hide)
 }
 
 /** Where [ChatViewModel.askNow] put a prompt. */
