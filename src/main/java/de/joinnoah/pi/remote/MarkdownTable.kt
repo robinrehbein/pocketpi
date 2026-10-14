@@ -1,7 +1,6 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -9,6 +8,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.semantics.CollectionInfo
 import androidx.compose.ui.semantics.CollectionItemInfo
 import androidx.compose.ui.semantics.collectionInfo
@@ -127,10 +130,27 @@ internal fun markdownBlocks(text: String): List<MarkdownBlock> {
     return blocks
 }
 
+/**
+ * The grid lines of one cell, 1dp wide and drawn inside the cell's edges: the right and bottom
+ * always, the top and left only on the outer edge of the table. Every inner line is then drawn by
+ * exactly one cell, so it is 1dp and not 2dp.
+ */
+private fun DrawScope.cellGridLines(color: Color, top: Boolean, left: Boolean) {
+    val stroke = 1.dp.toPx()
+    val half = stroke / 2
+    drawLine(color, Offset(size.width - half, 0f), Offset(size.width - half, size.height), stroke)
+    drawLine(color, Offset(0f, size.height - half), Offset(size.width, size.height - half), stroke)
+    if (top) drawLine(color, Offset(0f, half), Offset(size.width, half), stroke)
+    if (left) drawLine(color, Offset(half, 0f), Offset(half, size.height), stroke)
+}
+
 @Composable
 internal fun MarkdownTable(table: MarkdownBlock.Table) {
     val columns = maxOf(table.header.size, table.rows.maxOfOrNull { it.size } ?: 0)
     val codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest
+    // Links in an outgoing bubble keep the contrast of that bubble's text, as they do in prose.
+    val linkColor = LocalMarkdownLinkColor.current ?: MaterialTheme.colorScheme.primary
+    val outline = MaterialTheme.colorScheme.outline
     val rows = listOf(table.header) + table.rows
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         // Keep two columns readable on narrow phones; larger tables scroll as one grid.
@@ -145,12 +165,12 @@ internal fun MarkdownTable(table: MarkdownBlock.Table) {
                         Text(
                             inlineMarkdown(
                                 row.getOrElse(column) { "" },
-                                MaterialTheme.colorScheme.primary,
+                                linkColor,
                                 codeBackground = codeBackground,
                             ),
                             modifier = Modifier.width(width).fillMaxHeight()
                                 .background(if (rowIndex == 0) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface)
-                                .border(1.dp, MaterialTheme.colorScheme.outline)
+                                .drawBehind { cellGridLines(outline, top = rowIndex == 0, left = column == 0) }
                                 .padding(12.dp)
                                 .semantics {
                                     collectionItemInfo = CollectionItemInfo(rowIndex, 1, column, 1)

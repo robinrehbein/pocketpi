@@ -9,19 +9,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.DragIndicator
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draganddrop.DragAndDropTransferData
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -54,7 +55,7 @@ fun MarkdownText(text: String) {
                 val code = part.trimEnd()
                 // Only assistant text has a source; a diagram elsewhere stays the code it is.
                 if (segment.isMermaid && artifactCards) MermaidCard(code) { CodeBlock(it, segment.language) }
-                else CodeBlock(code, segment.language)
+                else CodeBlock(code, segment.language, segment.closed)
             } else
                 remember(part, artifactCards) { markdownRuns(markdownBlocks(part), artifactCards) }.forEach { run ->
                     MarkdownRunView(run, linkColor, codeBackground, files)
@@ -98,12 +99,7 @@ private fun MarkdownRunView(run: MarkdownRun, linkColor: Color, codeBackground: 
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.widthIn(max = PROSE_READING_WIDTH),
             )
-        is MarkdownRun.Items ->
-            LinkMenuText(
-                remember(run.items, linkColor, files, codeBackground) { itemsText(run.items, linkColor, files, codeBackground) },
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.widthIn(max = PROSE_READING_WIDTH),
-            )
+        is MarkdownRun.Items -> MarkdownListItems(run.items, linkColor, files, codeBackground)
         is MarkdownRun.Quote ->
             Row(Modifier.widthIn(max = PROSE_READING_WIDTH).height(IntrinsicSize.Min)) {
                 Box(
@@ -131,50 +127,60 @@ private fun linesText(lines: List<String>, linkColor: Color, files: FileOpener?,
     }
 
 /**
- * List items as one text. Each item is its own paragraph: a nested item steps in by [LIST_STEP_SP],
- * and wrapped lines hang under the item's text rather than under its bullet.
+ * List items, one row each: the bullet or task marker in a column one [LIST_STEP_SP] wide, then the
+ * item's text, so wrapped lines hang under the text and not under the bullet. A nested item steps in
+ * by its depth. Rows are not paragraph styles: a styled paragraph here added a blank line after each
+ * item. Each row is also its own accessibility node, so TalkBack moves from item to item.
  */
-private fun itemsText(items: List<MarkdownListItem>, linkColor: Color, files: FileOpener?, codeBackground: Color): AnnotatedString =
-    buildAnnotatedString {
-        items.forEachIndexed { index, item ->
-            if (index > 0) append('\n')
-            val nest = (item.depth * LIST_STEP_SP).sp
-            val hang = ((item.depth + 1) * LIST_STEP_SP).sp
-            withStyle(ParagraphStyle(textIndent = TextIndent(firstLine = nest, restLine = hang))) {
-                append(item.marker)
-                append(' ')
-                append(inlineMarkdown(item.text, linkColor, files, codeBackground))
+@Composable
+private fun MarkdownListItems(items: List<MarkdownListItem>, linkColor: Color, files: FileOpener?, codeBackground: Color) {
+    val step = with(LocalDensity.current) { LIST_STEP_SP.sp.toDp() }
+    Column(Modifier.widthIn(max = PROSE_READING_WIDTH)) {
+        items.forEach { item ->
+            Row(Modifier.fillMaxWidth().padding(start = step * item.depth)) {
+                Text(item.marker, Modifier.width(step), style = MaterialTheme.typography.bodyLarge)
+                LinkMenuText(
+                    remember(item.text, linkColor, files, codeBackground) { inlineMarkdown(item.text, linkColor, files, codeBackground) },
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     }
+}
 
 @Composable
-private fun CodeBlock(code: String, language: String? = null) {
+private fun CodeBlock(code: String, language: String? = null, closed: Boolean = true) {
     val copyLabel = stringResource(R.string.remote_copy_code)
     val copy = rememberCopyToClipboard(copyLabel)
     val syntax = fenceLanguage(language)
     val colors = syntaxColors()
-    val styled = remember(code, syntax, colors) {
+    // Kept across the updates of a streamed block, so each one styles only the lines that arrived since the last.
+    val highlighter = remember(syntax, colors) { syntax?.let { IncrementalHighlighter(it, colors) } }
+    val styled = remember(code, highlighter, closed) {
         val lines = code.lines()
         // A line the highlighter would cut stays plain, so what is shown is always the whole code.
-        if (syntax == null || lines.size > MAX_CHAT_HIGHLIGHT_LINES || lines.any { it.length > MAX_HIGHLIGHT_LINE_CHARS })
+        if (highlighter == null || lines.size > MAX_CHAT_HIGHLIGHT_LINES || lines.any { it.length > MAX_HIGHLIGHT_LINE_CHARS })
             AnnotatedString(code)
-        else
+        else {
+            // The last line of an open block is still arriving, so it stays plain until the next line starts.
+            val complete = if (closed) lines else lines.dropLast(1)
             buildAnnotatedString {
-                highlightLines(lines, syntax, colors).forEachIndexed { index, line ->
+                highlighter.update(complete).forEachIndexed { index, line ->
                     if (index > 0) append('\n')
                     append(line)
                 }
+                if (complete.size < lines.size) {
+                    if (complete.isNotEmpty()) append('\n')
+                    append(lines.last())
+                }
             }
+        }
     }
     val label = language?.trim()?.takeIf { it.isNotEmpty() } ?: stringResource(R.string.remote_code_block)
+    val dragLabel = stringResource(R.string.remote_drag_code)
     Surface(
-        modifier = Modifier.fillMaxWidth().testTag("codeBlock")
-            // The whole block drags out as plain text, into a note or a message.
-            .then(
-                if (LocalCodeBlockDrag.current) Modifier.dragAndDropSource { _ -> codeDragTransfer(code, label) }
-                else Modifier
-            ),
+        modifier = Modifier.fillMaxWidth().testTag("codeBlock"),
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
         shape = RoundedCornerShape(12.dp),
     ) {
@@ -186,7 +192,21 @@ private fun CodeBlock(code: String, language: String? = null) {
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                IconButton(onClick = { copy(code) }, modifier = Modifier.size(40.dp)) {
+                // Only this handle drags the block out as plain text. The code beside it has no drag source,
+                // so a long press there selects text as it does everywhere else in the message.
+                if (LocalCodeBlockDrag.current)
+                    Box(
+                        Modifier.size(48.dp).dragAndDropSource { _ -> codeDragTransfer(code, label) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Outlined.DragIndicator,
+                            dragLabel,
+                            Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                IconButton(onClick = { copy(code) }) {
                     Icon(Icons.Outlined.ContentCopy, copyLabel, Modifier.size(18.dp))
                 }
             }
@@ -200,9 +220,12 @@ private fun CodeBlock(code: String, language: String? = null) {
     }
 }
 
-/** What dragging a code block carries: its text, labelled with the language. */
+/**
+ * What dragging a code block carries: its text, labelled with the language. The text is cut as a
+ * copy is, so a very large block cannot overflow the drag's transfer.
+ */
 internal fun codeDragTransfer(code: String, label: String): DragAndDropTransferData =
-    DragAndDropTransferData(ClipData.newPlainText(label, code))
+    DragAndDropTransferData(ClipData.newPlainText(label, clipboardSafeText(code).first))
 
 /** What an image block shows where no image loader exists: its description, else the file name. */
 internal fun markdownImageAltText(image: MarkdownBlock.Image): String =

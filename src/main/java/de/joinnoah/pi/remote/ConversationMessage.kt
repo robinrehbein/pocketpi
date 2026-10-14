@@ -73,11 +73,17 @@ import kotlinx.serialization.json.jsonPrimitive
 private val BUBBLE_RADIUS = 20.dp
 private val BUBBLE_TAIL = 8.dp
 
-/** Whether [text] has content that wants the wide chat column: a code block, a table or an image. */
-internal fun hasWideContent(text: String): Boolean =
-    markdownSegments(text).any { segment ->
+/**
+ * Whether [text] has content that wants the wide chat column: a code block, a table or an image.
+ * Each of them needs one of these characters, so a text without any (most prose, and every update
+ * of a streamed prose message) is answered without parsing it.
+ */
+internal fun hasWideContent(text: String): Boolean {
+    if ("```" !in text && "~~~" !in text && '|' !in text && "![" !in text) return false
+    return markdownSegments(text).any { segment ->
         segment.code || markdownBlocks(segment.text).any { it is MarkdownBlock.Table || it is MarkdownBlock.Image }
     }
+}
 
 /**
  * The widest a chat item grows. Prose stays in the reading column; code, tables, images, tool and
@@ -444,9 +450,10 @@ private fun ConversationMessageContent(
                             ) {
                                 // The tail takes BUBBLE_TAIL off its side, so the text keeps 16dp from the body on both sides.
                                 Column(
-                                    Modifier.padding(
-                                        start = if (outgoing) 16.dp else 16.dp + BUBBLE_TAIL,
-                                        end = if (outgoing) 16.dp + BUBBLE_TAIL else 16.dp,
+                                    // Physical sides, as BubbleShape draws its tail on a fixed side in every layout direction.
+                                    Modifier.absolutePadding(
+                                        left = if (outgoing) 16.dp else 16.dp + BUBBLE_TAIL,
+                                        right = if (outgoing) 16.dp + BUBBLE_TAIL else 16.dp,
                                         top = 12.dp,
                                         bottom = 12.dp,
                                     ),

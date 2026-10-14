@@ -97,9 +97,11 @@ class ConversationWidthUiTest {
         compose.setContent {
             MaterialTheme { Box(Modifier.width(400.dp)) { MarkdownText("- [ ] offen\n  - [x] erledigt\n> zitat") } }
         }
-        // The list is one text with a line per item, so the items match as parts of it.
-        compose.onNodeWithText("☐ offen", substring = true).assertExists()
-        compose.onNodeWithText("☑ erledigt", substring = true).assertExists()
+        // Each item is a row with its marker and its text as separate nodes.
+        compose.onNodeWithText("☐").assertExists()
+        compose.onNodeWithText("offen").assertExists()
+        compose.onNodeWithText("☑").assertExists()
+        compose.onNodeWithText("erledigt").assertExists()
         compose.onNodeWithText("zitat").assertExists()
     }
 }

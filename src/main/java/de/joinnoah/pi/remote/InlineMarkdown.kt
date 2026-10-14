@@ -114,6 +114,8 @@ private fun parseInline(
                     color = color,
                     textDecoration = TextDecoration.Underline,
                     fontFamily = if (code) FontFamily.Monospace else null,
+                    // Inline code keeps its background when it is also a file link.
+                    background = if (code) codeBackground else Color.Unspecified,
                 )
             ) { append(label) }
         }
