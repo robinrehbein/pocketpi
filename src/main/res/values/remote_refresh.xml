@@ -2,4 +2,6 @@
     <!-- English fallback for all unsupported locales. -->
     <!-- When the changes on screen were read, shown while offline; %1$s is a time, or a date and time. -->
     <string name="remote_changes_updated_at">Updated %1$s</string>
+    <!-- The changes on screen could not be read again while connected; %1$s is when they were read, a time or a date and time. -->
+    <string name="remote_changes_stale_at">Could not check for newer changes. Updated %1$s</string>
 </resources>

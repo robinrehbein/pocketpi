@@ -52,6 +52,9 @@ internal class ProjectFilesLoader(
     /** By Mac, session and folder. */
     private val remembered = NavigationMemoryCache<Triple<String?, String, String>, FileListing>(MAX_REMEMBERED_LISTINGS)
 
+    /** Drops every remembered listing: the Mac is gone, or its navigation starts over. */
+    fun forget() = remembered.clear()
+
     private fun key(sessionId: String, path: String) = Triple(current().selection.routeId, sessionId, path)
 
     /** Keeps the listing [sessionId]'s browser shows now for the folder's next opening. */
@@ -289,7 +292,7 @@ internal class ProjectFilesLoader(
             )
         }
         if (failure != null) return
-        if (known != null) relist(sessionId, path) else list(sessionId, path, after = null)
+        if (known != null) relist(sessionId, path, revalidate = true) else list(sessionId, path, after = null)
         if (opened != null) read(sessionId, opened, 0, null, reopen = false)
     }
 
@@ -356,7 +359,7 @@ internal class ProjectFilesLoader(
         }
         when {
             offline -> Unit
-            known != null -> relist(files.sessionId, path)
+            known != null -> relist(files.sessionId, path, revalidate = true)
             else -> list(files.sessionId, path, after = null)
         }
     }
@@ -431,8 +434,12 @@ internal class ProjectFilesLoader(
         }
     }
 
-    /** The shown folder's first page again; previews of entries listed the same stay. */
-    private fun relist(sessionId: String, path: String) {
+    /**
+     * The shown folder's first page again; previews of entries listed the same stay. A failure
+     * leaves the listing shown, except when [revalidate] checks a remembered listing just opened:
+     * then the folder may be gone or unreadable since, and the failure replaces it.
+     */
+    private fun relist(sessionId: String, path: String, revalidate: Boolean = false) {
         stopList()
         val version = ++listVersion
         fun active() = version == listVersion && files()?.let { it.sessionId == sessionId && it.path == path } == true
@@ -457,6 +464,10 @@ internal class ProjectFilesLoader(
                 throw e
             } catch (e: Exception) {
                 Diagnostics.caught("files.relist", e)
+                if (revalidate && active()) {
+                    remembered.remove(key(sessionId, path))
+                    write(sessionId) { it.copy(loading = false, failure = failure(e)) }
+                }
             }
         }
     }

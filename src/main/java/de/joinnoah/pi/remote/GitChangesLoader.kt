@@ -205,6 +205,9 @@ internal class GitChangesLoader(
         }
     }
 
+    /** Drops every remembered status: the Mac is gone, or its navigation starts over. */
+    fun forget() = remembered.clear()
+
     fun close() {
         stop()
         stopSubagents()
@@ -243,6 +246,7 @@ internal class GitChangesLoader(
                 logLoading = false,
                 logFailure = null,
                 fetchedAt = null,
+                stale = false,
             ).shown(known)
         }
         if (!offline) loadStatus(changes.sessionId, base, fallback = false, silent = known != null)
@@ -256,8 +260,8 @@ internal class GitChangesLoader(
 
     /**
      * Reads the shown base again in place, as after a reconnect: the status, diff and log on
-     * screen stay until fresher ones replace them, and a failure leaves them. A view with nothing
-     * shown yet reloads.
+     * screen stay until fresher ones replace them, and a failure leaves them, marked
+     * [ChangesState.stale]. A view with nothing shown yet reloads.
      */
     fun refresh() {
         val changes = changes() ?: return
@@ -276,7 +280,7 @@ internal class GitChangesLoader(
         write(changes.sessionId) {
             val previews = it.previews.filterValues { preview -> !preview.loading && preview.failure == null }
             if (silent) it.copy(previews = previews)
-            else it.copy(loading = true, failure = null, previews = previews)
+            else it.copy(loading = true, failure = null, stale = false, previews = previews)
         }
         // A subagent file shown now reopens from that subagent's fresh snapshot.
         val subagentFile = changes.file?.let { path -> changes.fileSession?.let { it to path } }
@@ -377,6 +381,7 @@ internal class GitChangesLoader(
                                 }
                                 ?: changes.devBase,
                             fetchedAt = now(),
+                            stale = false,
                         )
                     }
                     remember(sessionId)
@@ -385,9 +390,21 @@ internal class GitChangesLoader(
                     throw e
                 } catch (e: Exception) {
                     Diagnostics.caught("git.loadStatusAndLog", e)
-                    // A silent read that failed leaves what is shown; Reload tries again.
+                    // A silent read that failed leaves what is shown, marked as not current, and Reload
+                    // tries again. A file reopened with the remembered status waited for this read.
                     if (active())
-                        write(sessionId) { it.copy(loading = false, failure = if (silent) it.failure else failure(e)) }
+                        write(sessionId) {
+                            if (!silent) it.copy(loading = false, failure = failure(e))
+                            else {
+                                val waiting = it.fileSession == null && it.file != null && it.diff == null && it.diffLoading
+                                it.copy(
+                                    loading = false,
+                                    stale = it.status != null && it.failure == null,
+                                    diffLoading = it.diffLoading && !waiting,
+                                    diffFailure = if (waiting) failure(e) else it.diffFailure,
+                                )
+                            }
+                        }
                     return
                 }
             val snapshotId = status.snapshotId ?: return
@@ -521,8 +538,11 @@ internal class GitChangesLoader(
         loadDiff(changes.sessionId, snapshotId, path, retry = true)
     }
 
-    /** Opens [path] from the changes of the subagent [subagentId]; its diff reads that subagent's snapshot. */
-    fun openSubagentFile(subagentId: String, path: String, retry: Boolean = true) {
+    /**
+     * Opens [path] from the changes of the subagent [subagentId]; its diff reads that subagent's
+     * snapshot. [keep] leaves that file's diff on screen until the new one replaces it.
+     */
+    fun openSubagentFile(subagentId: String, path: String, retry: Boolean = true, keep: Boolean = false) {
         val changes = changes() ?: return
         val status = changes.subagents.firstOrNull { it.sessionId == subagentId }?.status ?: return
         val snapshotId = status.snapshotId ?: return
@@ -542,16 +562,18 @@ internal class GitChangesLoader(
             return
         }
         val offline = !current().connected
+        val kept =
+            changes.diff?.takeIf { keep && changes.file == path && changes.fileSession == subagentId && it.path == path }
         write(changes.sessionId) {
             it.copy(
                 file = path,
                 fileSession = subagentId,
-                diff = null,
-                diffLoading = !offline,
-                diffFailure = if (offline) ChangesFailure.OFFLINE else null,
+                diff = kept,
+                diffLoading = !offline && kept == null,
+                diffFailure = if (offline && kept == null) ChangesFailure.OFFLINE else null,
             )
         }
-        if (!offline) loadDiff(changes.sessionId, snapshotId, path, retry, reader = subagentId)
+        if (!offline) loadDiff(changes.sessionId, snapshotId, path, retry, reader = subagentId, silent = kept != null)
     }
 
     /**
@@ -603,7 +625,7 @@ internal class GitChangesLoader(
         val (subagentId, path) = reopen ?: return
         if (changes()?.let { it.file == path && it.fileSession == subagentId } != true) return
         val listed = found.firstOrNull { it.sessionId == subagentId }?.status?.files.orEmpty().any { it.path == path }
-        if (listed) openSubagentFile(subagentId, path, retry = false)
+        if (listed) openSubagentFile(subagentId, path, retry = false, keep = true)
         else write(sessionId) { it.copy(diff = null, diffLoading = false, diffFailure = ChangesFailure.NOT_FOUND) }
     }
 

@@ -8263,6 +8263,54 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun aProjectListThatArrivesDuringAnOpenIsNotLostToIt() = runTest {
+        val transport = Transport()
+        var holdB = true
+        val lists = mutableMapOf("a" to listOf(session("one", projectId = "a")), "b" to listOf(session("two", projectId = "b")))
+        val heldSessions = configureProjects(transport, lists, hold = { holdB && it.text("projectId") == "b" })
+        var holdProjects = false
+        val heldProjects = mutableListOf<JsonObject>()
+        val answer = transport.response
+        transport.response = { request ->
+            if (holdProjects && request.text("type") == "projects.list") null.also { heldProjects += request }
+            else answer(request)
+        }
+        fun projects(ids: Collection<String>) = data("projects", ids.map { Wire.objectOf("id" to it, "name" to "Project $it") })
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        val a = RemoteSelection("host", "a")
+        val b = RemoteSelection("host", "b")
+        assertEquals(root, repository.activate(root, ActivationMode.USER_OPEN))
+        runCurrent()
+
+        // Opening a project reads the reused project list behind it; that reply waits.
+        advanceTimeBy(PROJECTS_REVALIDATE_MILLIS)
+        holdProjects = true
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        runCurrent()
+        val revalidation = heldProjects.single()
+
+        // Another project, whose list the Projects page never got, is opened and waits for it.
+        val opening = async { repository.activate(b, ActivationMode.USER_OPEN) }
+        runCurrent()
+        val bList = heldSessions.last()
+        // A project shared on the Mac meanwhile comes with the reply, while the open still runs.
+        lists["c"] = listOf(session("three", projectId = "c"))
+        holdProjects = false
+        transport.result(revalidation, projects(lists.keys))
+        runCurrent()
+        holdB = false
+        transport.result(bList, data("sessions", lists.getValue("b")))
+        assertEquals(b, opening.await())
+        runCurrent()
+
+        // Back on Projects at once, the new project is there.
+        assertEquals(root, repository.activate(root))
+        runCurrent()
+        assertEquals(listOf("a", "b", "c"), repository.state.value.projects.map { it.text("id") })
+    }
+
+    @Test
     fun anUnknownSessionOnTheSessionsListReadsThatListAtOnce() = runTest {
         val transport = Transport()
         val lists = mutableMapOf("a" to listOf(session("old", projectId = "a")), "b" to listOf(session("other", projectId = "b")))

@@ -325,6 +325,35 @@ class ProjectFilesLoaderTest {
     }
 
     @Test
+    fun aRememberedFolderThatCannotBeListedAgainShowsTheFailure() = runTest {
+        val transport = Transport(capabilities) { request ->
+            if (request.text("path") == "") listing(request, "src/", "README.md") else listing(request, "app/")
+        }
+        val repository = opened(transport)
+        repository.openFilesDir("src")
+        runCurrent()
+        repository.openFilesDir("")
+        runCurrent()
+
+        // Deleted on the Mac since: the remembered entries give way to the failure.
+        transport.failure = { if (it.text("path") == "src") "not_found" else null }
+        repository.openFilesDir("src")
+        assertEquals(listOf("app"), repository.state.value.files?.listing?.entries?.map { it.name })
+        runCurrent()
+        repository.state.value.files.let { files ->
+            assertEquals(FilesFailure.NOT_FOUND, files?.failure)
+            assertEquals(false, files?.loading)
+        }
+
+        // Opened again, it is listed from scratch.
+        transport.failure = { null }
+        repository.openFilesDir("")
+        repository.openFilesDir("src")
+        assertEquals(true, repository.state.value.files?.loading)
+        assertNull(repository.state.value.files?.listing)
+    }
+
+    @Test
     fun loadMoreDropsNamesARepeatedPageSendsAgain() = runTest {
         val transport = Transport(capabilities) { request ->
             // The `after` entry vanished, so the host starts the next page earlier.

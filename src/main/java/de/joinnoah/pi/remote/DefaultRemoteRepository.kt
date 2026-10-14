@@ -398,6 +398,8 @@ class DefaultRemoteRepository(
     /** When [cachedProjects] was last read, or a read of it started, by [now]. */
     private var projectsReadAt: Long? = null
     private var projectsRevalidateJob: Job? = null
+    /** The last [readSessions] started: by Mac, project and connection, and when by [now]. */
+    private var sessionReadAttempt: Pair<Triple<String, String, Long>, Long>? = null
     private var cachedProjectChats: Pair<String, List<ProjectChatSummary>>? = null
     private val projectChatCandidates = linkedMapOf<String, List<ProjectChatSummary>>()
     private var projectChatsJob: Job? = null
@@ -811,6 +813,9 @@ class DefaultRemoteRepository(
         chatCache.clear()
         sessionMeta.clear()
         paneMemos.clear()
+        sessionReadAttempt = null
+        changesLoader.forget()
+        filesLoader.forget()
     }
 
     private suspend fun ensureNavigationLoaded(): Boolean {
@@ -5071,6 +5076,9 @@ class DefaultRemoteRepository(
         val projectId = current.selection.projectId ?: return
         val read = projectListReads[projectId]?.takeIf { projectSessionsRoute == routeId && it.first == generation }
         if (read != null && now() - read.second in 0 until SESSION_REFRESH_INTERVAL_MILLIS) return
+        // A read that failed is not tried again at each status either.
+        val attempt = sessionReadAttempt?.takeIf { it.first == Triple(routeId, projectId, generation) }?.second
+        if (attempt != null && now() - attempt in 0 until SESSION_REFRESH_INTERVAL_MILLIS) return
         readSessions()
     }
 
@@ -5083,6 +5091,7 @@ class DefaultRemoteRepository(
             sessionRefreshJob?.isActive == true
         ) return
         lastSessionRefreshAt = now()
+        sessionReadAttempt = Triple(routeId, projectId, generation) to now()
         val epoch = selectionEpoch
         sessionRefreshJob = scope.launch {
             try {
@@ -5125,6 +5134,9 @@ class DefaultRemoteRepository(
             try {
                 val fresh = connectionRequest("projects.list").array("items")
                 if (connection != generation || activeHost?.routeId != routeId) return@launch
+                // An activation still running holds the list it started with and writes it back
+                // when it ends, so the end of that activation reads the list once more.
+                if (state.value.loading) projectsReadAt = null
                 val known = cachedProjects?.takeIf { it.first == routeId }?.second
                 if (known != null) projectsReadOn = connection
                 val shown = state.value.takeIf { it.selection.routeId == routeId }?.projects

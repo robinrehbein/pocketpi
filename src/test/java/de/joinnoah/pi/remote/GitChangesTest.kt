@@ -872,6 +872,38 @@ class GitChangesTest {
     }
 
     @Test
+    fun aRememberedStatusThatCannotBeReadAgainSaysSo() = runTest {
+        val (transport, repository) = opened(::sessionFixtures)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        repository.openChanges()
+        runCurrent()
+        val status = checkNotNull(repository.state.value.changes?.status)
+        repository.closeChanges()
+
+        // The remembered status stays, but no longer passes for current.
+        transport.failure = { if (it.text("type") == "session.git.status") "forbidden" else null }
+        repository.openChanges()
+        assertEquals(false, repository.state.value.changes?.stale)
+        runCurrent()
+        repository.state.value.changes.let { changes ->
+            assertEquals(status, changes?.status)
+            assertEquals(false, changes?.loading)
+            assertNull(changes?.failure)
+            assertEquals(true, changes?.stale)
+        }
+
+        // A read that succeeds makes it current again.
+        transport.failure = { null }
+        repository.reloadChanges()
+        runCurrent()
+        repository.state.value.changes.let { changes ->
+            assertEquals(false, changes?.stale)
+            assertNull(changes?.failure)
+            assertEquals(testScheduler.currentTime, changes?.fetchedAt)
+        }
+    }
+
+    @Test
     fun reloadKeepsLoadedPreviewsOfUnchangedFiles() = runTest {
         val (_, repository) = opened(::sessionFixtures)
         repository.activate(RemoteSelection("host", "project", sessionId))

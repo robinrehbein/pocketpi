@@ -222,6 +222,15 @@ private fun FailureNotice(failure: ChangesFailure, onRetry: () -> Unit) {
     }
 }
 
+/** The changes shown could not be read again; [onRetry] tries once more. */
+@Composable
+private fun StaleNotice(text: String, onRetry: () -> Unit) {
+    Column(Modifier.fillMaxWidth().testTag("changesStale")) {
+        Notice(text, Modifier.testTag("changesUpdated"))
+        TextButton(onClick = onRetry, Modifier.padding(horizontal = 8.dp)) { Text(stringResource(R.string.remote_changes_retry)) }
+    }
+}
+
 @Composable
 private fun Loading() {
     val label = stringResource(R.string.remote_changes_loading)
@@ -293,9 +302,11 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
             status?.branch?.let { branch ->
                 item(key = "branch", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_branch, branch)) }
             }
-            state.fetchedAt?.takeIf { offline && status != null && state.failure == null }?.let { at ->
+            state.fetchedAt?.takeIf { (offline || state.stale) && status != null && state.failure == null }?.let { at ->
                 item(key = "updated", span = { GridItemSpan(maxLineSpan) }) {
-                    Notice(stringResource(R.string.remote_changes_updated_at, updatedTime(context, at)), Modifier.testTag("changesUpdated"))
+                    val time = updatedTime(context, at)
+                    if (offline) Notice(stringResource(R.string.remote_changes_updated_at, time), Modifier.testTag("changesUpdated"))
+                    else StaleNotice(stringResource(R.string.remote_changes_stale_at, time), actions.onReload)
                 }
             }
             val failure = state.failure
