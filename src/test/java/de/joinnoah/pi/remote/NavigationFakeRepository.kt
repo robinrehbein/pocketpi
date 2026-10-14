@@ -180,8 +180,12 @@ internal class NavigationFakeRepository : RemoteRepository {
         state.value = state.value.copy(files = files.copy(editor = null))
     }
 
+    /** Imports mark themselves running like the real repository's; a test ends them. */
+    var importsRun = false
+
     override fun importAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) {
         imports += Triple(selection, uris, photo)
+        if (importsRun) state.value = state.value.copy(importingAttachments = true)
     }
 
     override suspend fun activate(

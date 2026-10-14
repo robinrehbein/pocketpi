@@ -608,4 +608,108 @@ class RemoteNavigationTest {
         runCurrent()
         assertNull(navigation.freshSession)
     }
+
+    // Share pick mode: "Choose another session…" in ShareActivity. Shares with files, which need
+    // Uri, are in ShareIntakeTest.
+
+    private fun pick(text: String = "Shared") = ShareRequest(SharedContent(text), ShareTarget.Pick)
+
+    @Test
+    fun `pick mode completes on a session tap`() = runTest {
+        val repository = NavigationFakeRepository()
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.Sessions("host", "project"))
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        var consumed = 0
+        navigation.share(pick()) { consumed++ }
+        assertNotNull(navigation.sharePick)
+        assertEquals("the share waits for a choice", 0, consumed)
+        assertFalse("Back walks up while the stack has somewhere to go", navigation.backCancelsShare)
+        navigation.open(RemoteNavKey.Chat("host", "project", "chosen"))
+        runCurrent()
+        assertNull(navigation.sharePick)
+        assertEquals(1, consumed)
+        assertEquals(RemoteNavKey.Chat("host", "project", "chosen"), stack.last())
+        assertEquals(RemoteSelection("host", "project", "chosen"), repository.state.value.selection)
+        assertEquals("Shared", repository.state.value.draft)
+        // Pick mode is over: the next tap only opens.
+        repository.draft("")
+        navigation.open(RemoteNavKey.Chat("host", "project", "next"))
+        runCurrent()
+        assertEquals("", repository.state.value.draft)
+        assertEquals(1, consumed)
+    }
+
+    @Test
+    fun `pick mode completes on New session in a project`() = runTest {
+        val repository = NavigationFakeRepository()
+        repository.create = { routeId, projectId ->
+            RemoteSelection(routeId, projectId, "created").also { repository.state.value = repository.state.value.copy(selection = it) }
+        }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.Sessions("host", "project"))
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        var consumed = 0
+        navigation.share(pick()) { consumed++ }
+        navigation.createSession("host", "project")
+        runCurrent()
+        assertEquals(1, repository.createdSessions)
+        assertEquals(1, consumed)
+        assertNull(navigation.sharePick)
+        assertEquals(RemoteNavKey.Chat("host", "project", "created"), stack.last())
+        assertEquals("Shared", repository.state.value.draft)
+    }
+
+    @Test
+    fun `back cancels the share where it would leave the app`() = runTest {
+        val repository = NavigationFakeRepository()
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        var consumed = 0
+        navigation.share(pick()) { consumed++ }
+        assertTrue(navigation.backCancelsShare)
+        navigation.cancelShare()
+        assertNull(navigation.sharePick)
+        assertFalse(navigation.backCancelsShare)
+        assertEquals(1, consumed)
+        navigation.open(RemoteNavKey.Chat("host", "project", "later"))
+        runCurrent()
+        assertEquals("a cancelled share reaches no chat", "", repository.state.value.draft)
+        assertEquals(1, consumed)
+    }
+
+    @Test
+    fun `pick mode starts from the sessions of the chat on top`() = runTest {
+        val repository = NavigationFakeRepository()
+        val stack = RemoteSelection("host", "project", "open").keys().toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.share(pick())
+        runCurrent()
+        assertEquals(RemoteNavKey.Sessions("host", "project"), stack.last())
+        assertNotNull(navigation.sharePick)
+    }
+
+    @Test
+    fun `a Direct Share target without its project is looked up like a notification`() = runTest {
+        val repository = NavigationFakeRepository()
+        repository.notification = RemoteSelection("host", "project", "session")
+        repository.notificationLookup = {
+            repository.notification.also { selection -> repository.state.value = repository.state.value.copy(selection = checkNotNull(selection)) }
+        }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        var consumed = 0
+        navigation.share(ShareRequest(SharedContent("Shared"), ShareTarget.Session("host", null, "session"))) { consumed++ }
+        assertEquals("taken at once", 1, consumed)
+        runCurrent()
+        assertEquals(listOf("host" to "session"), repository.notificationRequests)
+        assertEquals(RemoteNavKey.Chat("host", "project", "session"), stack.last())
+        assertEquals("Shared", repository.state.value.draft)
+
+        // A session that is gone says so.
+        repository.notification = null
+        repository.notificationLookup = { null }
+        navigation.share(ShareRequest(SharedContent("Again"), ShareTarget.Session("host", null, "gone")))
+        runCurrent()
+        assertEquals(listOf(R.string.remote_share_failed), repository.errors)
+        assertEquals("Shared", repository.state.value.draft)
+    }
 }

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Title of the picker that opens when another app shares with PocketPi. -->
+    <string name="remote_share_title">Send to PocketPi</string>
+    <!-- What was shared, in the picker's header: "2 files", or with text, "2 files and text". -->
+    <plurals name="remote_share_files">
+        <item quantity="one">%d file</item>
+        <item quantity="other">%d files</item>
+    </plurals>
+    <string name="remote_share_text">Text</string>
+    <string name="remote_share_files_and_text">%1$s and text</string>
+    <string name="remote_share_skipped">Some items were left out. PocketPi takes up to 5 images, PDFs or text files, each up to 20 MB.</string>
+    <string name="remote_share_nothing">PocketPi can\'t take anything from this share. It takes text, images, PDFs and text files.</string>
+    <string name="remote_share_loading">Loading sessions</string>
+    <string name="remote_share_recent">Recent sessions</string>
+    <!-- Marks the session that is open in the app right now. -->
+    <string name="remote_share_open_now">Open now</string>
+    <!-- %1$s is a project name, for example "pocketpi". -->
+    <string name="remote_share_new_session">New session in %1$s</string>
+    <string name="remote_share_change_project">Choose project</string>
+    <string name="remote_share_choose_other">Choose another session…</string>
+    <!-- Banner over the app while the user picks the session a share goes to. -->
+    <string name="remote_share_pick_title">Choose where to send</string>
+    <string name="remote_share_pick_help">Tap a session, or New session in a project.</string>
+    <string name="remote_share_failed">The shared items weren\'t added because the session didn\'t open.</string>
+    <string name="remote_share_dropped">The shared items weren\'t added because another session opened first.</string>
+    <string name="remote_share_text_too_long">The shared text doesn\'t fit into the message box.</string>
+    <!-- An entry of the composer's + menu that opens the camera. -->
+    <string name="remote_take_photo">Take photo</string>
+    <string name="remote_camera_unavailable">No camera app is available.</string>
+    <string name="remote_camera_permission_needed">Allow camera access to take a photo.</string>
+</resources>

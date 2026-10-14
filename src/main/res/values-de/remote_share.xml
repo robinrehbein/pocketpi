@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_share_title">An PocketPi senden</string>
+    <plurals name="remote_share_files">
+        <item quantity="one">%d Datei</item>
+        <item quantity="other">%d Dateien</item>
+    </plurals>
+    <string name="remote_share_text">Text</string>
+    <string name="remote_share_files_and_text">%1$s und Text</string>
+    <string name="remote_share_skipped">Einiges wurde weggelassen. PocketPi nimmt bis zu 5 Bilder, PDFs oder Textdateien mit je bis zu 20 MB.</string>
+    <string name="remote_share_nothing">PocketPi kann hiervon nichts übernehmen. Es nimmt Text, Bilder, PDFs und Textdateien.</string>
+    <string name="remote_share_loading">Sitzungen werden geladen</string>
+    <string name="remote_share_recent">Letzte Sitzungen</string>
+    <string name="remote_share_open_now">Gerade offen</string>
+    <string name="remote_share_new_session">Neue Sitzung in %1$s</string>
+    <string name="remote_share_change_project">Projekt wählen</string>
+    <string name="remote_share_choose_other">Andere Sitzung wählen …</string>
+    <string name="remote_share_pick_title">Wähle, wohin es gehen soll</string>
+    <string name="remote_share_pick_help">Tippe auf eine Sitzung oder in einem Projekt auf „Neue Sitzung“.</string>
+    <string name="remote_share_failed">Die geteilten Inhalte wurden nicht hinzugefügt, weil sich die Sitzung nicht geöffnet hat.</string>
+    <string name="remote_share_dropped">Die geteilten Inhalte wurden nicht hinzugefügt, weil vorher eine andere Sitzung geöffnet wurde.</string>
+    <string name="remote_share_text_too_long">Der geteilte Text passt nicht ins Eingabefeld.</string>
+    <string name="remote_take_photo">Foto aufnehmen</string>
+    <string name="remote_camera_unavailable">Keine Kamera-App verfügbar.</string>
+    <string name="remote_camera_permission_needed">Erlaube den Kamerazugriff, um ein Foto aufzunehmen.</string>
+</resources>

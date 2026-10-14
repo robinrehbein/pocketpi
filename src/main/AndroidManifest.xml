@@ -37,6 +37,31 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="pocketpi" android:host="session" />
             </intent-filter>
+            <!-- The share-target for Direct Share; the launcher activity holds the shortcuts file. -->
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
+        </activity>
+        <!--
+            The share sheet's target. Exported, so it trusts nothing it receives: ShareIntake checks
+            every URI and reads only EXTRA_TEXT, EXTRA_STREAM and the ClipData, never an extra that
+            names a session. Narrow types, not */*, so PocketPi stays out of unrelated share sheets.
+        -->
+        <activity android:name=".ShareActivity" android:exported="true"
+            android:theme="@style/Theme.PocketPi.Share" android:excludeFromRecents="true"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|navigation">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/pdf" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/pdf" />
+            </intent-filter>
         </activity>
         <!--
             The app's own launches (notifications, the widget, launcher shortcuts) go through this
