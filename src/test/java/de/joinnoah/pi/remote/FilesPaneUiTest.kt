@@ -15,6 +15,8 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
@@ -386,6 +388,35 @@ class FilesPaneUiTest {
         compose.onNodeWithTag("filesLine:6").performClick()
         assertEquals(null, stateOf("filesLine:6"))
         compose.onNodeWithTag("filesSelection").assertDoesNotExist()
+    }
+
+    @Test
+    fun shiftClickExtendsTheRangeAndCtrlCCopiesTheLines() {
+        val content = (1..8).joinToString("") { "line $it\n" }
+        render(FilesState("s", loading = false, listing = root, file = OpenFile("src/a.kt", loading = false, content = content)))
+        compose.onNodeWithTag("filesLine:2").performClick()
+        compose.onNodeWithTag("filesLine:5").performKeyInput { keyDown(androidx.compose.ui.input.key.Key.ShiftLeft) }
+        compose.onNodeWithTag("filesLine:5").performMouseInput { click() }
+        compose.onNodeWithTag("filesLine:5").performKeyInput { keyUp(androidx.compose.ui.input.key.Key.ShiftLeft) }
+        compose.waitForIdle()
+        assertEquals(label(R.string.remote_files_selection_lines, 2, 5), stateOf("filesLine:3"))
+        // The tap gave the lines the keyboard, so Ctrl+C copies the picked ones, without numbers.
+        compose.onNodeWithTag("filesFile").performKeyInput {
+            keyDown(androidx.compose.ui.input.key.Key.CtrlLeft)
+            pressKey(androidx.compose.ui.input.key.Key.C)
+            keyUp(androidx.compose.ui.input.key.Key.CtrlLeft)
+        }
+        compose.waitForIdle()
+        val clipboard = compose.activity.getSystemService(android.content.ClipboardManager::class.java)
+        assertEquals("line 2\nline 3\nline 4\nline 5", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+        // Ctrl+A picks every line.
+        compose.onNodeWithTag("filesFile").performKeyInput {
+            keyDown(androidx.compose.ui.input.key.Key.CtrlLeft)
+            pressKey(androidx.compose.ui.input.key.Key.A)
+            keyUp(androidx.compose.ui.input.key.Key.CtrlLeft)
+        }
+        compose.waitForIdle()
+        assertEquals(label(R.string.remote_files_selection_lines, 1, 8), stateOf("filesLine:3"))
     }
 
     @Test

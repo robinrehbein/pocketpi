@@ -886,11 +886,13 @@ internal fun RemoteScreen(
                             // The URIs stay readable only while the permissions are held: they go
                             // back once the import read every one.
                             val permissions = runCatching { activity?.requestDragAndDropPermissions(dragEvent) }.getOrNull()
+                            // Picked code lines go in quoted with their path and numbers, as "Send lines" writes them.
+                            val lines = dragEvent.localState as? CodeLinesDrag
                             return acceptChatDrop(
                                 clip.parts(context.contentResolver::getType),
                                 attach = { items, onDone -> chatModel.acceptAttachments(chatKey.selection(), items, onDone) },
                                 insertText = { text ->
-                                    composerDraft.insert(text).also {
+                                    composerDraft.insert(lines?.prompt ?: text).also {
                                         if (it) {
                                             composerDraft.flush()
                                             chatKeyTarget.draftEdited()

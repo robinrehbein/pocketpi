@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -187,7 +188,9 @@ class ChangesPaneTest {
         assertTrue("lazy list composed $composed rows", composed in 1..200)
 
         compose.onNodeWithTag("changesDiff").performScrollToNode(hasTestTag("changesDiffLine"))
+        // A click picks the line; the comment opens from its gutter button.
         compose.onAllNodesWithTag("changesDiffLine").onFirst().performClick()
+        compose.onAllNodesWithTag("changesGutterComment").onFirst().performClick()
         compose.onNodeWithTag("changesCommentField").performTextInput("Why this line?")
         compose.onNodeWithTag("changesCommentSave").performClick()
         compose.onNodeWithText("Why this line?").assertExists()
@@ -207,6 +210,34 @@ class ChangesPaneTest {
             recorder.reviews,
         )
         assertTrue(recorder.prefills.isEmpty())
+    }
+
+    @Test
+    fun ctrlAAndCtrlCCopyThePickedDiffLinesWithoutTheirPrefixes() {
+        val recorder = Recorder()
+        render(
+            ChangesState(
+                "s",
+                loading = false,
+                status = status,
+                file = "big.kt",
+                diff = GitDiff("big.kt", snapshot, "@@ -1,2 +1,3 @@\n ctx\n-old\n+new\n+more\n", binary = false, truncated = false),
+            ),
+            recorder,
+        )
+        // A click picks the line and gives the pane the keyboard.
+        compose.onAllNodesWithTag("changesDiffLine").onFirst().performClick()
+        compose.onNodeWithTag("changesDiff").performKeyInput {
+            keyDown(Key.CtrlLeft)
+            pressKey(Key.A)
+            pressKey(Key.C)
+            keyUp(Key.CtrlLeft)
+        }
+        compose.waitForIdle()
+        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+        val copied = clipboard.primaryClip?.getItemAt(0)?.text?.toString().orEmpty()
+        assertTrue("the context, removed and added lines are all in: $copied", copied.lines().containsAll(listOf("ctx", "old", "new", "more")))
+        assertTrue("no line keeps a diff marker: $copied", copied.lines().none { it.startsWith("+") || it.startsWith("-") })
     }
 
     @Test
@@ -255,7 +286,9 @@ class ChangesPaneTest {
             ),
             recorder,
         )
+        // A click picks the line; the comment opens from its gutter button.
         compose.onAllNodesWithTag("changesDiffLine").onFirst().performClick()
+        compose.onAllNodesWithTag("changesGutterComment").onFirst().performClick()
         compose.onNodeWithTag("changesCommentField").performTextInput("Note")
         compose.onNodeWithTag("changesCommentSave").performClick()
         compose.onNodeWithTag("changesCommentError").assertExists()
@@ -339,11 +372,12 @@ class ChangesPaneTest {
         compose.onNodeWithTag("changesList").performScrollToNode(hasText("new.kt"))
         compose.onNodeWithText("new.kt").performClick()
         assertEquals(listOf("child" to "lib/new.kt"), opened)
-        // Its diff carries no quick actions and takes no comments.
+        // Its diff carries no quick actions and takes no comments; its lines can still be picked and copied.
         state = loaded.copy(file = "lib/new.kt", fileSession = "child", diff = GitDiff("lib/new.kt", "child-snapshot", "@@ -0,0 +1 @@\n+x\n", false, false))
         compose.onNodeWithTag("changesSubagentFile").assertExists()
         compose.onNodeWithTag("changesActionRevert").assertDoesNotExist()
-        compose.onNodeWithTag("changesDiffLine").assertDoesNotExist()
+        compose.onAllNodesWithTag("changesDiffLine").onFirst().performClick()
+        compose.onNodeWithTag("changesGutterComment").assertDoesNotExist()
     }
 
     @Test

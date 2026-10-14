@@ -112,8 +112,10 @@ class ShortcutHelpTest {
         // One line per action, with all its keys.
         assertEquals(1, chat.count { it.labelRes == R.string.remote_keymap_search })
         assertEquals(2, chat.single { it.labelRes == R.string.remote_keymap_search }.chords.size)
-        // Settings shows everything.
-        assertEquals(shortcutEntries(null).size, chat.size)
+        // Settings shows everything except a code pane's own keys, which only a focused code pane takes.
+        val codeKeys = shortcutEntries(null).count { it.context == KeyContext.CODE }
+        assertEquals(4, codeKeys)
+        assertEquals(shortcutEntries(null).size - codeKeys, chat.size)
     }
 
     @Test

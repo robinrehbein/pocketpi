@@ -182,6 +182,19 @@ class KeymapTest {
     }
 
     @Test
+    fun codePanesSelectCopyAndZoomTheirLinesOnlyWhenFocused() {
+        assertEquals(Shortcut.SELECT_ALL_LINES, ctrl(Key.A, context = KeyContext.CODE))
+        assertEquals(Shortcut.COPY_LINES, ctrl(Key.C, context = KeyContext.CODE))
+        assertEquals(Shortcut.ZOOM_IN, ctrl(Key.Equals, context = KeyContext.CODE))
+        assertEquals(Shortcut.ZOOM_IN, ctrl(Key.Plus, context = KeyContext.CODE))
+        assertEquals(Shortcut.ZOOM_OUT, ctrl(Key.Minus, context = KeyContext.CODE))
+        // The chat and the composer keep Ctrl+A and Ctrl+C for their own text.
+        assertNull(ctrl(Key.A, context = KeyContext.CHAT))
+        assertNull(ctrl(Key.C, context = KeyContext.COMPOSER))
+        assertEquals(null, ctrl(Key.Equals, context = KeyContext.GLOBAL))
+    }
+
+    @Test
     fun aListThatLeftTheScreenNoLongerHoldsItsRows() {
         val targets = ShortcutTargets()
         val sessions = RemoteNavKey.Sessions("host", "project")

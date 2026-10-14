@@ -58,6 +58,10 @@ internal enum class Shortcut(val group: ShortcutGroup, val listed: Boolean = tru
     TOGGLE_INSPECTOR(ShortcutGroup.PANES),
     REVIEW(ShortcutGroup.PANES),
     OTHER_BUSY_ACTION(ShortcutGroup.COMPOSER),
+    SELECT_ALL_LINES(ShortcutGroup.PANES),
+    COPY_LINES(ShortcutGroup.PANES),
+    ZOOM_IN(ShortcutGroup.PANES),
+    ZOOM_OUT(ShortcutGroup.PANES),
     REFRESH(ShortcutGroup.NAVIGATION),
     RENAME(ShortcutGroup.CHAT),
     FORK(ShortcutGroup.CHAT),
@@ -79,7 +83,10 @@ internal enum class KeyContext(val parent: KeyContext?) {
     CHAT(GLOBAL),
 
     /** Keyboard focus is in the chat's composer. */
-    COMPOSER(CHAT);
+    COMPOSER(CHAT),
+
+    /** Keyboard focus is in a code pane (Files or Changes). It acts on the lines there, not on the chat. */
+    CODE(GLOBAL);
 
     fun includes(other: KeyContext): Boolean = generateSequence(this) { it.parent }.any { it == other }
 }
@@ -140,7 +147,22 @@ internal val KEYMAP: List<KeyBinding> =
         KeyBinding(Shortcut.FORK, Key.N, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_fork),
         KeyBinding(Shortcut.OTHER_BUSY_ACTION, Key.Enter, alt = true, context = KeyContext.COMPOSER, labelRes = R.string.remote_keymap_other_busy_action),
         KeyBinding(Shortcut.OTHER_BUSY_ACTION, Key.NumPadEnter, alt = true, context = KeyContext.COMPOSER, labelRes = R.string.remote_keymap_other_busy_action),
+        KeyBinding(Shortcut.SELECT_ALL_LINES, Key.A, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_select_all),
+        KeyBinding(Shortcut.COPY_LINES, Key.C, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_copy_lines),
+        KeyBinding(Shortcut.ZOOM_IN, Key.Equals, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_IN, Key.Equals, ctrl = true, shift = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_IN, Key.Plus, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_IN, Key.NumPadAdd, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_OUT, Key.Minus, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_out),
+        KeyBinding(Shortcut.ZOOM_OUT, Key.NumPadSubtract, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_out),
     )
+
+/** The shortcuts a focused code pane takes itself: they select, copy and zoom its lines. */
+internal val CODE_SHORTCUTS: Set<Shortcut> = setOf(Shortcut.SELECT_ALL_LINES, Shortcut.COPY_LINES, Shortcut.ZOOM_IN, Shortcut.ZOOM_OUT)
+
+/** The code pane shortcut [event] is, or null. Only a code pane with focus asks for these. */
+internal fun resolveCodeShortcut(event: KeyEvent): Shortcut? =
+    resolveShortcut(event, KeyContext.CODE)?.takeIf { it in CODE_SHORTCUTS }
 
 /**
  * The shortcut [key] with exactly these modifiers runs in [context], or null. Callers pass Meta

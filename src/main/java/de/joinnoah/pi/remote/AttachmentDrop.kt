@@ -98,11 +98,12 @@ internal fun mayHoldAttachments(mimeTypes: List<String>): Boolean =
     mimeTypes.any { !it.startsWith("text/") || it == ClipDescription.MIMETYPE_TEXT_URILIST }
 
 /**
- * A drag the chat takes: images, text and other files (`application/…`) from another app. A drag
- * with a [localState] started in PocketPi ([OwnDrag]) and is meant for another app.
+ * A drag the chat takes: images, text and other files (`application/…`) from another app, and
+ * picked code lines from Files ([CodeLinesDrag]). Any other drag with a [localState] started in
+ * PocketPi ([OwnDrag]) and is meant for another app.
  */
 internal fun acceptsDrop(localState: Any?, mimeTypes: Set<String>): Boolean =
-    localState == null &&
+    (localState == null || localState is CodeLinesDrag) &&
         mimeTypes.any { type -> listOf("image/", "text/", "application/").any { type.startsWith(it, ignoreCase = true) } }
 
 /** Ctrl+V and Shift+Insert paste; Ctrl+Shift+V pastes plain text, so it stays the field's. */
