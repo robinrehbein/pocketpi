@@ -45,6 +45,10 @@ import org.junit.Assert.fail
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.assert
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -811,5 +815,15 @@ class FilesPaneUiTest {
         assertTrue(acceptChatDrop(parts, { _, _ -> fail() }, { inserted += it; true }, localState = drag) {})
         assertTrue(acceptChatDrop(parts, { _, _ -> fail() }, { inserted += it; true }, localState = null) {})
         assertEquals(listOf(drag.prompt, "one\ntwo"), inserted)
+    }
+
+    @Test
+    fun aFailedListingUsesTheSharedFailureNotice() {
+        render(FilesState("s", loading = false, failure = FilesFailure.BUSY))
+        compose.onNode(
+            hasAnyAncestor(hasTestTag("filesFailure")) and hasText(label(R.string.remote_files_failure_busy))
+        ).assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
+        compose.onNodeWithText(label(R.string.remote_files_retry)).performClick()
+        assertEquals(1, reloaded)
     }
 }

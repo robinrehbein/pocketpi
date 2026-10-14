@@ -25,6 +25,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -122,7 +124,56 @@ internal class DiffRowStyle(
     val addedContent: Color,
     val removedContainer: Color,
     val removedContent: Color,
+    val labels: DiffLineLabels,
 )
+
+/** The formats TalkBack reads a diff line with, resolved once per diff instead of per row. */
+@Immutable
+internal class DiffLineLabels(
+    val addedLine: String,
+    val removedLine: String,
+    val contextLine: String,
+    val added: String,
+    val removed: String,
+    val blank: String,
+)
+
+@Composable
+private fun rememberDiffLineLabels(): DiffLineLabels {
+    val addedLine = stringResource(R.string.remote_chat_a11y_diff_added_line)
+    val removedLine = stringResource(R.string.remote_chat_a11y_diff_removed_line)
+    val contextLine = stringResource(R.string.remote_chat_a11y_diff_context_line)
+    val added = stringResource(R.string.remote_chat_a11y_diff_added)
+    val removed = stringResource(R.string.remote_chat_a11y_diff_removed)
+    val blank = stringResource(R.string.remote_chat_a11y_diff_blank)
+    return remember(addedLine, removedLine, contextLine, added, removed, blank) {
+        DiffLineLabels(addedLine, removedLine, contextLine, added, removed, blank)
+    }
+}
+
+/**
+ * What TalkBack reads for [line]: whether it was added or removed, its line number and its text,
+ * so the change never rests on the colour or the '+' and '-' signs alone. [number] is the line
+ * number to read, for a split diff the number on that side. A hunk header reads as it is.
+ */
+internal fun diffLineDescription(
+    line: DiffLine,
+    labels: DiffLineLabels,
+    number: Int? = when (line.kind) {
+        DiffKind.ADDED -> line.newLine
+        DiffKind.REMOVED -> line.oldLine
+        DiffKind.CONTEXT -> line.newLine ?: line.oldLine
+        DiffKind.HUNK -> null
+    },
+): String? {
+    val text = line.text.take(MAX_CODE_LINE_CHARS).ifBlank { labels.blank }
+    return when (line.kind) {
+        DiffKind.ADDED -> number?.let { labels.addedLine.format(it, text) } ?: labels.added.format(text)
+        DiffKind.REMOVED -> number?.let { labels.removedLine.format(it, text) } ?: labels.removed.format(text)
+        DiffKind.CONTEXT -> number?.let { labels.contextLine.format(it, text) } ?: text
+        DiffKind.HUNK -> null
+    }
+}
 
 @Composable
 internal fun rememberDiffRowStyle(lines: List<DiffLine>, showLineNumbers: Boolean = true, zoom: Float = 1f): DiffRowStyle {
@@ -138,9 +189,10 @@ internal fun rememberDiffRowStyle(lines: List<DiffLine>, showLineNumbers: Boolea
     val addedContent = diffAddedContent()
     val removedContainer = diffRemovedContainer()
     val removedContent = diffRemovedContent()
+    val labels = rememberDiffLineLabels()
     return remember(
         style, charWidth, numberWidth, contentWidth, numbered, muted,
-        addedContainer, addedContent, removedContainer, removedContent,
+        addedContainer, addedContent, removedContainer, removedContent, labels,
     ) {
         DiffRowStyle(
             style,
@@ -153,6 +205,7 @@ internal fun rememberDiffRowStyle(lines: List<DiffLine>, showLineNumbers: Boolea
             addedContent,
             removedContainer,
             removedContent,
+            labels,
         )
     }
 }
@@ -192,7 +245,10 @@ internal fun DiffRow(
             .fillMaxWidth()
             .then(if (container != null) Modifier.background(container) else Modifier)
             .then(if (picked) Modifier.background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f)) else Modifier)
-            .semantics(mergeDescendants = true) { if (selectable) this.selected = picked },
+            .semantics(mergeDescendants = true) {
+                if (selectable) this.selected = picked
+                diffLineDescription(line, rowStyle.labels)?.let { contentDescription = it }
+            },
     ) {
         leading?.invoke()
         if (rowStyle.numbered) {

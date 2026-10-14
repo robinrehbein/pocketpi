@@ -52,7 +52,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -184,7 +183,7 @@ internal fun SessionArtifactsSheet(
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.9f).dp
+    val maxHeight = windowHeightFraction(0.9f)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
