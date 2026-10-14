@@ -56,6 +56,39 @@ internal fun sortedProjectChats(chats: List<ProjectChatSummary>): List<ProjectCh
         }.thenByDescending { it.session["updatedAt"]?.jsonPrimitive?.longOrNull ?: 0L }
     ).take(12)
 
+/** How many running and how many recent quick chats a Mac's Projects page shows until "Show all". */
+internal const val QUICK_CHAT_LIMIT = 3
+
+/** The quick chats of a Projects page, grouped by what they need; see [quickChats]. */
+internal data class QuickChats(
+    val waiting: List<ProjectChatSummary>,
+    val running: List<ProjectChatSummary>,
+    val recent: List<ProjectChatSummary>,
+    /** Whether a running or recent group holds more chats than [QUICK_CHAT_LIMIT], so "Show all" has more to show. */
+    val expandable: Boolean,
+)
+
+/**
+ * The quick chats of a Mac's Projects page: every waiting chat, and the running and the recent ones up to
+ * [QUICK_CHAT_LIMIT] each unless [showAll]. A chat counts as waiting or running only on a connected Mac
+ * and once verified; all others are recent.
+ */
+internal fun quickChats(chats: List<ProjectChatSummary>, connected: Boolean, showAll: Boolean): QuickChats {
+    val waiting = chats.filter { it.verified && connected && it.session.text("status") == "waiting" }
+    val running = chats.filter { it.verified && connected && it.session.text("status") == "running" }
+    val recent =
+        chats.filter {
+            !it.verified || !connected || it.session.text("status") !in setOf("waiting", "running")
+        }
+    val limit = if (showAll) Int.MAX_VALUE else QUICK_CHAT_LIMIT
+    return QuickChats(
+        waiting = waiting,
+        running = running.take(limit),
+        recent = recent.take(limit),
+        expandable = running.size > QUICK_CHAT_LIMIT || recent.size > QUICK_CHAT_LIMIT,
+    )
+}
+
 /** How many of a project's sessions wait for an answer and how many run, by its latest list. */
 data class SessionCounts(val waiting: Int = 0, val running: Int = 0)
 

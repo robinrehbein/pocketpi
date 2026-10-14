@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Empty lists say what to do next (EmptyState in RemoteDesignComponents.kt), the host cards (HostCard) and the notification card (RemoteScreens.kt). -->
+    <string name="remote_empty_projects_title">No shared projects yet</string>
+    <string name="remote_empty_projects_open_folder">Share a project with /remote on your Mac, or open a folder on the Mac from here.</string>
+    <string name="remote_empty_sessions_title">No sessions yet</string>
+    <string name="remote_projects_show_all">Show all</string>
+    <string name="remote_projects_show_fewer">Show fewer</string>
+    <string name="remote_host_last_used">Last used %1$s</string>
+    <string name="remote_host_last_used_just_now">Last used just now</string>
+    <string name="remote_host_tap_to_connect">Tap to connect</string>
+    <string name="remote_notification_not_now">Not now</string>
+</resources>
