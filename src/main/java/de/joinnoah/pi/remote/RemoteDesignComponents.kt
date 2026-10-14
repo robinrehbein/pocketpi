@@ -28,9 +28,11 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -137,9 +139,20 @@ internal fun ProjectRow(
     selected: Boolean? = null,
     /** Starts a session in this project, from the row's menu; null where none can start now. */
     onNewSession: (() -> Unit)? = null,
+    /**
+     * The project's waiting and running sessions, shown as badges; null for a row that is not
+     * confirmed by the Mac (a cached one), which shows none.
+     */
+    counts: SessionCounts? = null,
 ) {
     val context = LocalContext.current
     val regionChild = rememberRegionChild()
+    val waitingBadge =
+        counts?.waiting?.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.remote_mac_waiting_count, it, it) }
+    val workingBadge =
+        counts?.running?.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.remote_mac_working_count, it, it) }
+    // With badges the row reads them after its name, as one label.
+    val badgeDescription = listOfNotNull(waitingBadge, workingBadge).takeIf { it.isNotEmpty() }
     val unshareLabel = stringResource(R.string.remote_project_unshare)
     val updateNeededLabel = stringResource(R.string.remote_project_unshare_update_needed)
     val updateHint = stringResource(R.string.remote_project_unshare_update_host)
@@ -187,10 +200,11 @@ internal fun ProjectRow(
                         Modifier.background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(16.dp))
                     else Modifier
                 )
-                .semantics {
+                .semantics(mergeDescendants = badgeDescription != null) {
                     // In the column every row says whether it is the open project, so TalkBack
                     // reads the rows as a group of choices.
                     if (selected != null) this.selected = selected
+                    if (badgeDescription != null) contentDescription = (listOf(name) + badgeDescription).joinToString(", ")
                     if (action != null) customActions = listOf(
                         CustomAccessibilityAction(swipeActionLabel) {
                             action()
@@ -226,8 +240,37 @@ internal fun ProjectRow(
             }
             Spacer(Modifier.width(16.dp))
             Text(name, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            waitingBadge?.let {
+                ProjectCountBadge(it, waitingContainerColor(), onWaitingContainerColor(), "projectBadgeWaiting-$projectId")
+            }
+            workingBadge?.let {
+                ProjectCountBadge(
+                    it,
+                    MaterialTheme.colorScheme.primaryContainer,
+                    MaterialTheme.colorScheme.onPrimaryContainer,
+                    "projectBadgeWorking-$projectId",
+                )
+            }
             Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+/** A count of a project's sessions in one status, as a small pill in the status's colours. */
+@Composable
+private fun ProjectCountBadge(text: String, container: Color, content: Color, tag: String) {
+    Surface(
+        shape = CircleShape,
+        color = container,
+        contentColor = content,
+        modifier = Modifier.padding(start = 8.dp).testTag(tag),
+    ) {
+        Text(
+            text,
+            Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+        )
     }
 }
 

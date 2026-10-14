@@ -121,10 +121,23 @@ internal fun RemoteSelection.keys(): List<RemoteNavKey> = buildList {
     sessionId?.let { add(RemoteNavKey.Chat(route, project, it)) }
 }
 
+/**
+ * The Mac a cold launch opens: the stored one while it is still paired, else the only paired Mac,
+ * else null, which keeps the hosts list. [hostRoutes] are the paired Macs' route IDs.
+ */
+internal fun coldStartRoute(hostRoutes: List<String>, stored: String?): String? =
+    when {
+        stored != null && stored in hostRoutes -> stored
+        hostRoutes.size == 1 -> hostRoutes.single()
+        else -> null
+    }
+
 internal class RemoteNavigator(
     private val repository: RemoteRepository,
     private val stack: MutableList<NavKey>,
     private val scope: CoroutineScope,
+    /** Remembers the Mac of each page opened, for [coldStart]; null remembers nothing. */
+    private val lastRoute: LastRouteStore? = null,
     /** Called after a pairing succeeded and its selection was opened. */
     private val onPaired: () -> Unit = {},
 ) {
@@ -241,6 +254,9 @@ internal class RemoteNavigator(
         activation = scope.launch {
             val canonical = repository.activate(key.selection(), mode)
             if (current != request) return@launch
+            // The Mac of a page the user is on is the one a cold launch opens again (see coldStart).
+            if (key is RemoteNavKey.Projects || key is RemoteNavKey.Sessions || key is RemoteNavKey.Chat)
+                canonical.routeId?.let { lastRoute?.save(it) }
             val chat = canonical.keys().lastOrNull() as? RemoteNavKey.Chat
             // The restored chat's own session is gone (offline, or otherwise dropped by the host).
             // Walk the stacked ancestors closest first, actually re-activating each through the
@@ -290,6 +306,30 @@ internal class RemoteNavigator(
         // The board is an overlay: the content beneath it is what gets restored, and the board
         // goes back on top of it.
         activate(contentKey() ?: RemoteNavKey.Hosts, ActivationMode.RESTORE)
+    }
+
+    /**
+     * Starts a cold launch once the paired Macs are read ([RemoteState.hostsLoaded]): the stack
+     * opens the Mac [coldStartRoute] picks on its Projects, above Hosts, so back still reaches the
+     * hosts list. A stored Mac that is no longer paired is forgotten, and only a read list says so.
+     * Returns false while the Macs are not read, so the caller asks again with the next state, and
+     * true once the start is decided, also when the user has navigated away from the hosts list.
+     */
+    fun coldStart(state: RemoteState): Boolean {
+        if (!state.hostsLoaded) return false
+        if (stack.singleOrNull() != RemoteNavKey.Hosts) return true
+        val routes = state.hosts.map { it.routeId }
+        val stored = lastRoute?.load()
+        stored?.takeIf { it !in routes }?.let { lastRoute?.forget(it) }
+        val route = coldStartRoute(routes, stored) ?: return true
+        replace(RemoteSelection(route))
+        activate(RemoteNavKey.Projects(route), ActivationMode.RESTORE)
+        return true
+    }
+
+    /** Forgets [routeId] as the Mac a cold launch opens, once its pairing is removed. */
+    fun forgetLastRoute(routeId: String) {
+        lastRoute?.forget(routeId)
     }
 
     fun open(key: RemoteNavKey) {
@@ -1090,9 +1130,13 @@ internal fun RemoteNavigation(
     val context = LocalContext.current
     val currentEnablePush by rememberUpdatedState(enablePush)
     var askForNotifications by rememberSaveable { mutableStateOf(false) }
+    val lastRoute = remember(context) { LastRouteStore(context) }
+    // A cold launch opens the last Mac; a recreated activity keeps the stack it was saved with.
+    var coldLaunch by rememberSaveable { mutableStateOf(true) }
+    val launchTargeted by rememberUpdatedState(notification != null || share != null)
     val navigator =
-        remember(repository, stack) {
-            RemoteNavigator(repository, stack, scope) {
+        remember(repository, stack, lastRoute) {
+            RemoteNavigator(repository, stack, scope, lastRoute) {
                 val granted =
                     Build.VERSION.SDK_INT < 33 ||
                         ContextCompat.checkSelfPermission(
@@ -1144,7 +1188,11 @@ internal fun RemoteNavigation(
         // A tapped notification opens its own session; restoring the previous screen first would
         // only connect and load what the tap replaces. Its open restores when it fails.
         if (notification == null) navigator.restore()
-        repository.state.collect { navigator.reconcile(it) }
+        repository.state.collect { state ->
+            navigator.reconcile(state)
+            // A launch with a target (notification, widget, shortcut, share) opens that instead.
+            if (coldLaunch && (launchTargeted || navigator.coldStart(state))) coldLaunch = false
+        }
     }
     LaunchedEffect(notification, navigator) {
         notification?.let {
