@@ -1845,7 +1845,12 @@ class DefaultRemoteRepository(
             else
                 payload.obj("error").let { error ->
                     completion.completeExceptionally(
-                        RemoteRequestException(error.text("code"), error["details"] as? JsonObject, hostMessage(error))
+                        RemoteRequestException(
+                            error.text("code"),
+                            error["details"] as? JsonObject,
+                            hostMessage(error),
+                            reason = (error["reason"] as? JsonPrimitive)?.takeIf { it.isString }?.content,
+                        )
                     )
                 }
         } catch (malformed: Exception) {
@@ -6491,11 +6496,6 @@ class DefaultRemoteRepository(
                 Diagnostics.caught("repo.action", swallowed)
                 if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
             } finally {
-                if (epoch == selectionEpoch) {
-                    val questionId = fields.find { it.first == "questionId" }?.second as? String
-                    if (questionId != null)
-                        update { it.copy(answering = it.answering - questionId) }
-                }
                 resumeDeferredRecovery()
             }
         }
