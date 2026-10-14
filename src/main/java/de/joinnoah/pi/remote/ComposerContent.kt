@@ -5,18 +5,19 @@ import android.net.Uri
 import androidx.compose.foundation.content.ReceiveContentListener
 import androidx.compose.foundation.content.TransferableContent
 import androidx.compose.foundation.content.consume
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
@@ -47,43 +48,60 @@ internal fun insertedText(before: CharSequence, after: CharSequence): String {
 }
 
 /**
- * The attachment a content URI of [mimeType] is, or null when it is not one: text stays with the
- * field, as a text file would without PocketPi looking at it, and so does anything not a content URI.
+ * The attachment a content URI of [mimeType] is, or null when it is not one. Text stays with the
+ * field, as a paste's text does, unless [textFiles] is set: a dropped text file is an attachment, as
+ * a drop on the chat makes it. Anything that is not a content URI stays with the field too.
  */
-internal fun attachmentOf(uri: String?, mimeType: String?): Picked? {
+internal fun attachmentOf(uri: String?, mimeType: String?, textFiles: Boolean = false): Picked? {
     if (uri == null || !uri.startsWith("content:", ignoreCase = true)) return null
     val mime = mimeType?.lowercase() ?: "application/octet-stream"
-    if (mime.startsWith("text/")) return null
+    if (mime.startsWith("text/") && !textFiles) return null
     return Picked(uri, photo = decodableImage(mime))
 }
 
 /**
- * Takes the images and files of [content] (a keyboard commit, a paste) and returns what the field
- * keeps: text, and every item that is not an attachment. The taken ones go to [attach] as one batch.
+ * The attachment one clip item of [uri] is, looking its type up with [typeOf]. A lookup that throws
+ * counts as an unknown type, so the item is still taken when it is a content URI.
+ */
+internal fun attachmentOfItem(uri: Uri?, typeOf: (Uri) -> String?, textFiles: Boolean): Picked? {
+    val text = uri?.toString()
+    val mime = if (uri == null) null else runCatching { typeOf(uri) }.getOrNull()
+    return attachmentOf(text, mime, textFiles)
+}
+
+/**
+ * Takes the images and files of [content] (a keyboard commit, a paste, a drop) and returns what the
+ * field keeps: text, and every item that is not an attachment. The taken ones go to [attach] as one
+ * batch.
  */
 internal fun takeAttachments(
     content: TransferableContent,
     typeOf: (Uri) -> String?,
+    textFiles: Boolean,
     attach: (List<Picked>) -> Unit,
 ): TransferableContent? {
     val taken = mutableListOf<Picked>()
     val rest = content.consume { item ->
-        val uri = item.uri?.toString()
-        val picked = attachmentOf(uri, uri?.let { runCatching { typeOf(it.toUri()) }.getOrNull() })
-        picked?.also(taken::add) != null
+        attachmentOfItem(item.uri, typeOf, textFiles)?.also(taken::add) != null
     }
     if (taken.isNotEmpty()) attach(taken)
     return rest
 }
 
 /**
- * The receiver the composer field installs with `Modifier.contentReceiver`: keyboard images and
- * stickers, and the images and files of a paste, go to [attach] instead of the field.
+ * The receiver the composer field installs with `Modifier.contentReceiver`. Keyboard images and
+ * stickers, and the images and files of a paste, go to [attach] instead of the field. A drop on the
+ * field takes text files as well, as a drop on the chat does; the field keeps the rest of a drop.
  */
 internal fun composerContentListener(context: Context, attach: (List<Picked>) -> Unit): ReceiveContentListener =
     object : ReceiveContentListener {
         override fun onReceive(transferableContent: TransferableContent): TransferableContent? =
-            takeAttachments(transferableContent, context.contentResolver::getType, attach)
+            takeAttachments(
+                transferableContent,
+                context.contentResolver::getType,
+                textFiles = transferableContent.source == TransferableContent.Source.DragAndDrop,
+                attach = attach,
+            )
     }
 
 /**
@@ -103,22 +121,29 @@ internal fun writePastedText(context: Context, text: String): File {
 internal fun pastedTextUri(context: Context, file: File): Uri =
     FileProvider.getUriForFile(context, exportAuthority(context), file)
 
-/** The inline offer above the field for a long paste: attach it as a text file, or paste it as text. */
+/**
+ * The inline offer above the field for a long paste: attach it as a text file, or, when [onPaste] is
+ * given, paste it as text. The offer is a polite live region, so TalkBack says it when it appears,
+ * and it wraps onto more lines rather than cutting the text short at large font scales.
+ */
 @Composable
-internal fun LongPasteOffer(onAttach: () -> Unit, onPaste: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(start = 4.dp).testTag("longPasteOffer"),
-        verticalAlignment = Alignment.CenterVertically,
+internal fun LongPasteOffer(onAttach: () -> Unit, onPaste: (() -> Unit)?) {
+    FlowRow(
+        Modifier.padding(start = 4.dp)
+            .semantics { liveRegion = LiveRegionMode.Polite }
+            .testTag("longPasteOffer"),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.Center,
     ) {
         Text(
             stringResource(R.string.remote_long_paste_body),
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.padding(vertical = 8.dp),
             style = MaterialTheme.typography.labelMedium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
         )
-        TextButton(onClick = onPaste, modifier = Modifier.testTag("longPastePaste")) {
-            Text(stringResource(R.string.remote_long_paste_insert))
+        if (onPaste != null) {
+            TextButton(onClick = onPaste, modifier = Modifier.testTag("longPastePaste")) {
+                Text(stringResource(R.string.remote_long_paste_insert))
+            }
         }
         TextButton(onClick = onAttach, modifier = Modifier.testTag("longPasteAttach")) {
             Text(stringResource(R.string.remote_long_paste_attach))
