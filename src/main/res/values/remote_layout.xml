@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <string name="remote_layout_title">Layout</string>
+    <string name="remote_layout_help">PocketPi keeps the column widths you dragged, a session list you hid and a projects column you kept open for each window size. Reset puts the columns and the side pane back to their defaults.</string>
+    <string name="remote_layout_reset">Reset layout</string>
+    <string name="remote_layout_reset_done">Layout reset</string>
+    <string name="remote_projects_expand">Keep projects column open</string>
+    <string name="remote_projects_collapse">Shrink projects column</string>
+</resources>

@@ -14,6 +14,11 @@ internal class NavigationFakeRepository : RemoteRepository {
 
     override fun peekCachedChat(selection: RemoteSelection): ChatPreview? = cachedChats[selection]
     var notificationLookup: suspend () -> RemoteSelection? = { notification }
+    /** What [notificationProject] knows without asking the Mac, by route and session. */
+    val knownProjects = mutableMapOf<Pair<String, String>, String>()
+
+    override suspend fun notificationProject(routeId: String, sessionId: String): String? =
+        knownProjects[routeId to sessionId]
     var answers = 0
     var prompts = 0
     val imports = mutableListOf<Triple<RemoteSelection, List<String>, Boolean>>()

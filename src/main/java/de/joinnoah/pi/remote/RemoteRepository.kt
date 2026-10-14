@@ -174,6 +174,12 @@ data class RemoteState(
     val providerAuth: ProviderAuthState = ProviderAuthState(),
 )
 
+/** The app's connection counts as healthy for a notification's request while a frame arrived this recently. */
+internal const val HEALTHY_CONNECTION_MILLIS = 25_000L
+
+/** How long a notification's request waits on the app's connection before it uses its own. */
+internal const val HEALTHY_REQUEST_TIMEOUT_MILLIS = 3_000L
+
 /** One content URI to attach; [photo] imports it as an image (scaled JPEG), otherwise as a file. */
 data class Picked(val uri: String, val photo: Boolean)
 
@@ -188,6 +194,31 @@ interface RemoteRepository {
     suspend fun createSession(routeId: String, projectId: String): RemoteSelection
 
     suspend fun openNotification(routeId: String, sessionId: String): RemoteSelection?
+
+    /**
+     * The project of [sessionId] on the paired [routeId] as the app already knows it, from its
+     * caches and stores, without asking the Mac; null when only the Mac knows. A tapped
+     * notification shows its chat at once when this knows the project.
+     */
+    suspend fun notificationProject(routeId: String, sessionId: String): String? = null
+
+    /**
+     * Runs [block] over the app's own connection when it is connected to [routeId] and heard from
+     * the Mac within [HEALTHY_CONNECTION_MILLIS]; each request on it gives up after
+     * [HEALTHY_REQUEST_TIMEOUT_MILLIS]. Returns null without running [block] when the connection is
+     * not known to be healthy, so the caller opens a connection of its own. A host error passes
+     * through as a [RemoteCommandException]. A plain [RemoteCommands.request] that was not sent,
+     * timed out or was lost also ends the call with null; a [MutationCommands.mutate] under the
+     * caller's mutation ID instead throws [MutationNotSentException] when nothing was sent, and the
+     * timeout or loss otherwise, so the caller decides whether to send it again. Any thread may
+     * call it. [onSent] runs as each request goes out, so a caller that falls back after a timeout
+     * knows the Mac may already have it.
+     */
+    suspend fun <T> withHealthyConnection(
+        routeId: String,
+        onSent: () -> Unit = {},
+        block: suspend (MutationCommands) -> T,
+    ): T? = null
 
     /**
      * Starts a new session that continues from just before the user message [messageId] of the

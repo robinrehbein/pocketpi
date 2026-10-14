@@ -49,17 +49,25 @@ class RemoteRepositoryTest {
         var route: String? = null
         var closes = 0
         var readyOnConnect = true
+        /** Routes whose handshake never completes, as when that Mac is asleep. */
+        var unreachable: Set<String> = emptySet()
         var failureOnConnect: Int? = null
         var response: (JsonObject) -> JsonObject? = { null }
         var failure: (JsonObject) -> String? = { null }
         var failureMessage: (JsonObject) -> String? = { null }
+
+        /** Delivers [payload] as the real transport does: receipt is reported before the payload. */
+        fun deliver(payload: JsonObject) {
+            listener.inbound()
+            listener.message(payload)
+        }
 
         override fun connect(host: PairedHost) {
             connects++
             route = host.routeId
             val failure = failureOnConnect
             if (failure != null) listener.failed(true, failure)
-            else if (readyOnConnect) listener.ready(capabilities)
+            else if (readyOnConnect && host.routeId !in unreachable) listener.ready(capabilities)
         }
 
         var pairing: JsonObject? = null
@@ -76,7 +84,7 @@ class RemoteRepositoryTest {
             sent += payload
             val code = failure(payload)
             if (code != null) {
-                listener.message(
+                deliver(
                     Wire.objectOf(
                         "type" to "result",
                         "requestId" to payload.text("requestId"),
@@ -90,7 +98,7 @@ class RemoteRepositoryTest {
         }
 
         fun result(request: JsonObject, data: JsonObject) {
-            listener.message(
+            deliver(
                 Wire.objectOf(
                     "type" to "result",
                     "requestId" to request.text("requestId"),
@@ -136,6 +144,7 @@ class RemoteRepositoryTest {
         hosts: List<PairedHost> = listOf(host),
         pairings: Pairings = Pairings(hosts),
         navigationStorage: NavigationSnapshotStorage? = null,
+        projectHint: suspend (String, String) -> String? = { _, _ -> null },
         attachmentImporter: (suspend (String, Boolean) -> LocalAttachment)? = null,
     ) =
         DefaultRemoteRepository(
@@ -148,6 +157,7 @@ class RemoteRepositoryTest {
             attachmentImporter,
             now = { testScheduler.currentTime },
             navigationStorage = navigationStorage,
+            projectHint = projectHint,
             jitter = { 0.5 },
         )
 
@@ -370,7 +380,7 @@ class RemoteRepositoryTest {
         runCurrent()
         fun lists() = transport.sent.count { it.text("type") == "session.jobs.list" }
         val before = lists()
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         runCurrent()
         assertEquals(before + 1, lists())
@@ -586,7 +596,7 @@ class RemoteRepositoryTest {
 
         // The re-list heuristic is active again for this older host.
         val before = allLists()
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "sessionId" to "session",
                 "revision" to 1, "kind" to "session.status", "status" to "running",
@@ -622,9 +632,10 @@ class RemoteRepositoryTest {
         assertEquals(0, leaseLists())
 
         // The host now advertises the lease capability; a later projects.list (here, resolving a
-        // notification while the chat stays connected) merges it in without a reconnect.
+        // notification for a session no cache knows while the chat stays connected) merges it in
+        // without a reconnect.
         leaseAdvertised = true
-        repository.openNotification("host", "session")
+        repository.openNotification("host", "elsewhere")
         runCurrent()
 
         assertTrue(canLeaseJobsList(repository.state.value))
@@ -639,7 +650,7 @@ class RemoteRepositoryTest {
             repository.activate(RemoteSelection("host", "project", "session"))
             runCurrent()
             val before = transport.jobsListRequests().size
-            transport.listener.message(
+            transport.deliver(
                 Wire.objectOf(
                     "type" to "event", "sessionId" to "session",
                     "revision" to 1, "kind" to "session.status", "status" to "running",
@@ -658,7 +669,7 @@ class RemoteRepositoryTest {
             repository.activate(RemoteSelection("host", "project", "session"))
             runCurrent()
             val before = transport.jobsListRequests().size
-            transport.listener.message(
+            transport.deliver(
                 Wire.objectOf(
                     "type" to "event",
                     "sessionId" to "session",
@@ -772,7 +783,7 @@ class RemoteRepositoryTest {
         repository.unshareProject("project")
         runCurrent()
         val request = transport.sent.single { it.text("type") == "project.unshare" }
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "result",
                 "requestId" to request.text("requestId"),
@@ -899,7 +910,7 @@ class RemoteRepositoryTest {
             transport.sent.last { it.text("type") == "session.rename" }.text("title"),
         )
 
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "kind" to "session.title", "sessionId" to "session",
                 "revision" to 1, "title" to "Changed on Mac",
@@ -907,14 +918,14 @@ class RemoteRepositoryTest {
         )
         assertEquals("Changed on Mac", repository.state.value.session?.text("title"))
         assertEquals("Changed on Mac", repository.state.value.sessions.single().text("title"))
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "kind" to "session.title", "sessionId" to "session",
                 "revision" to 0, "title" to "Stale title",
             )
         )
         assertEquals("Changed on Mac", repository.state.value.session?.text("title"))
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "kind" to "session.title", "sessionId" to "session",
                 "revision" to 2, "title" to "",
@@ -957,7 +968,7 @@ class RemoteRepositoryTest {
         runCurrent()
         val listRequest = transport.sent.single { it.text("type") == "sessions.list" }
 
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "kind" to "session.title", "sessionId" to "session",
                 "revision" to 7, "title" to "New",
@@ -984,7 +995,7 @@ class RemoteRepositoryTest {
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project"))
         runCurrent()
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "kind" to "session.title", "sessionId" to "session",
                 "revision" to 7, "title" to "A",
@@ -1055,7 +1066,7 @@ class RemoteRepositoryTest {
                     setOf("session.configuration.get", "session.commands.get") &&
                     request.text("sessionId") == "tui"
             ) {
-                transport.listener.message(
+                transport.deliver(
                     Wire.objectOf(
                         "type" to "result",
                         "requestId" to request.text("requestId"),
@@ -1429,7 +1440,7 @@ class RemoteRepositoryTest {
             val original = transport.response
             transport.response = { request ->
                 if (request.text("type") == "session.attachments.cancel") {
-                    transport.listener.message(
+                    transport.deliver(
                         Wire.objectOf(
                             "type" to "result",
                             "requestId" to request.text("requestId"),
@@ -1603,7 +1614,7 @@ class RemoteRepositoryTest {
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", "session"))
         runCurrent()
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event",
                 "sessionId" to "session",
@@ -1644,7 +1655,7 @@ class RemoteRepositoryTest {
         assertNotNull(drafts.values.values.single().mutationId)
         repository.draft("new draft")
         val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event",
                 "sessionId" to "session",
@@ -1746,7 +1757,7 @@ class RemoteRepositoryTest {
             when (it.text("type")) {
                 "session.configuration.get" -> configurationData(it.text("sessionId"), settings = settingsData())
                 "session.configuration.set" -> {
-                    transport.listener.message(
+                    transport.deliver(
                         Wire.objectOf(
                             "type" to "result",
                             "requestId" to it.text("requestId"),
@@ -1829,7 +1840,7 @@ class RemoteRepositoryTest {
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", "session"))
         runCurrent()
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event",
                 "sessionId" to "session",
@@ -1869,7 +1880,7 @@ class RemoteRepositoryTest {
         runCurrent()
         val listRequest = transport.sent.last { it.text("type") == "sessions.list" }
         fun status(revision: Long, value: String) =
-            transport.listener.message(
+            transport.deliver(
                 Wire.objectOf(
                     "type" to "event",
                     "sessionId" to "session",
@@ -2523,7 +2534,7 @@ class RemoteRepositoryTest {
         runCurrent()
         advanceTimeBy(10_000)
         // Any frame proves the socket alive: the host is slow, not gone.
-        transport.listener.message(Wire.objectOf("type" to "relay.notice"))
+        transport.deliver(Wire.objectOf("type" to "relay.notice"))
         advanceTimeBy(REQUEST_TIMEOUT_MILLIS)
         runCurrent()
         opening.await()
@@ -2770,7 +2781,7 @@ class RemoteRepositoryTest {
 
         // Another chat's status, and one of this chat that arrives ahead of its snapshot.
         for ((sessionId, revision) in listOf("other" to 1, "session" to 3))
-            transport.listener.message(
+            transport.deliver(
                 Wire.objectOf(
                     "type" to "event", "kind" to "session.status", "sessionId" to sessionId,
                     "revision" to revision, "status" to "running",
@@ -2854,7 +2865,7 @@ class RemoteRepositoryTest {
         runCurrent()
         assertEquals(chat, repository.state.value.selection)
         // An event that skips revisions waits for the snapshot the restore set up.
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "kind" to "session.status", "sessionId" to "session",
                 "revision" to 3, "status" to "running",
@@ -2865,7 +2876,7 @@ class RemoteRepositoryTest {
         assertEquals(snapshots + 1, transport.sent.count { it.text("type") == "session.snapshot" })
 
         // The project list fails with the connection up, so the restore never takes its snapshot.
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "result",
                 "requestId" to held.single().text("requestId"),
@@ -3632,6 +3643,179 @@ class RemoteRepositoryTest {
         assertTrue(kinds.indexOf("sessions.list") < kinds.indexOf("sessions.open"))
     }
 
+    @Test
+    fun aNotificationWhoseProjectTheAppKnowsOpensWithoutWalkingTheProjects() = runTest {
+        val transport = Transport().also { configure(it) }
+        val listed = configuredResponse(transport)
+        transport.response = { request ->
+            if (request.text("type") == "projects.list") projectsData(listOf(project, Wire.objectOf("id" to "other")))
+            else listed(request)
+        }
+        // As the home snapshot or the label worker's names know it, the caches being empty.
+        val repository = repository(transport, projectHint = { route, id -> "project".takeIf { route == "host" && id == "session" } })
+        assertEquals(RemoteSelection("host", "project", "session"), repository.openNotification("host", "session"))
+        assertEquals(listOf("project"), transport.sent.filter { it.text("type") == "sessions.list" }.map { it.text("projectId") })
+        assertEquals(1, transport.sent.count { it.text("type") == "projects.list" })
+    }
+
+    @Test
+    fun aNotificationForASessionInTheCachesSendsNoListAtAll() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        repository.activate(RemoteSelection("host"))
+        runCurrent()
+        transport.sent.clear()
+        assertEquals(RemoteSelection("host", "project", "session"), repository.openNotification("host", "session"))
+        val kinds = transport.sent.map { it.text("type") }
+        assertFalse(kinds.toString(), "projects.list" in kinds || "sessions.list" in kinds)
+        assertTrue("sessions.open" in kinds)
+    }
+
+    @Test
+    fun aColdStartFindsTheNotificationsProjectInTheSavedNavigation() = runTest {
+        val transport = Transport().also { configure(it) }
+        val listed = configuredResponse(transport)
+        transport.response = { request ->
+            if (request.text("type") == "projects.list") projectsData(listOf(namedProject, Wire.objectOf("id" to "other")))
+            else listed(request)
+        }
+        val repository = repository(transport, navigationStorage = SavedNavigation(savedHost()))
+        assertEquals("project", repository.notificationProject("host", "session"))
+        assertNull("not paired", repository.notificationProject("unpaired", "session"))
+        assertNull("never seen", repository.notificationProject("host", "unknown"))
+        assertEquals(RemoteSelection("host", "project", "session"), repository.openNotification("host", "session"))
+        assertEquals(listOf("project"), transport.sent.filter { it.text("type") == "sessions.list" }.map { it.text("projectId") })
+    }
+
+    @Test
+    fun aStaleProjectHintStillFindsTheSessionByWalking() = runTest {
+        val transport = Transport()
+        val moved = session(projectId = "other")
+        configure(transport, opened = moved)
+        val listed = configuredResponse(transport)
+        transport.response = { request ->
+            when {
+                request.text("type") == "projects.list" ->
+                    data("projects", listOf(project, Wire.objectOf("id" to "other")))
+                request.text("type") == "sessions.list" ->
+                    data("sessions", if (request.text("projectId") == "other") listOf(moved) else emptyList())
+                else -> listed(request)
+            }
+        }
+        val repository = repository(transport, projectHint = { _, _ -> "project" })
+        assertEquals(RemoteSelection("host", "other", "session"), repository.openNotification("host", "session"))
+    }
+
+    @Test
+    fun theNotificationWalkReadsFourListsAtATimeAndStopsAtTheFirstHit() = runTest {
+        val transport = Transport()
+        val opened = session(projectId = "p1")
+        configure(transport, sessions = listOf(opened), opened = opened)
+        val listed = configuredResponse(transport)
+        val lists = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            when (request.text("type")) {
+                "projects.list" -> projectsData((0 until 6).map { Wire.objectOf("id" to "p$it") })
+                "sessions.list" -> null.also { lists += request }
+                else -> listed(request)
+            }
+        }
+        val repository = repository(transport)
+        val opening = async { repository.openNotification("host", "session") }
+        runCurrent()
+        assertEquals(listOf("p0", "p1", "p2", "p3"), lists.map { it.text("projectId") })
+        transport.result(lists[0], data("sessions", emptyList()))
+        transport.result(lists[1], data("sessions", listOf(opened)))
+        runCurrent()
+        assertEquals(RemoteSelection("host", "p1", "session"), opening.await())
+        // The later projects are never read, and the open reuses the walk's lists.
+        assertEquals(4, transport.sent.count { it.text("type") == "sessions.list" })
+        assertEquals(1, transport.sent.count { it.text("type") == "projects.list" })
+        assertTrue(transport.sent.any { it.text("type") == "sessions.open" })
+    }
+
+    @Test
+    fun aNotificationRequestUsesTheAppConnectionOnlyWhileItIsHealthy() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        assertNull("not connected", repository.withHealthyConnection("host") { error("no connection") })
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val result = repository.withHealthyConnection("host") { it.request("question.answer", "sessionId" to "session") }
+        assertEquals("accepted", result?.text("kind"))
+        assertEquals("question.answer", transport.sent.last().text("type"))
+        assertNull("another Mac", repository.withHealthyConnection("other") { error("another Mac") })
+        advanceTimeBy(HEALTHY_CONNECTION_MILLIS)
+        runCurrent()
+        assertNull("quiet too long", repository.withHealthyConnection("host") { error("quiet") })
+    }
+
+    @Test
+    fun aSlowAppConnectionGivesUpSoonAndAHostErrorPassesThrough() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val listed = configuredResponse(transport)
+        transport.response = { request -> if (request.text("type") == "question.answer") null else listed(request) }
+        val slow = async { repository.withHealthyConnection("host") { it.request("question.answer") } }
+        advanceTimeBy(HEALTHY_REQUEST_TIMEOUT_MILLIS + 1)
+        runCurrent()
+        assertTrue(slow.isCompleted)
+        assertNull(slow.await())
+        transport.failure = { request -> "already_resolved".takeIf { request.text("type") == "question.answer" } }
+        val error = runCatching { repository.withHealthyConnection("host") { it.request("question.answer") } }.exceptionOrNull()
+        assertEquals("already_resolved", (error as RemoteCommandException).code)
+    }
+
+    @Test
+    fun aKnownNotificationForAnUnreachableMacReconnectsTheMacOnScreen() = runTest {
+        val other = host.copy(routeId = "other", name = "Other")
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, hosts = listOf(host, other), projectHint = { _, _ -> "project" })
+        val selection = RemoteSelection("host", "project", "session")
+        repository.activate(selection)
+        runCurrent()
+        val connects = transport.connects
+        transport.unreachable = setOf("other")
+        val opening = async { repository.openNotification("other", "session") }
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS + 1)
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        // A failed open is no selection: the navigator goes back to the screen it left.
+        assertNull(opening.await())
+        // Other was tried once, without a walk that would only time out again, then Host came back.
+        assertEquals(connects + 2, transport.connects)
+        assertEquals("host", transport.route)
+        val state = repository.state.value
+        assertEquals(selection, state.selection)
+        assertTrue(state.connected)
+        assertFalse(state.loading)
+        assertEquals("session", state.session?.text("id"))
+    }
+
+    @Test
+    fun aKnownNotificationOnAColdStartWithTheMacOfflineReturnsNoSelection() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, navigationStorage = SavedNavigation(savedHost()))
+        transport.unreachable = setOf("host")
+        val opening = async { repository.openNotification("host", "session") }
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS + 1)
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        // Not the empty selection the activation started from, which would collapse the saved stack.
+        assertNull(opening.await())
+        assertEquals(1, transport.connects)
+        assertFalse(repository.state.value.loading)
+    }
+
+    private fun configuredResponse(transport: Transport): (JsonObject) -> JsonObject? = transport.response
+
+    /** A v2 project list, which no host answers twice. */
+    private fun projectsData(items: List<JsonObject>) =
+        JsonObject(data("projects", items) + ("capabilities" to JsonArray(emptyList())))
+
     private fun quoteMessages(transport: Transport) {
         val normal = transport.response
         transport.response = { request ->
@@ -3677,7 +3861,7 @@ class RemoteRepositoryTest {
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project"))
         repository.activate(RemoteSelection("host", "other-project"))
-        transport.listener.message(Wire.objectOf(
+        transport.deliver(Wire.objectOf(
             "type" to "event", "kind" to "session.status", "sessionId" to "session",
             "revision" to 1, "status" to "idle",
         ))
@@ -3838,7 +4022,7 @@ class RemoteRepositoryTest {
         )
         val original = RemoteSelection("host", "project", "session")
         repository.activate(original)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         repository.draft("queued")
         repository.followUp()
@@ -3866,7 +4050,7 @@ class RemoteRepositoryTest {
         }
         val repository = repository(transport, drafts)
         repository.activate(RemoteSelection("host", "project", "session"))
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         repeat(64) { index ->
             repository.draft("queued $index")
@@ -3881,7 +4065,7 @@ class RemoteRepositoryTest {
         assertEquals(64, transport.sent.count { it.text("type") == "session.prompt" })
         repository.dismissFollowUp(oldest)
         assertEquals(64, repository.state.value.followUps.size)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 2, "kind" to "follow_up.status", "requestId" to oldest,
             "status" to "delivered"))
         repository.followUp()
@@ -3899,7 +4083,7 @@ class RemoteRepositoryTest {
         val last = repository.state.value.followUps.last().requestId
         repository.dismissFollowUp(last)
         assertEquals(64, repository.state.value.followUps.size)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 3, "kind" to "follow_up.status", "requestId" to last,
             "status" to "uncertain"))
         repository.dismissFollowUp(last)
@@ -3920,7 +4104,7 @@ class RemoteRepositoryTest {
         }
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", "session"))
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         repository.draft("Change direction")
         repository.steer()
@@ -3929,11 +4113,11 @@ class RemoteRepositoryTest {
         assertEquals("steer", sent.text("delivery"))
         assertEquals("accepted", repository.state.value.followUps.single().status)
         assertEquals("steer", repository.state.value.followUps.single().delivery)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 2, "kind" to "follow_up.status", "requestId" to sent.text("requestId"),
             "status" to "delivered"))
         assertEquals("accepted", repository.state.value.followUps.single().status)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 3, "kind" to "steer.status", "requestId" to sent.text("requestId"),
             "status" to "uncertain"))
         assertEquals("uncertain", repository.state.value.followUps.single().status)
@@ -3949,7 +4133,7 @@ class RemoteRepositoryTest {
             when (request.text("type")) {
                 "session.prompt" -> Wire.objectOf("kind" to "accepted", "sessionId" to "session")
                 "session.abort" -> {
-                    transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+                    transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
                         "revision" to 3, "kind" to "follow_up.status",
                         "requestId" to transport.sent.last { it.text("type") == "session.prompt" }.text("requestId"),
                         "status" to "uncertain"))
@@ -3960,7 +4144,7 @@ class RemoteRepositoryTest {
         }
         val repository = repository(transport, drafts)
         repository.activate(RemoteSelection("host", "project", "session"))
-        fun status(revision: Int, value: String) = transport.listener.message(
+        fun status(revision: Int, value: String) = transport.deliver(
             Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to revision,
                 "kind" to "session.status", "status" to value)
         )
@@ -3978,7 +4162,7 @@ class RemoteRepositoryTest {
         repository.followUp()
         runCurrent()
         assertEquals(listOf("first", "second"), repository.state.value.followUps.map { it.text })
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 2, "kind" to "follow_up.status", "requestId" to first.text("requestId"),
             "status" to "delivered"))
         assertEquals("delivered", repository.state.value.followUps.first().status)
@@ -3996,7 +4180,7 @@ class RemoteRepositoryTest {
         val normal = transport.response
         transport.response = { request ->
             if (request.text("type") == "session.prompt") {
-                transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+                transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
                     "revision" to 2, "kind" to "follow_up.status",
                     "requestId" to request.text("requestId"), "status" to "uncertain"))
                 Wire.objectOf("kind" to "accepted", "sessionId" to "session")
@@ -4004,7 +4188,7 @@ class RemoteRepositoryTest {
         }
         val repository = repository(transport, drafts)
         repository.activate(RemoteSelection("host", "project", "session"))
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         repository.draft("same text")
         repository.followUp()
@@ -4026,14 +4210,14 @@ class RemoteRepositoryTest {
         }
         val repository = repository(transport, drafts)
         repository.activate(RemoteSelection("host", "project", "session"))
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         repository.draft("same text")
         repository.steer()
         runCurrent()
         val id = transport.sent.last { it.text("type") == "session.prompt" }.text("requestId")
         listOf("uncertain", "delivered", "accepted", "cancelled").forEachIndexed { index, status ->
-            transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+            transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
                 "revision" to index + 2, "kind" to "steer.status", "requestId" to id, "status" to status))
         }
         repository.flush()
@@ -4048,12 +4232,12 @@ class RemoteRepositoryTest {
         val normal = transport.response
         transport.response = { request ->
             if (request.text("type") == "session.prompt") {
-                transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+                transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
                     "revision" to 2, "kind" to "message.upsert", "message" to Wire.objectOf(
                         "id" to "consumed", "role" to "user", "text" to "same text",
                         "remoteDelivery" to Wire.objectOf("requestId" to request.text("requestId"),
                             "delivery" to "follow_up"))))
-                transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+                transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
                     "revision" to 3, "kind" to "follow_up.status", "requestId" to request.text("requestId"),
                     "status" to "accepted"))
                 Wire.objectOf("kind" to "accepted", "sessionId" to "session")
@@ -4061,7 +4245,7 @@ class RemoteRepositoryTest {
         }
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", "session"))
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         repository.draft("same text")
         repository.followUp()
@@ -4135,7 +4319,7 @@ class RemoteRepositoryTest {
         val repository = repository(transport, drafts)
         val selection = RemoteSelection("host", "project", "session")
         repository.activate(selection)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         val normal = transport.response
         transport.response = { request ->
@@ -4162,7 +4346,7 @@ class RemoteRepositoryTest {
             transport.capabilities = capabilities
             val repository = repository(transport)
             repository.activate(RemoteSelection("host", "project", "session"))
-            transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+            transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
                 "revision" to 1, "kind" to "session.status", "status" to "running"))
             repository.draft("next")
             repository.followUp()
@@ -4186,7 +4370,7 @@ class RemoteRepositoryTest {
         val repository = repository(transport, drafts)
         val selection = RemoteSelection("host", "project", "session")
         repository.activate(selection)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "session",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         repository.draft("next")
         repository.followUp()
@@ -4282,7 +4466,7 @@ class RemoteRepositoryTest {
         val normal = transport.response
         transport.response = { request ->
             if (request.text("type") == "session.snapshot") {
-                transport.listener.message(
+                transport.deliver(
                     Wire.objectOf(
                         "type" to "result",
                         "requestId" to request.text("requestId"),
@@ -4856,16 +5040,16 @@ class RemoteRepositoryTest {
         }
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", sessionId))
-        transport.listener.message(running)
+        transport.deliver(running)
         runCurrent()
         assertEquals("threshold", repository.state.value.compaction?.reason)
         val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
-        transport.listener.message(insight("compaction-done"))
+        transport.deliver(insight("compaction-done"))
         runCurrent()
         assertNull(repository.state.value.compaction)
         assertEquals(snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
 
-        transport.listener.message(JsonObject(running + ("revision" to JsonPrimitive(17))))
+        transport.deliver(JsonObject(running + ("revision" to JsonPrimitive(17))))
         runCurrent()
         assertNotNull(repository.state.value.compaction)
         repository.activate(RemoteSelection("host", "project", "other"))
@@ -4897,18 +5081,18 @@ class RemoteRepositoryTest {
                 "message" to message,
             )
         val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
-        transport.listener.message(notice(4, "No artifacts in this session yet."))
+        transport.deliver(notice(4, "No artifacts in this session yet."))
         runCurrent()
         val first = repository.state.value.notice
         assertEquals("No artifacts in this session yet.", first?.message)
         // The timeline takes the notice without asking for a snapshot.
         assertEquals(snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
         // A replay and another session's notice change nothing.
-        transport.listener.message(notice(4, "No artifacts in this session yet."))
-        transport.listener.message(notice(5, "elsewhere", "other"))
+        transport.deliver(notice(4, "No artifacts in this session yet."))
+        transport.deliver(notice(5, "elsewhere", "other"))
         runCurrent()
         assertEquals(first, repository.state.value.notice)
-        transport.listener.message(notice(5, "second"))
+        transport.deliver(notice(5, "second"))
         runCurrent()
         val second = repository.state.value.notice!!
         assertEquals("second", second.message)
@@ -4917,7 +5101,7 @@ class RemoteRepositoryTest {
         assertEquals(second, repository.state.value.notice)
         repository.dismissNotice(second.id)
         assertNull(repository.state.value.notice)
-        transport.listener.message(notice(6, "third"))
+        transport.deliver(notice(6, "third"))
         runCurrent()
         assertNotNull(repository.state.value.notice)
         repository.activate(RemoteSelection("host", "project", "other"))
@@ -5583,7 +5767,7 @@ class RemoteRepositoryTest {
         assertEquals(selection, repository.activate(selection))
         // The terminal quits while the chat is open; restoring it now would return the parent.
         listed = session(origin = "tui", status = "offline")
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event",
                 "sessionId" to "session",
@@ -5681,7 +5865,7 @@ class RemoteRepositoryTest {
         return repository(transport, drafts).also {
             it.activate(RemoteSelection("host", "project", "child"))
             if (status == "running")
-                transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+                transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
                     "revision" to 1, "kind" to "session.status", "status" to "running"))
         }
     }
@@ -5755,13 +5939,13 @@ class RemoteRepositoryTest {
         assertEquals(ChildControl(ChildControlPhase.STOPPED_BY_YOU, agentId = "a1"),
             childControl(repository.state.value))
         assertNull(childControlStatus(repository.state.value))
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 2, "kind" to "session.status", "status" to "idle"))
         assertEquals(R.string.remote_child_stopped_by_you, childControlStatus(repository.state.value))
         assertTrue(offersChildResume(repository.state.value))
 
         answer = controlResult("refused", "reason" to "Reviewer diff changed")
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 3, "kind" to "session.status", "status" to "running"))
         repository.stopChild()
         assertEquals(ChildControl(ChildControlPhase.STOPPING, agentId = "a1"),
@@ -5776,7 +5960,7 @@ class RemoteRepositoryTest {
     fun stopConfirmedAfterTheChildWentIdleSaysNothingWasStopped() = runTest {
         val transport = Transport()
         val repository = childRepository(transport, "running")
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 2, "kind" to "session.status", "status" to "idle"))
         val sent = transport.sent.size
         repository.stopChild()
@@ -5790,7 +5974,7 @@ class RemoteRepositoryTest {
     fun stopConfirmedAfterTheChildWentOfflineSaysItIsOffline() = runTest {
         val transport = Transport()
         val repository = childRepository(transport, "running")
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 2, "kind" to "session.status", "status" to "offline"))
         val sent = transport.sent.size
         repository.stopChild()
@@ -5950,10 +6134,10 @@ class RemoteRepositoryTest {
         repository.resumeChild("Continue")
         runCurrent()
         assertEquals(ChildControlPhase.NOT_FOUND, childControl(repository.state.value)?.phase)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 1, "kind" to "session.status", "status" to "idle"))
         assertEquals(ChildControlPhase.NOT_FOUND, childControl(repository.state.value)?.phase)
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 2, "kind" to "session.status", "status" to "running"))
         assertNull(childControl(repository.state.value))
         assertNull(childControlStatus(repository.state.value))
@@ -6061,12 +6245,12 @@ class RemoteRepositoryTest {
         runCurrent()
         assertEquals(ChildControl(ChildControlPhase.REFUSED, "Busy", "agent-2"), childControl(repository.state.value))
 
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 1, "kind" to "session.status", "status" to "running"))
         assertEquals(ChildControl(null, agentId = "agent-2"), childControl(repository.state.value))
         assertNull(childControlStatus(repository.state.value))
         assertFalse(offersChildResume(repository.state.value))
-        transport.listener.message(Wire.objectOf("type" to "event", "sessionId" to "child",
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "child",
             "revision" to 2, "kind" to "session.status", "status" to "idle"))
         // The UI reads the neutral entry like no entry at all.
         assertEquals(R.string.remote_child_idle, childControlStatus(repository.state.value))
@@ -6107,14 +6291,14 @@ class RemoteRepositoryTest {
         val closes = transport.closes
         snapshotTimes.clear()
 
-        transport.listener.message(Wire.objectOf("type" to "host.future", "anything" to 1))
+        transport.deliver(Wire.objectOf("type" to "host.future", "anything" to 1))
         runCurrent()
         assertTrue(repository.state.value.connected)
 
         // A newer host sends a kind this app does not know, once a second for 25 s.
         val start = testScheduler.currentTime
         for (revision in 1..25) {
-            transport.listener.message(event(revision, "future.kind"))
+            transport.deliver(event(revision, "future.kind"))
             runCurrent()
             advanceTimeBy(1_000)
         }
@@ -6127,7 +6311,7 @@ class RemoteRepositoryTest {
         assertEquals(listOf(start, start + 10_000, start + 20_000), snapshotTimes)
 
         // The revision stayed in step, so the next known event applies without a snapshot.
-        transport.listener.message(event(26, "session.status", "status" to "running"))
+        transport.deliver(event(26, "session.status", "status" to "running"))
         runCurrent()
         assertEquals("running", repository.state.value.status)
         assertEquals(3, snapshotTimes.size)
@@ -6140,7 +6324,7 @@ class RemoteRepositoryTest {
         val snapshots = transport.snapshotRequests()
 
         // An upsert without its message.
-        transport.listener.message(event(1, "message.upsert"))
+        transport.deliver(event(1, "message.upsert"))
         runCurrent()
 
         assertTrue(repository.state.value.connected)
@@ -6154,14 +6338,14 @@ class RemoteRepositoryTest {
         val transport = Transport().also { configure(it) }
         val original = transport.response
         val repository = chatRepository(transport)
-        transport.listener.message(event(1, "session.status", "status" to "running"))
+        transport.deliver(event(1, "session.status", "status" to "running"))
         runCurrent()
         assertEquals("running", repository.state.value.status)
         // The resync stays unanswered, so the state shows what the event left behind.
         transport.response = { request -> if (request.text("type") == "session.snapshot") null else original(request) }
         val snapshots = transport.snapshotRequests()
 
-        transport.listener.message(event(2, "session.status", "status" to "retrying"))
+        transport.deliver(event(2, "session.status", "status" to "retrying"))
         runCurrent()
 
         assertEquals("running", repository.state.value.status)
@@ -6176,9 +6360,9 @@ class RemoteRepositoryTest {
         val repository = chatRepository(transport)
         val snapshots = transport.snapshotRequests()
 
-        transport.listener.message(event(1, "advisor.status", "advisor" to Wire.objectOf()))
+        transport.deliver(event(1, "advisor.status", "advisor" to Wire.objectOf()))
         runCurrent()
-        transport.listener.message(event(2, "session.status", "status" to "running"))
+        transport.deliver(event(2, "session.status", "status" to "running"))
         runCurrent()
 
         assertTrue(repository.state.value.connected)
@@ -6192,9 +6376,9 @@ class RemoteRepositoryTest {
         val repository = chatRepository(transport)
         val snapshots = transport.snapshotRequests()
 
-        transport.listener.message(event(1, "follow_up.status", "requestId" to "request", "status" to "bogus"))
+        transport.deliver(event(1, "follow_up.status", "requestId" to "request", "status" to "bogus"))
         runCurrent()
-        transport.listener.message(event(2, "session.status", "status" to "running"))
+        transport.deliver(event(2, "session.status", "status" to "running"))
         runCurrent()
 
         assertTrue(repository.state.value.connected)
@@ -6212,7 +6396,7 @@ class RemoteRepositoryTest {
         val normal = transport.response
         transport.response = { request ->
             if (request.text("type") == "session.rename") {
-                transport.listener.message(
+                transport.deliver(
                     Wire.objectOf("type" to "result", "requestId" to request.text("requestId"), "ok" to "yes")
                 )
                 null
@@ -6231,7 +6415,7 @@ class RemoteRepositoryTest {
         val transport = Transport().also { configure(it) }
         val repository = chatRepository(transport)
 
-        transport.listener.message(Wire.objectOf("requestId" to "no type"))
+        transport.deliver(Wire.objectOf("requestId" to "no type"))
 
         assertFalse(repository.state.value.connected)
         assertNotNull(repository.state.value.reconnectAt)
@@ -6407,7 +6591,7 @@ class RemoteRepositoryTest {
         runCurrent()
         assertTrue(repository.state.value.connected)
         // A frame after the reads went out: they are slow, not on a dead socket.
-        transport.listener.message(Wire.objectOf("type" to "relay.notice"))
+        transport.deliver(Wire.objectOf("type" to "relay.notice"))
         advanceTimeBy(CONNECTION_PROVEN_MILLIS)
         runCurrent()
         transport.listener.failed(true, R.string.remote_connection_error)
@@ -6687,7 +6871,7 @@ class RemoteRepositoryTest {
         val repository = chatRepository(transport)
         repository.setForeground(false)
         advanceTimeBy(2_000)
-        transport.listener.message(event(1, "session.status", "status" to "running"))
+        transport.deliver(event(1, "session.status", "status" to "running"))
         advanceTimeBy(1_000)
         runCurrent()
         val sent = transport.sent.size
@@ -6738,7 +6922,7 @@ class RemoteRepositoryTest {
             repository.setForeground(false)
             for (revision in 1..10) {
                 advanceTimeBy(30_000)
-                transport.listener.message(
+                transport.deliver(
                     event(revision, "session.status", "status" to if (revision % 2 == 0) "idle" else "running")
                 )
             }
@@ -6868,7 +7052,7 @@ class RemoteRepositoryTest {
         repository.setForeground(false)
         advanceTimeBy(RESUME_QUIET_AWAY_MILLIS + 2_000)
         // The socket still delivers frames.
-        transport.listener.message(Wire.objectOf("type" to "ping"))
+        transport.deliver(Wire.objectOf("type" to "ping"))
         advanceTimeBy(2_000)
         runCurrent()
         val connects = transport.connects
@@ -6924,7 +7108,7 @@ class RemoteRepositoryTest {
         repository.setForeground(false)
         repository.setNetwork(null, false)
         advanceTimeBy(2_000)
-        transport.listener.message(event(1, "session.status", "status" to "running"))
+        transport.deliver(event(1, "session.status", "status" to "running"))
         advanceTimeBy(1_000)
         runCurrent()
         val sent = transport.sent.size
@@ -7650,7 +7834,7 @@ class RemoteRepositoryTest {
 
         // Its late reply, and an event of the gone chat, change nothing.
         transport.result(snapshots.single(), checkNotNull(answer(snapshots.single())))
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "kind" to "session.status", "sessionId" to "session",
                 "revision" to 1, "status" to "running",
@@ -7751,7 +7935,7 @@ class RemoteRepositoryTest {
         assertNull(repository.state.value.selection.sessionId)
         // Revision 7 of the chat arrives meanwhile: 6 never does.
         revision = 7
-        transport.listener.message(
+        transport.deliver(
             Wire.objectOf(
                 "type" to "event", "kind" to "session.status", "sessionId" to "session",
                 "revision" to 7, "status" to "running",
@@ -7803,6 +7987,123 @@ class RemoteRepositoryTest {
             "revision" to revision, "status" to "running",
         )
 
+    private class NavigationSaves : NavigationSnapshotStorage {
+        val saves = mutableListOf<Map<String, NavigationSnapshot>>()
+
+        override fun load() = emptyMap<String, NavigationSnapshot>()
+
+        override fun save(snapshots: Map<String, NavigationSnapshot>) {
+            saves += snapshots
+        }
+
+        fun lastText() = saves.last().getValue("host").messages.lastOrNull()?.optionalText("text")
+    }
+
+    /** A chat open and running, with the writes its open caused done. */
+    private suspend fun TestScope.streamingChat(
+        storage: NavigationSaves,
+    ): Pair<Transport, DefaultRemoteRepository> {
+        val transport = Transport().also { configure(it, sessions = listOf(session(), session("other"))) }
+        val repository = repository(transport, navigationStorage = storage)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        transport.deliver(running(1))
+        advanceTimeBy(5_000)
+        runCurrent()
+        return transport to repository
+    }
+
+    @Test
+    fun streamedUpsertsWriteTheNavigationSnapshotAtMostOncePerFifteenSeconds() = runTest {
+        val storage = NavigationSaves()
+        val (transport, _) = streamingChat(storage)
+        val before = storage.saves.size
+        assertTrue(before > 0)
+
+        // 100 upserts spread over 15 s.
+        for (index in 1..100) {
+            transport.deliver(upsert(1 + index, "m$index"))
+            advanceTimeBy(NAVIGATION_DIRTY_WRITE_MILLIS / 100)
+        }
+        runCurrent()
+        assertTrue("${storage.saves.size - before} writes", storage.saves.size - before <= 1)
+
+        // The tail reaches storage within the interval of the last event.
+        advanceTimeBy(NAVIGATION_DIRTY_WRITE_MILLIS)
+        runCurrent()
+        assertTrue(storage.saves.size - before <= 2)
+        assertEquals("Answer m100", storage.lastText())
+        // Nothing streamed since: no further writes.
+        val settled = storage.saves.size
+        advanceTimeBy(NAVIGATION_DIRTY_WRITE_MILLIS * 4)
+        runCurrent()
+        assertEquals(settled, storage.saves.size)
+    }
+
+    @Test
+    fun goingToTheBackgroundWritesTheStreamedTailAtOnce() = runTest {
+        val storage = NavigationSaves()
+        val (transport, repository) = streamingChat(storage)
+        transport.deliver(upsert(2, "tail"))
+        runCurrent()
+        val before = storage.saves.size
+
+        repository.setForeground(false)
+        runCurrent()
+
+        assertEquals(before + 1, storage.saves.size)
+        assertEquals("Answer tail", storage.lastText())
+    }
+
+    @Test
+    fun theEndOfARunWritesTheNavigationSnapshot() = runTest {
+        val storage = NavigationSaves()
+        val (transport, _) = streamingChat(storage)
+        transport.deliver(upsert(2, "last"))
+        runCurrent()
+        val before = storage.saves.size
+
+        transport.deliver(
+            Wire.objectOf(
+                "type" to "event", "kind" to "session.status", "sessionId" to "session",
+                "revision" to 3, "status" to "idle",
+            )
+        )
+        // Within the write queue's one second, far sooner than the streaming interval.
+        advanceTimeBy(1_100)
+        runCurrent()
+
+        assertEquals(before + 1, storage.saves.size)
+        assertEquals("Answer last", storage.lastText())
+        assertEquals("idle", storage.saves.last().getValue("host").sessions.first().text("status"))
+    }
+
+    @Test
+    fun anotherSessionsRepeatedStatusWritesNothingButItsTransitionDoes() = runTest {
+        val storage = NavigationSaves()
+        val (transport, _) = streamingChat(storage)
+        val before = storage.saves.size
+        fun other(revision: Int, status: String) =
+            Wire.objectOf(
+                "type" to "event", "kind" to "session.status", "sessionId" to "other",
+                "revision" to revision, "status" to status,
+            )
+
+        transport.deliver(other(1, "idle"))
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(before, storage.saves.size)
+
+        transport.deliver(other(2, "running"))
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(before + 1, storage.saves.size)
+        assertEquals(
+            "running",
+            storage.saves.last().getValue("host").sessions.single { it.text("id") == "other" }.text("status"),
+        )
+    }
+
     @Test
     fun eventsThatArriveWhileARestoreHoldsItsSnapshotReachTheChat() = runTest {
         val (transport, held) = heldOpenTransport({ 5 }, "projects.list")
@@ -7813,8 +8114,8 @@ class RemoteRepositoryTest {
         // The snapshot (revision 5) is in; the project list is not, so no Timeline exists yet.
         assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
         assertNull(repository.state.value.selection.sessionId)
-        transport.listener.message(upsert(6, "c"))
-        transport.listener.message(running(7))
+        transport.deliver(upsert(6, "c"))
+        transport.deliver(running(7))
         runCurrent()
 
         transport.result(held.single(), JsonObject(data("projects", listOf(project)) + ("capabilities" to JsonArray(emptyList()))))
@@ -7836,8 +8137,8 @@ class RemoteRepositoryTest {
         runCurrent()
         assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
         assertNull(repository.state.value.selection.sessionId)
-        transport.listener.message(upsert(6, "c"))
-        transport.listener.message(running(7))
+        transport.deliver(upsert(6, "c"))
+        transport.deliver(running(7))
         runCurrent()
 
         transport.result(held.single(), Wire.objectOf("kind" to "session", "session" to session()))
@@ -7859,7 +8160,7 @@ class RemoteRepositoryTest {
         runCurrent()
         assertEquals(1, transport.sent.count { it.text("type") == "session.snapshot" })
         // Revisions 6 to 205: the oldest ones no longer fit, so the rest leaves a gap.
-        for (next in 6..205) transport.listener.message(running(next))
+        for (next in 6..205) transport.deliver(running(next))
         revision = 205
         runCurrent()
 
@@ -8128,7 +8429,7 @@ class RemoteRepositoryTest {
 
         // Live status events patch the rows and the counts.
         fun status(sessionId: String, value: String) =
-            transport.listener.message(
+            transport.deliver(
                 Wire.objectOf(
                     "type" to "event", "sessionId" to sessionId, "revision" to 1,
                     "kind" to "session.status", "status" to value,
@@ -8191,7 +8492,7 @@ class RemoteRepositoryTest {
         runCurrent()
         assertEquals(3, transport.lists())
         fun status(sessionId: String, revision: Long = 1) =
-            transport.listener.message(
+            transport.deliver(
                 Wire.objectOf(
                     "type" to "event", "sessionId" to sessionId, "revision" to revision,
                     "kind" to "session.status", "status" to "running",
@@ -8217,7 +8518,7 @@ class RemoteRepositoryTest {
     }
 
     private fun Transport.status(sessionId: String, value: String = "running", revision: Long = 1) =
-        listener.message(
+        deliver(
             Wire.objectOf(
                 "type" to "event", "sessionId" to sessionId, "revision" to revision,
                 "kind" to "session.status", "status" to value,
