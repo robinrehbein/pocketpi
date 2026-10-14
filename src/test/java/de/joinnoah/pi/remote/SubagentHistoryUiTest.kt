@@ -18,7 +18,7 @@ class SubagentHistoryUiTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test
-    fun finishedAgentKeepsChipAndShowsResultAndDetailsWithoutStop() {
+    fun finishedAgentKeepsOpenOverviewAndShowsResultUntilClosed() {
         val live = SubagentStripEntry("child", "scout", "Scout", "running", "reading", true)
         val current = mutableStateOf(SubagentStrip(listOf(live), 1, emptySet(), 0))
         val opened = mutableListOf<SubagentStripEntry>()
@@ -35,12 +35,23 @@ class SubagentHistoryUiTest {
         compose.onNodeWithText(compose.activity.getString(R.string.remote_subagent_succeeded)).assertExists()
         compose.onNodeWithText("All checks passed").assertExists()
         compose.onNodeWithText(compose.activity.getString(R.string.remote_subagent_stop_label)).assertDoesNotExist()
-        compose.onNodeWithContentDescription(compose.activity.getString(R.string.remote_subagent_popover_close)).performClick()
-        compose.onNodeWithText(compose.activity.getString(R.string.remote_subagent_popover_title)).assertExists()
-        compose.onNodeWithTag("subagentStrip").performClick()
         compose.onNodeWithText(compose.activity.getString(R.string.remote_subagent_open_details)).performClick()
         assertEquals(listOf(finished), opened)
         compose.onNodeWithTag("subagentPopover").assertDoesNotExist()
+        // Closed with nothing running or queued, the chip hides.
+        compose.onNodeWithTag("subagentStrip").assertDoesNotExist()
+    }
+
+    @Test
+    fun chipIsHiddenWhileNoAgentRunsOrWaits() {
+        val entries = listOf(
+            SubagentStripEntry(null, "done", "Done", "succeeded", null, false),
+            SubagentStripEntry(null, "failed", "Failed", "failed", null, false),
+        )
+        compose.setContent {
+            MaterialTheme { SubagentStrip(SubagentStrip(entries, 0, emptySet(), 0), { true }, {}, {}) }
+        }
+        compose.onNodeWithTag("subagentStrip").assertDoesNotExist()
     }
 
     @Test
@@ -63,7 +74,7 @@ class SubagentHistoryUiTest {
     fun completedHistoryRemainsScrollableOnNarrowScreens() {
         val entries = (1..25).map { index ->
             SubagentStripEntry("child-$index", "scout $index", "Scout $index", "succeeded", "Result $index", false)
-        }
+        } + SubagentStripEntry(null, "queued", "Queued", "queued", null, false)
         val opened = mutableListOf<SubagentStripEntry>()
         compose.setContent {
             MaterialTheme {
@@ -81,8 +92,8 @@ class SubagentHistoryUiTest {
     fun switchingParentClosesHistoryAndShowsOnlyNewParentsEntries() {
         val parent = mutableStateOf("first")
         val current = mutableStateOf(SubagentStrip(listOf(
-            SubagentStripEntry("old-child", "old scout", "Old", "succeeded", "Old result", false),
-        ), 0, emptySet(), 0))
+            SubagentStripEntry("old-child", "old scout", "Old", "running", "Old result", false),
+        ), 1, emptySet(), 0))
         compose.setContent {
             MaterialTheme { SubagentStrip(current.value, { true }, {}, {}, sessionId = parent.value) }
         }
@@ -91,8 +102,8 @@ class SubagentHistoryUiTest {
         compose.runOnIdle {
             parent.value = "second"
             current.value = SubagentStrip(listOf(
-                SubagentStripEntry("new-child", "new scout", "New", "failed", "New result", false),
-            ), 0, emptySet(), 0)
+                SubagentStripEntry("new-child", "new scout", "New", "running", "New result", false),
+            ), 1, emptySet(), 0)
         }
         compose.onNodeWithTag("subagentPopover").assertDoesNotExist()
         compose.onNodeWithTag("subagentStrip").performClick()
