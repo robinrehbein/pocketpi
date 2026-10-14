@@ -233,12 +233,19 @@ class SecureRemoteTransport(
                                 // decoder in that order and resumes here in it.
                                 delivery = scope.launch {
                                     try {
-                                        val payload = withContext(decoder) { open.open(Wire.parse(text)) }
-                                        if (epoch == generation) listener.message(payload)
+                                        // A frame queued behind a close or an unreadable frame is
+                                        // dropped without parsing it.
+                                        val payload =
+                                            withContext(decoder) {
+                                                if (open.isClosed) null else open.open(Wire.parse(text))
+                                            }
+                                        if (payload != null && epoch == generation) listener.message(payload)
                                     } catch (e: CancellationException) {
                                         throw e
                                     } catch (e: Exception) {
-                                        broke(e)
+                                        // Only a failure on the live connection is recorded; one
+                                        // racing a close is that close, not a broken frame.
+                                        if (epoch == generation) broke(e)
                                     }
                                 }
                                 return@launch

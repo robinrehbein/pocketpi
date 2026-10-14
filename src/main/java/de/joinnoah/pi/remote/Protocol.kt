@@ -255,22 +255,32 @@ object Wire {
             .toString()
 }
 
+/**
+ * One encrypted connection. Sending and receiving keep separate state and separate locks, so a
+ * [seal] on the main thread never waits for an [open] that is decrypting and parsing a large frame
+ * on the decoder. Any failure in either direction closes the channel for both.
+ */
 class SecureChannel(secret: String, private val context: JsonObject, client: Boolean = true) {
     private val raw = Wire.derive(secret, context)
     private val sendKey = SecretKeySpec(if (client) raw.first else raw.second, "AES")
     private val receiveKey = SecretKeySpec(if (client) raw.second else raw.first, "AES")
     private val sendDirection = if (client) "c2h" else "h2c"
     private val receiveDirection = if (client) "h2c" else "c2h"
+    private val sendLock = Any()
+    private val receiveLock = Any()
     private var sendSequence = 0L
     private var receiveSequence = 0L
-    private var closed = false
+    @Volatile private var closed = false
+
+    /** True once [close] ran or a frame in either direction failed. */
+    val isClosed: Boolean
+        get() = closed
 
     init {
         raw.first.fill(0)
         raw.second.fill(0)
     }
 
-    @Synchronized
     fun close() {
         closed = true
     }
@@ -285,8 +295,9 @@ class SecureChannel(secret: String, private val context: JsonObject, client: Boo
         }
     }
 
-    @Synchronized
-    fun seal(payload: JsonObject): JsonObject = guarded {
+    fun seal(payload: JsonObject): JsonObject = synchronized(sendLock) { sealLocked(payload) }
+
+    private fun sealLocked(payload: JsonObject): JsonObject = guarded {
         val bytes = payload.toString().toByteArray()
         require(bytes.size <= Wire.MAX_PLAINTEXT)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -301,8 +312,9 @@ class SecureChannel(secret: String, private val context: JsonObject, client: Boo
         )
     }
 
-    @Synchronized
-    fun open(frame: JsonObject): JsonObject = guarded {
+    fun open(frame: JsonObject): JsonObject = synchronized(receiveLock) { openLocked(frame) }
+
+    private fun openLocked(frame: JsonObject): JsonObject = guarded {
         val started = System.nanoTime()
         Wire.keys(frame, setOf("v", "type", "connectionId", "seq", "ciphertext"))
         require(

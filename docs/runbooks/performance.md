@@ -57,6 +57,9 @@
   `Dispatchers.Default.limitedParallelism(1)`, one at a time so frames keep their order, and hands
   the payload back to the scope. `Listener.inbound()` fires at receipt, before decoding, and stamps
   the repository's `lastInboundAt`; a socket close waits for the frames still being decoded.
+  `SecureChannel` locks sending and receiving separately, so a send on main never waits for a
+  frame being decrypted; frames queued behind a local close or an unreadable frame are dropped
+  without parsing and without a `CAUGHT` entry.
   `Wire.decode` compiles its alphabet once and checks the canonical encoding by its padding bits
   instead of re-encoding; `Wire.parse` bounds the size by the text's length and counts UTF-8 bytes
   only between `length` and `length * 3`, and the decrypted payload is not measured again.

@@ -74,6 +74,57 @@ class ProtocolTest {
     }
 
     @Test
+    fun sealDoesNotWaitForAnOpenInProgress() {
+        val f = fixture()
+        val c = f.obj("context")
+        val host = SecureChannel(f.text("secret"), c, false)
+        val device = SecureChannel(f.text("secret"), c)
+        val frame = host.seal(Wire.objectOf("type" to "event"))
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        // A frame whose first read inside open() parks until the test releases it.
+        val held =
+            JsonObject(
+                object : Map<String, JsonElement> by frame {
+                    override val keys: Set<String>
+                        get() {
+                            entered.countDown()
+                            release.await()
+                            return frame.keys
+                        }
+                }
+            )
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(2)
+        try {
+            val opening = executor.submit<JsonObject> { device.open(held) }
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            val sealing = executor.submit<JsonObject> { device.seal(Wire.objectOf("type" to "steer")) }
+            // Returns while open() still holds the receive side.
+            val sealed = sealing.get(5, java.util.concurrent.TimeUnit.SECONDS)
+            assertFalse(opening.isDone)
+            release.countDown()
+            assertEquals("event", opening.get(5, java.util.concurrent.TimeUnit.SECONDS).text("type"))
+            assertEquals("steer", host.open(sealed).text("type"))
+            assertFalse(device.isClosed)
+        } finally {
+            release.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun aFailedOpenClosesTheSendSideToo() {
+        val f = fixture()
+        val c = f.obj("context")
+        val host = SecureChannel(f.text("secret"), c, false)
+        val device = SecureChannel(f.text("secret"), c)
+        val frame = host.seal(Wire.objectOf("type" to "event"))
+        assertThrows(Exception::class.java) { device.open(JsonObject(frame + ("seq" to JsonPrimitive(5)))) }
+        assertTrue(device.isClosed)
+        assertThrows(IllegalStateException::class.java) { device.seal(Wire.objectOf("type" to "steer")) }
+    }
+
+    @Test
     fun onlyTheCanonicalEncodingDecodes() {
         val alphabet = ('A'..'Z') + ('a'..'z') + ('0'..'9') + '-' + '_'
         val lenient = java.util.Base64.getUrlDecoder()

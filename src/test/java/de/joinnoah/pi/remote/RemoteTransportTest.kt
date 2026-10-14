@@ -185,9 +185,11 @@ class RemoteTransportTest {
         listener: Listener = Listener { },
         // Decodes on the test's scheduler, so runCurrent() also runs the decoding.
         decoder: CoroutineDispatcher = StandardTestDispatcher(testScheduler),
+        created: (SecureRemoteTransport) -> Unit = {},
     ): Pair<Listener, SecureChannel> {
         val transport = SecureRemoteTransport(backgroundScope, socket, decoder = decoder) { "Test device" }
             .also { it.listener = listener }
+            .also(created)
         val deviceKey = Wire.random(32)
         transport.connect(PairedHost(Wire.random(), "https://relay.test", Wire.random(), deviceKey, "Host"))
         socket.open()
@@ -324,6 +326,8 @@ class RemoteTransportTest {
         assertEquals(listOf(true), listener.reconnects)
     }
 
+    private fun caughtEntries() = Diagnostics.report().entries.filter { it.kind == Diagnostics.Kind.CAUGHT }
+
     @Test
     fun anUnreadableActiveFrameDropsTheFramesQueuedBehindIt() = runTest {
         val socket = Socket()
@@ -332,13 +336,39 @@ class RemoteTransportTest {
         val broken = server.seal(Wire.objectOf("type" to "event", "n" to 1))
         socket.receive(JsonObject(broken + ("ciphertext" to JsonPrimitive(Wire.random(48)))))
         socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 2)))
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 3)))
         runCurrent()
+        Diagnostics.clear()
 
         decoder.runAll()
         runCurrent()
-        assertEquals(listOf("inbound", "inbound", "failed"), listener.events)
+        assertEquals(listOf("inbound", "inbound", "inbound", "failed"), listener.events)
         assertEquals(1, listener.brokenCount)
         assertTrue(listener.messages.isEmpty())
+        // The unreadable frame is recorded once; the frames behind it add nothing.
+        assertEquals(listOf("transport.message"), caughtEntries().map { it.label })
+        Diagnostics.clear()
+    }
+
+    @Test
+    fun aLocalCloseDropsQueuedFramesWithoutRecordingThem() = runTest {
+        val socket = Socket()
+        val decoder = HeldDecoder()
+        var transport: SecureRemoteTransport? = null
+        val (listener, server) = authenticated(socket = socket, decoder = decoder, created = { transport = it })
+        repeat(3) { socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to it))) }
+        runCurrent()
+        Diagnostics.clear()
+
+        // A host switch or a move to the background closes while frames wait for the decoder.
+        checkNotNull(transport).close()
+        decoder.runAll()
+        runCurrent()
+        assertEquals(listOf("inbound", "inbound", "inbound"), listener.events)
+        assertEquals(0, listener.brokenCount)
+        assertFalse(listener.failed)
+        assertTrue(caughtEntries().isEmpty())
+        Diagnostics.clear()
     }
 
     private val deviceAccess =
