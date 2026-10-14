@@ -852,4 +852,32 @@ class ConversationPresenterTest {
             }
         }
     }
+
+    @Test
+    fun pendingSendIsATailBubbleWithItsStateAndTheBodyTheTimelineWillShow() {
+        val pending = PendingSend(
+            "m1", "Hello pi", MessageQuote("a", "assistant", "Quoted", null), emptyList(), PendingSendState.SENDING,
+        )
+        val bubble = pendingSendItem(pending)
+        assertEquals("pending-m1", bubble.id)
+        assertEquals("user", bubble.role)
+        assertEquals("Hello pi", bubble.text)
+        assertEquals(pending.quote, bubble.quote)
+        assertEquals(PendingSendState.SENDING, bubble.pendingState)
+        val attachmentsOnly = pendingSendItem(
+            pending.copy(text = "", attachments = listOf(LocalAttachment("x", "photo.jpg", "image", "image/jpeg", 1L, "h"))),
+        )
+        assertEquals("photo.jpg", attachmentsOnly.text)
+
+        val sent = Wire.objectOf(
+            "id" to "u1", "role" to "user", "text" to QuoteCodec.encode("Hello pi", pending.quote),
+            "state" to "complete",
+        )
+        assertEquals("Hello pi", userMessageBody(sent))
+        val parts = Wire.objectOf(
+            "id" to "u2", "role" to "user", "state" to "complete",
+            "parts" to JsonArray(listOf(Wire.objectOf("type" to "text", "text" to "One"), Wire.objectOf("type" to "text", "text" to "Two"))),
+        )
+        assertEquals("One\nTwo", userMessageBody(parts))
+    }
 }

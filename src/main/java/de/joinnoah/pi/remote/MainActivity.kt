@@ -26,6 +26,7 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -153,7 +154,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        lifecycleScope.launch {
+        // The composer's own stop flush runs after this returns: lifecycle ON_STOP is dispatched
+        // then. Dispatchers.Main posts this barrier behind it, so the last typed text is written too.
+        lifecycleScope.launch(Dispatchers.Main) {
             try {
                 app.repository.flush()
             } catch (error: kotlinx.coroutines.CancellationException) {

@@ -24,6 +24,12 @@ data class StoredDraft(
     val followUps: List<PendingFollowUp> = emptyList(),
     /** Pending review comments of the changes view; an optional key in the stored JSON. */
     val reviewComments: List<ReviewComment> = emptyList(),
+    /**
+     * What kind of send the journal holds: "prompt", "command", "follow_up" or "steer". Only a
+     * plain prompt may reuse the mutation ID of an unresolved journal; null is a journal stored
+     * before this was recorded.
+     */
+    val submittedDelivery: String? = null,
 )
 
 interface DraftStorage {
@@ -70,6 +76,7 @@ class DraftStore(
                             "reviewComments" to
                                 value.reviewComments.takeIf { it.isNotEmpty() }
                                     ?.let { comments -> JsonArray(comments.map { it.json() }) },
+                            "submittedDelivery" to value.submittedDelivery,
                         )
                     }
                 )
@@ -123,5 +130,9 @@ internal fun parseStoredDrafts(bytes: ByteArray): Map<DraftKey, StoredDraft> =
                     .orEmpty()
                     .also { require(it.size <= 64 && it.map(PendingFollowUp::requestId).distinct().size == it.size) },
                 storedReviewComments(value["reviewComments"]),
+                submittedDelivery =
+                    value.optionalText("submittedDelivery")?.also {
+                        require(it in setOf("prompt", "command", "follow_up", "steer"))
+                    },
             )
     }

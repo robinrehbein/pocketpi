@@ -292,7 +292,11 @@ internal fun RemoteScreen(
     val presenter = remember(key) { ConversationPresenter() }
     val presentation =
         remember(presenter, state.messages, sessionActive) { presenter.present(state.messages, sessionActive) }
-    val conversation = presentation.items
+    // The prompt the timeline does not show yet goes at the tail, where the reply will follow it.
+    val conversation =
+        remember(presentation, state.pendingSend) {
+            state.pendingSend?.let { presentation.items + pendingSendItem(it) } ?: presentation.items
+        }
     val thinkingDisplay = chatPreferences?.thinkingDisplay ?: "status"
     val thinkingActive = state.connected && !state.loading && state.status == "running"
     val visibleConversation =
