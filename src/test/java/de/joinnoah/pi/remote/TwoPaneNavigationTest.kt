@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
@@ -19,6 +20,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.doubleClick
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.platform.LocalConfiguration
@@ -65,6 +67,8 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -1102,24 +1106,380 @@ class TwoPaneNavigationTest {
 
     @Test
     @Config(qualifiers = "w1700dp-h1000dp")
-    fun aNewLayoutBucketResetsTheDraggedWidths() {
+    fun draggedWidthsSurviveAnotherBucketAndARestart() {
         val window = mutableStateOf<Dp>(1300.dp)
+        val launch = mutableStateOf(0)
         compose.setContent {
-            Box(Modifier.width(window.value).fillMaxHeight()) { App() }
+            Box(Modifier.width(window.value).fillMaxHeight()) { key(launch.value) { App() } }
         }
         compose.waitForIdle()
         accessibilityAction("sessionListDivider", label(R.string.remote_pane_wider))
         compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
-        // Within the bucket the dragged width stays.
+        // Within the bucket the width keeps its share of the window.
         window.value = 1400.dp
         compose.waitForIdle()
-        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo((400f / 1300f * 1400f).dp)
+        // Another bucket shows its own default and keeps the first one's width aside.
         window.value = 900.dp
         compose.waitForIdle()
         compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(280.dp)
         window.value = 1300.dp
         compose.waitForIdle()
-        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(360.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
+        // A cold start reads it back from the preferences.
+        launch.value++
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
+        assertTrue(PaneLayoutStore(compose.activity).load().isNotEmpty())
+    }
+
+    // ---- Artifacts beside the chat -------------------------------------------------------
+
+    private val page = "<html><head><title>Quarterly report</title></head><body>v1</body></html>"
+
+    /** A chat whose answer names an HTML page the Mac serves. */
+    private fun artifactChat() {
+        repository.artifact = { _, path, _ -> ProjectArtifactResult.Loaded(path, "1".repeat(64), page, page.length) }
+        repository.state.value =
+            repository.state.value.copy(
+                capabilities = setOf(FILES_ARTIFACT_CAPABILITY),
+                capabilitiesKnown = true,
+                messages =
+                    listOf(
+                        buildJsonObject {
+                            put("id", "answer")
+                            put("role", "assistant")
+                            put("text", "[the report](out/report.html)")
+                        }
+                    ),
+            )
+    }
+
+    private fun openArtifact() {
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Quarterly report").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(label(R.string.remote_artifact_open_action)).performClick()
+        compose.waitForIdle()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun anArtifactOpensInItsTabBesideTheChatAndPopsOut() {
+        artifactChat()
+        render()
+        openArtifact()
+        compose.onNodeWithTag("inspectorTab_artifact").assertIsSelected()
+        assertInInspector("artifactTab")
+        compose.onNodeWithTag("artifactViewer").assertDoesNotExist()
+        // The chat stays usable beside the page, with the list out of the way.
+        assertChatShown()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        // Pop out opens the full-screen dialog; closing it brings the page back into the tab.
+        click("artifactPopOut")
+        compose.onNodeWithTag("artifactViewer").assertIsDisplayed()
+        compose.onNodeWithTag("artifactTab").assertDoesNotExist()
+        compose.onNodeWithTag("artifactViewerClose").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("artifactViewer").assertDoesNotExist()
+        assertInInspector("artifactTab")
+        // Closing the tab closes the pane and brings the list back.
+        click("inspectorTabClose_artifact")
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun aPhoneOpensTheArtifactInItsDialog() {
+        artifactChat()
+        render()
+        openArtifact()
+        compose.onNodeWithTag("artifactViewer").assertIsDisplayed()
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("artifactPopOut").assertDoesNotExist()
+    }
+
+    /** The chat edits out/report.html, after which the Mac serves [text]. */
+    private fun editReport(text: String) {
+        repository.artifact = { _, path, _ -> ProjectArtifactResult.Loaded(path, "2".repeat(64), text, text.length) }
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(
+                    messages =
+                        repository.state.value.messages +
+                            buildJsonObject {
+                                put("id", "editing")
+                                put("role", "assistant")
+                                put("text", "")
+                                put(
+                                    "parts",
+                                    buildJsonArray {
+                                        addJsonObject {
+                                            put("type", "toolCall")
+                                            put("id", "call-edit")
+                                            put("name", "edit")
+                                            // Absolute, where the message named it relative to the project.
+                                            put("arguments", "{\"path\":\"/Users/robin/project/out/report.html\"}")
+                                        }
+                                    },
+                                )
+                            } +
+                            buildJsonObject {
+                                put("id", "edited")
+                                put("role", "tool")
+                                put("text", "Edited")
+                                put("state", "complete")
+                                put("toolName", "edit")
+                                put("toolCallId", "call-edit")
+                            }
+                )
+        }
+        compose.waitForIdle()
+    }
+
+    private fun assertArtifactCode(text: String) {
+        compose.onNodeWithTag("artifactTabCode").performClick()
+        compose.waitForIdle()
+        compose.onNode(hasText(text) and hasAnyAncestor(hasTestTag("artifactTab"))).assertExists()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun theChatsEditOfAnOpenPageOffersItsNewVersion() {
+        artifactChat()
+        render()
+        openArtifact()
+        compose.onNodeWithTag("artifactChanged").assertDoesNotExist()
+        val newer = page.replace("v1", "v2")
+        editReport(newer)
+        // Nothing reloads until the user says so.
+        compose.onNodeWithTag("artifactChanged").assertIsDisplayed()
+        assertFalse(repository.artifactReads.any { it.second })
+        click("artifactChangedReload")
+        compose.waitUntil(5_000) { repository.artifactReads.any { it == "out/report.html" to true } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("artifactChanged").assertDoesNotExist()
+        assertArtifactCode(newer)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun aCardLoadedBeforeTheChatsEditOpensWhatIsOnTheMacNow() {
+        artifactChat()
+        render()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Quarterly report").fetchSemanticsNodes().isNotEmpty() }
+        // The card shows v1; the chat then edits the file before the user taps the card.
+        val newer = page.replace("v1", "v2")
+        editReport(newer)
+        openArtifact()
+        compose.waitUntil(5_000) { repository.artifactReads.any { it == "out/report.html" to true } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("artifactChanged").assertDoesNotExist()
+        assertArtifactCode(newer)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun anotherArtifactReplacesTheOpenOneWithItsOwnPage() {
+        val other = "<html><head><title>Other page</title></head><body>other</body></html>"
+        artifactChat()
+        repository.artifact = { _, path, _ ->
+            val text = if (path == "out/other.html") other else page
+            ProjectArtifactResult.Loaded(path, (if (path == "out/other.html") "2" else "1").repeat(64), text, text.length)
+        }
+        repository.state.value =
+            repository.state.value.copy(
+                messages =
+                    listOf(
+                        buildJsonObject {
+                            put("id", "answer")
+                            put("role", "assistant")
+                            put("text", "[the report](out/report.html)\n\n[the other](out/other.html)")
+                        }
+                    )
+            )
+        render()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Other page").fetchSemanticsNodes().isNotEmpty() }
+        // The first card sits above the chat's end: its action, not a tap, opens it.
+        val open = compose.onAllNodes(hasText(label(R.string.remote_artifact_open_action)) and !hasAnyAncestor(hasTestTag("inspectorPane")))
+        open[0].performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        compose.onNode(hasText("Quarterly report") and hasAnyAncestor(hasTestTag("artifactTab"))).assertExists()
+        open[1].performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        compose.onNode(hasText("Other page") and hasAnyAncestor(hasTestTag("artifactTab"))).assertExists()
+        compose.onNode(hasText("Quarterly report") and hasAnyAncestor(hasTestTag("artifactTab"))).assertDoesNotExist()
+        // Robolectric has no WebView to draw in; ArtifactSandboxEmulatorTest checks the new view.
+        assertArtifactCode(other)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun anImageOpensInTheArtifactTabAndBackClosesIt() {
+        val png =
+            java.io.ByteArrayOutputStream().also {
+                android.graphics.Bitmap.createBitmap(40, 20, android.graphics.Bitmap.Config.ARGB_8888)
+                    .compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+            }.toByteArray()
+        repository.image = { path -> ProjectImageResult.Loaded(path, "image/png", "0".repeat(64), png) }
+        repository.state.value =
+            repository.state.value.copy(
+                capabilities = setOf(FILES_MEDIA_CAPABILITY),
+                capabilitiesKnown = true,
+                messages =
+                    listOf(
+                        buildJsonObject {
+                            put("id", "answer")
+                            put("role", "assistant")
+                            put("text", "![Result](build/shot.png)")
+                        }
+                    ),
+            )
+        render()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("projectImagePicture-build/shot.png", true).fetchSemanticsNodes().isNotEmpty()
+        }
+        click("projectImage-build/shot.png")
+        compose.onNodeWithTag("inspectorTab_artifact").assertIsSelected()
+        assertInInspector("imageTab")
+        compose.onNodeWithTag("imageViewer").assertDoesNotExist()
+        back()
+        compose.onNodeWithTag("imageTab").assertDoesNotExist()
+        compose.onNodeWithTag("inspectorTab_artifact").assertDoesNotExist()
+        assertChatShown()
+    }
+
+    /** A chat whose host keeps session artifacts, with one HTML page among them. */
+    private fun galleryChat() {
+        val listed = SessionArtifact("Zk3_xY9aB-0qWe7RtYuI1o", "Gallery page", ArtifactType.HTML, 1, "a".repeat(64), 100, 0, 0)
+        val text = "<html><head><title>Gallery page</title></head><body>listed</body></html>"
+        repository.sessionArtifacts = listOf(listed)
+        repository.openArtifact = { id, version ->
+            SessionArtifactOpenResult.Text(
+                ArtifactType.HTML, ProjectArtifactResult.Loaded("artifacts/$id/$version.html", "1".repeat(64), text, text.length),
+            )
+        }
+        repository.state.value = repository.state.value.copy(capabilities = setOf(ARTIFACTS_CAPABILITY), capabilitiesKnown = true)
+    }
+
+    private fun runArtifactsCommand() {
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performTextReplacement("/artifacts")
+        compose.waitForIdle()
+        compose.onNodeWithTag("composerField").performKeyInput { pressKey(Key.Enter) }
+        compose.waitForIdle()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun artifactsOpensTheGalleryTabAndSelectsItAgainBehindTheArtifact() {
+        galleryChat()
+        render(hardwareKeyboard = true)
+        runArtifactsCommand()
+        compose.onNodeWithTag("inspectorTab_gallery").assertIsSelected()
+        assertInInspector("artifactsPane")
+        // No sheet over the chat besides the tab.
+        compose.onAllNodesWithTag("artifactGallery").assertCountEquals(1)
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("artifactCard-Zk3_xY9aB-0qWe7RtYuI1o").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(hasTestTag("artifactCard-Zk3_xY9aB-0qWe7RtYuI1o") and SemanticsMatcher.keyIsDefined(SemanticsActions.OnClick))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        click("artifactCard-Zk3_xY9aB-0qWe7RtYuI1o")
+        compose.onNodeWithTag("inspectorTab_artifact").assertIsSelected()
+        assertInInspector("artifactTab")
+        // /artifacts again brings the gallery forward from behind the artifact.
+        runArtifactsCommand()
+        compose.onNodeWithTag("inspectorTab_gallery").assertIsSelected()
+        assertInInspector("artifactsPane")
+        // It shows the list it had, without asking the Mac again.
+        compose.onNodeWithTag("artifactCard-Zk3_xY9aB-0qWe7RtYuI1o").assertExists()
+        assertEquals(1, repository.artifactLists)
+        // Back closes the gallery's tab.
+        back()
+        compose.onNodeWithTag("inspectorTab_gallery").assertDoesNotExist()
+        compose.onNodeWithTag("inspectorTab_artifact").assertIsSelected()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun aPhoneShowsTheGalleryInItsSheet() {
+        galleryChat()
+        render(hardwareKeyboard = true)
+        runArtifactsCommand()
+        compose.onNodeWithTag("artifactGallery").assertIsDisplayed()
+        compose.onNodeWithTag("artifactsPane").assertDoesNotExist()
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+    }
+
+    /** A chat that read one file, so the touched files summary shows. */
+    private fun touchedChat() {
+        repository.state.value =
+            repository.state.value.copy(
+                messages =
+                    listOf(
+                        buildJsonObject {
+                            put("id", "reading")
+                            put("role", "assistant")
+                            put("text", "")
+                            put(
+                                "parts",
+                                buildJsonArray {
+                                    addJsonObject {
+                                        put("type", "toolCall")
+                                        put("id", "call-read")
+                                        put("name", "read")
+                                        put("arguments", "{\"path\":\"src/App.kt\"}")
+                                    }
+                                },
+                            )
+                        },
+                        buildJsonObject {
+                            put("id", "read")
+                            put("role", "tool")
+                            put("text", "fun main() {}")
+                            put("state", "complete")
+                            put("toolName", "read")
+                            put("toolCallId", "call-read")
+                        },
+                    )
+            )
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun theTouchedFilesOpenInTheirTabBesideTheChat() {
+        touchedChat()
+        render()
+        click("touchedFilesSummary")
+        compose.onNodeWithTag("inspectorTab_touched").assertIsSelected()
+        assertInInspector("touchedFilesPane")
+        compose.onNodeWithTag("touchedFilesSheet").assertDoesNotExist()
+        back()
+        compose.onNodeWithTag("inspectorTab_touched").assertDoesNotExist()
+        compose.onNodeWithTag("touchedFilesPane").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun aPhoneShowsTheTouchedFilesInTheirSheet() {
+        touchedChat()
+        render()
+        click("touchedFilesSummary")
+        compose.onNodeWithTag("touchedFilesSheet").assertIsDisplayed()
+        compose.onNodeWithTag("touchedFilesPane").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun aLongPressPeekShowsTheWholeOutputInTheToolTab() {
+        render()
+        compose.onNodeWithTag("toolCardHeader").performTouchInput { longClick() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("inspectorTab_tool").assertIsSelected()
+        assertInInspector("toolDetail")
+        // Pop out opens the dialog a phone peeks with.
+        click("toolDetailPopOut")
+        compose.onNodeWithText(label(R.string.remote_output_close)).assertIsDisplayed()
     }
 
     // ---- Hardware keyboard ---------------------------------------------------------------

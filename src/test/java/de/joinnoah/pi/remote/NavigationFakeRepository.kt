@@ -196,6 +196,42 @@ internal class NavigationFakeRepository : RemoteRepository {
         return result
     }
 
+    /** Answers [readProjectArtifact]; `fresh` is a reload from the viewer. */
+    var artifact: suspend (sessionId: String, path: String, fresh: Boolean) -> ProjectArtifactResult = { _, _, _ ->
+        ProjectArtifactResult.Unavailable
+    }
+    val artifactReads = mutableListOf<Pair<String, Boolean>>()
+
+    override suspend fun readProjectArtifact(sessionId: String, path: String, fresh: Boolean): ProjectArtifactResult {
+        artifactReads += path to fresh
+        return artifact(sessionId, path, fresh)
+    }
+
+    /** Answers [listSessionArtifacts] and [openSessionArtifact]. */
+    var sessionArtifacts: List<SessionArtifact> = emptyList()
+    var openArtifact: suspend (artifactId: String, version: Int?) -> SessionArtifactOpenResult = { _, _ ->
+        SessionArtifactOpenResult.Unavailable
+    }
+    var artifactLists = 0
+
+    override suspend fun listSessionArtifacts(sessionId: String): SessionArtifactListResult {
+        artifactLists++
+        return SessionArtifactListResult.Loaded(SessionArtifactList(sessionArtifacts, false))
+    }
+
+    override suspend fun openSessionArtifact(
+        sessionId: String,
+        artifactId: String,
+        version: Int?,
+        type: ArtifactType?,
+        sha256: String?,
+    ): SessionArtifactOpenResult = openArtifact(artifactId, version)
+
+    /** Answers [readProjectImage]. */
+    var image: suspend (path: String) -> ProjectImageResult = { ProjectImageResult.Unavailable }
+
+    override suspend fun readProjectImage(sessionId: String, path: String, fresh: Boolean): ProjectImageResult = image(path)
+
     var createdSessions = 0
     var create: suspend (String, String) -> RemoteSelection = { routeId, projectId ->
         RemoteSelection(routeId, projectId, "created")

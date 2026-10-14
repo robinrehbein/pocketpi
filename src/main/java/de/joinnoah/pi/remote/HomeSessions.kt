@@ -34,6 +34,22 @@ internal data class HomeSnapshot(
      * re-confirm.
      */
     val refreshedAt: Long? = null,
+    /** Sessions a notification was posted for recently, newest first. */
+    val notified: List<NotifiedSession> = emptyList(),
+)
+
+/**
+ * A session PocketPi posted a notification for. Its launcher shortcut stays published for a while,
+ * since a notification shows as a conversation only while its session's long-lived shortcut exists,
+ * also when the session is not among the ones the app knows.
+ */
+internal data class NotifiedSession(
+    val routeId: String,
+    val sessionId: String,
+    /** The session's title and project as the notification named them; empty while unknown. */
+    val title: String = "",
+    val projectName: String = "",
+    val at: Long,
 )
 
 internal const val MAX_HOME_SESSIONS = 40
@@ -41,6 +57,10 @@ internal const val MAX_WIDGET_ROWS = 3
 /** Rows per column of the three-column tablet layout, which is tall enough for more. */
 internal const val MAX_LARGE_WIDGET_ROWS = 6
 internal const val MAX_SHORTCUTS = 4
+/** At most this many notified sessions keep a shortcut, on top of the [MAX_SHORTCUTS] ranked ones. */
+internal const val MAX_NOTIFIED_SESSIONS = 8
+/** How long a notified session keeps its shortcut. */
+internal const val NOTIFIED_SHORTCUT_MILLIS = 3 * 24 * 60 * 60_000L
 
 private fun HomeSession.key() = routeId to sessionId
 
@@ -110,6 +130,94 @@ internal fun shortcutSessions(snapshot: HomeSnapshot, limit: Int = MAX_SHORTCUTS
                 .thenBy { it.title }
         )
         .take(limit.coerceAtLeast(0))
+
+/**
+ * Every launcher shortcut to publish, in rank order: the [shortcutSessions] first, which the
+ * launcher shows, then the sessions notified within [NOTIFIED_SHORTCUT_MILLIS], so their
+ * notifications stay conversations. [limit] is the launcher's per-activity limit; when it leaves
+ * room for fewer notified sessions, the newest ones win. Shortcuts of [closed] sessions are left
+ * out.
+ *
+ * The notified ones are ordered by ID, not by time: another push for a session already in the set
+ * then changes nothing to publish. setDynamicShortcuts is rate-limited in the background, where
+ * pushes arrive, so only a session joining or leaving the set republishes it.
+ */
+internal fun shortcutChoice(
+    snapshot: HomeSnapshot,
+    limit: Int,
+    now: Long,
+    closed: Set<String> = emptySet(),
+): List<HomeSession> {
+    val top = shortcutSessions(snapshot, minOf(MAX_SHORTCUTS, limit))
+    val chosen = top.map { it.key() }.toMutableSet()
+    val known = snapshot.sessions.associateBy { it.key() }
+    val notified =
+        snapshot.notified
+            .asSequence()
+            .filter { now - it.at in 0 until NOTIFIED_SHORTCUT_MILLIS }
+            .sortedByDescending { it.at }
+            .filter { shortcutId(it.routeId, it.sessionId) !in closed }
+            .filter { chosen.add(it.routeId to it.sessionId) }
+            .map {
+                known[it.routeId to it.sessionId]
+                    ?: HomeSession(it.routeId, "", it.projectName, it.sessionId, it.title, "idle", it.at)
+            }
+            .take((limit - top.size).coerceAtLeast(0))
+            .sortedWith(compareBy({ it.routeId }, { it.sessionId }))
+            .toList()
+    return top + notified
+}
+
+/**
+ * What [chosen] publishes, compared with the last publish to skip an unchanged one. Titles count
+ * for the sessions the app knows; a session that is only notified counts by its ID alone, so the
+ * name its notification looks up later does not cost another rate-limited publish from the
+ * background. Its label then follows with the next publish that happens anyway.
+ */
+internal fun shortcutSignature(chosen: List<HomeSession>, snapshot: HomeSnapshot): List<String> {
+    val known = snapshot.sessions.map { it.key() }.toSet()
+    return chosen.map {
+        if (it.key() in known) shortcutSignatureEntry(it.routeId, it.sessionId, it.title, it.projectName)
+        else shortcutSignatureEntry(it.routeId, it.sessionId, "", "")
+    }
+}
+
+/** Forgets the notifications of sessions known to be closed (by [shortcutId]). */
+internal fun HomeSnapshot.withoutNotified(closed: Set<String>): HomeSnapshot =
+    if (closed.isEmpty()) this
+    else copy(notified = notified.filter { shortcutId(it.routeId, it.sessionId) !in closed })
+
+/** Records a notification for a session; it keeps the title an earlier one named. */
+internal fun HomeSnapshot.withNotified(routeId: String, sessionId: String, now: Long): HomeSnapshot {
+    val previous = notified.find { it.routeId == routeId && it.sessionId == sessionId }
+    val entry =
+        NotifiedSession(routeId, sessionId, previous?.title.orEmpty(), previous?.projectName.orEmpty(), now)
+    return copy(
+        notified =
+            (listOf(entry) + notified.filter { it !== previous })
+                .filter { now - it.at in 0 until NOTIFIED_SHORTCUT_MILLIS }
+                .take(MAX_NOTIFIED_SESSIONS)
+    )
+}
+
+/** The title and project a notification named a notified session by, once they were read. */
+internal fun HomeSnapshot.withNotifiedName(
+    routeId: String,
+    sessionId: String,
+    title: String?,
+    projectName: String?,
+): HomeSnapshot =
+    copy(
+        notified =
+            notified.map {
+                if (it.routeId != routeId || it.sessionId != sessionId) it
+                else
+                    it.copy(
+                        title = title?.trim()?.take(200)?.ifEmpty { null } ?: it.title,
+                        projectName = projectName?.trim()?.take(200)?.ifEmpty { null } ?: it.projectName,
+                    )
+            }
+    )
 
 private fun session(
     routeId: String,
@@ -279,7 +387,7 @@ internal fun mergeHomeSnapshot(
     val refreshedAt =
         if (trusted && (sessions != previous.sessions || outdated(previous.refreshedAt, now))) now
         else previous.refreshedAt
-    return HomeSnapshot(paired, sessions, refreshedAt)
+    return HomeSnapshot(paired, sessions, refreshedAt, previous.notified.filter { it.routeId in pairedRoutes })
 }
 
 internal fun shortcutId(routeId: String, sessionId: String) = "session:$routeId:$sessionId"
@@ -412,6 +520,18 @@ internal fun HomeSnapshot.json(): JsonObject =
                 )
             }
         ),
+        // Optional too; a version without it drops it on its next write.
+        "notified" to JsonArray(
+            notified.map {
+                Wire.objectOf(
+                    "routeId" to it.routeId,
+                    "sessionId" to it.sessionId,
+                    "title" to it.title,
+                    "projectName" to it.projectName,
+                    "at" to it.at,
+                )
+            }
+        ),
     )
 
 internal fun homeSnapshot(value: JsonObject): HomeSnapshot {
@@ -432,5 +552,23 @@ internal fun homeSnapshot(value: JsonObject): HomeSnapshot {
             )
         },
         value["refreshedAt"]?.jsonPrimitive?.longOrNull,
+        (value["notified"] as? JsonArray).orEmpty().take(MAX_NOTIFIED_SESSIONS).mapNotNull { element ->
+            try {
+                val item = element.jsonObject
+                // Nullable on purpose: the strict push-id check, whose IDs never contain a colon.
+                val route: String? = item.text("routeId")
+                val session: String? = item.text("sessionId")
+                require(isOpaqueId(route) && isOpaqueId(session))
+                NotifiedSession(
+                    route!!,
+                    session!!,
+                    item.text("title"),
+                    item.text("projectName"),
+                    item.long("at"),
+                )
+            } catch (_: Exception) {
+                null
+            }
+        },
     )
 }
