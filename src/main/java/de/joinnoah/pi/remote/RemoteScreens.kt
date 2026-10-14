@@ -41,7 +41,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
+import androidx.annotation.StringRes
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
@@ -293,7 +295,7 @@ internal fun RemoteScreen(
     // The selection names the chat beside the list; the screen's state strips the chat's session.
     val shownSessionId = state.selection.sessionId
     val visibleSessions =
-        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds, routeMarks) {
+        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds, routeMarks, shownSessionId) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
@@ -525,7 +527,9 @@ internal fun RemoteScreen(
     // restored position, and TalkBack keeps the header, whose actions it could no longer reach.
     var headerHidden by remember(key) { mutableStateOf(false) }
     val touchExploring = rememberTouchExploring()
-    val headerScroll = remember(listState) {
+    // Keyed on compactState too: a new layout or keyboard state makes a new one, which the old
+    // connection would no longer read.
+    val headerScroll = remember(listState, compactState) {
         HeaderHideConnection(
             position = { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset },
             active = { compactState.value && !touchExploring.value },
@@ -534,7 +538,12 @@ internal fun RemoteScreen(
         )
     }
     LaunchedEffect(compact, touchExploring.value) { if (!compact || touchExploring.value) headerHidden = false }
-    val headerLift by animateIntAsState(if (compact && headerHidden) -headerSize.height else 0, label = "headerLift")
+    // Hidden, the header also leaves the status bar's area, where it would still show through.
+    val headerTopInset = WindowInsets.safeDrawing.getTop(density)
+    val headerLift by animateIntAsState(
+        if (compact && headerHidden) -(headerSize.height + headerTopInset) else 0,
+        label = "headerLift",
+    )
     val listScope = rememberCoroutineScope()
     var autoFollow by rememberSaveable(key) { mutableStateOf(savedViewport?.following ?: true) }
     // The chat counts as read once it shows its end; a newer update after that is unread again.
@@ -1102,6 +1111,17 @@ internal fun RemoteScreen(
     val bannersShown = compactionVisible(state.compaction, compactionNow) || exportState != null
     // The status sheet shows the banners only; it goes when they do, and does not return for the next ones.
     LaunchedEffect(bannersShown) { if (!bannersShown) statusSheet = false }
+    // Compact, a one-line chip leads the controls' row while a banner waits in the status sheet; a
+    // failed export shows in the header itself, which a failure brings back.
+    val statusChipLine: Int? =
+        when {
+            !compact -> null
+            compactionVisible(state.compaction, compactionNow) -> R.string.remote_panel_compacting
+            exportState == ExportState.Exporting -> R.string.remote_export_running
+            exportState is ExportState.Done -> R.string.remote_export_done
+            else -> null
+        }
+    LaunchedEffect(exportState is ExportState.Failed) { if (exportState is ExportState.Failed) headerHidden = false }
     // The large editor is a compact-chrome control: it closes with the compact rules, not when they return.
     LaunchedEffect(compact) { if (!compact) editorExpanded = false }
     val exportScope = rememberCoroutineScope()
@@ -1170,7 +1190,7 @@ internal fun RemoteScreen(
     /** Runs the local command [command] with its [argument], as a typed command would. */
     fun runLocal(command: LocalCommand, argument: String) {
         when (command) {
-            LocalCommand.NEW -> if (key is RemoteNavKey.Chat) newSessionOpen = true
+            LocalCommand.NEW -> if (key is RemoteNavKey.Chat && !navigator.mutating) newSessionOpen = true
             LocalCommand.COMPACT -> model.compactContext()
             LocalCommand.MODEL -> modelPickerRequested = true
             LocalCommand.SETTINGS -> settingsSheetRequested = true
@@ -1497,7 +1517,8 @@ internal fun RemoteScreen(
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             CompactionBanner(state.compaction, compactionNow)
                         }
-                    if (!compact && exportState != null)
+                    // A failed export always shows here: a failure must not wait behind a menu.
+                    if (exportState != null && (!compact || exportState is ExportState.Failed))
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             ExportStatus(exportState, ::shareExport) {
                                 if (exportState is ExportState.Done)
@@ -2078,7 +2099,7 @@ internal fun RemoteScreen(
                             // overflow in the header, so the list keeps the full height.
                             is RemoteNavKey.Projects -> {
                                 OutlinedButton(
-                                    onClick = { navigator.openActivity(key.routeId) },
+                                    onClick = { navigator.openActivity(key.routeId, twoPane) },
                                     enabled = state.host != null,
                                     modifier = Modifier.fillMaxWidth().testTag("activityButton"),
                                 ) {
@@ -3062,7 +3083,8 @@ internal fun RemoteScreen(
                 Modifier.align(Alignment.TopCenter).fillMaxWidth()
                     .onSizeChanged { headerSize = it }
                     .offset { IntOffset(0, headerLift) }
-                    .then(underlay),
+                    .then(underlay)
+                    .testTag("chatHeader"),
             ) {
                 chatHeader()
             }
@@ -3258,6 +3280,11 @@ internal fun RemoteScreen(
                                 Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
+                                Text(
+                                    stringResource(R.string.remote_chat_status),
+                                    Modifier.semantics { heading() },
+                                    style = MaterialTheme.typography.titleLarge,
+                                )
                                 if (compactionVisible(state.compaction, compactionNow))
                                     CompactionBanner(state.compaction, compactionNow)
                                 if (exportState != null)
@@ -3352,7 +3379,17 @@ internal fun RemoteScreen(
                                 settingsSheetRequested = settingsSheetRequested,
                                 onSettingsSheetRequestHandled = { settingsSheetRequested = false },
                                 slashSuggestions = !composer.suggestionsClosed,
-                                leadingChips = if (compact && insightsShown) insightChips else null,
+                                leadingChips =
+                                    if (compact && (insightsShown || statusChipLine != null)) {
+                                        {
+                                            statusChipLine?.let { line ->
+                                                ChatStatusChip(line, running = line != R.string.remote_export_done) {
+                                                    statusSheet = true
+                                                }
+                                            }
+                                            if (insightsShown) insightChips()
+                                        }
+                                    } else null,
                                 onManageProviders = state.selection.routeId?.let { route -> { navigator.openProviders(route) } },
                             )
                         },
@@ -4197,6 +4234,25 @@ internal fun headerHiddenAfterScroll(hidden: Boolean, previous: Pair<Int, Int>, 
         up -> false
         else -> hidden
     }
+}
+
+/**
+ * The compact chat's status in one line, at the start of the controls' row while a banner waits in
+ * the status sheet: what runs ([running] spins) or what is done. A tap opens the sheet; the line is
+ * read out as it changes.
+ */
+@Composable
+private fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () -> Unit) {
+    AssistChip(
+        onClick = onClick,
+        label = { Text(stringResource(line), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+        leadingIcon = {
+            if (running && ValueAnimator.areAnimatorsEnabled())
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            else Icon(Icons.Outlined.Info, contentDescription = null, modifier = Modifier.size(18.dp))
+        },
+        modifier = Modifier.testTag("chatStatusChip").semantics { liveRegion = LiveRegionMode.Polite },
+    )
 }
 
 /** Whether TalkBack or another touch-exploration service is on; follows the setting while shown. */
