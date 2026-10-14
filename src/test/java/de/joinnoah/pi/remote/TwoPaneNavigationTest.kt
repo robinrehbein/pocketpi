@@ -2496,6 +2496,45 @@ class TwoPaneNavigationTest {
     }
 
     @Test
+    @Config(qualifiers = "w1280dp-h800dp-keysexposed-qwerty")
+    fun aLetterReviewDoesNotUseEndsReviewModeAndTypesIntoTheComposer() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        repository.changedFiles = listOf(GitFile("a.kt", GitChange.MODIFIED, 1, 1), GitFile("b.kt", GitChange.MODIFIED, 1, 1))
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performTextInput("abc")
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
+        val shift = android.view.KeyEvent.META_SHIFT_ON or android.view.KeyEvent.META_SHIFT_LEFT_ON
+        windowKey(android.view.KeyEvent.KEYCODE_D, ctrlMeta or shift)
+        compose.onNodeWithTag("chatStrip").assertIsDisplayed()
+        // "x" is no review key: the chat comes back with its composer, which takes the letter.
+        windowKey(android.view.KeyEvent.KEYCODE_X)
+        windowKey(android.view.KeyEvent.KEYCODE_Y)
+        compose.onNodeWithTag("chatStrip").assertDoesNotExist()
+        compose.onNodeWithTag("projectStrip").assertWidthIsEqualTo(PROJECT_STRIP_WIDTH)
+        assertInInspector("changesPane")
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(400.dp)
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        compose.onNodeWithTag("composerField").assert(hasText("abcxy"))
+        assertEquals(listOf<String?>("a.kt"), repository.openedChangesFiles)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-keysexposed-qwerty")
+    fun reviewModeEndsWhenTheChangesItOpenedNeverShow() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        repository.changesNeverOpen = true
+        render(hardwareKeyboard = true)
+        val shift = android.view.KeyEvent.META_SHIFT_ON or android.view.KeyEvent.META_SHIFT_LEFT_ON
+        windowKey(android.view.KeyEvent.KEYCODE_D, ctrlMeta or shift)
+        compose.mainClock.advanceTimeBy(5_000)
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatStrip").assertDoesNotExist()
+        compose.onNodeWithTag("projectStrip").assertWidthIsEqualTo(PROJECT_STRIP_WIDTH)
+        compose.onNodeWithTag("changesPane").assertDoesNotExist()
+        assertChatShown()
+    }
+
+    @Test
     @Config(qualifiers = "w800dp-h1280dp")
     fun theReviewButtonTakesThePortraitWindowAndClosingChangesEndsIt() {
         repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))

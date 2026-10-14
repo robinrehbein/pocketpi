@@ -132,6 +132,8 @@ private const val CHILD_REFRESH_ATTEMPTS = 12
 private const val CHILD_REFRESH_INTERVAL_MILLIS = 5_000L
 private const val JUMP_HIGHLIGHT_MILLIS = 2_000L
 private const val COMPACTION_TICK_MILLIS = 30_000L
+/** How long review mode waits for the Changes pane Ctrl+Shift+D opened for it. */
+private const val REVIEW_OPEN_GRACE_MILLIS = 2_000L
 private const val PRIVACY_POLICY_URL = "https://robinrehbein.de/privacy"
 private val LIST_TO_HEADER_END_SHIFT = 4.dp
 
@@ -694,8 +696,8 @@ internal fun RemoteScreen(
         if (composerFocusRequest == 0) return@LaunchedEffect
         // A prompt filled in or a composer asked for behind the strip: the chat comes back first,
         // so the user sees what they type into.
-        if (chatStripped) {
-            if (twoPane?.reviewing == true) twoPane.leaveReview() else twoPane?.inspectorExpanded = false
+        if (chatStripped && twoPane?.inspectorExpanded == true) {
+            if (twoPane.reviewing) twoPane.leaveReview() else twoPane.inspectorExpanded = false
             withTimeoutOrNull(1_000) { snapshotFlow { chatStripped }.first { !it } }
         }
         withFrameNanos { }
@@ -1505,7 +1507,8 @@ internal fun RemoteScreen(
     val paneOverChat =
         chatKey != null && chatModel != null && !panesBeside &&
             (jobsOpen || changesOpen != null || filesOpen != null || openTool != null)
-    val composerCovered = paneOverChat || (chatKey != null && inspectorShown && chatStripped)
+    // The strip reports itself a frame late; a pane no longer expanded gives the chat back at once.
+    val composerCovered = paneOverChat || (chatKey != null && inspectorShown && chatStripped && twoPane?.inspectorExpanded == true)
     if (chatKey != null)
         LaunchedEffect(chatKey, hardwareKeyboard) {
             if (!hardwareKeyboard || questionPending || chatDialogOpen || composerCovered || touchExplorationEnabled(context))
@@ -1538,6 +1541,8 @@ internal fun RemoteScreen(
                 if (chatFocusParked) composerFocusRequest++
             }
         }
+    // Ctrl+Shift+D entered review mode while Changes was still opening for it.
+    var reviewOpening by remember(key) { mutableStateOf(false) }
     /** A chat shortcut from the keyboard ([KeyContext.CHAT]); false when it does not apply now. */
     fun chatShortcut(shortcut: Shortcut): Boolean {
         val chat = chatModel ?: return false
@@ -1568,6 +1573,7 @@ internal fun RemoteScreen(
                 if (changesOpen == null) {
                     if (!state.connected) return false
                     openInspector(InspectorTab.CHANGES)
+                    reviewOpening = true
                 } else showTab(InspectorTab.CHANGES)
                 pane.enterReview()
                 true
@@ -1650,12 +1656,32 @@ internal fun RemoteScreen(
             chatKeyTarget.shortcut = ::chatShortcut
             chatKeyTarget.reviewing = { twoPane?.reviewing == true }
             chatKeyTarget.leaveReview = { twoPane?.leaveReview() }
+            chatKeyTarget.leaveReviewToType = leave@{
+                val pane = twoPane
+                if (pane?.reviewing != true || paneOverChat) return@leave false
+                pane.leaveReview()
+                // Uncovered from now on, so keys typed before the next frame reach the draft too.
+                chatKeyTarget.composerCovered = false
+                composerFocusRequest++
+                true
+            }
         }
     }
     // Review mode lives in the Changes pane: it ends once that closes, or another tab takes its place.
     val reviewable = changesOpen != null && (!panesBeside || (inspectorShown && (tabs.active ?: tabs.open.firstOrNull()) == InspectorTab.CHANGES))
     if (chatKey != null && twoPane != null)
-        LaunchedEffect(twoPane, reviewable) { if (!reviewable) twoPane.leaveReview() }
+        LaunchedEffect(twoPane, reviewable, twoPane.reviewing) {
+            if (reviewable || !twoPane.reviewing) {
+                reviewOpening = false
+                return@LaunchedEffect
+            }
+            // Changes opening for review mode gets a moment to show; one that never does ends it.
+            if (reviewOpening) {
+                delay(REVIEW_OPEN_GRACE_MILLIS)
+                reviewOpening = false
+            }
+            twoPane.leaveReview()
+        }
     // F6 into the chat goes to the composer, or with a question to the chat itself; a pane over
     // the chat is a region of its own.
     val chatRegion =

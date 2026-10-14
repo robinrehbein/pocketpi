@@ -403,6 +403,12 @@ internal class ChatKeyTarget {
     var reviewing: () -> Boolean = { false }
     var leaveReview: () -> Unit = {}
 
+    /**
+     * A printable key review mode does not use: review mode ends, so the chat comes back from
+     * its strip, and the composer gets focus. False where that does not uncover the composer.
+     */
+    var leaveReviewToType: () -> Boolean = { false }
+
     /** The Changes pane's handler of review keys while it shows; false when a key did nothing. */
     private var reviewHandler: ((ReviewKey) -> Boolean)? = null
 

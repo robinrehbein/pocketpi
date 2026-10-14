@@ -114,7 +114,11 @@ internal class NavigationFakeRepository : RemoteRepository {
     /** The files [openChanges] lists. */
     var changedFiles: List<GitFile> = emptyList()
 
+    /** The host never answers [openChanges]: the pane never opens. */
+    var changesNeverOpen = false
+
     override fun openChanges() {
+        if (changesNeverOpen) return
         val sessionId = checkNotNull(state.value.selection.sessionId)
         state.value =
             state.value.copy(
@@ -147,7 +151,7 @@ internal class NavigationFakeRepository : RemoteRepository {
     var sharedChangesOpens = 0
 
     override fun openChanges(exclusive: Boolean) {
-        if (exclusive) return openChanges()
+        if (exclusive || changesNeverOpen) return openChanges()
         sharedChangesOpens++
         val files = state.value.files
         openChanges()

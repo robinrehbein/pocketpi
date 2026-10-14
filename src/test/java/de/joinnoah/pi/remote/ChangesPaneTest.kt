@@ -1,6 +1,9 @@
 package de.joinnoah.pi.remote
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -571,6 +574,38 @@ class ChangesPaneTest {
         compose.onNodeWithTag("changesReview").performClick()
         assertTrue(twoPane.reviewing)
         compose.onAllNodesWithTag("changesSplitRow").assertCountEquals(5)
+    }
+
+    @Test
+    @Config(qualifiers = "w940dp-h900dp")
+    fun aHunkHeaderNeverPullsTheSplitColumnsBackSideways() {
+        // Lines wider than a column; a hunk header has about twice a column's room for them.
+        val long = "x".repeat(600)
+        val patch = "@@ -1,1 +1,1 @@\n-$long a\n+$long b\n@@ -9,1 +9,1 @@\n-$long c\n+$long d\n"
+        val lines = patchDiff(patch)
+        val rows = checkNotNull(splitDiff(patch, lines))
+        assertEquals(4, rows.size)
+        val scroll = androidx.compose.foundation.ScrollState(0)
+        // The second hunk's header comes into view last, as it does while the list scrolls down.
+        var shown by mutableStateOf(rows.size - 2)
+        compose.setContent {
+            MaterialTheme {
+                val rowStyle = rememberDiffRowStyle(lines)
+                Column(Modifier.fillMaxWidth()) {
+                    SplitDiffHeading()
+                    rows.take(shown).forEach { SplitDiffItem(it, lines, rowStyle, scroll, wrap = false) }
+                }
+            }
+        }
+        compose.waitForIdle()
+        assertTrue("the columns scroll sideways", scroll.maxValue > 0)
+        compose.runOnIdle { kotlinx.coroutines.runBlocking { scroll.scrollTo(scroll.maxValue) } }
+        val end = scroll.value
+        shown = rows.size
+        compose.waitForIdle()
+        compose.onAllNodesWithTag("changesSplitRow").assertCountEquals(4)
+        assertEquals(end, scroll.value)
+        assertTrue(scroll.maxValue >= end)
     }
 
     @Test

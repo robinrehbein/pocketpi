@@ -220,19 +220,15 @@ private fun FolderSideList(state: FilesState, actions: FilesActions, headerHeigh
         modifier.semantics { contentDescription = label }.testTag("filesSideList"),
         contentPadding = PaddingValues(top = headerHeight + 8.dp, bottom = 8.dp),
     ) {
-        itemsIndexed(entries, key = { _, entry -> entry.name }) { index, entry ->
+        itemsIndexed(entries, key = { _, entry -> entry.name }) { _, entry ->
             val path = childPath(state.path, entry.name)
             val folder = entry.type == FileEntryType.DIR
             val selected = !folder && path == state.file?.path
-            fun openFileAt(at: Int): (() -> Unit)? =
-                entries.getOrNull(at)?.takeIf { it.type == FileEntryType.FILE }?.let { other ->
-                    { actions.onOpenFile(childPath(state.path, other.name)) }
-                }
             Row(
                 Modifier.fillMaxWidth()
                     .heightIn(min = 48.dp)
                     .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Unspecified)
-                    .openAdjacentOnUpDown(openFileAt(index - 1), openFileAt(index + 1))
+                    .openOnArrowRelease(if (entry.type == FileEntryType.FILE && !selected) ({ actions.onOpenFile(path) }) else null)
                     .focusRing()
                     .selectable(selected) {
                         when (entry.type) {

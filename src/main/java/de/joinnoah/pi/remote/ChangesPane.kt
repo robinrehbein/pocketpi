@@ -27,7 +27,7 @@ import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.clickable
@@ -312,7 +312,8 @@ private fun changesHeaderActions(
 ): List<PaneAction> {
     val context = LocalContext.current
     val wrapLabel = stringResource(R.string.remote_review_wrap_lines)
-    val reviewLabel = stringResource(if (reviewing) R.string.remote_review_leave else R.string.remote_review_enter)
+    // One label; the toggle's state says whether review mode is on.
+    val reviewLabel = stringResource(R.string.remote_review_enter)
     val shipLabel = stringResource(R.string.remote_ship_menu)
     // Older hosts name the dev base only with the dev comparison.
     val devBase = state.devBase?.takeIf { it.ref != null } ?: state.status?.devRef?.let(::GitDevBase)
@@ -344,19 +345,20 @@ private fun changesHeaderActions(
 }
 
 /**
- * Up and Down on a row of a file list beside a diff or a file open the row above or below as
- * focus moves there; null where there is none. Focus itself moves as usual.
+ * A row of a file list beside a diff or a file: once Up or Down moved focus onto it, letting go
+ * of the key runs [open]; null where the row does not open that way, such as the open file's
+ * own. Holding the key walks the list and opens only the row it stops on, and the opened row is
+ * always the focused one. Focus itself moves as usual.
  */
-internal fun Modifier.openAdjacentOnUpDown(previous: (() -> Unit)?, next: (() -> Unit)?): Modifier =
-    onPreviewKeyEvent { event ->
-        if (event.type == KeyEventType.KeyDown && !event.isCtrlPressed && !event.isAltPressed && !event.isMetaPressed && !event.isShiftPressed)
-            when (event.key) {
-                Key.DirectionUp -> previous?.invoke()
-                Key.DirectionDown -> next?.invoke()
-                else -> Unit
-            }
-        false
-    }
+internal fun Modifier.openOnArrowRelease(open: (() -> Unit)?): Modifier =
+    if (open == null) this
+    else
+        onKeyEvent { event ->
+            if (event.type == KeyEventType.KeyUp && (event.key == Key.DirectionUp || event.key == Key.DirectionDown) &&
+                !event.isCtrlPressed && !event.isAltPressed && !event.isMetaPressed && !event.isShiftPressed)
+                open()
+            false
+        }
 
 /** The changed files beside a diff, as rows; Up and Down open the file above or below. */
 @Composable
@@ -370,16 +372,13 @@ private fun ChangesFileList(state: ChangesState, actions: ChangesActions, header
         modifier.semantics { contentDescription = label }.testTag("changesFileList"),
         contentPadding = PaddingValues(top = headerHeight + 8.dp, bottom = 8.dp),
     ) {
-        itemsIndexed(files, key = { _, file -> file.path }) { index, file ->
+        itemsIndexed(files, key = { _, file -> file.path }) { _, file ->
             val selected = file.path == open
             Row(
                 Modifier.fillMaxWidth()
                     .heightIn(min = 48.dp)
                     .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Unspecified)
-                    .openAdjacentOnUpDown(
-                        files.getOrNull(index - 1)?.let { { actions.onOpenFile(it.path) } },
-                        files.getOrNull(index + 1)?.let { { actions.onOpenFile(it.path) } },
-                    )
+                    .openOnArrowRelease(if (selected) null else ({ actions.onOpenFile(file.path) }))
                     .focusRing()
                     .selectable(selected) { actions.onOpenFile(file.path) }
                     .padding(horizontal = 16.dp, vertical = 6.dp)
@@ -784,9 +783,9 @@ private fun ChangesFileDiff(
             if (splitRows != null) splitRows.indices.filter { splitRows[it].old?.let(lines::get)?.kind == DiffKind.HUNK }
             else lines.indices.filter { lines[it].kind == DiffKind.HUNK }
         }
-    // One item comes before the rows: the actions, or a subagent's notice.
-    val leading = 1
     val showsRows = state.diffFailure == null && !state.diffLoading && diff != null && diff.omitted == null && !diff.binary && lines.isNotEmpty()
+    // Items before the rows: the actions, or a subagent's notice, and a split diff's heading.
+    val leading = if (splitRows != null && showsRows) 2 else 1
     SideEffect {
         keys.step = { direction ->
             val first = listState.firstVisibleItemIndex - leading
@@ -894,22 +893,19 @@ private fun ChangesFileDiff(
             lines.isEmpty() -> item(key = "empty") { Notice(stringResource(R.string.remote_changes_diff_empty)) }
             splitRows != null -> {
                 // A hunk header spans both sides; every other row pairs an old and a new line.
+                item(key = "splitHeading", contentType = "splitHeading") { SplitDiffHeading() }
                 itemsIndexed(splitRows, contentType = { _, row -> if (row.old != null && row.old == row.new) lines[row.old].kind else "pair" }) { _, row ->
-                    val old = row.old?.let(lines::get)
-                    val new = row.new?.let(lines::get)
-                    Column(Modifier.testTag("changesSplitRow")) {
-                        if (old != null && old.kind == DiffKind.HUNK)
-                            DiffRow(old, rowStyle, scroll, lineMenu(old, checkNotNull(row.old), commentable = false), wrap)
-                        else {
-                            SplitDiffRow(old, new, rowStyle, scroll, wrap) { line ->
-                                val index = if (line === old) row.old else row.new
-                                if (line == null || index == null) Modifier
-                                else lineMenu(line, index, !readOnly).then(if (readOnly) Modifier else Modifier.commentable(line))
-                            }
-                            old?.let { LineComment(it) }
-                            new?.takeIf { it !== old }?.let { LineComment(it) }
-                        }
-                    }
+                    SplitDiffItem(
+                        row,
+                        lines,
+                        rowStyle,
+                        scroll,
+                        wrap,
+                        cell = { line, index ->
+                            val commentable = line.kind != DiffKind.HUNK && !readOnly
+                            lineMenu(line, index, commentable).then(if (commentable) Modifier.commentable(line) else Modifier)
+                        },
+                    ) { LineComment(it) }
                 }
                 if (diff.truncated)
                     item(key = "truncated") { Notice(stringResource(R.string.remote_changes_diff_truncated)) }

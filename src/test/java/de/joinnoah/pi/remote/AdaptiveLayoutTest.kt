@@ -613,6 +613,21 @@ class AdaptiveLayoutTest {
     }
 
     @Test
+    fun aListChosenInReviewModeStaysAfterIt() {
+        val state = TwoPaneState()
+        state.adopt(paneLayout(1280.dp, TALL))
+        state.enterReview()
+        state.listCollapsed = false
+        state.leaveReview()
+        assertFalse(state.listCollapsed)
+        state.enterReview()
+        state.listCollapsed = true
+        state.leaveReview()
+        assertTrue(state.listCollapsed)
+        assertEquals(true, state.memos[paneLayout(1280.dp, TALL).sizeKey()]?.listCollapsed)
+    }
+
+    @Test
     fun reviewModeSurvivesRecreation() {
         val state = TwoPaneState()
         state.enterReview()

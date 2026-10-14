@@ -432,6 +432,11 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
         set(value) {
             collapsed = value
             autoCollapsed = false
+            // A choice made in review mode holds after it, too.
+            beforeReview?.let {
+                it[0] = value
+                it[1] = false
+            }
             sizedFor?.let { key -> memos = memos + (key to (memos[key] ?: PaneMemo()).copy(listCollapsed = value)) }
         }
 
@@ -442,6 +447,10 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
     fun revealList() {
         collapsed = false
         autoCollapsed = false
+        beforeReview?.let {
+            it[0] = false
+            it[1] = false
+        }
         val key = sizedFor ?: return
         val memo = memos[key]?.takeIf { it.listCollapsed == true }?.copy(listCollapsed = null) ?: return
         memos = if (memo.empty) memos - key else memos + (key to memo)

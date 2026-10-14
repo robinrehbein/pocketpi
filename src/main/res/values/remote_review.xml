@@ -2,7 +2,6 @@
 <resources>
     <!-- Review mode (Changes header, Ctrl+Shift+D): the window gives the changes its whole width. -->
     <string name="remote_review_enter">Review</string>
-    <string name="remote_review_leave">Leave review</string>
     <string name="remote_keymap_review">Review the changes across the window</string>
     <!-- The keys that only act in review mode, while no text field has focus. -->
     <string name="remote_review_keys_files">Next or previous file in review</string>

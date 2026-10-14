@@ -1185,7 +1185,8 @@ private fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets
     // a text field with focus takes them before they get here.
     reviewKey(event)?.let { key -> if (chat.reviewKey(key)) return true }
     // Over Files, Changes, a tool detail or the jobs the composer is hidden: no typing into it.
-    if (chat.composerCovered) return false
+    // Review mode only strips the chat; any other key there ends it and types into the composer.
+    if (chat.composerCovered && !chat.reviewing()) return false
     val text =
         typedText(
             native.unicodeChar,
@@ -1194,6 +1195,7 @@ private fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets
             native.isMetaPressed,
             altGr = altGrOnly(native.metaState),
         ) ?: return false
+    if (chat.composerCovered && !chat.leaveReviewToType()) return false
     chat.type(text)
     return true
 }

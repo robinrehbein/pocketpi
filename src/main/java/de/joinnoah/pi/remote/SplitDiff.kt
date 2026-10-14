@@ -2,6 +2,9 @@ package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -9,11 +12,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
 
 /*
  * A split diff: the old side on the left and the new side on the right, built from the same patch
@@ -80,6 +89,52 @@ internal fun splitDiffRows(lines: List<DiffLine>): List<SplitRow> {
     }
     flush()
     return rows
+}
+
+/**
+ * One item of a split diff: a hunk header across both sides, or an old and a new line side by
+ * side. [cell] decorates each line's cell or the header with the line's index into [lines], for
+ * example to make it commentable; [below] adds what goes under a line, such as its comment.
+ *
+ * The code columns share [scroll], so both sides move sideways together. A hunk header is wider
+ * than either column: sharing [scroll] would let its measurement lower the shared maximum and
+ * snap the columns back, leaving the end of long lines out of reach. It scrolls on its own.
+ */
+@Composable
+internal fun SplitDiffItem(
+    row: SplitRow,
+    lines: List<DiffLine>,
+    rowStyle: DiffRowStyle,
+    scroll: ScrollState,
+    wrap: Boolean,
+    cell: (DiffLine, Int) -> Modifier = { _, _ -> Modifier },
+    below: @Composable (DiffLine) -> Unit = {},
+) {
+    val old = row.old?.let(lines::get)
+    val new = row.new?.let(lines::get)
+    Column(Modifier.testTag("changesSplitRow")) {
+        if (old != null && old.kind == DiffKind.HUNK) DiffRow(old, rowStyle, rememberScrollState(), cell(old, checkNotNull(row.old)), wrap)
+        else {
+            SplitDiffRow(old, new, rowStyle, scroll, wrap) { line ->
+                val index = if (line === old) row.old else row.new
+                if (line == null || index == null) Modifier else cell(line, index)
+            }
+            old?.let { below(it) }
+            new?.takeIf { it !== old }?.let { below(it) }
+        }
+    }
+}
+
+/** "Before" over the old side and "After" over the new one, aligned with [SplitDiffRow]'s halves. */
+@Composable
+internal fun SplitDiffHeading(modifier: Modifier = Modifier) {
+    val style = MaterialTheme.typography.labelMedium
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(modifier.fillMaxWidth().height(IntrinsicSize.Min).testTag("changesSplitHeading")) {
+        Text(stringResource(R.string.remote_review_split_old), Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 4.dp).semantics { heading() }, color = color, style = style)
+        VerticalDivider(Modifier.fillMaxHeight())
+        Text(stringResource(R.string.remote_review_split_new), Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 4.dp).semantics { heading() }, color = color, style = style)
+    }
 }
 
 /**
