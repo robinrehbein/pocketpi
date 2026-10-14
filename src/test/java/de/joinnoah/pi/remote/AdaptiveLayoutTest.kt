@@ -566,4 +566,94 @@ class AdaptiveLayoutTest {
             }
         )
     }
+
+    @Test
+    fun resetLayoutForgetsWidthsAndHiddenListsButLeavesRoomForTheInspector() {
+        val layout = paneLayout(1300.dp, TALL)
+        val state = TwoPaneState()
+        assertFalse(state.customized)
+        state.window = 1300.dp
+        state.adopt(layout)
+        state.resizeList(layout, 420.dp)
+        state.resizeInspector(layout, 500.dp)
+        state.listCollapsed = true
+        state.inspectorExpanded = true
+        assertTrue(state.customized)
+        state.resetLayout()
+        assertFalse(state.customized)
+        assertTrue(state.memos.isEmpty())
+        assertFalse(state.listCollapsed)
+        assertFalse(state.inspectorExpanded)
+        assertEquals(layout.listWidth, state.listWidth(layout))
+        assertEquals(layout.inspectorWidth, state.inspectorWidth(layout))
+        // A list that only made way for the open inspector is no change of the user's to undo.
+        state.autoCollapseList()
+        assertFalse(state.customized)
+        state.resetLayout()
+        assertTrue(state.listCollapsed)
+        state.restoreList()
+        assertFalse(state.listCollapsed)
+    }
+
+    @Test
+    fun projectsColumnKeptBesideAChatIsRememberedPerBucketAndReset() {
+        val wide = paneLayout(1300.dp, TALL)
+        val narrow = paneLayout(800.dp, TALL)
+        val state = TwoPaneState()
+        state.adopt(wide)
+        state.projectsExpanded = true
+        assertTrue(state.customized)
+        assertEquals(true, state.memos[wide.sizeKey()]?.projectsExpanded)
+        // Another bucket has its own choice, and coming back restores this one.
+        state.adopt(narrow)
+        assertFalse(state.projectsExpanded)
+        state.adopt(wide)
+        assertTrue(state.projectsExpanded)
+        val scope = androidx.compose.runtime.saveable.SaverScope { true }
+        assertTrue(TwoPaneState.Saver.restore(with(TwoPaneState.Saver) { scope.save(state) }!!)!!.projectsExpanded)
+        state.projectsExpanded = false
+        assertTrue(state.memos.isEmpty())
+        state.projectsExpanded = true
+        state.resetLayout()
+        assertFalse(state.projectsExpanded)
+        assertFalse(state.customized)
+    }
+
+    @Test
+    fun fullProjectsColumnDecidesTheInspectorForTheRoomItLeaves() {
+        // Tab S11 landscape: beside the strip the inspector opens beside the list.
+        val landscape = paneLayout(1205.dp, TALL)
+        assertTrue(landscape.inspectorBesideList)
+        val kept = checkNotNull(projectsColumnLayout(1205.dp, landscape))
+        // Beside the full column it would leave the chat under its minimum: the list makes way.
+        assertFalse(kept.inspectorBesideList)
+        assertTrue(kept.autoCollapseList)
+        assertEquals(landscape.sizeKey(), kept.sizeKey())
+        // Once the list has made way, the chat keeps its minimum beside the narrowest inspector.
+        val room = 1205.dp - landscape.projectsWidth - PANE_DIVIDER_WIDTH
+        assertTrue(room - landscape.inspectorMinWidth - PANE_DIVIDER_WIDTH >= CHAT_PANE_MIN_WIDTH)
+        // Where the narrowest list and the chat no longer fit beside it, the strip stays.
+        val portrait = paneLayout(800.dp, TALL)
+        assertNull(projectsColumnLayout(800.dp, portrait))
+        assertNull(projectsColumnLayout(400.dp, PaneLayout.Phone))
+        // 280 dp of projects, a divider, 400 dp of chat, a divider and a 300 dp inspector need 982 dp.
+        val wide = paneLayout(1300.dp, TALL)
+        assertNull(projectsColumnLayout(981.dp, wide))
+        assertTrue(projectsColumnLayout(982.dp, wide) != null)
+        // Without an inspector beside the chat, the narrowest list is what has to fit: 922 dp.
+        val overlay = wide.copy(inspector = InspectorMode.OVERLAY)
+        assertNull(projectsColumnLayout(921.dp, overlay))
+        assertTrue(projectsColumnLayout(922.dp, overlay) != null)
+    }
+
+    @Test
+    fun aListShownAgainIsNoLayoutToReset() {
+        val layout = paneLayout(1300.dp, TALL)
+        val state = TwoPaneState()
+        state.adopt(layout)
+        state.listCollapsed = true
+        assertTrue(state.customized)
+        state.listCollapsed = false
+        assertFalse(state.customized)
+    }
 }

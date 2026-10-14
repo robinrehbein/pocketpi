@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import android.content.Context
 import android.text.format.Formatter
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -16,6 +17,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 internal sealed interface ProjectArtifactState {
     data object Loading : ProjectArtifactState
@@ -150,9 +153,14 @@ internal fun ProjectArtifactCard(path: String, source: ProjectImageSource, modif
                 )
             )
     }
+    val context = LocalContext.current
     Column(modifier.fillMaxWidth().testTag("projectArtifact-$path"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Surface(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                // Dragged into another app, the card is the HTML file.
+                .dragOut(ready?.artifact?.sha256, enabled = ready != null) {
+                    ready?.artifact?.let { dragArtifact(context, path, it.html) }
+                },
             color = MaterialTheme.colorScheme.surfaceContainer,
             shape = RoundedCornerShape(12.dp),
         ) {
@@ -212,6 +220,18 @@ internal fun ProjectArtifactCard(path: String, source: ProjectImageSource, modif
         )
     }
 }
+
+/** The page at [path] as an HTML file another app can take, written to the drag folder. */
+internal suspend fun dragArtifact(context: Context, path: String, html: String): DragPayload =
+    withContext(Dispatchers.IO) {
+        dragFile(
+            context,
+            path.substringAfterLast('/'),
+            ArtifactStorage.safeName(path, "html"),
+            html.toByteArray(Charsets.UTF_8),
+            "text/html",
+        )
+    }
 
 /** A closed ```mermaid fence in assistant text: a live thumbnail of the diagram, the viewer on a tap. */
 @Composable

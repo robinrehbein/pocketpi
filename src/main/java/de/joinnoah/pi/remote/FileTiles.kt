@@ -128,6 +128,8 @@ internal fun FileEntryTile(
             }
             .testTag(tag)
             .contextMenu(enabled = path != null, items = menu)
+            // Dragged into another app, the tile is its path as text.
+            .dragOut(path, enabled = path != null) { path?.let(::pathTransfer) }
             .then(
                 // Right opens the tile as Enter does, where no tile lies to its right.
                 if (openable) Modifier.focusRing(RoundedCornerShape(18.dp)).then(regionChild).openOnRight(focusManager, onOpen)

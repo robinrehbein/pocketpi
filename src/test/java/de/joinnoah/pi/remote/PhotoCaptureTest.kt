@@ -36,13 +36,15 @@ class PhotoCaptureTest {
         val model = ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "session"), FakeSettingsRepository())
         repository.state.value = RemoteState(selection = selection)
         val discarded = mutableListOf<String>()
-        repository.importsRun = true
+        repository.holdBatches = true
         PhotoCapture.onResult(true, capture, selection, model::acceptAttachments) { discarded += it }
         runCurrent()
-        assertEquals(listOf(Triple(selection, listOf(capture), true)), repository.imports)
+        val (importedInto, items, done) = repository.batches.single()
+        assertEquals(selection, importedInto)
+        assertEquals(listOf(Picked(capture, photo = true)), items)
         // The import still reads it.
         assertTrue(discarded.isEmpty())
-        repository.state.value = repository.state.value.copy(importingAttachments = false)
+        done()
         runCurrent()
         // The plaintext capture does not outlive the import that copied it.
         assertEquals(listOf(capture), discarded)
@@ -66,7 +68,7 @@ class PhotoCaptureTest {
         val model = ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "session"), FakeSettingsRepository())
         repository.state.value = RemoteState(selection = selection)
         val discarded = mutableListOf<String>()
-        // importsRun is off: the repository refused the import without starting it.
+        // The repository refused the import without starting it.
         PhotoCapture.onResult(true, capture, selection, model::acceptAttachments) { discarded += it }
         runCurrent()
         assertEquals(listOf(capture), discarded)

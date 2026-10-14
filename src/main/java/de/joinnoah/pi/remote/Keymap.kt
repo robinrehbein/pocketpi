@@ -352,6 +352,12 @@ internal class ChatKeyTarget {
     /** Focuses the composer and types [text] at its cursor; never while [composerCovered]. */
     var type: (String) -> Unit = {}
 
+    /**
+     * Text went into the composer's draft from outside the field (a drop): dictation stops, so
+     * it cannot overwrite that text.
+     */
+    var draftEdited: () -> Unit = {}
+
     /** Runs a chat shortcut ([KeyContext.CHAT]); false when it does not apply now. */
     var shortcut: (Shortcut) -> Boolean = { false }
 
