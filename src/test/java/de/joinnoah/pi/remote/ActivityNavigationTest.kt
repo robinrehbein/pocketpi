@@ -7,6 +7,9 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ActivityNavigationTest {
@@ -24,6 +27,37 @@ class ActivityNavigationTest {
         navigation.openActivity("host")
         navigation.openActivity("host")
         assertEquals(chat + RemoteNavKey.Activity("host"), stack)
+    }
+
+    @Test
+    fun theBoardBringsACollapsedListBackBesideTheChat() = runTest {
+        val repository = NavigationFakeRepository()
+        val stack = chat.toMutableList()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        val twoPane = TwoPaneState(listCollapsed = true)
+
+        navigation.openActivity("other", twoPane)
+        assertTrue(twoPane.listCollapsed)
+
+        navigation.openActivity("host", twoPane)
+        assertFalse(twoPane.listCollapsed)
+        assertEquals(chat + RemoteNavKey.Activity("host"), stack)
+    }
+
+    @Test
+    fun theChatBesideTheBoardKeepsItsShortcutsInTwoPanesOnly() = runTest {
+        val repository = NavigationFakeRepository()
+        val stack = chat.toMutableList()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        val open = chat.last() as RemoteNavKey.Chat
+        assertEquals(open, navigation.chatInView(null))
+
+        navigation.openActivity("host")
+
+        assertNull(navigation.topChat)
+        // On a phone the board covers the chat; in two panes the chat stays in the detail column.
+        assertNull(navigation.chatInView(null))
+        assertEquals(open, navigation.chatInView(TwoPaneState()))
     }
 
     @Test

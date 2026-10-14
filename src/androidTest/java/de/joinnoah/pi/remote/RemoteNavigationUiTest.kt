@@ -1781,14 +1781,17 @@ class RemoteNavigationUiTest {
         compose.onNodeWithText("Test computer").performClick()
         compose.onNodeWithText("Project one").assertIsDisplayed()
         val title = compose.activity.getString(R.string.remote_disconnect_title, "Test computer")
-        click(R.string.remote_disconnect)
+        // Disconnect lives in the Mac's overflow on its Projects page.
+        compose.onNodeWithTag("macOverflow").performClick()
+        click(R.string.remote_mac_disconnect)
         compose.onNodeWithText(title).assertIsDisplayed()
         compose.onNode(hasText(label(R.string.remote_cancel)) and hasAnyAncestor(isDialog()))
             .performClick()
         compose.onNodeWithText(title).assertDoesNotExist()
         compose.runOnIdle { assertNotNull(repository.state.value.host) }
 
-        click(R.string.remote_disconnect)
+        compose.onNodeWithTag("macOverflow").performClick()
+        click(R.string.remote_mac_disconnect)
         compose.onNodeWithTag("confirmDisconnect").performClick()
         compose.runOnIdle {
             assertEquals(1, repository.disconnects)
@@ -2053,13 +2056,18 @@ class RemoteNavigationUiTest {
                     compaction = SessionCompaction("threshold", System.currentTimeMillis())
                 )
         }
-        // A compact chat (always, on a phone) keeps the banner out of the conversation: the header
-        // menu offers Status while it shows, and the banner is in the sheet that opens.
+        // A compact chat (always, on a phone) keeps the banner out of the conversation: a one-line
+        // status chip says what runs, the header menu offers Status while it shows, and the banner
+        // is in the sheet that opens.
         compose.onNodeWithTag("compactionBanner").assertDoesNotExist()
+        // The chip merges its label into itself, as a button does.
+        compose.onNode(hasTestTag("chatStatusChip") and hasText(label(R.string.remote_panel_compacting)))
+            .assertIsDisplayed()
         compose.onNodeWithTag("chatActionsMore").performClick()
         compose.onNodeWithTag("chatActionMenu_status").performClick()
         compose.onNodeWithTag("compactionBanner").assertIsDisplayed()
-        compose.onNodeWithText(label(R.string.remote_panel_compacting)).assertIsDisplayed()
+        compose.onNode(hasText(label(R.string.remote_panel_compacting)) and hasAnyAncestor(hasTestTag("compactionBanner")))
+            .assertIsDisplayed()
         compose.runOnIdle {
             repository.state.value = repository.state.value.copy(compaction = null)
         }

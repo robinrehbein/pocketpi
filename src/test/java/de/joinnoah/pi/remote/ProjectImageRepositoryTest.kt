@@ -35,12 +35,15 @@ class ProjectImageRepositoryTest {
         val sent = mutableListOf<JsonObject>()
         val sentAt = mutableListOf<Long>()
         var advertised: List<String> = listOf(FILES_MEDIA_CAPABILITY)
+        /** The file the Mac serves; an agent may overwrite it between runs. */
+        var served: ByteArray = content
+        private val servedDigest get() = AttachmentImportRules.sha256(served)
         /** A host that predates the v2 route sends no list for it. */
         var legacyHost = false
         var startReply: (JsonObject) -> JsonObject = { request ->
             Wire.objectOf(
                 "kind" to "files.media", "sessionId" to request.text("sessionId"), "path" to request.text("path").removePrefix("/p/"),
-                "mediaId" to mediaId, "mimeType" to "image/png", "totalBytes" to content.size, "sha256" to digest,
+                "mediaId" to mediaId, "mimeType" to "image/png", "totalBytes" to served.size, "sha256" to servedDigest,
             )
         }
         var error: String? = null
@@ -87,13 +90,13 @@ class ProjectImageRepositoryTest {
                         ?: reply(startReply(payload).also { if (it.containsKey("mediaId")) { open++; peakOpen = maxOf(peakOpen, open) } })
                 "session.files.media.get" -> {
                     val offset = payload.long("offset").toInt()
-                    val length = minOf(MEDIA_CHUNK_BYTES, content.size - offset)
-                    if (offset + length == content.size) open--
+                    val length = minOf(MEDIA_CHUNK_BYTES, served.size - offset)
+                    if (offset + length == served.size) open--
                     reply(
                         Wire.objectOf(
                             "kind" to "files.media.content", "sessionId" to payload.text("sessionId"),
-                            "mediaId" to payload.text("mediaId"), "offset" to offset, "totalBytes" to content.size,
-                            "sha256" to digest, "data" to Wire.encode(content.copyOfRange(offset, offset + length)),
+                            "mediaId" to payload.text("mediaId"), "offset" to offset, "totalBytes" to served.size,
+                            "sha256" to servedDigest, "data" to Wire.encode(served.copyOfRange(offset, offset + length)),
                         )
                     )
                 }
@@ -148,12 +151,38 @@ class ProjectImageRepositoryTest {
         assertTrue(read.await() is ProjectImageResult.Loaded)
         assertTrue(first.media().isNotEmpty())
 
+        // The Mac cannot answer after the restart: the kept copy shows.
         val second = transport()
         val restarted = connected(second, media)
+        second.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
         val result = restarted.readProjectImage("session", "build/shot.png")
         assertArrayEquals(content, (result as ProjectImageResult.Loaded).bytes)
         assertEquals("build/shot.png", result.path)
         assertTrue(second.media().isEmpty())
+    }
+
+    @Test
+    fun aKeptPointerIsCheckedWithTheMacOnceARunSoAnOverwrittenPictureShows() = runTest {
+        val media = diskCache()
+        val first = transport()
+        val running = connected(first, media)
+        val read = async { running.readProjectImage("session", "build/shot.png") }
+        advanceUntilIdle()
+        read.await()
+
+        // The agent overwrote the file before the next run; a connected Mac is asked once.
+        val overwritten = ByteArray(300) { (it * 7).toByte() }
+        val second = transport().apply { served = overwritten }
+        val restarted = connected(second, media)
+        val again = async { restarted.readProjectImage("session", "build/shot.png") }
+        advanceUntilIdle()
+        assertArrayEquals(overwritten, (again.await() as ProjectImageResult.Loaded).bytes)
+        val reads = second.media().size
+        assertTrue(reads > 0)
+
+        assertArrayEquals(overwritten, (restarted.readProjectImage("session", "build/shot.png") as ProjectImageResult.Loaded).bytes)
+        assertEquals(reads, second.media().size)
     }
 
     @Test

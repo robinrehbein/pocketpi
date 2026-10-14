@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import androidx.navigation3.runtime.NavKey
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
@@ -48,6 +49,76 @@ class FolderNavigationTest {
         runCurrent()
         assertEquals(projects + RemoteNavKey.FolderBrowser("host"), stack)
         assertEquals(RemoteSelection("host"), repository.activations.single().first)
+    }
+
+    @Test
+    fun `folders opened while the projects still activate stay open`() = runTest {
+        val repository = NavigationFakeRepository()
+        val gate = CompletableDeferred<Unit>()
+        repository.activation = { selection, _ ->
+            gate.await()
+            selection
+        }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.open(RemoteNavKey.Projects("host"))
+        runCurrent()
+        navigation.openFolders("host")
+        assertEquals(projects + RemoteNavKey.FolderBrowser("host"), stack)
+
+        gate.complete(Unit)
+        runCurrent()
+
+        assertEquals(projects + RemoteNavKey.FolderBrowser("host"), stack)
+    }
+
+    @Test
+    fun `providers opened while the projects still activate stay open`() = runTest {
+        val repository = NavigationFakeRepository()
+        val gate = CompletableDeferred<Unit>()
+        repository.activation = { selection, _ ->
+            gate.await()
+            selection
+        }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.open(RemoteNavKey.Projects("host"))
+        runCurrent()
+        navigation.openProviders("host")
+
+        gate.complete(Unit)
+        runCurrent()
+
+        assertEquals(projects + RemoteNavKey.Providers("host"), stack)
+    }
+
+    @Test
+    fun `restore keeps the browser on top of stacked parent chats`() = runTest {
+        val repository = NavigationFakeRepository()
+        val child = RemoteNavKey.Chat("host", "project", "child")
+        val parent = RemoteNavKey.Chat("host", "project", "parent")
+        val chats = child.selection().keys().dropLast(1) + parent + child
+        val stack = (chats + RemoteNavKey.FolderBrowser("host")).toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+
+        navigation.restore()
+        runCurrent()
+
+        assertEquals(chats + RemoteNavKey.FolderBrowser("host"), stack)
+    }
+
+    @Test
+    fun `restore keeps the board and the browser above it`() = runTest {
+        val repository = NavigationFakeRepository()
+        val open = RemoteSelection("host", "project", "s1").keys()
+        val overlays = listOf(RemoteNavKey.Activity("host"), RemoteNavKey.FolderBrowser("host"))
+        val stack = (open + overlays).toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+
+        navigation.restore()
+        runCurrent()
+
+        assertEquals(open + overlays, stack)
     }
 
     @Test

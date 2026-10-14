@@ -55,6 +55,13 @@ class NewSessionSheetTest {
         override fun send() {
             events += "send"
         }
+
+        /** What [modelNotSet] told the user, if anything: whether the prompt was kept. */
+        var modelNotSet: Boolean? = null
+
+        override fun modelNotSet(promptKept: Boolean) {
+            modelNotSet = promptKept
+        }
     }
 
     private fun run(choice: NewSessionChoice, steps: FakeSteps) =
@@ -82,6 +89,15 @@ class NewSessionSheetTest {
         val steps = steps(modelResult = false)
         run(NewSessionChoice(model, "Hi"), steps)
         assertEquals(listOf("models", "model:anthropic/sonnet:start", "model:done", "draft:Hi"), steps.events)
+        // The user learns why nothing went out.
+        assertEquals(true, steps.modelNotSet)
+    }
+
+    @Test
+    fun aFailedModelWithoutAPromptIsStillReported() {
+        val steps = steps(modelResult = false)
+        run(NewSessionChoice(model, ""), steps)
+        assertEquals(false, steps.modelNotSet)
     }
 
     @Test
@@ -103,6 +119,7 @@ class NewSessionSheetTest {
         val steps = steps(modelsArrive = false)
         run(NewSessionChoice(model, "Hi"), steps)
         assertEquals(listOf("models", "draft:Hi"), steps.events)
+        assertEquals(true, steps.modelNotSet)
     }
 
     @Test
@@ -110,6 +127,8 @@ class NewSessionSheetTest {
         val steps = steps(navigateAway = true)
         run(NewSessionChoice(model, "Hi"), steps)
         assertEquals(listOf("models"), steps.events)
+        // Another chat is on screen: nothing is reported there.
+        assertEquals(null, steps.modelNotSet)
     }
 
     @Test
