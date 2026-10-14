@@ -184,9 +184,10 @@ class PromptPredictionTest {
     }
 
     @Test
-    fun anOfferFollowedByASuccessfulToolStillCounts() {
+    fun anOfferIsOnlyOpenWhileItIsTheLastReply() {
+        // pi kept working after asking, so the question is no longer the turn's last word.
         val messages = listOf(user(), reply("Shall I commit this?")) + tool("read")
-        assertEquals(rule(PredictionRule.ACCEPT_OFFER), predictPrompt(messages, "idle", false))
+        assertNull(predictPrompt(messages, "idle", false))
     }
 
     @Test
