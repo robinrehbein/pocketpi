@@ -86,12 +86,13 @@ private fun toolEvents(messages: List<JsonObject>): Pair<List<ToolEvent>, Int> {
                 val call = message.optionalText("toolCallId")?.let { calls[it] }
                 val name = (message.optionalText("toolName") ?: call?.name).orEmpty().lowercase()
                 if (message.optionalText("state") == "streaming") return@forEachIndexed
+                val shell = if (name == "bash" && call != null) command(call.arguments) else null
                 events +=
                     ToolEvent(
                         index,
                         edit = name in editTools,
-                        test = name == "bash" && call != null && testCommand.containsMatchIn(command(call.arguments)),
-                        publish = name == "bash" && call != null && gitPublish.containsMatchIn(command(call.arguments)),
+                        test = shell != null && testCommand.containsMatchIn(shell),
+                        publish = shell != null && gitPublish.containsMatchIn(shell),
                         failed = message.optionalText("state") == "error",
                         timestamp = call?.timestamp,
                     )
@@ -104,7 +105,7 @@ private fun toolEvents(messages: List<JsonObject>): Pair<List<ToolEvent>, Int> {
 /**
  * Suggests the next prompt for an idle conversation, or null.
  *
- * In order: a turn that ended in an error → continue; a tool that failed in the latest turn → fix
+ * In order: a turn the host was stopped during → continue; a tool that failed in the latest turn → fix
  * it; a reply that ends by offering a next step ("Shall I …?") → accept it; an approved plan
  * without edits since → implement it; edits since the last test run → run the tests; several edits
  * and a green test run in the latest turn, not yet pushed → prepare a PR; otherwise the user's
@@ -122,7 +123,11 @@ internal fun predictPrompt(
     if (messages.last().optionalText("state") == "streaming") return null
     val (events, lastUser) = toolEvents(messages)
     val reply = messages.withIndex().lastOrNull { it.index > lastUser && it.value.optionalText("role") == "assistant" }
-    if (reply?.value?.optionalText("state") == "error") return PromptPrediction.Rule(PredictionRule.CONTINUE)
+    // pi's own errors and the user's Stop both arrive as an empty error reply and can't be told
+    // apart, so only the host's interruption notice, which has text, suggests continuing.
+    if (reply?.value?.optionalText("state") == "error" && !reply.value.optionalText("text").isNullOrBlank()) {
+        return PromptPrediction.Rule(PredictionRule.CONTINUE)
+    }
     val latest = events.lastOrNull()
     val fix =
         if (latest != null && latest.failed && latest.index > lastUser)
@@ -143,7 +148,8 @@ internal fun predictPrompt(
     val edits = events.count { it.edit && !it.failed }
     if (lastTest >= 0 && edits >= PR_EDIT_THRESHOLD) {
         val test = events[lastTest]
-        val published = events.drop(lastTest + 1).any { it.publish && !it.failed }
+        // The test run itself may be the push ("./gradlew test && git push"), so it counts too.
+        val published = events.drop(lastTest).any { it.publish && !it.failed }
         if (!test.failed && test.index > lastUser && !published) return PromptPrediction.Rule(PredictionRule.PREPARE_PR)
     }
     val lastPrompt = messages.getOrNull(lastUser)?.optionalText("text")?.let(::normalizePrompt)?.lowercase()
@@ -154,44 +160,47 @@ internal fun predictPrompt(
 
 // ---- What the latest reply asks, and which language the conversation is in ----
 
-private val offerOpenings =
+// An offer starts a sentence: at the start of the reply, after . ! ? or :, or on a new line
+// (bullets and quote marks allowed).
+private val offerOpening =
     Regex(
-        "^(shall i|should i|do you want me to|want me to|would you like me to|shall we|should we|" +
-            "can i go ahead|ok to|okay to|soll ich|sollen wir|möchtest du, dass ich|willst du, dass ich|" +
-            "darf ich|wollen wir)\\b",
+        "(?:^|[.!?:]\\s+|\\n)[\\s>*_-]*(shall i|should i|do you want me to|want me to|" +
+            "would you like me to|shall we|should we|can i go ahead|ok to|okay to|soll ich|sollen wir|" +
+            "möchtest du,? dass ich|willst du,? dass ich|darf ich|kann ich|wollen wir)\\b",
         RegexOption.IGNORE_CASE,
     )
 
 private val alternatives = Regex("\\b(or|oder)\\b", RegexOption.IGNORE_CASE)
 
+private val word = Regex("[\\p{L}']+")
+
 /**
  * True when [text] ends with a yes/no offer of a next step, such as "Shall I commit this?" or
- * "Soll ich die Tests anpassen?". A question between alternatives ("… or …?") has no single
- * answer, so it does not count.
+ * "Soll ich z. B. die Tests anpassen?": the last offer opening in the reply runs to its final "?"
+ * without another question in between. A question between alternatives ("… or …?") has no
+ * single answer, so it does not count.
  */
 internal fun offersNextStep(text: String): Boolean {
     val trimmed = text.trimEnd().trimEnd('*', '_', '`', ' ')
     if (!trimmed.endsWith("?")) return false
-    val sentence =
-        trimmed.dropLast(1)
-            .split(Regex("(?<=[.!?:])\\s+|\\n+"))
-            .last()
-            .trimStart('-', '*', '>', ' ', '\t')
-    return offerOpenings.containsMatchIn(sentence) && !alternatives.containsMatchIn(sentence)
+    val opening = offerOpening.findAll(trimmed).lastOrNull() ?: return false
+    val offer = trimmed.substring(opening.groups[1]!!.range.first, trimmed.length - 1)
+    return '?' !in offer && !alternatives.containsMatchIn(offer)
 }
 
 private val germanWords =
     setOf(
-        "und", "ist", "nicht", "ich", "du", "das", "der", "den", "dem", "mit", "für", "auf", "bitte",
-        "mach", "mache", "noch", "auch", "wir", "ein", "eine", "es", "kannst", "soll", "jetzt",
-        "dann", "wie", "warum", "ja", "nein", "aber", "bei", "zu", "im", "von", "wenn", "dass",
+        "und", "ist", "nicht", "ich", "du", "das", "der", "die", "den", "dem", "mit", "für", "auf",
+        "bitte", "mach", "mache", "noch", "auch", "wir", "ein", "eine", "es", "kannst", "kann",
+        "soll", "jetzt", "dann", "wie", "warum", "ja", "nein", "aber", "bei", "zu", "im", "von",
+        "wenn", "dass", "hast", "habe", "sind", "wird",
     )
 
 private val englishWords =
     setOf(
         "the", "and", "is", "not", "i", "you", "it", "with", "for", "on", "please", "make", "also",
-        "we", "a", "an", "can", "should", "now", "then", "how", "what", "why", "yes", "but", "this",
-        "that", "to", "of", "in", "if", "do", "run",
+        "we", "can", "should", "now", "then", "how", "what", "why", "yes", "but", "this", "that",
+        "to", "of", "if", "do", "run",
     )
 
 /**
@@ -205,14 +214,14 @@ internal fun conversationLanguage(messages: List<JsonObject>): String? {
     messages.asReversed()
         .asSequence()
         .filter { it.optionalText("role") == "user" }
+        .map { it.optionalText("text").orEmpty().trim().lowercase() }
+        .filter { it.isNotEmpty() && !it.startsWith("/") }
         .take(3)
-        .forEach { message ->
-            val text = message.optionalText("text").orEmpty().lowercase()
-            if (text.startsWith("/")) return@forEach
+        .forEach { text ->
             if (text.any { it in "äöüß" }) german += 2
-            Regex("[\\p{L}']+").findAll(text).forEach { word ->
-                if (word.value in germanWords) german++
-                if (word.value in englishWords) english++
+            word.findAll(text).forEach {
+                if (it.value in germanWords) german++
+                if (it.value in englishWords) english++
             }
         }
     return when {
