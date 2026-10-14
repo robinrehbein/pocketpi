@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -18,6 +19,25 @@ class RemoteAbortTest {
         assertTrue(
             canAbortRemoteRun(RemoteState(selection = selection, connected = true), activeRouteId = "host")
         )
+    }
+
+    @Test
+    fun aStopDiscardsOnlyTheFollowUpsStillWaiting() {
+        val state =
+            RemoteState(
+                selection = RemoteSelection(routeId = "host", projectId = "project", sessionId = "session"),
+                connected = true,
+                status = "running",
+                followUps = listOf(
+                    PendingFollowUp("waiting", "wait", "pending"),
+                    PendingFollowUp("steered", "steer", "accepted", "steer"),
+                    PendingFollowUp("delivered", "done", "delivered"),
+                    PendingFollowUp("cancelled", "gone", "cancelled"),
+                    PendingFollowUp("uncertain", "unclear", "uncertain"),
+                ),
+            )
+        assertEquals(2, queuedFollowUpCount(state))
+        assertEquals(0, queuedFollowUpCount(state.copy(followUps = emptyList())))
     }
 
     private val parent = RemoteSelection(routeId = "host", projectId = "project", sessionId = "parent")

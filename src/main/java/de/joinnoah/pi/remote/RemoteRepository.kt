@@ -25,7 +25,8 @@ enum class ToolOutputFailure {
 
 /**
  * Progress of the one full tool output download for the selected session. [text] is non-null
- * only once every chunk arrived; [failure] is set when the download stopped early.
+ * only once every chunk arrived; [failure] is set when the download stopped early. While it runs,
+ * [preview] is the text of the chunks that arrived so far, so the output reads as it loads.
  */
 data class ToolOutputDownload(
     val toolCallId: String,
@@ -35,6 +36,7 @@ data class ToolOutputDownload(
     val truncated: Boolean,
     val isError: Boolean,
     val failure: ToolOutputFailure?,
+    val preview: String? = null,
 )
 
 internal fun canFollowUp(state: RemoteState): Boolean =
@@ -65,6 +67,33 @@ enum class ActivationMode {
     RESTORE,
     USER_OPEN,
 }
+
+/** Where a plain prompt stands between tapping send and the host's timeline having it. */
+enum class PendingSendState {
+    /** Journaled and on its way; the host has not answered yet. */
+    SENDING,
+
+    /** The host acknowledged it; the timeline may not show it yet. */
+    CONFIRMED,
+
+    /** The send failed or may not have left the phone. */
+    NOT_CONFIRMED,
+}
+
+/**
+ * A plain prompt the chat shows at its tail until the host's timeline has it. It lives in memory
+ * for this run only; after a restart the unresolved send is back in the composer instead.
+ * [afterMessageId] is the newest message the chat showed when the prompt was sent: only messages
+ * after it can be the host's copy of this prompt, so an identical earlier prompt never matches.
+ */
+data class PendingSend(
+    val mutationId: String,
+    val text: String,
+    val quote: MessageQuote?,
+    val attachments: List<LocalAttachment>,
+    val state: PendingSendState,
+    val afterMessageId: String? = null,
+)
 
 data class RemoteState(
     val hosts: List<PairedHost> = emptyList(),
@@ -130,6 +159,8 @@ data class RemoteState(
     val sending: Boolean = false,
     val uncertain: Boolean = false,
     val followUps: List<PendingFollowUp> = emptyList(),
+    /** The plain prompt the chat shows at its tail until the timeline has it; null when none. */
+    val pendingSend: PendingSend? = null,
     /**
      * Phone stops and resumes of subagent children, by child session ID. Memory only on purpose:
      * "stopped by you" describes this app run; after a restart the host's status is the truth.
@@ -142,6 +173,8 @@ data class RemoteState(
      */
     val childControlUnsupported: Set<String> = emptySet(),
     val answering: Set<String> = emptySet(),
+    /** Questions the user cannot answer from here right now, by question ID. */
+    val questionBlocks: Map<String, QuestionBlock> = emptyMap(),
     val capabilities: Set<String> = emptySet(),
     /** True once the connection's `projects.list` reply has added its route capabilities. */
     val capabilitiesKnown: Boolean = false,
@@ -174,6 +207,12 @@ data class RemoteState(
     val providerAuth: ProviderAuthState = ProviderAuthState(),
 )
 
+/** The app's connection counts as healthy for a notification's request while a frame arrived this recently. */
+internal const val HEALTHY_CONNECTION_MILLIS = 25_000L
+
+/** How long a notification's request waits on the app's connection before it uses its own. */
+internal const val HEALTHY_REQUEST_TIMEOUT_MILLIS = 3_000L
+
 /** One content URI to attach; [photo] imports it as an image (scaled JPEG), otherwise as a file. */
 data class Picked(val uri: String, val photo: Boolean)
 
@@ -188,6 +227,31 @@ interface RemoteRepository {
     suspend fun createSession(routeId: String, projectId: String): RemoteSelection
 
     suspend fun openNotification(routeId: String, sessionId: String): RemoteSelection?
+
+    /**
+     * The project of [sessionId] on the paired [routeId] as the app already knows it, from its
+     * caches and stores, without asking the Mac; null when only the Mac knows. A tapped
+     * notification shows its chat at once when this knows the project.
+     */
+    suspend fun notificationProject(routeId: String, sessionId: String): String? = null
+
+    /**
+     * Runs [block] over the app's own connection when it is connected to [routeId] and heard from
+     * the Mac within [HEALTHY_CONNECTION_MILLIS]; each request on it gives up after
+     * [HEALTHY_REQUEST_TIMEOUT_MILLIS]. Returns null without running [block] when the connection is
+     * not known to be healthy, so the caller opens a connection of its own. A host error passes
+     * through as a [RemoteCommandException]. A plain [RemoteCommands.request] that was not sent,
+     * timed out or was lost also ends the call with null; a [MutationCommands.mutate] under the
+     * caller's mutation ID instead throws [MutationNotSentException] when nothing was sent, and the
+     * timeout or loss otherwise, so the caller decides whether to send it again. Any thread may
+     * call it. [onSent] runs as each request goes out, so a caller that falls back after a timeout
+     * knows the Mac may already have it.
+     */
+    suspend fun <T> withHealthyConnection(
+        routeId: String,
+        onSent: () -> Unit = {},
+        block: suspend (MutationCommands) -> T,
+    ): T? = null
 
     /**
      * Starts a new session that continues from just before the user message [messageId] of the
@@ -404,16 +468,19 @@ interface RemoteRepository {
     ): FileWritten = throw RemoteRequestException.unsupported()
 
     /**
-     * The bytes of an image this device sent in [sessionId]'s chat, from memory or read from the
-     * host in chunks (`session.attachments.get`, only with [ATTACHMENT_READ_CAPABILITY]).
+     * The bytes of an image this device sent in [sessionId]'s chat, from memory, from the encrypted
+     * disk copy ([MediaDiskCache]), or read from the host in chunks (`session.attachments.get`, only
+     * with [ATTACHMENT_READ_CAPABILITY]). A downloaded copy is kept on disk for its route.
      */
     suspend fun readAttachment(sessionId: String, attachment: RemoteAttachment): AttachmentReadResult =
         AttachmentReadResult.Unsupported
 
     /**
      * An image the agent mentioned, by [path] (relative to the session folder or POSIX absolute),
-     * read from the host in chunks (`session.files.media`, only with [FILES_MEDIA_CAPABILITY]). The
-     * first-loaded bytes stay in memory; [fresh] reads the file again and replaces them, so a share or save and the next view agree.
+     * read from memory, from the encrypted disk copy ([MediaDiskCache]), or from the host in chunks
+     * (`session.files.media`, only with [FILES_MEDIA_CAPABILITY]). A downloaded copy is kept in memory
+     * and on disk for its route. [fresh] skips both copies and reads the file again, replacing them, so
+     * a share or save and the next view agree.
      */
     suspend fun readProjectImage(sessionId: String, path: String, fresh: Boolean = false): ProjectImageResult =
         ProjectImageResult.Unsupported

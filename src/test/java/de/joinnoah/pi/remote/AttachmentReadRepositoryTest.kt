@@ -1,12 +1,18 @@
 package de.joinnoah.pi.remote
 
+import java.io.File
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.*
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 class AttachmentReadRepositoryTest {
+    @get:Rule
+    val folder = TemporaryFolder()
+
     private val host = PairedHost("host", "https://relay.test", "device", "secret", "Host")
     private val selection = RemoteSelection("host", "project", "session")
     private val attachmentId = "AAAAAAAAAAAAAAAAAAAAAA"
@@ -120,6 +126,24 @@ class AttachmentReadRepositoryTest {
     }
 
     private fun TestScope.transport() = Transport { testScheduler.currentTime }.also { it.serve() }
+
+    private fun TestScope.repositoryWith(
+        transport: Transport,
+        hosts: List<PairedHost>,
+        media: MediaDiskCache? = null,
+    ) = DefaultRemoteRepository(
+        Pairings(hosts), Drafts(), transport, backgroundScope,
+        StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime }, media = media,
+    )
+
+    private fun TestScope.diskCache() =
+        MediaDiskCache(
+            File(folder.root, "media"),
+            now = { testScheduler.currentTime },
+            alias = "test",
+            wrap = TestMediaKey.wrap,
+            unwrap = TestMediaKey.unwrap,
+        )
 
     @Test
     fun noRequestIsSentWithoutTheCapability() = runTest {
@@ -317,5 +341,63 @@ class AttachmentReadRepositoryTest {
         runCurrent()
         assertEquals(AttachmentReadResult.Failed, result.await())
         assertTrue(transport.reads().isEmpty())
+    }
+
+    @Test
+    fun aSentImageStaysKeptForItsMacWhileAnotherMacIsSelected() = runTest {
+        val other = host.copy(routeId = "other")
+        val transport = transport()
+        val repository = repositoryWith(transport, listOf(host, other))
+        repository.activate(selection)
+        runCurrent()
+        assertTrue(repository.readAttachment("session", attachment) is AttachmentReadResult.Loaded)
+        val reads = transport.reads().size
+        assertTrue(reads > 0)
+
+        repository.activate(RemoteSelection("other", "project", "session"))
+        runCurrent()
+        repository.activate(selection)
+        runCurrent()
+        assertTrue(repository.readAttachment("session", attachment) is AttachmentReadResult.Loaded)
+        assertEquals(reads, transport.reads().size)
+    }
+
+    @Test
+    fun aSentImageIsReadFromDiskAfterARestartWithoutTheMac() = runTest {
+        val media = diskCache()
+        val first = transport()
+        val running = repositoryWith(first, listOf(host), media)
+        running.activate(selection)
+        runCurrent()
+        assertTrue(running.readAttachment("session", attachment) is AttachmentReadResult.Loaded)
+        assertTrue(first.reads().isNotEmpty())
+
+        val second = transport()
+        val restarted = repositoryWith(second, listOf(host), media)
+        restarted.activate(selection)
+        runCurrent()
+        val result = restarted.readAttachment("session", attachment)
+        assertArrayEquals(bytes, (result as AttachmentReadResult.Loaded).bytes)
+        assertTrue(second.reads().isEmpty())
+    }
+
+    @Test
+    fun unpairingAMacRemovesOnlyItsKeptImages() = runTest {
+        val other = host.copy(routeId = "other")
+        val media = diskCache()
+        val transport = transport()
+        val repository = repositoryWith(transport, listOf(host, other), media)
+        repository.activate(selection)
+        runCurrent()
+        repository.readAttachment("session", attachment)
+        repository.activate(RemoteSelection("other", "project", "session"))
+        runCurrent()
+        repository.readAttachment("session", attachment)
+        assertNotNull(media.get("other", attachment.sha256))
+
+        repository.remove("other")
+        runCurrent()
+        assertNull(media.get("other", attachment.sha256))
+        assertArrayEquals(bytes, media.get("host", attachment.sha256))
     }
 }

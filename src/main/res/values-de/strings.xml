@@ -148,11 +148,6 @@
     <string name="remote_tui_info_title">Mac-Terminalsitzung</string>
     <string name="remote_tui_info_body">Während diese Sitzung arbeitet, sind Follow-up und Steer nur lokal am Mac verfügbar. Sende eine Nachricht, sobald sie inaktiv ist, oder unterbrich sie mit Stop.</string>
     <string name="remote_tui_info_close">Verstanden</string>
-    <string name="remote_follow_up">Anschlussnachricht vormerken</string>
-    <string name="remote_steer">Laufenden Durchgang lenken</string>
-    <string name="remote_follow_up_short">Anschluss</string>
-    <string name="remote_steer_short">Lenken</string>
-    <string name="remote_switch_delivery">Tippen oder auf dem Sendeknopf wischen, um die Zustellung zu wechseln</string>
     <string name="remote_steer_accepted">Wird an den laufenden Schritt übergeben: %1$s</string>
     <string name="remote_follow_up_pending">Wird nach dem aktuellen Schritt gesendet: %1$s</string>
     <string name="remote_follow_up_uncertain">Zustellung unklar – vor erneutem Senden prüfen: %1$s</string>
@@ -187,6 +182,10 @@
     <string name="remote_answer_sending">Antwort wird gesendet…</string>
     <string name="remote_recommended">Empfohlen</string>
     <string name="remote_local_required">Eingabe am Mac erforderlich</string>
+    <string name="remote_question_answered_elsewhere">Anderswo beantwortet</string>
+    <string name="remote_question_session_offline">Die Sitzung ist offline</string>
+    <string name="remote_question_answer_on_mac">Beantworte das am Mac</string>
+    <string name="remote_question_answer_uncertain">Die Antwort wurde möglicherweise zugestellt; warte auf die Sitzung</string>
     <string name="remote_yes">Ja</string>
     <string name="remote_no">Nein</string>
     <string name="remote_other">Andere Antwort</string>

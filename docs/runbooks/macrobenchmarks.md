@@ -3,12 +3,16 @@
 ## Scope
 
 The `benchmarks` Android test module runs AndroidX Macrobenchmark against a separate,
-non-debuggable, shell-profileable APK: `de.robinrehbein.pocketpi.benchmark`.
+non-debuggable, shell-profileable APK: `de.robinrehbein.pocketpi.benchmark`. The app's
+`benchmarkProfile` build type builds the same APK without R8, only for the
+[baseline profile](#baseline-profile) generator.
 
-This APK uses the app's current release configuration (including its current **disabled** R8),
-but is debug-key signed. It needs no Play upload key or Firebase secrets. All four Firebase
-BuildConfig fields are empty. Its application ID gives it separate pairings, drafts, files,
-notifications and preferences. It must never be uploaded to Play.
+This APK uses the app's release configuration, R8 included: it is shrunk, optimized and has its
+unused resources removed like release, but keeps its original class and method names
+(`benchmark-rules.pro` adds `-dontobfuscate`), so traces stay readable. It is debug-key signed.
+It needs no Play upload key or Firebase secrets. All four Firebase BuildConfig fields are empty.
+Its application ID gives it separate pairings, drafts, files, notifications and preferences. It
+must never be uploaded to Play.
 
 `PerformanceFixtureActivity`, `FullChatFixtureActivity` and `ConnectedFlowActivity` exist only in
 `src/benchmark`: no fixture activity or profileable manifest addition is included in normal
@@ -42,8 +46,16 @@ APKs contain no fake relay or fixture; CI checks the debug APK's dex files for t
 
 All tests use `CompilationMode.None()` so compilation policy is explicit and repeatable. This is
 not representative of an app already optimized by Play/baseline profiles; keep the same policy for
-before/after comparisons. `coldStartup` is first-screen display, **not** connected-data readiness;
-`coldStartToProjects` waits for the projects of a paired Mac.
+before/after comparisons. To see what the [baseline profile](#baseline-profile) buys, run a
+scenario once with `CompilationMode.None()` and once with `CompilationMode.Partial()` (the
+profile installed by profileinstaller) on the same build.
+
+Since R8 was turned on for release (and so for this APK), numbers from earlier commits measure an
+unshrunk app and are not comparable with later ones; take a new baseline on the first commit with
+R8.
+
+`coldStartup` is first-screen display, **not** connected-data readiness; `coldStartToProjects`
+waits for the projects of a paired Mac.
 
 The synthetic tests use the production `MarkdownText` renderer (including tables) in a simple lazy
 list. They deliberately exclude transport, repository/timeline projection, full chat navigation,
@@ -216,6 +228,115 @@ What the fake relay does not model: TLS and encryption cost, the relay's and Mac
 processing time, frame chunking of large replies, the real host's page size, background and push
 paths, and anything behind a capability. Use the Diagnostics report on a real phone for those.
 
+## Baseline profile
+
+`src/main/baseline-prof.txt` lists the classes and methods ART compiles ahead of time at install,
+so cold start and the first chat run less interpreted and JIT code. AGP merges it with every file
+in `src/main/baselineProfiles/`. Play compiles the result from the bundle;
+`androidx.profileinstaller` (an app-only dependency: no phone source may reference it, since the
+wear module compiles the same sources) installs it for sideloaded and benchmark APKs. R8 reads the
+profile in source names and rewrites it to the release build's optimized, obfuscated names.
+
+### Generating it
+
+`BaselineProfileGenerator` writes `baseline-prof.txt`. Before collecting, it clears the app and
+runs the connected-flow prepare pass, so the app is paired with the fixture Mac. Each iteration
+then cold starts `MainActivity` from its launcher intent, waits for the fixture projects (tapping
+the Mac when the Macs show first), opens the project's session list and the 48-turn uncached chat,
+and swipes four times toward history and four times back. Everything runs on the fake relay, so
+the connected screens and the repository are profiled, not just the first frame. Rules for
+classes that exist only in `src/benchmark` are filtered out.
+
+The generator runs against the app's `benchmarkProfile` build type, never against `benchmark`:
+`benchmarkProfile` is the benchmark app (same application ID, fixture activities, fake relay and
+manifest) **without R8**. A profile recorded on the shrunk APK would name classes as R8 left them:
+merged, inlined or moved into a library's synthetic class. R8 would then apply those rules to the
+wrong code in release and leave the inlined code without any. The benchmarks module has the same
+build type, so its tests run against either build; only the generator belongs on
+`benchmarkProfile`, and timing stays on the shrunk `benchmark` build.
+
+The fake relay replaces `SecureRemoteTransport`, so the generated profile never covers the real
+transport, encryption and WebSocket that every release start goes through.
+`src/main/baselineProfiles/real-transport.txt` holds hand-written rules for them; keep it when the
+generated file is replaced, and extend it when the real transport path gains classes.
+
+BaselineProfileRule needs API 33 or newer (or a rooted device). An emulator is fine, since a
+profile records which code runs, not how fast. On the module's managed device (the same Pixel 2
+API 36 image the app's emulator tests use):
+
+```sh
+./gradlew :benchmarks:pixel2Api36BenchmarkProfileAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=de.robinrehbein.pocketpi.benchmarks.BaselineProfileGenerator \
+  -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.enabledRules=BaselineProfile
+cp "$(find benchmarks/build/outputs/managed_device_android_test_additional_output \
+  -name 'BaselineProfileGenerator_generate-baseline-prof.txt')" src/main/baseline-prof.txt
+```
+
+On a phone, run `:benchmarks:connectedBenchmarkProfileAndroidTest` with the same arguments and copy
+the same file from `benchmarks/build/outputs/connected_android_test_additional_output/`.
+
+Without a local emulator, the **Baseline profile** workflow (`.github/workflows/baseline-profile.yml`)
+does the same on GitHub's runners: it starts by hand (`workflow_dispatch`) and on pull requests
+that touch the profile, the benchmarks or the keep rules. It measures `BaselineProfileBenchmarks`
+with the committed profile, generates a new one on `benchmarkProfile`, measures again with that
+one, and publishes the generated file (artifact `baseline-profile`, and gzip/base64 in the log
+between `BEGIN` and `END` lines), the results and both APK sizes in the job summary. It never
+commits; copy the file into `src/main/baseline-prof.txt` yourself. Regenerate the profile after a
+change to the start path, the projects, the session list or the chat screen, and commit it with
+that change.
+
+### Measuring it
+
+`BaselineProfileBenchmarks` measures the generator's path (paired cold start to the projects, the
+session list and the 48-turn chat, ten iterations) twice on the shrunk benchmark build:
+`startupWithoutCompilation` with `CompilationMode.None()` and `startupWithBaselineProfile` with
+`CompilationMode.Partial(BaselineProfileMode.Require)`, which compiles only what the profile lists,
+as Play does at install. Compare `timeToInitialDisplayMs` and `PocketPi.activateSumMs` between the
+two on the same device. The workflow's emulator numbers show whether the profile is applied and
+roughly what it buys; claims about phones need a phone run:
+
+```sh
+ANDROID_SERIAL=<serial> ./gradlew :benchmarks:connectedBenchmarkAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=de.robinrehbein.pocketpi.benchmarks.BaselineProfileBenchmarks
+```
+
+### The full suite
+
+`connectedBenchmarkAndroidTest` without a class filter runs every test in the module, the
+generator included, and the generator fails below API 33. On an API 29 to 32 phone pass
+`-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.enabledRules=Macrobenchmark`,
+which skips it. A full run also runs `MinifiedSmokeTest` and `BaselineProfileBenchmarks`, which
+clear the benchmark app's data like the other tests' prepare passes do.
+
+### Smoke checks of the shrunk APK
+
+A keep rule R8 needs but does not have shows only at runtime. `MinifiedSmokeTest` drives the
+shrunk benchmark APK from outside like a user. Each test first clears the benchmark app's data and
+runs the prepare pass, then:
+
+- `pairedAppOpensChat`: a launcher start, the projects, a session list and a chat (the wire's JSON
+  through kotlinx-serialization).
+- `backStackSurvivesProcessDeath`: the same chat, then Home and `am kill`; the launcher brings the
+  task back and the restored back stack (saved by class name through kotlinx-serialization) shows
+  the chat again.
+- `sharedTextOpensPickedSession`: text shared to `ShareActivity`; the session picked there opens
+  through `LaunchIntents` and the `InternalLaunch` alias.
+- `runningSessionStaysLiveInBackground`: a chat in `ConnectedFlowActivity` (which hands its pause
+  to `LiveRun` as `MainActivity` does), the fake relay's slowed `stream` marks it running, Home;
+  `LiveRunService` must then run as a foreground service.
+
+CI runs it on every pull request (job **Minified smoke tests**). Locally:
+
+```sh
+./gradlew :benchmarks:pixel2Api36BenchmarkAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=de.robinrehbein.pocketpi.benchmarks.MinifiedSmokeTest
+```
+
+What the fake relay cannot reach stays a device check with the minified release from the internal
+track: push delivery and `RemoteMessagingService`, notification actions
+(`NotificationActionReceiver`), WorkManager's upgrade workers, opening an artifact (the fixture has
+none, and the `ArtifactSandbox` WebView needs the host's files), the widget and the watch handoff.
+
 ## Comparing before and after
 
 Numbers are comparable only within one device, or one emulator image (system image, API level,
@@ -274,7 +395,8 @@ python3 scripts/check-benchmark-isolation.py \
   build/intermediates/merged_manifests/benchmark/processBenchmarkManifest/AndroidManifest.xml
 ```
 
-Normal PR CI compiles both benchmark APKs and checks isolation, but does not gate performance on
+Normal PR CI compiles both benchmark APKs and checks isolation, runs release's obfuscating R8
+pass and `MinifiedSmokeTest` on the emulator, but does not gate performance on
 shared-runner/emulator timings. Existing debug instrumentation tests still run in CI.
 
 ## Real-device measurement (Robin)
@@ -287,6 +409,10 @@ transport is the fake relay.
 ```sh
 ANDROID_SERIAL=<serial> ./gradlew :benchmarks:connectedBenchmarkAndroidTest
 ```
+
+The full suite includes the baseline profile generator, which needs API 33+; on an older phone add
+`-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.enabledRules=Macrobenchmark`
+([The full suite](#the-full-suite)).
 
 To run a single workload:
 
@@ -345,4 +471,5 @@ small baseline; collect more repeated runs before drawing conclusions about tail
 3. Use those traces to prioritize incremental streaming processing and frame-aligned auto-follow;
    retain the full-chat workloads and their follow/no-follow assertions as regression checks.
 4. Validate [per-session scroll restoration](chat-scroll-restoration.md) on physical devices.
-5. Add Baseline Profile generation and a matching compilation-mode comparison in a later PR.
+5. Run `BaselineProfileBenchmarks` on a physical device to confirm what the baseline profile
+   buys there.

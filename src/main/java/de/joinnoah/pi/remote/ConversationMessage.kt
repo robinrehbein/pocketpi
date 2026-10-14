@@ -111,13 +111,14 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
         var dragOffset by remember { mutableFloatStateOf(0f) }
         var dragging by remember { mutableStateOf(false) }
         val haptics = LocalHapticFeedback.current
+        val latestOnQuote by rememberUpdatedState(onQuote)
         val offsetX by
             animateFloatAsState(
                 targetValue = dragOffset,
                 animationSpec = if (dragging) snap() else spring(),
                 label = "quote-swipe-offset",
             )
-        this.graphicsLayer { translationX = offsetX }.pointerInput(onQuote) {
+        this.graphicsLayer { translationX = offsetX }.pointerInput(Unit) {
             val threshold = 64.dp.toPx()
             val verticalTolerance = 24.dp.toPx()
             awaitEachGesture {
@@ -125,7 +126,6 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
                 var quote = false
                 var armed = false
                 try {
-                    dragging = true
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Final)
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
@@ -139,7 +139,11 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
                             break
                         val delta = change.position - down.position
                         if (abs(delta.y) > verticalTolerance) break
-                        dragOffset = delta.x.coerceIn(-threshold, 0f)
+                        // A tap must not recompose the parent and restart child click detectors.
+                        // Start the visual swipe only after horizontal touch slop is crossed.
+                        if (!dragging && delta.x < -viewConfiguration.touchSlop && abs(delta.x) > abs(delta.y))
+                            dragging = true
+                        if (dragging) dragOffset = delta.x.coerceIn(-threshold, 0f)
                         val pastThreshold = delta.x <= -threshold && abs(delta.x) > abs(delta.y) * 3
                         if (pastThreshold && !armed) {
                             armed = true
@@ -153,7 +157,7 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
                 } finally {
                     dragging = false
                     dragOffset = 0f
-                    if (quote) onQuote()
+                    if (quote) latestOnQuote()
                 }
             }
         }
@@ -268,7 +272,8 @@ private fun ConversationMessageContent(
     when (item) {
         is ConversationItem.Bubble -> {
             val outgoing = item.role == "user"
-            val canQuote = item.text.isNotBlank()
+            // The pending prompt is not in the timeline yet, so there is no message to quote.
+            val canQuote = item.text.isNotBlank() && item.pendingState == null
             val forkShown = fork != null && outgoing
             // Only a finished assistant text can be copied; a streaming one is still changing.
             val canCopy = item.role == "assistant" && !item.streaming && !item.error && item.text.isNotBlank()
@@ -290,7 +295,14 @@ private fun ConversationMessageContent(
                     selection.selectedTexts.any { it.isNotEmpty() } -> emptyList()
                     url != null -> linkMenu(url)
                     else ->
-                        messageMenuActions(item.role, item.text, item.streaming, forkShown, onAskToFixMessage != null)
+                        messageMenuActions(
+                            item.role,
+                            item.text,
+                            item.streaming,
+                            forkShown,
+                            onAskToFixMessage != null,
+                            canQuote = canQuote,
+                        )
                             .map { action ->
                                 MenuItem(
                                     action.label,
@@ -475,6 +487,7 @@ private fun ConversationMessageContent(
                                 }
                             }
                         }
+                        item.pendingState?.let { PendingSendLabel(item.id, it) }
                         if (!outgoing && item.role == "assistant") item.usage?.let { UsageCaption(it) }
                     }
                     // Over the bubble's top corner, so showing it never moves the chat.
@@ -871,6 +884,22 @@ private fun spelledCount(value: Long, locale: Locale): String =
 private val TRUNCATED_LINK = Regex("\\[([^]\\n]+)]\\(https?://[^)\\s]*$")
 
 internal fun subagentPreviewText(preview: String): String = preview.replace(TRUNCATED_LINK, "$1…")
+
+/** Under a pending prompt: "Sending…" while it is on its way, "Not confirmed" once it may not have left. */
+@Composable
+private fun PendingSendLabel(id: String, state: PendingSendState) {
+    if (state == PendingSendState.CONFIRMED) return
+    val failed = state == PendingSendState.NOT_CONFIRMED
+    Text(
+        stringResource(if (failed) R.string.remote_prompt_not_confirmed else R.string.remote_prompt_sending),
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp).testTag("pendingSendLabel-$id"),
+        style = MaterialTheme.typography.labelSmall,
+        color =
+            if (failed) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = androidx.compose.ui.text.style.TextAlign.End,
+    )
+}
 
 @Composable
 private fun MessageTimestamp(timestamp: Long, modifier: Modifier = Modifier) {

@@ -1,0 +1,4 @@
+<resources>
+    <string name="remote_prompt_sending">Wird gesendet…</string>
+    <string name="remote_prompt_not_confirmed">Nicht bestätigt</string>
+</resources>

@@ -19,7 +19,7 @@
     <string name="remote_keymap_help">Tastenkürzel</string>
     <string name="remote_keymap_expand_inspector">Seitenbereich verbreitern</string>
     <string name="remote_keymap_toggle_inspector">Seitenbereich ein- oder ausblenden</string>
-    <string name="remote_keymap_other_busy_action">Mit der anderen Wahl senden, Lenken oder Anschluss</string>
+    <string name="remote_keymap_other_busy_action">Mit dem anderen Modus senden: jetzt einlenken oder nach Abschluss</string>
     <string name="remote_keymap_refresh">Aktualisieren</string>
     <string name="remote_keymap_rename">Sitzung umbenennen</string>
     <string name="remote_keymap_fork">Ab der letzten Nachricht zurückspulen</string>

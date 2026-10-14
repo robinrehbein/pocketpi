@@ -21,10 +21,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.ScheduleSend
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -39,13 +39,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import kotlin.math.abs
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -143,11 +139,9 @@ internal fun VoiceInput(
     state: RemoteState,
     binding: VoiceInputBinding,
     onSend: () -> Unit,
-    onStop: () -> Unit,
     busyAction: BusyComposerAction? = null,
     busyActionEnabled: Boolean = false,
     onBusyAction: () -> Unit = {},
-    onBusyActionSwipe: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
     permissionGrantedOverride: Boolean? = null,
 ) {
@@ -166,22 +160,20 @@ internal fun VoiceInput(
             ?: (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
                 PackageManager.PERMISSION_GRANTED)
     val voiceState = binding.state
+    // While pi runs, this button never stops it: Stop lives in the composer's busy row.
     val busy = state.status in setOf("running", "waiting")
-    val canStop = state.connected && !state.loading && busy
     val canChooseBusyAction = busy && busyAction != null
     val canSend = canSendDraft(state)
     val listening = voiceState is VoiceInputState.Listening
     val finishing = voiceState is VoiceInputState.Finishing
-    val swipeThreshold = with(androidx.compose.ui.platform.LocalDensity.current) { 16.dp.toPx() }
-    val latestSwipe by rememberUpdatedState(onBusyActionSwipe)
     FilledIconButton(
             onClick = {
                 when {
                     canChooseBusyAction -> if (busyActionEnabled) onBusyAction()
-                    canStop -> onStop()
                     listening -> controller.stop()
                     finishing -> controller.cancel()
                     canSend -> onSend()
+                    busy -> Unit
                     voiceState is VoiceInputState.RequestingPermission -> Unit
                     else -> {
                         val start = controller.start(state.selection, state.draft, permissionGranted, localeTag)
@@ -192,24 +184,8 @@ internal fun VoiceInput(
                     }
                 }
             },
-            modifier = modifier.pointerInput(canChooseBusyAction, swipeThreshold) {
-                if (canChooseBusyAction) {
-                    var horizontalDrag = 0f
-                    detectHorizontalDragGestures(
-                        onDragStart = { horizontalDrag = 0f },
-                        onHorizontalDrag = { change, amount ->
-                            horizontalDrag += amount
-                            change.consume()
-                        },
-                        onDragEnd = {
-                            if (abs(horizontalDrag) >= swipeThreshold)
-                                latestSwipe(horizontalDrag < 0f)
-                        },
-                    )
-                }
-            },
-            enabled = (canChooseBusyAction && busyActionEnabled) ||
-                (!canChooseBusyAction && canStop) || listening || finishing || canSend ||
+            modifier = modifier,
+            enabled = (canChooseBusyAction && busyActionEnabled) || listening || finishing || canSend ||
                 (voiceState !is VoiceInputState.RequestingPermission &&
                     state.connected &&
                     !state.loading &&
@@ -225,20 +201,22 @@ internal fun VoiceInput(
                     when {
                         canChooseBusyAction && busyAction == BusyComposerAction.Steer -> VoiceInputButton.Steer
                         canChooseBusyAction -> VoiceInputButton.FollowUp
-                        busy -> VoiceInputButton.Stop
+                        // Dictation that outlasts the start of a run still finishes from here.
                         listening -> VoiceInputButton.Finish
                         finishing -> VoiceInputButton.Cancel
+                        busy -> VoiceInputButton.Send
                         state.draft.isNotBlank() || state.attachments.isNotEmpty() -> VoiceInputButton.Send
                         else -> VoiceInputButton.Mic
                     },
                 label = "voice input action",
             ) { action ->
                 when (action) {
-                    VoiceInputButton.Steer -> Icon(Icons.Default.ArrowUpward, stringResource(R.string.remote_steer))
-                    VoiceInputButton.FollowUp -> Icon(Icons.AutoMirrored.Filled.ScheduleSend, stringResource(R.string.remote_follow_up))
-                    VoiceInputButton.Stop -> Icon(Icons.Default.Stop, stringResource(R.string.remote_stop))
+                    VoiceInputButton.Steer -> Icon(Icons.Default.ArrowUpward, stringResource(R.string.remote_send_now))
+                    VoiceInputButton.FollowUp ->
+                        Icon(Icons.AutoMirrored.Filled.ScheduleSend, stringResource(R.string.remote_send_when_done))
+                    // A check, not the Stop of the busy row: finishing keeps the dictated text.
                     VoiceInputButton.Finish ->
-                        Icon(Icons.Default.Stop, stringResource(R.string.remote_voice_finish))
+                        Icon(Icons.Default.Check, stringResource(R.string.remote_voice_finish))
                     VoiceInputButton.Cancel -> Icon(Icons.Default.Close, stringResource(R.string.remote_voice_cancel))
                     VoiceInputButton.Send -> Icon(Icons.AutoMirrored.Filled.Send, stringResource(R.string.remote_send))
                     VoiceInputButton.Mic -> Icon(Icons.Default.Mic, stringResource(R.string.remote_voice_start))
@@ -250,7 +228,6 @@ internal fun VoiceInput(
 private enum class VoiceInputButton {
     Mic,
     Send,
-    Stop,
     Steer,
     FollowUp,
     Finish,

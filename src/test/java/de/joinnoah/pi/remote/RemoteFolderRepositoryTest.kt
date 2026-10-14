@@ -204,7 +204,7 @@ class RemoteFolderRepositoryTest {
         assertEquals(RemoteRequestException.Kind.TIMEOUT, (error as RemoteRequestException).kind)
         assertEquals(HEALTHY_REQUEST_TIMEOUT_MILLIS, testScheduler.currentTime)
         assertTrue(repository.state.value.connected)
-        advanceTimeBy(HEALTHY_INBOUND_MILLIS)
+        advanceTimeBy(HEALTHY_CONNECTION_MILLIS)
         assertNull(repository.withHealthyConnection("host") { error("must not run") })
         assertEquals(1, transport.of("session.prompt").size)
     }

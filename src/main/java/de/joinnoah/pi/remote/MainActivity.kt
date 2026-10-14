@@ -26,6 +26,7 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -112,10 +113,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // In front again: a run kept live in the background no longer needs the service.
+        LiveRun.onResume()
         if (app.appLock.locked.value && !autoPrompted) {
             autoPrompted = true
             unlock()
         }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Here, not in onStop: the app still counts as in front, and Android 12+ can refuse a
+        // foreground service started later. A resume before onStop stops it again. The lock's own
+        // prompt and a configuration change pause the activity without leaving the app.
+        if (!authenticating && !isChangingConfigurations) LiveRun.onPause(this)
     }
 
     override fun onDestroy() {
@@ -147,7 +158,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        lifecycleScope.launch {
+        // The composer's own stop flush runs after this returns: lifecycle ON_STOP is dispatched
+        // then. Dispatchers.Main posts this barrier behind it, so the last typed text is written too.
+        lifecycleScope.launch(Dispatchers.Main) {
             try {
                 app.repository.flush()
             } catch (error: kotlinx.coroutines.CancellationException) {

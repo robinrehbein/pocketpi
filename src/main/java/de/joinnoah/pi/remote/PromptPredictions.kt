@@ -59,8 +59,8 @@ internal class PromptPredictions(
     context: Context,
     private val scope: CoroutineScope,
     private val pairings: PairingStorage? = null,
+    private val file: EncryptedFileStore = context.stores.prompts,
 ) : PromptPredictionSource {
-    private val file = EncryptedFileStore(context, "prompt-history.enc", "pi-remote-prompts-v1")
     private val preferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
     private val mutex = Mutex()
     private var loaded = false

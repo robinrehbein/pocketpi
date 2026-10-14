@@ -7,7 +7,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
@@ -414,9 +413,8 @@ class ComposerStateTest {
         }
         compose.waitForIdle()
         val suggestion = label(R.string.remote_prediction_run_tests)
-        val accept = field().fetchSemanticsNode().config[SemanticsActions.CustomActions].single()
         compose.mainClock.autoAdvance = false
-        compose.runOnUiThread { accept.action() }
+        compose.onNodeWithTag("promptSuggestion").performClick()
         Snapshot.sendApplyNotifications()
         compose.mainClock.advanceTimeByFrame()
         assertEquals(suggestion, shownText())

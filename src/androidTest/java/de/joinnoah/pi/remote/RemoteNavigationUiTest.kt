@@ -299,7 +299,7 @@ class RemoteNavigationUiTest {
     }
 
     @Test
-    fun runningChatSwipesBetweenSteerAndFollowUpWithoutStopping() {
+    fun runningChatChoosesTheSendModeWithoutStopping() {
         openChat()
         compose.runOnUiThread {
             repository.state.value = repository.state.value.copy(
@@ -309,8 +309,9 @@ class RemoteNavigationUiTest {
                 session = Wire.objectOf("id" to "live", "title" to "Live session", "origin" to "rpc"),
             )
         }
-        compose.onNodeWithTag("steer").assertIsDisplayed()
-        compose.onNodeWithTag("steer").performTouchInput { swipeLeft() }
+        compose.onNodeWithText(label(R.string.remote_send_now)).assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.remote_send_when_done)).assertIsDisplayed()
+        compose.onNodeWithTag("sendWhenDone").performClick()
         compose.onNodeWithTag("followUp").assertIsDisplayed().performClick()
         assertEquals(1, repository.followUps)
         assertEquals(0, repository.aborts)

@@ -13,9 +13,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
@@ -261,7 +262,6 @@ internal fun ChatComposer(
     onSteer: () -> Unit = {},
     onStopChild: () -> Unit = {},
     onResumeChild: () -> Unit = {},
-    onDismissFollowUp: (String) -> Unit = {},
     onAbort: () -> Unit = onStop,
     onAnswer: (String, kotlinx.serialization.json.JsonObject) -> Unit = { _, _ -> },
     leading: @Composable RowScope.() -> Unit = {},
@@ -305,6 +305,21 @@ internal fun ChatComposer(
     val control = childControl(state)
     val childBusy = control?.phase in setOf(ChildControlPhase.STOPPING, ChildControlPhase.RESUMING)
     var confirmChildStop by remember(state.selection.sessionId) { mutableStateOf(false) }
+    // Saved, so a rotation does not silently drop an open confirmation.
+    var confirmStop by rememberSaveable(state.selection.sessionId) { mutableStateOf(false) }
+    val busy = state.status in setOf("running", "waiting")
+    val queuedFollowUps = queuedFollowUpCount(state)
+    // Every stop goes through here: the busy row's Stop, Esc, Esc, Ctrl+. and the question's abort.
+    // A child asks its parent's confirmation, and a run with queued follow-ups asks first, since
+    // stopping discards them; otherwise the stop is at once.
+    val stop: () -> Unit = when {
+        childControls -> ({ confirmChildStop = true })
+        queuedFollowUps > 0 -> ({ confirmStop = true })
+        else -> onStop
+    }
+    // The question's abort is the same stop; without one to confirm, the question asks itself.
+    val abort: () -> Unit = if (childControls || queuedFollowUps > 0) stop else onAbort
+    LaunchedEffect(queuedFollowUps) { if (queuedFollowUps == 0) confirmStop = false }
     // The layout's keys (Esc, Ctrl+., typing with nothing focused) reach the composer through this.
     val keyTarget = LocalChatKeyTarget.current
     if (keyTarget != null)
@@ -337,8 +352,35 @@ internal fun ChatComposer(
                 }
             },
         )
+    if (confirmStop)
+        AlertDialog(
+            onDismissRequest = { confirmStop = false },
+            title = { Text(stringResource(R.string.remote_stop_queued_title)) },
+            text = {
+                Text(stringResource(
+                    if (state.questions.isNotEmpty()) R.string.remote_stop_queued_answers_body
+                    else R.string.remote_stop_queued_body
+                ))
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmStop = false
+                        onStop()
+                    },
+                    // The same guards as the busy row's Stop: a stop while answers are being sent
+                    // or while offline would be refused, so the dialog must not look accepted.
+                    enabled = state.connected && !state.loading && state.answering.isEmpty(),
+                    modifier = Modifier.testTag("confirmStop"),
+                ) { Text(stringResource(R.string.remote_stop_queued_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmStop = false }) {
+                    Text(stringResource(R.string.remote_stop_queued_dismiss))
+                }
+            },
+        )
     if (state.questions.isNotEmpty()) {
-        val abort: () -> Unit = if (childControls) ({ confirmChildStop = true }) else onAbort
         val abortEnabled = !(childControls && childBusy) && questionAbortEnabled(state)
         if (keyTarget != null)
             SideEffect {
@@ -391,7 +433,6 @@ internal fun ChatComposer(
     val canResumeChild = childResume && state.connected && !state.loading && !state.sending &&
         !childBusy && state.draft.isNotBlank() && state.attachments.isEmpty() && state.quote == null &&
         !state.draft.trimStart().startsWith("/")
-    val stop: () -> Unit = if (childControls) ({ confirmChildStop = true }) else onStop
     val send: () -> Unit = if (childResume) onResumeChild else onSend
     val showBusyAction = busyAction != null && hasDraft
     val voiceInput = rememberVoiceInputBinding(state.draft, { draft.setText(it) }, voiceEngine)
@@ -426,7 +467,7 @@ internal fun ChatComposer(
         }
     }
     val latestKeyboardSend = rememberUpdatedState(keyboardSend)
-    // Alt+Enter sends with the choice the chip does not show, when both are offered; otherwise
+    // Alt+Enter sends with the mode not chosen, when both are offered; otherwise
     // the key stays the field's.
     val otherBusyActionOffered = showBusyAction && canQueue && canSteerNow && canFollowUpNow
     val otherBusyAction: () -> Unit = {
@@ -529,65 +570,22 @@ internal fun ChatComposer(
                     resumeEnabled = canResumeChild,
                     onResume = onResumeChild,
                 )
-            if (state.followUps.isNotEmpty()) {
-                Column(
-                    Modifier.fillMaxWidth().heightIn(max = 112.dp)
-                        .verticalScroll(rememberScrollState())
-                        .testTag("followUpJournal"),
-                ) {
-                    state.followUps.forEach { entry ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                stringResource(
-                                    when (entry.status) {
-                                        "delivered" -> R.string.remote_follow_up_delivered
-                                        "uncertain" -> R.string.remote_follow_up_uncertain
-                                        "cancelled" -> R.string.remote_follow_up_cancelled
-                                        else -> if (entry.delivery == "steer") R.string.remote_steer_accepted
-                                            else R.string.remote_follow_up_pending
-                                    },
-                                    entry.text.take(100),
-                                ),
-                                modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                            if (entry.status !in setOf("pending", "accepted")) {
-                                IconButton(
-                                    onClick = { onDismissFollowUp(entry.requestId) },
-                                    modifier = Modifier.testTag("dismissFollowUp-${entry.requestId}"),
-                                ) {
-                                    Icon(
-                                        Icons.Default.Close,
-                                        stringResource(R.string.remote_follow_up_dismiss, entry.text.take(100)),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if (showBusyAction) {
+            // While pi runs, the busy row is the one place Stop lives. It also holds the send mode
+            // when a draft can be queued, so the choice is visible instead of hidden in a swipe.
+            if (busy) {
                 Row(
                     Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    InputChip(
-                        selected = true,
-                        enabled = canSteerNow && canFollowUpNow,
-                        onClick = { preferredBusyAction = busyAction.other() },
-                        label = {
-                            Text(stringResource(
-                                if (busyAction == BusyComposerAction.Steer)
-                                    R.string.remote_steer_short else R.string.remote_follow_up_short
-                            ))
-                        },
-                        trailingIcon = {
-                            if (canSteerNow && canFollowUpNow)
-                                Icon(Icons.Default.SwapHoriz, stringResource(R.string.remote_switch_delivery))
-                        },
-                        modifier = Modifier.testTag("busyDeliveryMode"),
-                    )
+                    if (busyAction != null && hasDraft)
+                        SendModeChoice(
+                            selected = busyAction,
+                            steerEnabled = canSteerNow,
+                            followUpEnabled = canFollowUpNow,
+                            onSelect = { preferredBusyAction = it },
+                        )
+                    else Spacer(Modifier.weight(1f))
                     ShortcutTooltip(stringResource(R.string.remote_stop), Shortcut.STOP) {
                         IconButton(
                             onClick = stop,
@@ -598,6 +596,23 @@ internal fun ChatComposer(
                         }
                     }
                 }
+            }
+            // The suggestion is a chip above the field; a tap or Tab takes it.
+            prediction?.let { suggestion ->
+                // TalkBack names what a tap does; the chip's text alone would not say it fills the field.
+                val useSuggestion = stringResource(R.string.remote_suggestion_use, suggestion)
+                SuggestionChip(
+                    onClick = {
+                        acceptPrediction()
+                        // A tap lands in the field, as a Tab does, so the next keystroke goes into it.
+                        focusRequester?.let { runCatching { it.requestFocus() } }
+                    },
+                    label = { Text(suggestion, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    modifier =
+                        Modifier.padding(start = 4.dp)
+                            .semantics { contentDescription = useSuggestion }
+                            .testTag("promptSuggestion"),
+                )
             }
             Row(
                 // Writing with the S Pen anywhere on the row, beside the field too, writes into it.
@@ -657,15 +672,20 @@ internal fun ChatComposer(
                                 )
                         }
                     }
+                val promptLabel = stringResource(R.string.remote_prompt)
                 TextField(
                     value = shown,
                     onValueChange = {
                         val typed = it.text != draft.text
                         if (draft.edit(it) && typed) voiceInput.userEdited(it.text)
                     },
+                    // The visible hint stays a placeholder: a floating label would grow the field and
+                    // shift the chat when the first character arrives. The name for TalkBack is the
+                    // field's description below, and only while the field is empty; the suggestion is
+                    // a chip above the field.
                     placeholder = {
                         Text(
-                            prediction ?: stringResource(R.string.remote_prompt),
+                            promptLabel,
                             maxLines = 3,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.testTag("composerPlaceholder"),
@@ -683,14 +703,14 @@ internal fun ChatComposer(
                     modifier =
                         Modifier.weight(1f)
                             .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
+                            // The name only while the field is empty: a content description on an
+                            // editable node can replace the typed text for TalkBack, so it stops once
+                            // there is text to read.
+                            .then(
+                                if (shown.text.isEmpty()) Modifier.semantics { contentDescription = promptLabel }
+                                else Modifier
+                            )
                             .handwritingHandler()
-                            .promptPrediction(
-                                prediction,
-                                stringResource(R.string.remote_prediction_use),
-                                prediction?.let {
-                                    stringResource(R.string.remote_prediction_announce, it)
-                                }.orEmpty(),
-                            ) { latestAccept.value() }
                             .onFocusChanged { keyTarget?.composerFocused = it.isFocused }
                             .onPreviewKeyEvent { event ->
                                 // A paste of images or files attaches them; any other paste,
@@ -793,17 +813,14 @@ internal fun ChatComposer(
                         KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     shape = RoundedCornerShape(24.dp),
                 )
-                // Names what the primary button does now, and its key.
-                val busy = state.status in setOf("running", "waiting")
+                // Names what the primary button does now, and its key. While pi runs it never stops:
+                // with a draft it sends the chosen mode, and without one it stays a disabled Send.
                 val primaryTip: Pair<String, KeyChord?> =
                     when {
-                        busy && showBusyAction ->
-                            stringResource(
-                                if (busyAction == BusyComposerAction.Steer) R.string.remote_steer else R.string.remote_follow_up
-                            ) to enterChord
-                        busy -> stringResource(R.string.remote_stop) to tooltipChord(Shortcut.STOP)
+                        busy && busyAction != null && hasDraft -> stringResource(busyAction.labelRes()) to enterChord
                         voiceInput.state is VoiceInputState.Listening -> stringResource(R.string.remote_voice_finish) to null
                         voiceInput.state is VoiceInputState.Finishing -> stringResource(R.string.remote_voice_cancel) to null
+                        busy -> stringResource(R.string.remote_send) to null
                         hasDraft -> stringResource(R.string.remote_send) to enterChord
                         else -> stringResource(R.string.remote_voice_start) to null
                     }
@@ -815,17 +832,11 @@ internal fun ChatComposer(
                             recordPrompt()
                             send()
                         },
-                        onStop = stop,
                         busyAction = if (showBusyAction) busyAction else null,
                         busyActionEnabled = canQueue,
                         onBusyAction = {
                             recordPrompt()
                             if (busyAction == BusyComposerAction.Steer) onSteer() else onFollowUp()
-                        },
-                        onBusyActionSwipe = { swipeLeft ->
-                            if (canSteerNow && canFollowUpNow)
-                                preferredBusyAction = if (swipeLeft) BusyComposerAction.FollowUp
-                                else BusyComposerAction.Steer
                         },
                         modifier = Modifier.padding(bottom = 6.dp).size(48.dp)
                             .testTag(
@@ -920,8 +931,45 @@ private fun EscapeStopHint() {
     )
 }
 
-internal enum class BusyComposerAction { Steer, FollowUp;
-    fun other() = if (this == Steer) FollowUp else Steer
+internal enum class BusyComposerAction { Steer, FollowUp }
+
+/** The plain verb of a send mode: interrupt the running step, or send once the run is done. */
+internal fun BusyComposerAction.labelRes(): Int =
+    if (this == BusyComposerAction.Steer) R.string.remote_send_now else R.string.remote_send_when_done
+
+/** The follow-ups a stop would discard: the ones still waiting for the run, or accepted into it. */
+internal fun queuedFollowUpCount(state: RemoteState): Int =
+    state.followUps.count { it.status == "pending" || it.status == "accepted" }
+
+/** The busy draft's send mode as two plain choices; a mode the host cannot take is disabled. */
+@Composable
+private fun RowScope.SendModeChoice(
+    selected: BusyComposerAction,
+    steerEnabled: Boolean,
+    followUpEnabled: Boolean,
+    onSelect: (BusyComposerAction) -> Unit,
+) {
+    val modes = listOf(BusyComposerAction.Steer, BusyComposerAction.FollowUp)
+    val description = stringResource(R.string.remote_send_mode)
+    SingleChoiceSegmentedButtonRow(Modifier.weight(1f).semantics { contentDescription = description }) {
+        modes.forEachIndexed { index, mode ->
+            SegmentedButton(
+                selected = selected == mode,
+                onClick = { onSelect(mode) },
+                enabled = if (mode == BusyComposerAction.Steer) steerEnabled else followUpEnabled,
+                shape = SegmentedButtonDefaults.itemShape(index, modes.size),
+                modifier = Modifier.testTag(if (mode == BusyComposerAction.Steer) "sendNow" else "sendWhenDone"),
+                icon = {},
+            ) {
+                Text(
+                    stringResource(mode.labelRes()),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+        }
+    }
 }
 
 /** The question composer's abort can run, apart from a child stop or resume in flight. */
@@ -954,6 +1002,7 @@ private fun QuestionComposer(
                         question = question,
                         enabled = state.connected && questionId !in state.answering,
                         pending = questionId in state.answering,
+                        block = state.questionBlocks[questionId],
                         onAnswer = { answer -> onAnswer(questionId, answer) },
                     )
                 }
