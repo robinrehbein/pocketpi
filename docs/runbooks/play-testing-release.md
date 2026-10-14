@@ -107,10 +107,13 @@ test; it publishes as soon as the checks pass.
    `build/outputs/bundle/release/pocketpi-release.aab`. Gradle requires the four new Firebase
    values and new upload key. `python scripts/release/verify_bundle.py
    build/outputs/bundle/release/pocketpi-release.aab` rejects an unsigned AAB or a certificate
-   other than the fingerprint above.
+   other than the fingerprint above. The release build is shrunk, optimized and obfuscated by R8
+   (keep rules in `proguard-rules.pro`), so the job also requires
+   `build/outputs/mapping/release/mapping.txt`.
 4. `python scripts/release/play_release.py publish --version-code <code> --bundle
-   build/outputs/bundle/release/pocketpi-release.aab` rechecks the code, uploads one AAB, and
-   updates `internal` in one Play edit. If `POCKETPI_CLOSED_TRACK` is set, the same edit also updates
+   build/outputs/bundle/release/pocketpi-release.aab --mapping
+   build/outputs/mapping/release/mapping.txt` rechecks the code, uploads one AAB and its R8 mapping
+   as the version's deobfuscation file, and updates `internal` in one Play edit. If `POCKETPI_CLOSED_TRACK` is set, the same edit also updates
    that track; every configured track must already exist.
    `ERROR_IF_IN_REVIEW` stops the commit if Play already has an in-progress review. A fresh edit
    then checks that every configured track reports the new code as `completed`.
@@ -154,6 +157,18 @@ gh run view <run-id> --repo robinrehbein/pocketpi --log-failed
 - If upload or commit fails, inspect both tracks before retrying. The script deletes an
   uncommitted edit; it cannot undo a committed release. A failure during post-commit verification
   may mean that both tracks already contain the code.
+- If only the deobfuscation upload fails, the release does not need it: AGP already puts the
+  mapping into the AAB (`BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map`), and
+  Play deobfuscates from that. Retry once; if it fails again, drop `--mapping` from the publish
+  step for that release rather than holding it, and upload `mapping.txt` by hand in Play Console
+  (App bundle explorer, Downloads) afterwards if the reports lack readable traces.
+- If a release build crashes where debug builds do not (a `ClassNotFoundException`,
+  `NoSuchMethodException` or serialization error naming an obfuscated class), R8 removed or
+  renamed something reached by reflection. Play's crash report shows the readable stack trace
+  through the uploaded mapping; locally, run `retrace` from the Android SDK's
+  `cmdline-tools/latest/bin` with the run's `mapping.txt`. Add the missing keep rule to
+  `proguard-rules.pro`, check it with `./gradlew :assembleBenchmark` and the emulator suite, and
+  publish a higher version code.
 - If testers receive a bad release, stop further release dispatches and halt the affected testing release in
   Play Console where that control exists. Fix the app, pass CI, and publish a higher version code
   to both tracks. Play does not accept a downgrade to an older AAB with a lower code. Do not use

@@ -43,6 +43,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
@@ -111,6 +112,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.first
 
 private data class AbortRunTarget(val sessionId: String, val questionIds: Set<String>)
@@ -130,6 +132,7 @@ private const val PENDING_QUESTION_MARKER = "__pending_question__"
 private val HISTORY_BUTTON_MIN_HEADER = 600.dp
 private const val CHILD_REFRESH_ATTEMPTS = 12
 private const val CHILD_REFRESH_INTERVAL_MILLIS = 5_000L
+private const val TOUCHED_LINES_STREAMING_MILLIS = 1_000L
 private const val JUMP_HIGHLIGHT_MILLIS = 2_000L
 private const val COMPACTION_TICK_MILLIS = 30_000L
 /** How long review mode waits for the Changes pane Ctrl+Shift+D opened for it. */
@@ -284,8 +287,16 @@ internal fun RemoteScreen(
         }
     val sessionActive =
         state.connected && !state.loading && state.status in setOf("running", "waiting")
+    // Built per message: a streamed delta rebuilds the items of the message it changed, and what
+    // is derived below reuses the rest (docs/runbooks/performance.md).
+    val presenter = remember(key) { ConversationPresenter() }
+    val presentation =
+        remember(presenter, state.messages, sessionActive) { presenter.present(state.messages, sessionActive) }
+    // The prompt the timeline does not show yet goes at the tail, where the reply will follow it.
     val conversation =
-        remember(state.messages, sessionActive) { conversationItems(state.messages, sessionActive) }
+        remember(presentation, state.pendingSend) {
+            state.pendingSend?.let { presentation.items + pendingSendItem(it) } ?: presentation.items
+        }
     val thinkingDisplay = chatPreferences?.thinkingDisplay ?: "status"
     val thinkingActive = state.connected && !state.loading && state.status == "running"
     val visibleConversation =
@@ -339,29 +350,40 @@ internal fun RemoteScreen(
                 )
             }
         }
-    val touched = remember(conversation) { touchedFiles(conversation) }
-    // Diffing every edit can take a moment in a long chat; keep it off the main thread.
+    val touched = presentation.touchedFiles
+    // Off the main thread, diffing only edits that are new or changed. While pi streams, the
+    // counts follow at most every TOUCHED_LINES_STREAMING_MILLIS, from the latest conversation.
+    val touchedLineCache = remember(key) { TouchedLineCache() }
+    val latestConversation by rememberUpdatedState(conversation)
+    val streamingNow by rememberUpdatedState(sessionActive)
     val touchedLines by
-        produceState<TouchedLineCounts?>(null, conversation) {
-            value = withContext(Dispatchers.Default) { touchedLineCounts(conversation) }
+        produceState<TouchedLineCounts?>(null, touchedLineCache) {
+            snapshotFlow { latestConversation }.conflate().collect { items ->
+                value = withContext(Dispatchers.Default) { touchedLineCache.counts(items) }
+                if (streamingNow) delay(TOUCHED_LINES_STREAMING_MILLIS)
+            }
         }
-    val errorCount = remember(conversation) { conversation.count(::isErrorItem) }
+    val errorCount = presentation.errorCount
     val children =
         remember(chatKey, state.sessions, state.connected, state.loading, state.stale) {
             if (chatKey == null) emptyList()
             else sessionListItems(state.sessions, state.connected, state.loading, state.stale)
         }
     val strip =
-        remember(chatKey, conversation, children) {
+        remember(chatKey, presentation, children) {
             if (chatKey == null) SubagentStrip(emptyList(), 0, emptySet(), 0)
-            else subagentStrip(conversation, children, chatKey.sessionId)
+            else presenter.subagentStrip(presentation, children, chatKey.sessionId)
         }
     var onlyErrorsShown by rememberSaveable(key) { mutableStateOf(false) }
     val shownItems =
         remember(visibleConversation, onlyErrorsShown) {
             if (onlyErrorsShown) onlyErrors(visibleConversation) else visibleConversation
         }
-    val forkableIds = remember(shownItems) { forkableBubbleIds(shownItems) }
+    // Bubbles are always visible, so only the error filter narrows the conversation's set.
+    val forkableIds =
+        remember(presentation, shownItems, onlyErrorsShown) {
+            if (onlyErrorsShown) forkableBubbleIds(shownItems) else presentation.forkableBubbleIds
+        }
     val forkReady = state.connected && !state.loading && !navigator.mutating && forkStopped(state)
     val forkStopFirst = forkRunning(state)
     // The same instance while nothing it holds changes, so the bubbles that get it can skip.
@@ -378,7 +400,7 @@ internal fun RemoteScreen(
     val questionPending = state.questions.isNotEmpty()
     val markers =
         remember(shownItems, questionPending) {
-            timelineMarkers(shownItems) +
+            presenter.timelineMarkers(shownItems) +
                 if (questionPending)
                     listOf(TimelineMarker(PENDING_QUESTION_MARKER, TimelineMarkerKind.QUESTION, shownItems.size))
                 else emptyList()
@@ -2259,6 +2281,8 @@ internal fun RemoteScreen(
                         }
                     }
                 item { PredictionSettingsSection() }
+                // Only the wide layout has widths and columns to reset.
+                twoPane?.let { item { LayoutSettingsSection(it) } }
                 item {
                     Section(stringResource(R.string.remote_notifications)) {
                         val hint =
@@ -2324,6 +2348,7 @@ internal fun RemoteScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                        LiveRunSettingRow()
                     }
                 }
                 item {
@@ -2720,6 +2745,17 @@ internal fun RemoteScreen(
                                         stringResource(R.string.remote_settings),
                                     )
                                 }
+                                // The full projects column kept beside a chat shrinks back to the strip.
+                                if (projectsColumn?.canCollapse == true && twoPane != null)
+                                    IconButton(
+                                        onClick = { twoPane.projectsExpanded = false },
+                                        modifier = Modifier.size(48.dp).testTag("collapseProjects"),
+                                    ) {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.MenuOpen,
+                                            stringResource(R.string.remote_projects_collapse),
+                                        )
+                                    }
                             }
                         }
                 }
@@ -2916,6 +2952,7 @@ internal fun RemoteScreen(
                             open = openArtifact,
                             onDismiss = { artifactsSheetRequested = false },
                         )
+                    FollowUpStatus(state, model::dismissFollowUp)
                     ChatPreviewHint(state)
                     ChatComposerNotices(connectionStatusLine(state), state.uncertain)
                     val composer = checkNotNull(composerDraft)
@@ -2928,7 +2965,6 @@ internal fun RemoteScreen(
                         onSteer = model::steer,
                         onStopChild = model::stopChild,
                         onResumeChild = model::resumeChild,
-                        onDismissFollowUp = model::dismissFollowUp,
                         onStop = model::abort,
                         onRemoveQuote = { model.quote(null) },
                         onAbort = {
@@ -3663,6 +3699,32 @@ internal fun SharePickBanner(onCancel: () -> Unit) {
             TextButton(onClick = onCancel, modifier = Modifier.testTag("sharePickCancel")) {
                 Text(stringResource(R.string.remote_cancel))
             }
+        }
+    }
+}
+
+/** Puts the column widths, the hidden session list and the expanded inspector back to their defaults. */
+@Composable
+private fun LayoutSettingsSection(twoPane: TwoPaneState) {
+    val context = LocalContext.current
+    val done = stringResource(R.string.remote_layout_reset_done)
+    Section(stringResource(R.string.remote_layout_title), Modifier.testTag("layoutSettings")) {
+        Text(
+            stringResource(R.string.remote_layout_help),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TextButton(
+            onClick = {
+                twoPane.resetLayout()
+                Toast.makeText(context, done, Toast.LENGTH_SHORT).show()
+            },
+            enabled = twoPane.customized,
+            modifier = Modifier.testTag("resetLayout"),
+        ) {
+            Icon(Icons.Default.Restore, contentDescription = null)
+            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+            Text(stringResource(R.string.remote_layout_reset))
         }
     }
 }

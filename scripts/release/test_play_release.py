@@ -93,6 +93,76 @@ class PlayReleaseTests(unittest.TestCase):
         edits.tracks.return_value.update.assert_called_once()
         self.assertEqual(edits.tracks.return_value.update.call_args.kwargs["track"], "internal")
 
+    def test_publish_uploads_mapping_in_the_same_edit(self):
+        service = service_with_snapshot()
+        edits = service.edits.return_value
+        edits.insert.return_value.execute.side_effect = [{"id": "edit-1"}, {"id": "edit-2"}]
+        edits.tracks.return_value.list.return_value.execute.side_effect = [
+            {"tracks": [{"track": "internal", "releases": []}]},
+            {"tracks": [{"track": "internal", "releases": [
+                {"versionCodes": ["2"], "status": "completed"}
+            ]}]},
+        ]
+        edits.bundles.return_value.list.return_value.execute.return_value = {"bundles": []}
+        edits.bundles.return_value.upload.return_value.execute.return_value = {"versionCode": 2}
+        edits.apks.return_value.list.return_value.execute.return_value = {"apks": []}
+        uploads = []
+        media = types.ModuleType("googleapiclient.http")
+        media.MediaFileUpload = lambda path, **kwargs: uploads.append(Path(path).name) or path
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / "app.aab"
+            bundle.write_bytes(b"signed-bundle-placeholder")
+            mapping = Path(directory) / "mapping.txt"
+            mapping.write_text("de.joinnoah.pi.remote.MainActivity -> de.joinnoah.pi.remote.MainActivity:\n")
+            with patch.dict(sys.modules, {"googleapiclient": types.ModuleType("googleapiclient"),
+                                          "googleapiclient.http": media}):
+                play_release.publish(service, None, 2, bundle, mapping)
+        self.assertEqual(uploads, ["app.aab", "mapping.txt"])
+        upload = edits.deobfuscationfiles.return_value.upload
+        upload.assert_called_once()
+        self.assertEqual(upload.call_args.kwargs["editId"], "edit-1")
+        self.assertEqual(upload.call_args.kwargs["apkVersionCode"], 2)
+        self.assertEqual(upload.call_args.kwargs["deobfuscationFileType"], "proguard")
+        edits.commit.assert_called_once()
+
+    def test_publish_without_mapping_uploads_no_deobfuscation_file(self):
+        service = service_with_snapshot()
+        edits = service.edits.return_value
+        edits.insert.return_value.execute.side_effect = [{"id": "edit-1"}, {"id": "edit-2"}]
+        edits.tracks.return_value.list.return_value.execute.side_effect = [
+            {"tracks": [{"track": "internal", "releases": []}]},
+            {"tracks": [{"track": "internal", "releases": [
+                {"versionCodes": ["2"], "status": "completed"}
+            ]}]},
+        ]
+        edits.bundles.return_value.list.return_value.execute.return_value = {"bundles": []}
+        edits.bundles.return_value.upload.return_value.execute.return_value = {"versionCode": 2}
+        edits.apks.return_value.list.return_value.execute.return_value = {"apks": []}
+        media = types.ModuleType("googleapiclient.http")
+        media.MediaFileUpload = lambda *args, **kwargs: object()
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / "app.aab"
+            bundle.write_bytes(b"signed-bundle-placeholder")
+            with patch.dict(sys.modules, {"googleapiclient": types.ModuleType("googleapiclient"),
+                                          "googleapiclient.http": media}):
+                play_release.publish(service, None, 2, bundle)
+        edits.deobfuscationfiles.return_value.upload.assert_not_called()
+
+    def test_empty_mapping_stops_before_any_edit(self):
+        service = service_with_snapshot()
+        media = types.ModuleType("googleapiclient.http")
+        media.MediaFileUpload = lambda *args, **kwargs: object()
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory) / "app.aab"
+            bundle.write_bytes(b"signed-bundle-placeholder")
+            mapping = Path(directory) / "mapping.txt"
+            mapping.write_bytes(b"")
+            with patch.dict(sys.modules, {"googleapiclient": types.ModuleType("googleapiclient"),
+                                          "googleapiclient.http": media}):
+                with self.assertRaisesRegex(ValueError, "mapping"):
+                    play_release.publish(service, None, 2, bundle, mapping)
+        service.edits.return_value.insert.assert_not_called()
+
     def test_prepare_uses_maximum_across_tracks_bundles_and_apks(self):
         service = service_with_snapshot()
         service.edits.return_value.apks.return_value.list.return_value.execute.return_value = {

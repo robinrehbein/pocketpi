@@ -97,7 +97,7 @@ jobs:
   benchmark:
     name: Benchmark isolation
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - *checkout
       - *setup-java
@@ -114,6 +114,17 @@ jobs:
             build/intermediates/merged_manifests/benchmark/processBenchmarkManifest/AndroidManifest.xml \
             build/outputs/apk/debug/pocketpi-debug.apk \
             build/outputs/apk/benchmark/pocketpi-benchmark.apk
+      # The benchmark build runs R8 without obfuscation; this is the obfuscating pass release.yml
+      # runs, so a release-only R8 failure shows here and not first when a release starts. It needs
+      # no secrets: the signing and Firebase checks belong to the release workflow.
+      - name: Release R8 pass
+        run: >-
+          ./gradlew :minifyReleaseWithR8
+          -x validateUploadKey -x validateReleasePushConfiguration
+          -PPI_REMOTE_FIREBASE_API_KEY=ci-placeholder
+          -PPI_REMOTE_FIREBASE_APP_ID=ci-placeholder
+          -PPI_REMOTE_FIREBASE_PROJECT_ID=ci-placeholder
+          -PPI_REMOTE_FIREBASE_GCM_SENDER_ID=ci-placeholder
       - name: Upload benchmark reports
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -220,6 +231,45 @@ jobs:
           path: |
             build/reports/
             build/outputs/androidTest-results/
+          if-no-files-found: ignore
+
+  minified:
+    name: Minified smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # The phone job's device: the benchmarks module defines the same one, so this job shares
+      # its cached system image, AVD and boot snapshot.
+      GMD_DEVICE: pixel2Api36
+    steps:
+      - *checkout
+      - *setup-java
+      - *setup-gradle
+      - *setup-android
+      - *verify-android-tools
+      - *install-sdk
+      - *enable-kvm
+      - *install-emulator
+      - *locate-avd
+      - *restore-image
+      - *restore-avd
+      - name: Build the minified benchmark app and its tests
+        run: ./gradlew :assembleBenchmark :benchmarks:assembleBenchmark
+      # A keep rule R8 needs but lacks shows only at runtime: MinifiedSmokeTest drives the shrunk
+      # benchmark APK on the fake relay (docs/runbooks/macrobenchmarks.md).
+      - name: Smoke tests of the R8-shrunk app
+        run: >-
+          ./gradlew :benchmarks:pixel2Api36BenchmarkAndroidTest
+          -Pandroid.testInstrumentationRunnerArguments.class=de.robinrehbein.pocketpi.benchmarks.MinifiedSmokeTest
+      - name: Upload smoke test reports
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketpi-minified
+          path: |
+            benchmarks/build/reports/
+            benchmarks/build/outputs/androidTest-results/
+            benchmarks/build/outputs/managed_device_android_test_additional_output/
           if-no-files-found: ignore
 
   tablet:

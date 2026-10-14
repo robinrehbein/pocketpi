@@ -80,6 +80,8 @@ class AttachmentStore(
     override fun read(attachment: LocalAttachment): ByteArray {
         val source = file(attachment.id)
         require(source.length() <= AttachmentImportRules.FILE_BYTES + 29L)
+        // A file that does not decrypt is quarantined alone and reads as missing from then on;
+        // the other attachments share the key and stay readable.
         val encoded =
             requireNotNull(EncryptedFileStore(context, source.name, alias).read()) {
                 "Attachment is unavailable"
