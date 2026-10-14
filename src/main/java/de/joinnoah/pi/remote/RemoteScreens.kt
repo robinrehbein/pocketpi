@@ -2120,15 +2120,13 @@ internal fun RemoteScreen(
         ) {
         // While the tool detail covers the chat, the chat below must not be reachable by TalkBack.
         val underlay = if (openTool != null && !panesBeside) Modifier.clearAndSetSemantics {} else Modifier
-        // A wide chat pane centres its bubbles in a reading column; phones never reach the limit.
-        val readingInset =
-            if (key is RemoteNavKey.Chat) ((maxWidth - 40.dp - MAX_READING_WIDTH) / 2).coerceAtLeast(0.dp)
-            else 0.dp
         // The inspector's resize handle reaches into the chat's end: the scrollbar lane starts
         // clear of it. Constant while the inspector is open, so scrolling never moves anything.
+        // Each chat item centres itself in its reading column (see readingColumn), so the list
+        // itself only keeps the gutters.
         val laneInset =
-            if (key is RemoteNavKey.Chat && inspectorShown && twoPane != null) maxOf(readingInset, PANE_RESIZE_HANDLE_OVERHANG)
-            else readingInset
+            if (key is RemoteNavKey.Chat && inspectorShown && twoPane != null) PANE_RESIZE_HANDLE_OVERHANG
+            else 0.dp
         // F6 reaches the project and session lists, and comes back to the row it left there.
         val listRegion =
             when (key) {
@@ -2147,7 +2145,7 @@ internal fun RemoteScreen(
                 state = listState,
                 contentPadding =
                     PaddingValues(
-                        start = 20.dp + readingInset,
+                        start = 20.dp,
                         // Constant, so nothing rewraps while scrolling; the scrollbar lives in this lane.
                         end = CHAT_SCROLLBAR_LANE + laneInset,
                         // A list page's connection chip brings the header's height itself (see
@@ -2893,16 +2891,20 @@ internal fun RemoteScreen(
                         is RemoteNavKey.Chat -> {
                             if (conversation.isEmpty() && state.questions.isEmpty() && state.loading) {
                                 leading++
-                                item(key = CHAT_SKELETON_KEY, contentType = CHAT_SKELETON_KEY) { ChatSkeleton() }
+                                item(key = CHAT_SKELETON_KEY, contentType = CHAT_SKELETON_KEY) {
+                                    Box(Modifier.readingColumn(PROSE_READING_WIDTH)) { ChatSkeleton() }
+                                }
                             }
                             if (state.nextCursor != null) {
                                 leading++
                                 item(key = LOAD_OLDER_KEY, contentType = LOAD_OLDER_KEY) {
-                                    TextButton(
-                                        onClick = model::older,
-                                        enabled = state.connected,
-                                    ) {
-                                        Text(stringResource(R.string.remote_load_older))
+                                    Box(Modifier.readingColumn(PROSE_READING_WIDTH)) {
+                                        TextButton(
+                                            onClick = model::older,
+                                            enabled = state.connected,
+                                        ) {
+                                            Text(stringResource(R.string.remote_load_older))
+                                        }
                                     }
                                 }
                             }
@@ -2913,7 +2915,8 @@ internal fun RemoteScreen(
                                 }?.id
                             items(shownItems, key = { it.id }, contentType = ::conversationContentType) { item ->
                                 val highlighted = item.id == highlightedId
-                                Box(
+                                ConversationItemColumn(
+                                    item,
                                     if (highlighted)
                                         Modifier.testTag("jumpTarget").focusRequester(jumpFocus).focusable()
                                     else Modifier
@@ -2948,6 +2951,7 @@ internal fun RemoteScreen(
                             )
                                 item(key = "waiting-for-output") {
                                     Row(
+                                        Modifier.readingColumn(PROSE_READING_WIDTH),
                                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     ) {
@@ -3120,7 +3124,7 @@ internal fun RemoteScreen(
         if (key is RemoteNavKey.Chat) {
             Box(
                 Modifier.align(Alignment.BottomCenter)
-                    .widthIn(max = MAX_READING_WIDTH + 32.dp)
+                    .widthIn(max = PROSE_READING_WIDTH + 32.dp)
                     .fillMaxWidth()
                     .onSizeChanged { composerSize = it }.testTag("floatingComposer")
                     .then(underlay)
