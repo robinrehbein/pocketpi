@@ -54,6 +54,9 @@ interface SettingsRepository {
 
     /** Counts one use of [action] on this device. */
     fun recordChatAction(action: ChatAction, now: Long = System.currentTimeMillis()) {}
+
+    /** The stored uses of each chat action, undecayed; the palette decays them to its own time. */
+    fun chatActionUsage(): Map<ChatAction, ActionUsage> = emptyMap()
 }
 
 class DefaultSettingsRepository(context: Context) : SettingsRepository {
@@ -122,11 +125,10 @@ class DefaultSettingsRepository(context: Context) : SettingsRepository {
         mutable.value = mutable.value.copy(enterSends = enabled)
     }
 
-    override fun rankedChatActions(now: Long): List<ChatAction> =
-        rankChatActions(
-            ChatAction.entries.mapNotNull { action -> actionUsage(action)?.let { action to it } }.toMap(),
-            now,
-        )
+    override fun rankedChatActions(now: Long): List<ChatAction> = rankChatActions(chatActionUsage(), now)
+
+    override fun chatActionUsage(): Map<ChatAction, ActionUsage> =
+        ChatAction.entries.mapNotNull { action -> actionUsage(action)?.let { action to it } }.toMap()
 
     override fun recordChatAction(action: ChatAction, now: Long) {
         val usage = actionUsage(action).used(now)

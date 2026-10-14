@@ -27,6 +27,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -95,6 +97,7 @@ class MainActivity : ComponentActivity() {
                         app::disablePush,
                         share,
                         { if (share == it) share = null },
+                        app.home.snapshot,
                     )
                 }
             }
@@ -266,6 +269,7 @@ internal fun RemoteApp(
     disablePush: () -> Unit = {},
     share: PendingShare? = null,
     consumeShare: (PendingShare) -> Unit = {},
+    home: StateFlow<HomeSnapshot> = remember { MutableStateFlow(HomeSnapshot()) },
 ) {
     val preferences by settings.state.collectAsStateWithLifecycle()
     val theme = preferences.theme
@@ -333,6 +337,7 @@ internal fun RemoteApp(
                     disablePush,
                     share,
                     consumeShare,
+                    home,
                 )
             }
         }

@@ -67,6 +67,9 @@ internal fun SessionControls(
     /** A typed `/model` asks for the model picker; [onModelPickerRequestHandled] acknowledges it. */
     modelPickerRequested: Boolean = false,
     onModelPickerRequestHandled: () -> Unit = {},
+    /** The command palette asks for the thinking level or the advisor; the same handshake. */
+    controlRequest: SessionControl? = null,
+    onControlRequestHandled: () -> Unit = {},
     changeSettings: (Boolean?, String?, String?) -> Unit = { _, _, _ -> },
     /** The header action or a typed `/settings` asks for the settings sheet; same handshake as the model picker. */
     settingsSheetRequested: Boolean = false,
@@ -131,6 +134,22 @@ internal fun SessionControls(
             }
             onModelPickerRequestHandled()
         }
+    }
+    LaunchedEffect(controlRequest) {
+        when (controlRequest) {
+            SessionControl.THINKING ->
+                if (thinking != null && state.connected) {
+                    picker = "thinking"
+                    refreshConfiguration()
+                }
+            SessionControl.ADVISOR ->
+                if (state.connected && advisorControlAvailable(state)) {
+                    showAdvisor = true
+                    refreshAdvisor()
+                }
+            else -> Unit
+        }
+        if (controlRequest != null) onControlRequestHandled()
     }
     LaunchedEffect(settingsSheetRequested) {
         if (settingsSheetRequested) {

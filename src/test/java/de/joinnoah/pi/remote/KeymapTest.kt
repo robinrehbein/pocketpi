@@ -25,7 +25,6 @@ class KeymapTest {
 
     @Test
     fun theExistingShortcutsKeepTheirKeys() {
-        assertEquals(Shortcut.SEARCH, ctrl(Key.K, context = KeyContext.GLOBAL))
         assertEquals(Shortcut.SEARCH, ctrl(Key.F, context = KeyContext.GLOBAL))
         assertEquals(Shortcut.NEW_SESSION, ctrl(Key.N, context = KeyContext.GLOBAL))
         assertEquals(Shortcut.TOGGLE_LIST, ctrl(Key.B, context = KeyContext.GLOBAL))
@@ -35,6 +34,14 @@ class KeymapTest {
         assertEquals(Shortcut.PREVIOUS_SESSION, alt(Key.DirectionUp))
         assertEquals(Shortcut.PREVIOUS_PROJECT, alt(Key.PageUp))
         assertEquals(Shortcut.NEXT_PROJECT, alt(Key.PageDown))
+    }
+
+    @Test
+    fun ctrlKOpensThePaletteAndCtrlFStaysSessionSearch() {
+        // Ctrl+K moved from the session search to the command palette, which also finds sessions.
+        assertEquals(Shortcut.PALETTE, ctrl(Key.K, context = KeyContext.GLOBAL))
+        assertEquals(Shortcut.PALETTE, ctrl(Key.K, context = KeyContext.COMPOSER))
+        assertEquals(Shortcut.SEARCH, ctrl(Key.F, context = KeyContext.COMPOSER))
     }
 
     @Test
@@ -95,7 +102,7 @@ class KeymapTest {
             0, 0, android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_K, 0,
             android.view.KeyEvent.META_META_ON or android.view.KeyEvent.META_META_LEFT_ON,
         )
-        assertEquals(Shortcut.SEARCH, resolveShortcut(androidx.compose.ui.input.key.KeyEvent(down), KeyContext.GLOBAL))
+        assertEquals(Shortcut.PALETTE, resolveShortcut(androidx.compose.ui.input.key.KeyEvent(down), KeyContext.GLOBAL))
     }
 
     @Test
@@ -123,7 +130,7 @@ class KeymapTest {
         // Chat keys need a chat; global ones work everywhere.
         assertNull(ctrl(Key.L, context = KeyContext.GLOBAL))
         assertNull(plain(Key.Escape, KeyContext.GLOBAL))
-        assertEquals(Shortcut.SEARCH, ctrl(Key.K, context = KeyContext.COMPOSER))
+        assertEquals(Shortcut.PALETTE, ctrl(Key.K, context = KeyContext.COMPOSER))
         assertEquals(Shortcut.STOP, ctrl(Key.Period, context = KeyContext.COMPOSER))
         // Alt+Enter only means something inside the composer.
         assertNull(alt(Key.Enter, context = KeyContext.CHAT))
