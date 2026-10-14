@@ -362,7 +362,8 @@ internal fun chatActionAvailable(action: ChatAction, state: RemoteState, mutatin
         ChatAction.NEW_SESSION -> state.connected && !state.loading && !mutating
         ChatAction.SESSION_SETTINGS -> state.connected && !state.loading && sessionSettingsAvailable(state)
         ChatAction.REFRESH, ChatAction.SETTINGS, ChatAction.HISTORY -> true
-        ChatAction.CLOSE -> false
+        // The banners' entry belongs to the compact header's menu only, where the banners show.
+        ChatAction.STATUS, ChatAction.CLOSE -> false
     }
 
 private fun chatItems(input: PaletteInput, labels: PaletteLabels): List<PaletteItem> {

@@ -16,6 +16,8 @@ enum class ChatAction {
     SESSION_SETTINGS,
     /** The chat history; a header wide enough shows it as its own button instead, see [withHistory]. */
     HISTORY,
+    /** The compaction and export banners, in a sheet; offered in the compact header's menu only, see [compact]. */
+    STATUS,
     /** Closes the session on the Mac after a confirmation; only ever in the menu, see [withClose]. */
     CLOSE,
 }
@@ -67,6 +69,13 @@ internal fun chatActionLayout(ranked: List<ChatAction>, available: Set<ChatActio
 internal fun ChatActionLayout.withHistory(): ChatActionLayout =
     if (menu.isEmpty()) copy(shown = (shown + ChatAction.HISTORY).sortedBy { it.ordinal })
     else copy(menu = (menu + ChatAction.HISTORY).sortedBy { it.ordinal })
+
+/**
+ * [this] with the banners' entry in the menu while [status] holds: a compact chat moves the
+ * compaction and export banners out of the conversation into the status sheet, opened from here.
+ */
+internal fun ChatActionLayout.withStatus(status: Boolean): ChatActionLayout =
+    if (!status) this else copy(menu = (menu + ChatAction.STATUS).sortedBy { it.ordinal })
 
 /**
  * [this] with Close at the end of the menu: the same session actions as a session row's menu,

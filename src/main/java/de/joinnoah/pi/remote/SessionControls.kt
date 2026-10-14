@@ -37,6 +37,17 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
+/** Below this height, with the keyboard up, the chat's rows merge and its header and composer shrink. */
+internal val COMPACT_CHROME_HEIGHT = 520.dp
+
+/**
+ * Whether the chat's rows merge and its header and composer compact: always on a phone (the phone
+ * layout, [phone]), and on any window while the keyboard is up and [height] is under
+ * [COMPACT_CHROME_HEIGHT]. A wider window with no keyboard, such as a Book Cover, keeps the rows apart.
+ */
+internal fun compactChrome(phone: Boolean, imeVisible: Boolean, height: Dp): Boolean =
+    phone || (imeVisible && height < COMPACT_CHROME_HEIGHT)
+
 @Composable
 private fun LoadingControlPill(width: Dp) {
     Surface(
@@ -76,6 +87,11 @@ internal fun SessionControls(
     onSettingsSheetRequestHandled: () -> Unit = {},
     /** False while Esc closed the slash suggestions; the next edit brings them back. */
     slashSuggestions: Boolean = true,
+    /**
+     * The chat's insights chips, merged into the controls' row before the controls when the chat is
+     * compact (see [compactChrome]); null keeps the insights in their own row.
+     */
+    leadingChips: (@Composable RowScope.() -> Unit)? = null,
 ) {
     var picker by remember { mutableStateOf<String?>(null) }
     val pickerSheet = rememberModalBottomSheetState()
@@ -205,11 +221,14 @@ internal fun SessionControls(
             (sessionAdvisor == null && state.advisorLoading)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
+            // A merged row holds the insights chips too, so it keeps their tag.
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = 8.dp)
+                .then(if (leadingChips != null) Modifier.testTag("chatInsights") else Modifier),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            leadingChips?.invoke(this)
             if (loadingConfiguration) {
                 LoadingControlPill(160.dp)
                 LoadingControlPill(96.dp)
