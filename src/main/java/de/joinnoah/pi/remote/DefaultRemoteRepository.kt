@@ -5562,6 +5562,9 @@ class DefaultRemoteRepository(
                     override suspend fun request(type: String, vararg fields: Pair<String, Any?>): JsonObject =
                         try {
                             send(Wire.random(), type, fields)
+                        } catch (e: CancellationException) {
+                            // CancellationException is an IllegalStateException; let it cancel.
+                            throw e
                         } catch (e: IllegalStateException) {
                             // Not sent (disconnected meanwhile, another connection, too many in
                             // flight), or sent without a reply in time or before the connection went.
