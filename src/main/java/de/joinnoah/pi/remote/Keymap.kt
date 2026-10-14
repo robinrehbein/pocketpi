@@ -55,6 +55,7 @@ internal enum class Shortcut(val group: ShortcutGroup, val listed: Boolean = tru
     HISTORY(ShortcutGroup.PANES),
     SETTINGS(ShortcutGroup.NAVIGATION),
     HELP(ShortcutGroup.NAVIGATION),
+    ACTIVITY(ShortcutGroup.NAVIGATION),
     EXPAND_INSPECTOR(ShortcutGroup.PANES),
     TOGGLE_INSPECTOR(ShortcutGroup.PANES),
     REVIEW(ShortcutGroup.PANES),
@@ -126,6 +127,7 @@ internal val KEYMAP: List<KeyBinding> =
         KeyBinding(Shortcut.REFRESH, Key.F5, labelRes = R.string.remote_keymap_refresh),
         KeyBinding(Shortcut.SETTINGS, Key.Comma, ctrl = true, labelRes = R.string.remote_keymap_settings),
         KeyBinding(Shortcut.HELP, Key.Slash, ctrl = true, labelRes = R.string.remote_keymap_help),
+        KeyBinding(Shortcut.ACTIVITY, Key.A, ctrl = true, shift = true, labelRes = R.string.remote_keymap_activity),
         KeyBinding(Shortcut.NEXT_REGION, Key.F6, labelRes = R.string.remote_keymap_next_region),
         KeyBinding(Shortcut.NEXT_REGION, Key.DirectionRight, ctrl = true, alt = true, labelRes = R.string.remote_keymap_next_region),
         KeyBinding(Shortcut.PREVIOUS_REGION, Key.F6, shift = true, labelRes = R.string.remote_keymap_previous_region),
@@ -605,6 +607,9 @@ internal class ShortcutTargets {
 
     /** The "hide offline sessions" setting, which the session list applies. */
     var hideOfflineSessions = false
+
+    /** The session marks, so the shortcuts order the sessions like the list does (pinned first). */
+    var sessionMarks: Map<Pair<String, String>, SessionMark> = emptyMap()
 
     private val refreshers = mutableMapOf<RemoteNavKey, () -> Unit>()
 

@@ -1,10 +1,13 @@
 package de.joinnoah.pi.remote
 
+import java.io.File
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.*
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 class ProjectImageRepositoryTest {
     private val host = PairedHost("host", "https://relay.test", "device", "secret", "Host")
@@ -108,15 +111,104 @@ class ProjectImageRepositoryTest {
         fun media() = sent.filter { it.text("type").startsWith("session.files.media") }
     }
 
-    private suspend fun TestScope.connected(transport: Transport): DefaultRemoteRepository {
+    private suspend fun TestScope.connected(
+        transport: Transport,
+        media: MediaDiskCache? = null,
+        hosts: List<PairedHost> = listOf(host),
+    ): DefaultRemoteRepository {
         val repository =
             DefaultRemoteRepository(
-                Pairings(listOf(host)), Drafts(), transport, backgroundScope,
-                StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
+                Pairings(hosts), Drafts(), transport, backgroundScope,
+                StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime }, media = media,
             )
         repository.activate(selection)
         runCurrent()
         return repository
+    }
+
+    @get:Rule
+    val folder = TemporaryFolder()
+
+    private fun TestScope.diskCache() =
+        MediaDiskCache(
+            File(folder.root, "media"),
+            now = { testScheduler.currentTime },
+            alias = "test",
+            wrap = TestMediaKey.wrap,
+            unwrap = TestMediaKey.unwrap,
+        )
+
+    @Test
+    fun aPictureKeptOnDiskOpensAfterARestartWithoutAskingTheMac() = runTest {
+        val media = diskCache()
+        val first = transport()
+        val running = connected(first, media)
+        val read = async { running.readProjectImage("session", "build/shot.png") }
+        advanceUntilIdle()
+        assertTrue(read.await() is ProjectImageResult.Loaded)
+        assertTrue(first.media().isNotEmpty())
+
+        val second = transport()
+        val restarted = connected(second, media)
+        val result = restarted.readProjectImage("session", "build/shot.png")
+        assertArrayEquals(content, (result as ProjectImageResult.Loaded).bytes)
+        assertEquals("build/shot.png", result.path)
+        assertTrue(second.media().isEmpty())
+    }
+
+    @Test
+    fun aFreshReadAsksTheMacEvenWithAKeptCopy() = runTest {
+        val media = diskCache()
+        val transport = transport()
+        val repository = connected(transport, media)
+        val first = async { repository.readProjectImage("session", "build/shot.png") }
+        advanceUntilIdle()
+        first.await()
+        val before = transport.media().size
+
+        val fresh = async { repository.readProjectImage("session", "build/shot.png", fresh = true) }
+        advanceUntilIdle()
+        assertTrue(fresh.await() is ProjectImageResult.Loaded)
+        assertTrue(transport.media().size > before)
+    }
+
+    @Test
+    fun aKeptPointerWhoseImageIsGoneFallsBackToTheMac() = runTest {
+        val media = diskCache()
+        val first = transport()
+        val running = connected(first, media)
+        val read = async { running.readProjectImage("session", "build/shot.png") }
+        advanceUntilIdle()
+        read.await()
+        // The image file is evicted or lost; its pointer is still there.
+        folder.root.walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".v2") && !it.name.startsWith("ptr-") }
+            .forEach { it.delete() }
+
+        val second = transport()
+        val restarted = connected(second, media)
+        val fallback = async { restarted.readProjectImage("session", "build/shot.png") }
+        advanceUntilIdle()
+        assertArrayEquals(content, (fallback.await() as ProjectImageResult.Loaded).bytes)
+        assertTrue(second.media().isNotEmpty())
+    }
+
+    @Test
+    fun aMacSwitchKeepsEachMacsImagesWithoutAnotherRead() = runTest {
+        val other = host.copy(routeId = "other")
+        val transport = transport()
+        val repository = connected(transport, hosts = listOf(host, other))
+        val read = async { repository.readProjectImage("session", "build/shot.png") }
+        advanceUntilIdle()
+        read.await()
+        val reads = transport.media().size
+
+        repository.activate(RemoteSelection("other", "project", "session"))
+        runCurrent()
+        repository.activate(selection)
+        runCurrent()
+        assertTrue(repository.readProjectImage("session", "build/shot.png") is ProjectImageResult.Loaded)
+        assertEquals(reads, transport.media().size)
     }
 
     private fun TestScope.transport() = Transport { testScheduler.currentTime }

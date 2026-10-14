@@ -23,6 +23,7 @@ internal open class DestinationViewModel(
             RemoteNavKey.Hosts,
             RemoteNavKey.Settings -> true
             is RemoteNavKey.Projects -> state.selection.routeId == key.routeId
+            is RemoteNavKey.Activity -> state.selection.routeId == key.routeId
             is RemoteNavKey.FolderBrowser ->
                 state.selection.routeId == key.routeId && state.selection.projectId == null
             is RemoteNavKey.Providers ->
@@ -185,6 +186,9 @@ internal open class DestinationViewModel(
 
 internal class HostsViewModel(repository: RemoteRepository) :
     DestinationViewModel(repository, RemoteNavKey.Hosts)
+
+internal class ActivityViewModel(repository: RemoteRepository, key: RemoteNavKey.Activity) :
+    DestinationViewModel(repository, key)
 
 internal class ProjectsViewModel(repository: RemoteRepository, key: RemoteNavKey.Projects) :
     DestinationViewModel(repository, key) {

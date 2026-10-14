@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The activity board (ActivityBoard.kt), its entry points and the session row marks (SessionMarksStore.kt). -->
+    <string name="remote_activity_title">Activity</string>
+    <string name="remote_activity_empty">Nothing needs you, nothing is running and nothing finished while you were away.</string>
+    <string name="remote_activity_last_known">Your Mac is offline. These are its last known states.</string>
+    <plurals name="remote_activity_needs_you_count">
+        <item quantity="one">%d needs you</item>
+        <item quantity="other">%d need you</item>
+    </plurals>
+    <string name="remote_activity_pinned">Pinned</string>
+    <string name="remote_activity_unread">Unread</string>
+    <string name="remote_menu_pin">Pin</string>
+    <string name="remote_menu_unpin">Unpin</string>
+    <string name="remote_menu_mark_read">Mark read</string>
+</resources>

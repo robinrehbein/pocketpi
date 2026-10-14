@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Die Aktivitätsübersicht (ActivityBoard.kt), ihre Einstiegspunkte und die Markierungen der Sitzungszeilen (SessionMarksStore.kt). -->
+    <string name="remote_activity_title">Aktivität</string>
+    <string name="remote_activity_empty">Nichts braucht dich, nichts läuft und nichts ist fertig, während du weg warst.</string>
+    <string name="remote_activity_last_known">Dein Mac ist offline. Das sind seine zuletzt bekannten Zustände.</string>
+    <plurals name="remote_activity_needs_you_count">
+        <item quantity="one">%d braucht dich</item>
+        <item quantity="other">%d brauchen dich</item>
+    </plurals>
+    <string name="remote_activity_pinned">Angeheftet</string>
+    <string name="remote_activity_unread">Ungelesen</string>
+    <string name="remote_menu_pin">Anheften</string>
+    <string name="remote_menu_unpin">Nicht mehr anheften</string>
+    <string name="remote_menu_mark_read">Als gelesen markieren</string>
+</resources>

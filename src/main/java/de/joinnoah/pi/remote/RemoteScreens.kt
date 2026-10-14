@@ -105,7 +105,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -249,8 +252,14 @@ internal fun RemoteScreen(
     val sessionSearchShown = key is RemoteNavKey.Sessions && (listPane != null || sessionSearchOpen)
     var collapsedSessionIds by rememberSaveable(key) { mutableStateOf(arrayListOf<String>()) }
     val collapsedIds = collapsedSessionIds.toSet()
+    // Pinned sessions list first and unread ones carry their dot; the open chat is never unread.
+    val sessionMarkStore = LocalSessionMarks.current
+    val sessionMarkMap by sessionMarksState()
+    val routeMarks = remember(sessionMarkMap, state.host?.routeId) { sessionMarksById(sessionMarkMap, state.host?.routeId) }
+    // The selection names the chat beside the list; the screen's state strips the chat's session.
+    val shownSessionId = state.selection.sessionId
     val visibleSessions =
-        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds) {
+        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds, routeMarks) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
@@ -258,6 +267,8 @@ internal fun RemoteScreen(
                 hidesOfflineSessions(hideOfflineSessions, state.connected, state.stale),
                 collapsedIds,
                 stale = state.stale,
+                marks = routeMarks,
+                openSessionId = shownSessionId,
             )
         }
     val listedSessions =
@@ -330,9 +341,10 @@ internal fun RemoteScreen(
     val sentImages =
         state.selection.sessionId?.takeIf { chatModel != null }?.let { sessionId ->
             val supported = ATTACHMENT_READ_CAPABILITY in state.capabilities
-            remember(chatModel, sessionId, state.connected, state.capabilitiesKnown, supported) {
+            val routeId = state.selection.routeId
+            remember(chatModel, routeId, sessionId, state.connected, state.capabilitiesKnown, supported) {
                 SentImageSource(
-                    sessionId, state.connected, state.capabilitiesKnown, supported,
+                    routeId.orEmpty(), sessionId, state.connected, state.capabilitiesKnown, supported,
                     checkNotNull(chatModel)::readAttachment,
                 )
             }
@@ -459,6 +471,26 @@ internal fun RemoteScreen(
     val headerHeight = with(LocalDensity.current) { headerSize.height.toDp() }
     val listScope = rememberCoroutineScope()
     var autoFollow by rememberSaveable(key) { mutableStateOf(savedViewport?.following ?: true) }
+    // The chat counts as read once it shows its end; a newer update after that is unread again.
+    // The chat is only the selected one once the repository confirmed it; a chat opened from a
+    // list, a notification or a restore first shows cached content with an empty selection.
+    val chatSelected = chatKey != null && chatSelected(state, chatKey.sessionId)
+    // The list row moves ahead of the session snapshot taken at selection while the chat runs.
+    val chatUpdatedAt =
+        remember(chatKey, state.sessions, state.session) {
+            chatKey?.let { liveUpdatedAt(state, it.sessionId) }
+        }
+    LaunchedEffect(chatKey, autoFollow, chatUpdatedAt, chatSelected) {
+        val chat = chatKey ?: return@LaunchedEffect
+        if (autoFollow && chatSelected)
+            sessionMarkStore?.markSeen(chat.routeId, chat.sessionId, chatUpdatedAt, System.currentTimeMillis())
+    }
+    // The chat counts as open for the marks only while it is on screen and the app is resumed.
+    if (chatKey != null && sessionMarkStore != null)
+        LifecycleResumeEffect(chatKey, sessionMarkStore) {
+            sessionMarkStore.chatShown(chatKey.routeId, chatKey.sessionId)
+            onPauseOrDispose { sessionMarkStore.chatHidden(chatKey.routeId, chatKey.sessionId) }
+        }
     var tuiInfoOpen by remember { mutableStateOf(false) }
     var scrollingProgrammatically by remember { mutableStateOf(false) }
     var waitingForOutput by remember { mutableStateOf(false) }
@@ -1195,6 +1227,7 @@ internal fun RemoteScreen(
                     is RemoteNavKey.Chat -> R.string.remote_chat
                     is RemoteNavKey.FolderBrowser -> R.string.remote_folders_title
                     is RemoteNavKey.Providers -> R.string.providers_title
+                    is RemoteNavKey.Activity -> R.string.remote_activity_title
                     RemoteNavKey.Settings -> R.string.remote_settings
                 }
         )
@@ -1899,6 +1932,7 @@ internal fun RemoteScreen(
                             is RemoteNavKey.Chat -> Unit
                             is RemoteNavKey.FolderBrowser -> Unit
                             is RemoteNavKey.Providers -> Unit
+                            is RemoteNavKey.Activity -> Unit
                             is RemoteNavKey.Projects -> {
                                 if (canManageProviders(state))
                                     OutlinedButton(
@@ -1908,6 +1942,13 @@ internal fun RemoteScreen(
                                     ) {
                                         Text(stringResource(R.string.providers_open))
                                     }
+                                OutlinedButton(
+                                    onClick = { navigator.openActivity(key.routeId) },
+                                    enabled = state.host != null,
+                                    modifier = Modifier.fillMaxWidth().testTag("activityButton"),
+                                ) {
+                                    Text(stringResource(R.string.remote_activity_title))
+                                }
                                 OutlinedButton(
                                     onClick = { disconnecting = true },
                                     modifier = Modifier.fillMaxWidth(),
@@ -2401,6 +2442,8 @@ internal fun RemoteScreen(
                     RemoteNavKey.Settings -> Unit
                     is RemoteNavKey.FolderBrowser -> Unit
                     is RemoteNavKey.Providers -> Unit
+                    // The board is its own screen (ActivityBoardScreen), never a RemoteScreen page.
+                    is RemoteNavKey.Activity -> Unit
                     RemoteNavKey.Hosts -> {
                         // Until the pairings are read, no list is no news: the first-run text
                         // would flash before the Macs appear. A read that failed says so instead.
@@ -2502,6 +2545,7 @@ internal fun RemoteScreen(
                                         key = { "chat:${it.projectId}:${it.session.text("id")}" },
                                     ) { chat ->
                                         ProjectChatRow(
+                                            mark = chat.session.optionalText("id")?.let(routeMarks::get),
                                             chat = chat,
                                             connected = state.connected,
                                             enabled = !state.loading,
@@ -2552,6 +2596,16 @@ internal fun RemoteScreen(
                             SessionListRow(
                                 item = session,
                                 selected = session.id == listPane?.selectedSessionId,
+                                onTogglePin = {
+                                    sessionMarkStore?.setPinned(key.routeId, session.id, !session.pinned)
+                                },
+                                onMarkRead =
+                                    if (!session.unread) null
+                                    else {
+                                        {
+                                            sessionMarkStore?.markSeen(key.routeId, session.id, session.updatedAt, System.currentTimeMillis())
+                                        }
+                                    },
                                 enabled = !state.connected || !state.loading,
                                 closeAvailable =
                                     canCloseSession(
@@ -3510,6 +3564,7 @@ private fun ProjectChatRow(
     chat: ProjectChatSummary,
     connected: Boolean,
     enabled: Boolean,
+    mark: SessionMark?,
     onClick: () -> Unit,
 ) {
     Column {
@@ -3519,7 +3574,10 @@ private fun ProjectChatRow(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         SessionListRow(
-            item = sessionListItem(chat.session, connected && chat.verified, loading = false),
+            item =
+                sessionListItem(chat.session, connected && chat.verified, loading = false).let {
+                    it.copy(pinned = mark?.pinned == true, unread = sessionUnread(mark, it.updatedAt, open = false))
+                },
             enabled = enabled,
             closeAvailable = false,
             onClick = onClick,
