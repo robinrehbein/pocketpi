@@ -261,7 +261,6 @@ internal fun ChatComposer(
     onSteer: () -> Unit = {},
     onStopChild: () -> Unit = {},
     onResumeChild: () -> Unit = {},
-    onDismissFollowUp: (String) -> Unit = {},
     onAbort: () -> Unit = onStop,
     onAnswer: (String, kotlinx.serialization.json.JsonObject) -> Unit = { _, _ -> },
     leading: @Composable RowScope.() -> Unit = {},
@@ -529,43 +528,6 @@ internal fun ChatComposer(
                     resumeEnabled = canResumeChild,
                     onResume = onResumeChild,
                 )
-            if (state.followUps.isNotEmpty()) {
-                Column(
-                    Modifier.fillMaxWidth().heightIn(max = 112.dp)
-                        .verticalScroll(rememberScrollState())
-                        .testTag("followUpJournal"),
-                ) {
-                    state.followUps.forEach { entry ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                stringResource(
-                                    when (entry.status) {
-                                        "delivered" -> R.string.remote_follow_up_delivered
-                                        "uncertain" -> R.string.remote_follow_up_uncertain
-                                        "cancelled" -> R.string.remote_follow_up_cancelled
-                                        else -> if (entry.delivery == "steer") R.string.remote_steer_accepted
-                                            else R.string.remote_follow_up_pending
-                                    },
-                                    entry.text.take(100),
-                                ),
-                                modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.labelSmall,
-                            )
-                            if (entry.status !in setOf("pending", "accepted")) {
-                                IconButton(
-                                    onClick = { onDismissFollowUp(entry.requestId) },
-                                    modifier = Modifier.testTag("dismissFollowUp-${entry.requestId}"),
-                                ) {
-                                    Icon(
-                                        Icons.Default.Close,
-                                        stringResource(R.string.remote_follow_up_dismiss, entry.text.take(100)),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
             if (showBusyAction) {
                 Row(
                     Modifier.fillMaxWidth(),

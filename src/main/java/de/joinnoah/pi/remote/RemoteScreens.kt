@@ -2900,6 +2900,7 @@ internal fun RemoteScreen(
                             open = openArtifact,
                             onDismiss = { artifactsSheetRequested = false },
                         )
+                    FollowUpStatus(state, model::dismissFollowUp)
                     ChatPreviewHint(state)
                     ChatComposerNotices(connectionStatusLine(state), state.uncertain)
                     val composer = checkNotNull(composerDraft)
@@ -2912,7 +2913,6 @@ internal fun RemoteScreen(
                         onSteer = model::steer,
                         onStopChild = model::stopChild,
                         onResumeChild = model::resumeChild,
-                        onDismissFollowUp = model::dismissFollowUp,
                         onStop = model::abort,
                         onRemoveQuote = { model.quote(null) },
                         onAbort = {
