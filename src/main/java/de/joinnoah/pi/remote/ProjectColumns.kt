@@ -65,7 +65,7 @@ private val VERTICAL_LABEL_MAX_LENGTH = 240.dp
  * open chat, the same project closes it, and either brings a collapsed session list back.
  */
 internal fun openProject(navigator: RemoteNavigator, twoPane: TwoPaneState?, routeId: String, projectId: String) {
-    twoPane?.listCollapsed = false
+    twoPane?.revealList()
     navigator.open(RemoteNavKey.Sessions(routeId, projectId))
 }
 

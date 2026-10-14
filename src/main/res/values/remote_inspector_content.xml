@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- More tabs of the inspector beside a chat (InspectorHost.kt): the session's artifacts and
+         the files the chat touched. -->
+    <string name="remote_inspector_tab_gallery">Artifacts</string>
+    <string name="remote_inspector_tab_touched">Chat files</string>
+    <!-- Opens what a tab shows in a full-window view over everything. -->
+    <string name="remote_inspector_pop_out">Pop out</string>
+    <!-- An HTML page open beside the chat changed: pi edited it, or a newer version was listed. -->
+    <string name="remote_artifact_changed">This page changed on your Mac.</string>
+    <string name="remote_artifact_changed_reload">Reload</string>
+    <!-- Reloads now and every later change too, while the page stays open. -->
+    <string name="remote_artifact_changed_always">Always reload</string>
+</resources>

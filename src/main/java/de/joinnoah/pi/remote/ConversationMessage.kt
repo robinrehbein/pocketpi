@@ -516,6 +516,8 @@ private fun ConversationMessageContent(
             // Plan cards keep their inline toggle; other tools open the detail screen when the host
             // screen offers one, and the expand icon toggles the inline preview on its own.
             val openTool = onOpenTool.takeIf { planMarkdown == null }
+            // Beside the chat the tool's own tab shows all of its output instead of the peek dialog.
+            val peekInTab = openTool?.takeIf { LocalInspectorViewers.current != null }?.let { open -> { open(item) } }
             val diff = remember(item.arguments, item.details) { toolDiff(item) }
             val summary = item.summary
             val activityShape = MaterialTheme.shapes.medium
@@ -571,7 +573,7 @@ private fun ConversationMessageContent(
                                     else expanded = !expanded
                                 },
                                 onLongClickLabel = stringResource(R.string.remote_output_peek),
-                                onLongClick = if (item.output != null) ({ outputPeek = true }) else null,
+                                onLongClick = if (item.output != null) (peekInTab ?: { outputPeek = true }) else null,
                             )
                             .heightIn(min = 40.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -671,7 +673,7 @@ private fun ConversationMessageContent(
                                 stringResource(R.string.remote_tool_output),
                                 style = MaterialTheme.typography.labelMedium,
                             )
-                            ToolOutputView(it, item.name, item.arguments)
+                            ToolOutputView(it, item.name, item.arguments, onPeek = peekInTab)
                             TextButton(onClick = { onQuote(item.sourceId) }) { Text(quoteLabel) }
                         }
                         if (item.truncated)

@@ -107,6 +107,15 @@ internal const val QUIET_RECONNECT_MILLIS = 5_000L
 /** The default wait for a request's reply. */
 internal const val REQUEST_TIMEOUT_MILLIS = 30_000L
 
+/** The app's connection counts as healthy for background work while a frame came this recently. */
+internal const val HEALTHY_INBOUND_MILLIS = 25_000L
+
+/** How long background work waits for a reply over the app's connection. */
+internal const val HEALTHY_REQUEST_TIMEOUT_MILLIS = 4_000L
+
+/** Connection-bound requests (folder, fan-out, background) that may be outstanding at once. */
+private const val MAX_CONNECTION_REQUESTS = 32
+
 /** Back this soon, on the same screen and with frames flowing, the app resumes without a request. */
 internal const val RESUME_QUIET_AWAY_MILLIS = 15_000L
 
@@ -266,8 +275,10 @@ class DefaultRemoteRepository(
     /** host.event payloads that arrived before their clone.started result, by clone ID. */
     private val earlyCloneEvents = linkedMapOf<String, JsonObject>()
     /**
-     * Folder, clone and project list requests; a selection change does not cancel them, a lost
-     * connection does.
+     * Connection-bound requests: folder, clone and provider commands ([folderRequest]), the
+     * project fan-out ([connectionRequest]) and background work ([withHealthyConnection]). A
+     * selection change does not cancel them; a lost or replaced connection fails them all
+     * ([failConnectionRequests]). At most [MAX_CONNECTION_REQUESTS] are outstanding.
      */
     private val connectionCompletions = mutableMapOf<String, CompletableDeferred<JsonObject>>()
     private var openCounter = 0L
@@ -5309,22 +5320,58 @@ class DefaultRemoteRepository(
     }
 
     /**
+     * Sends a request bound to the connection rather than the selection and waits up to
+     * [timeoutMillis] for its reply. Navigating away does not drop the reply; only a lost or
+     * replaced connection fails it ([failConnectionRequests]). The caller checks that the
+     * connection is up, that [requestId] is free and that fewer than [MAX_CONNECTION_REQUESTS]
+     * are outstanding. With [record], Diagnostics records the round trip like [request]'s and a
+     * reply proves the connection.
+     */
+    private suspend fun awaitConnectionReply(
+        requestId: String,
+        type: String,
+        fields: Array<out Pair<String, Any?>>,
+        timeoutMillis: Long,
+        record: Boolean,
+    ): JsonObject {
+        val payload = Wire.objectOf("type" to type, "requestId" to requestId, *fields)
+        val completion = CompletableDeferred<JsonObject>()
+        connectionCompletions[requestId] = completion
+        val started = Diagnostics.now()
+        var outcome = "failed"
+        try {
+            transport.send(payload)
+            val result =
+                withTimeoutOrNull(timeoutMillis) { completion.await() }
+                    ?: run {
+                        outcome = "timeout"
+                        throw RemoteRequestException.timeout()
+                    }
+            outcome = "ok"
+            if (record) connectionProven()
+            return result
+        } catch (e: Throwable) {
+            if (outcome != "timeout") outcome = requestOutcome(e)
+            throw e
+        } finally {
+            connectionCompletions.remove(requestId)
+            if (record)
+                Diagnostics.request(type, Diagnostics.now() - started, payload.toString().length.toLong(), outcome)
+        }
+    }
+
+    /** Whether another connection-bound request may be sent now. */
+    private fun connectionRequestsOpen() =
+        state.value.connected && connectionCompletions.size < MAX_CONNECTION_REQUESTS
+
+    /**
      * Sends a folder or clone command. Unlike [request] it is not bound to the selection, so
      * leaving the browser cannot drop a clone this device already started; only a lost or
      * replaced connection ends it.
      */
     private suspend fun folderRequest(type: String, vararg fields: Pair<String, Any?>): JsonObject {
-        check(state.value.connected && connectionCompletions.size < 32)
-        val id = Wire.random()
-        val completion = CompletableDeferred<JsonObject>()
-        connectionCompletions[id] = completion
-        try {
-            transport.send(Wire.objectOf("type" to type, "requestId" to id, *fields))
-            return withTimeoutOrNull(30000) { completion.await() }
-                ?: throw RemoteRequestException.timeout()
-        } finally {
-            connectionCompletions.remove(id)
-        }
+        check(connectionRequestsOpen())
+        return awaitConnectionReply(Wire.random(), type, fields, REQUEST_TIMEOUT_MILLIS, record = false)
     }
 
     /**
@@ -5333,33 +5380,55 @@ class DefaultRemoteRepository(
      * Diagnostics records its round trip like [request]'s.
      */
     private suspend fun connectionRequest(type: String, vararg fields: Pair<String, Any?>): JsonObject {
-        check(state.value.connected && connectionCompletions.size < 32)
-        val id = Wire.random()
-        val payload = Wire.objectOf("type" to type, "requestId" to id, *fields)
-        val completion = CompletableDeferred<JsonObject>()
-        connectionCompletions[id] = completion
-        val started = Diagnostics.now()
-        var outcome = "failed"
-        try {
-            transport.send(payload)
-            val result =
-                withTimeoutOrNull(REQUEST_TIMEOUT_MILLIS) { completion.await() }
-                    ?: run {
-                        outcome = "timeout"
-                        throw RemoteRequestException.timeout()
-                    }
-            outcome = "ok"
-            connectionProven()
-            return result
-        } catch (e: Throwable) {
-            if (outcome != "timeout") outcome = requestOutcome(e)
-            throw e
-        } finally {
-            connectionCompletions.remove(id)
-            Diagnostics.request(type, Diagnostics.now() - started, payload.toString().length.toLong(), outcome)
-        }
+        check(connectionRequestsOpen())
+        return awaitConnectionReply(Wire.random(), type, fields, REQUEST_TIMEOUT_MILLIS, record = true)
     }
 
+    /**
+     * Runs [block] over this connection for work outside the UI, such as a reply from a
+     * notification, when it is connected to [routeId] and a frame arrived within
+     * [HEALTHY_INBOUND_MILLIS]. Otherwise it returns null without sending anything, and the caller
+     * opens a connection of its own. A half-open socket would make that work slower, not faster,
+     * so a quiet one does not count. The requests are independent of the selection, like folder
+     * requests, and wait at most [HEALTHY_REQUEST_TIMEOUT_MILLIS] for their reply.
+     */
+    internal suspend fun <T> withHealthyConnection(
+        routeId: String,
+        block: suspend (MutationCommands) -> T,
+    ): T? {
+        val main = scope.coroutineContext.minusKey(Job)
+        val healthy =
+            withContext(main) {
+                val inbound = lastInboundAt
+                state.value.connected && activeHost?.routeId == routeId && inbound != null &&
+                    now() - inbound in 0 until HEALTHY_INBOUND_MILLIS
+            }
+        if (!healthy) return null
+        return block(
+            object : MutationCommands {
+                override suspend fun request(type: String, vararg fields: Pair<String, Any?>) =
+                    mutate(Wire.random(), type, *fields)
+
+                override suspend fun mutate(
+                    requestId: String,
+                    type: String,
+                    vararg fields: Pair<String, Any?>,
+                ): JsonObject =
+                    withContext(main) {
+                        if (
+                            !connectionRequestsOpen() || activeHost?.routeId != routeId ||
+                                requestId in connectionCompletions
+                        )
+                            throw MutationNotSentException()
+                        awaitConnectionReply(
+                            requestId, type, fields, HEALTHY_REQUEST_TIMEOUT_MILLIS, record = false,
+                        )
+                    }
+            }
+        )
+    }
+
+    /** Fails every connection-bound request; called when the connection is lost or replaced. */
     private fun failConnectionRequests() {
         val pending = connectionCompletions.values.toList()
         connectionCompletions.clear()

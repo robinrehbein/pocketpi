@@ -136,6 +136,20 @@ internal fun ProjectArtifactCard(path: String, source: ProjectImageSource, modif
     val fileName = path.substringAfterLast('/')
     val ready = state as? ProjectArtifactState.Ready
     val open = stringResource(R.string.remote_artifact_open, fileName)
+    val viewers = LocalInspectorViewers.current
+    val reload: suspend () -> String? = { (source.readArtifact(source.sessionId, path, true) as? ProjectArtifactResult.Loaded)?.html }
+    // Beside the chat the page opens in the inspector's tab, which offers the chat's later edits.
+    fun view() {
+        val artifact = ready?.artifact ?: return
+        if (viewers == null) viewing = true
+        else
+            viewers.show(
+                InspectorViewer.Artifact(
+                    ArtifactKind.Html, path, artifactTitle(artifact.html, fileName), artifact.html, reload,
+                    ArtifactWatch.File(path),
+                )
+            )
+    }
     Column(modifier.fillMaxWidth().testTag("projectArtifact-$path"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Surface(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
@@ -151,11 +165,11 @@ internal fun ProjectArtifactCard(path: String, source: ProjectImageSource, modif
                         artifact.html,
                         artifact.sha256,
                         onClickLabel = open,
-                        onClick = { viewing = true },
+                        onClick = ::view,
                         failed = { Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis) },
                     )
                     Row(
-                        Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = open) { viewing = true }
+                        Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = open, onClick = ::view)
                             .padding(start = 12.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -177,7 +191,7 @@ internal fun ProjectArtifactCard(path: String, source: ProjectImageSource, modif
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        TextButton(onClick = { viewing = true }) { Text(stringResource(R.string.remote_artifact_open_action)) }
+                        TextButton(onClick = ::view) { Text(stringResource(R.string.remote_artifact_open_action)) }
                     }
                 } else
                     Box(Modifier.fillMaxWidth().heightIn(min = 120.dp), contentAlignment = Alignment.Center) {
@@ -193,7 +207,7 @@ internal fun ProjectArtifactCard(path: String, source: ProjectImageSource, modif
             path = path,
             title = artifactTitle(artifact.html, fileName),
             initialText = artifact.html,
-            reload = { (source.readArtifact(source.sessionId, path, true) as? ProjectArtifactResult.Loaded)?.html },
+            reload = reload,
             onDismiss = { viewing = false },
         )
     }
@@ -214,6 +228,12 @@ internal fun MermaidCard(code: String, modifier: Modifier = Modifier, codeBlock:
     val type = remember(code) { mermaidDiagramType(code) }
     val lines = remember(code) { mermaidLineCount(code) }
     val open = stringResource(R.string.remote_mermaid_open)
+    val viewers = LocalInspectorViewers.current
+    val badge = stringResource(R.string.remote_mermaid_badge)
+    fun view() {
+        if (viewers == null) viewing = true
+        else viewers.show(InspectorViewer.Artifact(ArtifactKind.Mermaid, "diagram.mmd", badge, code, reload = null))
+    }
     val summary =
         listOf(stringResource(R.string.remote_mermaid_badge), type)
             .filter { it.isNotEmpty() }
@@ -230,7 +250,7 @@ internal fun MermaidCard(code: String, modifier: Modifier = Modifier, codeBlock:
                     code,
                     sha,
                     onClickLabel = open,
-                    onClick = { viewing = true },
+                    onClick = ::view,
                     failed = {
                         Text(
                             stringResource(R.string.remote_mermaid_failed),
@@ -240,12 +260,12 @@ internal fun MermaidCard(code: String, modifier: Modifier = Modifier, codeBlock:
                     },
                 )
                 Row(
-                    Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = open) { viewing = true }
+                    Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = open, onClick = ::view)
                         .padding(start = 12.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(summary, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    TextButton(onClick = { viewing = true }) { Text(stringResource(R.string.remote_artifact_open_action)) }
+                    TextButton(onClick = ::view) { Text(stringResource(R.string.remote_artifact_open_action)) }
                 }
             }
         }
@@ -254,7 +274,7 @@ internal fun MermaidCard(code: String, modifier: Modifier = Modifier, codeBlock:
         ArtifactViewer(
             kind = ArtifactKind.Mermaid,
             path = "diagram.mmd",
-            title = stringResource(R.string.remote_mermaid_badge),
+            title = badge,
             initialText = code,
             reload = null,
             onDismiss = { viewing = false },

@@ -287,4 +287,55 @@ class ChatNavigationUiTest {
         compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
         compose.onNodeWithTag("composerField").assertIsDisplayed()
     }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun reconnectingAndUncertainNoticesStayBesideTheComposerWhileScrolledUp() {
+        render()
+        // Scrolled up by hand, so the chat stops following its end.
+        repeat(30) {
+            if (compose.onAllNodes(hasText("Question number 0")).fetchSemanticsNodes().isNotEmpty()) return@repeat
+            compose.onNodeWithTag("conversationList").performTouchInput { swipeDown() }
+            compose.waitForIdle()
+        }
+        compose.onNodeWithText("Question number 0").assertIsDisplayed()
+        compose.onNodeWithTag("chatComposerNotices").assertDoesNotExist()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(
+                    connected = false,
+                    stale = true,
+                    connection = R.string.remote_reconnecting,
+                    uncertain = true,
+                )
+        }
+        compose.waitForIdle()
+        // Still scrolled up, and both notices sit in the floating composer, above its field.
+        compose.onNodeWithText("Question number 0").assertIsDisplayed()
+        val field = compose.onNodeWithTag("composerField").getUnclippedBoundsInRoot()
+        for (notice in listOf(
+            hasText(label(R.string.remote_reconnecting)),
+            hasText(label(R.string.remote_draft_uncertain)),
+        )) {
+            val node = compose.onNode(notice and hasAnyAncestor(hasTestTag("floatingComposer")))
+            node.assertIsDisplayed()
+            assertTrue("A notice ends below the composer field", node.getUnclippedBoundsInRoot().bottom <= field.top)
+        }
+        // The conversation itself no longer leads with them.
+        compose.onNode(hasText(label(R.string.remote_reconnecting)) and hasAnyAncestor(hasTestTag("conversationList")))
+            .assertDoesNotExist()
+        compose.onNode(hasText(label(R.string.remote_draft_uncertain)) and hasAnyAncestor(hasTestTag("conversationList")))
+            .assertDoesNotExist()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(
+                    connected = true,
+                    stale = false,
+                    connection = R.string.remote_connected,
+                    uncertain = false,
+                )
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatComposerNotices").assertDoesNotExist()
+    }
 }

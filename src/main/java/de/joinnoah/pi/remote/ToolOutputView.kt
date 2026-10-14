@@ -10,6 +10,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -33,15 +34,22 @@ internal fun outputFormat(name: String?, arguments: String?, text: String): Outp
     return OutputFormat.TEXT
 }
 
+/**
+ * A tool's output in its card, at most 24 lines; Peek shows all of it in [ToolOutputPeek], or calls
+ * [onPeek] where the tool's own tab beside the chat shows it instead.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun ToolOutputView(text: String, name: String? = null, arguments: String? = null) {
+internal fun ToolOutputView(text: String, name: String? = null, arguments: String? = null, onPeek: (() -> Unit)? = null) {
     var peek by remember { mutableStateOf(false) }
     val format = remember(name, arguments, text) { outputFormat(name, arguments, text) }
     val preview = remember(text) { text.lineSequence().take(24).joinToString("\n").take(6000) }
-    Column(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = { peek = true })) {
+    val showAll = onPeek ?: { peek = true }
+    Column(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = showAll)) {
         OutputContent(preview, format)
-        TextButton(onClick = { peek = true }) { Text(stringResource(R.string.remote_output_peek)) }
+        TextButton(onClick = showAll, modifier = Modifier.testTag("toolOutputPeek")) {
+            Text(stringResource(R.string.remote_output_peek))
+        }
     }
     if (peek) ToolOutputPeek(text, name, arguments) { peek = false }
 }

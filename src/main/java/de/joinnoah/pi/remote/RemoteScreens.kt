@@ -155,6 +155,9 @@ private fun ReconnectCountdown(reconnectAt: Long?, now: () -> Long = System::cur
 private fun reconnectSeconds(reconnectAt: Long, now: () -> Long): Int =
     ((reconnectAt - now() + 999) / 1000).toInt().coerceAtLeast(0)
 
+/** The space between the items of the chat and of the list pages. */
+private val LIST_ITEM_SPACING = 12.dp
+
 /** Keys of the chat list's own rows beside the messages, like "waiting-for-output". */
 internal const val CHAT_SKELETON_KEY = "chat-skeleton"
 internal const val LOAD_OLDER_KEY = "load-older"
@@ -232,13 +235,14 @@ internal fun RemoteScreen(
     var collapsedSessionIds by rememberSaveable(key) { mutableStateOf(arrayListOf<String>()) }
     val collapsedIds = collapsedSessionIds.toSet()
     val visibleSessions =
-        remember(state.sessions, state.connected, state.loading, hideOfflineSessions, collapsedIds) {
+        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
                 state.loading,
-                hideOfflineSessions && state.connected,
+                hidesOfflineSessions(hideOfflineSessions, state.connected, state.stale),
                 collapsedIds,
+                stale = state.stale,
             )
         }
     val listedSessions =
@@ -257,12 +261,13 @@ internal fun RemoteScreen(
             onDispose { shortcutTargets.unregisterRefresh(key, refresh) }
         }
     val sessionCount =
-        remember(state.sessions, state.connected, state.loading, hideOfflineSessions) {
+        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
                 state.loading,
-                hideOfflineSessions && state.connected,
+                hidesOfflineSessions(hideOfflineSessions, state.connected, state.stale),
+                stale = state.stale,
             ).size
         }
     val sessionActive =
@@ -330,9 +335,9 @@ internal fun RemoteScreen(
         }
     val errorCount = remember(conversation) { conversation.count(::isErrorItem) }
     val children =
-        remember(chatKey, state.sessions, state.connected, state.loading) {
+        remember(chatKey, state.sessions, state.connected, state.loading, state.stale) {
             if (chatKey == null) emptyList()
-            else sessionListItems(state.sessions, state.connected, state.loading)
+            else sessionListItems(state.sessions, state.connected, state.loading, state.stale)
         }
     val strip =
         remember(chatKey, conversation, children) {
@@ -569,8 +574,26 @@ internal fun RemoteScreen(
     val filesOpen = state.files?.takeIf { it.sessionId == state.selection.sessionId && chatModel != null }
     val jobsOpen =
         state.jobs?.let { (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId } == true
+    // The touched files and the session's artifacts: sheets on a phone, tabs beside the chat.
+    var touchedSheet by rememberSaveable(key) { mutableStateOf(false) }
+    var artifactsSheetRequested by remember(key) { mutableStateOf(false) }
+    // The artifact or image open in the ARTIFACT tab, and the newest versions a gallery listed.
+    val viewerScope = rememberCoroutineScope()
+    val viewerSlot = remember(key) { InspectorViewerSlot(viewerScope) }
+    var listedVersions by remember(key) { mutableStateOf(emptyMap<String, Int>()) }
+    /** The newest change [viewer] can show: the chat's last edit of its file, or its newest listed version. */
+    fun viewerChange(viewer: InspectorViewer?): String? =
+        when (val watch = (viewer as? InspectorViewer.Artifact)?.watch) {
+            is ArtifactWatch.File -> artifactChange(conversation, watch.path)
+            is ArtifactWatch.Listed -> maxOf(watch.version, listedVersions[watch.id] ?: 0).toString()
+            null -> null
+        }
+    val openViewer = viewerSlot.viewer
+    val openViewerChange = remember(openViewer, conversation, listedVersions) { viewerChange(openViewer) }
+    LaunchedEffect(viewerSlot, openViewerChange) { viewerSlot.changed(openViewerChange) }
     // The inspector's tabs beside this chat. What backs each tab decides which exist: the
-    // repository's changes, files and jobs, the open tool and the history (see the reconcile below).
+    // repository's changes, files and jobs, the open tool, the history, the open viewer, the
+    // gallery and the touched files (see the reconcile below).
     var inspectorTabs by rememberSaveable(key, stateSaver = InspectorTabs.Saver) { mutableStateOf(InspectorTabs()) }
     /** Shows [tab] in the inspector and makes room for it; the caller opens what backs it. */
     fun showTab(tab: InspectorTab) {
@@ -593,6 +616,8 @@ internal fun RemoteScreen(
             InspectorTab.FILES -> if (filesOpen == null) chat.openFiles(exclusive = !sideCapable)
             InspectorTab.JOBS -> if (!jobsOpen) chat.openJobs()
             InspectorTab.HISTORY -> historyOpen = true
+            InspectorTab.GALLERY -> artifactsSheetRequested = true
+            InspectorTab.TOUCHED -> touchedSheet = true
             InspectorTab.TOOL, InspectorTab.ARTIFACT -> Unit
         }
     }
@@ -605,7 +630,9 @@ internal fun RemoteScreen(
             InspectorTab.JOBS -> chatModel?.closeJobs()
             InspectorTab.TOOL -> closeTool()
             InspectorTab.HISTORY -> historyOpen = false
-            InspectorTab.ARTIFACT -> Unit
+            InspectorTab.ARTIFACT -> viewerSlot.close()
+            InspectorTab.GALLERY -> artifactsSheetRequested = false
+            InspectorTab.TOUCHED -> touchedSheet = false
         }
     }
     // The panes show beside the chat, or would if the user had not hidden them (Ctrl+\); set
@@ -627,7 +654,24 @@ internal fun RemoteScreen(
     fun toggleHistory() {
         toggleTab(InspectorTab.HISTORY, historyOpen, canOpen = true)
     }
-    var touchedSheet by rememberSaveable(key) { mutableStateOf(false) }
+    /** `/artifacts`: the gallery's tab beside the chat, selected even when open behind another tab; a sheet on a phone. */
+    fun openGallery() {
+        if (sideCapable) openInspector(InspectorTab.GALLERY) else artifactsSheetRequested = true
+    }
+    val showViewer by rememberUpdatedState<(InspectorViewer) -> Unit> { viewer ->
+        viewerSlot.show(viewer, viewerChange(viewer))
+        showTab(InspectorTab.ARTIFACT)
+    }
+    // Where the inspector can go beside the chat, artifacts and images open in its tab.
+    val inspectorViewers =
+        remember(key) {
+            InspectorViewers(
+                show = { showViewer(it) },
+                listed = { artifacts ->
+                    listedVersions = listedVersions + artifacts.associate { it.id to maxOf(it.version, listedVersions[it.id] ?: 0) }
+                },
+            )
+        }
     var childCandidates by remember(key) { mutableStateOf<List<SessionListItem>?>(null) }
     var abortChild by remember(key) { mutableStateOf<SubagentStripEntry?>(null) }
     val composerFocus = remember { FocusRequester() }
@@ -832,7 +876,6 @@ internal fun RemoteScreen(
     var modelPickerRequested by remember(key) { mutableStateOf(false) }
     var settingsSheetRequested by remember(key) { mutableStateOf(false) }
     var treeSheetRequested by remember(key) { mutableStateOf(false) }
-    var artifactsSheetRequested by remember(key) { mutableStateOf(false) }
     // A sheet closed by a lost connection or capability must not reappear by itself after a reconnect.
     val artifactsAvailable = canShowArtifacts(state)
     LaunchedEffect(artifactsAvailable) { if (!artifactsAvailable) artifactsSheetRequested = false }
@@ -864,7 +907,7 @@ internal fun RemoteScreen(
                 else if (reloading) showToast(R.string.remote_reload_running)
                 else state.selection.sessionId?.let(::startReload)
             LocalCommand.ARTIFACTS ->
-                if (artifactsAvailable) artifactsSheetRequested = true
+                if (artifactsAvailable) openGallery()
                 else showToast(R.string.remote_artifacts_host_outdated)
             LocalCommand.NAME -> {
                 val session = state.session ?: return true
@@ -1139,6 +1182,7 @@ internal fun RemoteScreen(
                     },
                     onClose = ::closeTool,
                     modifier = Modifier.fillMaxSize(),
+                    popOut = panesBesideNow.value,
                 )
             }
         }
@@ -1181,6 +1225,44 @@ internal fun RemoteScreen(
         if (historyOpen && key is RemoteNavKey.Chat && sideCapable) {
             { ChatHistoryPane(history, onOpen = ::jumpTo, onClose = { historyOpen = false }, initialIndex = historyStart) }
         } else null
+    // Artifacts, images, the gallery and the touched files: dialogs and sheets on a phone.
+    val artifactContent: (@Composable () -> Unit)? =
+        if (chatKey != null && sideCapable && viewerSlot.viewer != null) {
+            { InspectorViewerPane(viewerSlot, onClose = { closeTab(InspectorTab.ARTIFACT) }) }
+        } else null
+    val artifactsSessionId = state.selection.sessionId
+    val artifactsChat = chatModel
+    val listArtifacts: (suspend () -> SessionArtifactListResult)? =
+        if (artifactsSessionId != null && artifactsChat != null) ({ artifactsChat.listSessionArtifacts(artifactsSessionId) })
+        else null
+    val openArtifact: suspend (SessionArtifact, Boolean) -> SessionArtifactOpenResult = { artifact, listed ->
+        // The listed version is pinned to the listed digest; a reload takes the latest.
+        checkNotNull(artifactsChat).openSessionArtifact(
+            checkNotNull(artifactsSessionId), artifact.id,
+            if (listed) artifact.version else null,
+            artifact.type,
+            if (listed) artifact.sha256 else null,
+        )
+    }
+    val artifactsShown =
+        artifactsSheetRequested && chatKey != null && listArtifacts != null && artifactsSessionId != null && canShowArtifacts(state)
+    // The gallery tab's list while the tab stays open; it loads again once the tab reopens.
+    val keptGallery = remember(key, artifactsSessionId) { mutableStateOf<ArtifactGalleryState.Loaded?>(null) }
+    LaunchedEffect(artifactsShown) { if (!artifactsShown) keptGallery.value = null }
+    val galleryContent: (@Composable () -> Unit)? =
+        if (artifactsShown && sideCapable) {
+            {
+                SessionArtifactsPane(
+                    artifactsSessionId, listArtifacts, openArtifact,
+                    onClose = { closeTab(InspectorTab.GALLERY) },
+                    kept = keptGallery,
+                )
+            }
+        } else null
+    val touchedContent: (@Composable () -> Unit)? =
+        if (touchedSheet && chatKey != null && sideCapable) {
+            { TouchedFilesPane(touched, onOpen = ::jumpTo, onClose = { closeTab(InspectorTab.TOUCHED) }) }
+        } else null
     fun tabContent(tab: InspectorTab): (@Composable () -> Unit)? =
         when (tab) {
             InspectorTab.CHANGES -> changesContent
@@ -1188,7 +1270,9 @@ internal fun RemoteScreen(
             InspectorTab.JOBS -> jobsContent
             InspectorTab.TOOL -> toolContent
             InspectorTab.HISTORY -> historyContent
-            InspectorTab.ARTIFACT -> null
+            InspectorTab.ARTIFACT -> artifactContent
+            InspectorTab.GALLERY -> galleryContent
+            InspectorTab.TOUCHED -> touchedContent
         }
     // A tab whose pane closed elsewhere (its own close button, a reconnect, another session)
     // goes, and one that opened elsewhere (a notification, the jobs chip) joins.
@@ -1199,6 +1283,9 @@ internal fun RemoteScreen(
             if (jobsContent != null) add(InspectorTab.JOBS)
             if (toolContent != null) add(InspectorTab.TOOL)
             if (historyOpen && sideCapable) add(InspectorTab.HISTORY)
+            if (galleryContent != null) add(InspectorTab.GALLERY)
+            if (artifactContent != null) add(InspectorTab.ARTIFACT)
+            if (touchedContent != null) add(InspectorTab.TOUCHED)
         }
     val tabs = remember(inspectorTabs, availableTabs) { inspectorTabs.reconcile(availableTabs) }
     val persistentInspector = paneLayout.inspector == InspectorMode.PERSISTENT
@@ -1422,6 +1509,7 @@ internal fun RemoteScreen(
     CompositionLocalProvider(
         LocalChatKeyTarget provides chatKeyTarget.takeIf { chatKey != null },
         LocalFocusRegionChildren provides regionChildren,
+        LocalInspectorViewers provides inspectorViewers.takeIf { chatKey != null && sideCapable },
     ) {
     InspectorRow(
         shown = inspectorShown,
@@ -1574,7 +1662,12 @@ internal fun RemoteScreen(
                     start = 20.dp + readingInset,
                     // Constant, so nothing rewraps while scrolling; the scrollbar lives in this lane.
                     end = CHAT_SCROLLBAR_LANE + laneInset,
-                    top = headerHeight + if (key is RemoteNavKey.Chat) 16.dp else 48.dp,
+                    // A list page's connection chip brings the header's height itself (see
+                    // connectionStatusItem); with the spacing after it the page title starts where
+                    // it would at headerHeight + 48dp.
+                    top =
+                        if (key is RemoteNavKey.Chat) headerHeight + 16.dp
+                        else 48.dp - LIST_ITEM_SPACING,
                     bottom =
                         if (
                             key is RemoteNavKey.Sessions || key is RemoteNavKey.Hosts ||
@@ -1583,11 +1676,19 @@ internal fun RemoteScreen(
                         else if (key is RemoteNavKey.Chat) composerHeight + 24.dp
                         else 24.dp,
                 ),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(LIST_ITEM_SPACING),
         ) {
             // Every item emitted before the conversation counts here, so a jump can turn an index
             // in shownItems into a list index.
             var leading = 0
+            // The chat shows the connection beside its composer instead. Beside an open chat or a
+            // project's sessions, that pane speaks for the connection (as with the error card
+            // below); the item stays, empty, so the indices after it do not move.
+            if (key !is RemoteNavKey.Chat)
+                connectionStatusItem(
+                    connectionStatusLine(state).takeIf { listPane?.selectedSessionId == null && !projectSelected },
+                    headerHeight,
+                )
             if (key !is RemoteNavKey.Chat)
                 item(key = "page-title") {
                     Row(
@@ -1695,7 +1796,7 @@ internal fun RemoteScreen(
                 !projectSelected
             ) {
                 leading++
-                item {
+                item(key = "error-card") {
                     Card(
                         modifier = Modifier.fillMaxWidth().testTag("errorCard"),
                         colors =
@@ -2001,29 +2102,6 @@ internal fun RemoteScreen(
                     if (diagnosticsOpen) DiagnosticsDialog(onDismiss = { diagnosticsOpen = false })
                 }
             } else {
-                if (
-                    (state.host != null || state.connection != R.string.remote_offline) &&
-                        !(state.connected &&
-                            (key is RemoteNavKey.Sessions || key is RemoteNavKey.Chat))
-                ) {
-                    leading++
-                    item {
-                        Text(
-                            stringResource(state.connection),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                }
-                if (state.uncertain) {
-                    leading++
-                    item {
-                        Text(
-                            stringResource(R.string.remote_draft_uncertain),
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
                 when (key) {
                     RemoteNavKey.Settings -> Unit
                     is RemoteNavKey.FolderBrowser -> Unit
@@ -2167,7 +2245,7 @@ internal fun RemoteScreen(
                             if (state.loading) item { SessionListSkeleton() }
                             else item { Text(stringResource(R.string.remote_empty_sessions)) }
                         }
-                        else if (visibleSessions.isEmpty() && state.connected && !state.loading)
+                        else if (visibleSessions.isEmpty() && (state.connected || state.stale) && !state.loading)
                             item { Text(stringResource(R.string.remote_offline_sessions_hidden)) }
                         else if (listedSessions.isEmpty() && visibleSessions.isNotEmpty())
                             item { Text(stringResource(R.string.remote_session_search_empty)) }
@@ -2475,7 +2553,10 @@ internal fun RemoteScreen(
                             TouchedFilesSummary(touched, touchedLines) {
                                 when (touchedFilesTarget(canViewChanges(state) && state.connected, touched.changed.isNotEmpty())) {
                                     TouchedFilesTarget.CHANGES -> openInspector(InspectorTab.CHANGES)
-                                    TouchedFilesTarget.SHEET -> touchedSheet = true
+                                    TouchedFilesTarget.SHEET -> {
+                                        touchedSheet = true
+                                        if (sideCapable) showTab(InspectorTab.TOUCHED)
+                                    }
                                 }
                             }
                             ErrorFilterChip(errorCount, onlyErrorsShown) {
@@ -2528,23 +2609,16 @@ internal fun RemoteScreen(
                             onDismiss = { treeSheetRequested = false },
                             forkBlocked = navigator.mutating,
                         )
-                    if (artifactsSheetRequested && chatKey != null && treeSessionId != null && treeChat != null &&
-                        canShowArtifacts(state))
+                    // Beside the chat the gallery is a tab of the inspector.
+                    if (artifactsShown && !panesBeside)
                         SessionArtifactsSheet(
-                            sessionId = treeSessionId,
-                            list = { treeChat.listSessionArtifacts(treeSessionId) },
-                            open = { artifact, listed ->
-                                // The listed version is pinned to the listed digest; a reload takes the latest.
-                                treeChat.openSessionArtifact(
-                                    treeSessionId, artifact.id,
-                                    if (listed) artifact.version else null,
-                                    artifact.type,
-                                    if (listed) artifact.sha256 else null,
-                                )
-                            },
+                            sessionId = artifactsSessionId,
+                            list = listArtifacts,
+                            open = openArtifact,
                             onDismiss = { artifactsSheetRequested = false },
                         )
                     ChatPreviewHint(state)
+                    ChatComposerNotices(connectionStatusLine(state), state.uncertain)
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,
@@ -2593,7 +2667,7 @@ internal fun RemoteScreen(
                                         // Like a sent command, a command draft does not stay in the composer.
                                         if (composer.text.trimStart().startsWith("/")) composer.replace("")
                                         if (command == LocalCommand.TREE) treeSheetRequested = true
-                                        else if (artifactsAvailable) artifactsSheetRequested = true
+                                        else if (artifactsAvailable) openGallery()
                                         else showToast(R.string.remote_artifacts_host_outdated)
                                     }
                                     // A terminal session only explains itself; nothing to send.
@@ -2689,8 +2763,13 @@ internal fun RemoteScreen(
                 }
             },
         )
-    if (touchedSheet && key is RemoteNavKey.Chat)
+    if (touchedSheet && key is RemoteNavKey.Chat && !panesBeside)
         TouchedFilesSheet(touched, onDismiss = { touchedSheet = false }, onOpen = ::jumpTo)
+    // The open viewer popped out of its tab, or where its pane would cover the chat.
+    if (chatKey != null && viewerSlot.viewer != null && (viewerSlot.poppedOut || !panesBeside))
+        InspectorViewerDialog(viewerSlot) {
+            if (panesBeside) viewerSlot.poppedOut = false else closeTab(InspectorTab.ARTIFACT)
+        }
     if (historyOpen && key is RemoteNavKey.Chat && !panesBeside)
         ChatHistorySheet(history, onDismiss = { historyOpen = false }, onOpen = ::jumpTo, initialIndex = historyStart)
     childCandidates?.let { candidates ->

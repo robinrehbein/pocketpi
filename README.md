@@ -166,6 +166,9 @@ The app initializes Firebase programmatically and does not require `google-servi
 needs the matching server credentials. Enable notifications after pairing. Declining permission does
 not disable remote control. Notifications contain generic completion or question text and opaque
 routing identifiers. The app only opens notification targets associated with a saved host.
+Notifications are grouped per Mac and show as conversations with pi. From Android 12, a completion
+notification offers Reply on an unlocked phone: the text goes to the Mac over the encrypted channel
+as the session's next prompt, and a reply without an acknowledgement is reported, never resent.
 
 ## Behavior and checks
 
