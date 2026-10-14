@@ -38,6 +38,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
@@ -821,6 +822,55 @@ internal fun RemoteScreen(
             }
             attachmentSelection = null
         }
+    // The file the camera app writes, kept across a process restart behind the camera.
+    var photoCapture by rememberSaveable { mutableStateOf<String?>(null) }
+    val photoScope = rememberCoroutineScope()
+    val camera =
+        rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
+            PhotoCapture.onResult(
+                saved,
+                photoCapture,
+                attachmentSelection,
+                accept = { selection, uris, photo, done -> (model as? ChatViewModel)?.acceptAttachments(selection, uris, photo, done) ?: false },
+                // Not the screen's scope: the import may end after the screen is gone.
+                discard = { uri -> PhotoCapture.discardLater(context, uri) },
+            )
+            photoCapture = null
+            attachmentSelection = null
+        }
+    fun launchCamera() {
+        photoScope.launch {
+            val uri =
+                try {
+                    withContext(Dispatchers.IO) { PhotoCapture.newUri(context) }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    attachmentSelection = null
+                    Toast.makeText(context, R.string.remote_camera_unavailable, Toast.LENGTH_LONG).show()
+                    return@launch
+                }
+            photoCapture = uri.toString()
+            try {
+                camera.launch(uri)
+            } catch (_: android.content.ActivityNotFoundException) {
+                photoCapture = null
+                attachmentSelection = null
+                withContext(Dispatchers.IO) { PhotoCapture.discard(context, uri.toString()) }
+                Toast.makeText(context, R.string.remote_camera_unavailable, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    // The manifest asks for the camera (QR pairing), so the camera app's capture needs it granted.
+    val cameraPermission =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) launchCamera()
+            else {
+                attachmentSelection = null
+                Toast.makeText(context, R.string.remote_camera_permission_needed, Toast.LENGTH_LONG).show()
+            }
+        }
+    val hasCamera = remember(context) { context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY) }
     var scan by rememberSaveable { mutableStateOf(false) }
     var paste by rememberSaveable(key) { mutableStateOf(false) }
     var qrText by remember { mutableStateOf("") }
@@ -2763,6 +2813,16 @@ internal fun RemoteScreen(
                             attachmentSelection = state.selection
                             filePicker.launch(arrayOf("*/*"))
                         },
+                        onTakePhoto =
+                            if (!hasCamera) null
+                            else {
+                                {
+                                    attachmentSelection = state.selection
+                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+                                        launchCamera()
+                                    else cameraPermission.launch(Manifest.permission.CAMERA)
+                                }
+                            },
                         focusRequester = composerFocus,
                         hardwareKeyboard = hardwareKeyboard,
                         enterSends = chatPreferences?.enterSends ?: true,
@@ -3374,3 +3434,38 @@ internal fun chatStatusLabel(state: RemoteState): Int =
         state.status == "idle" -> R.string.remote_status_idle
         else -> R.string.remote_status_unknown
     }
+
+/**
+ * Shown above the app while a share from another app waits for its session: tapping a session or
+ * New session in a project sends it there ([RemoteNavigator.sharePick]).
+ */
+@Composable
+internal fun SharePickBanner(onCancel: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier.fillMaxWidth().testTag("sharePickBanner"),
+    ) {
+        Row(
+            Modifier
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
+            // Announced when it appears, so TalkBack users learn what a tap on a session does now.
+            Column(Modifier.weight(1f).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }) {
+                Text(
+                    stringResource(R.string.remote_share_pick_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.semantics { heading() },
+                )
+                Text(stringResource(R.string.remote_share_pick_help), style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = onCancel, modifier = Modifier.testTag("sharePickCancel")) {
+                Text(stringResource(R.string.remote_cancel))
+            }
+        }
+    }
+}

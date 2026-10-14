@@ -268,6 +268,8 @@ internal fun ChatComposer(
     onCancelAttachments: () -> Unit = {},
     onPickPhotos: () -> Unit = {},
     onPickFiles: () -> Unit = {},
+    /** Takes a photo for the draft; null where there is no camera. */
+    onTakePhoto: (() -> Unit)? = null,
     voiceEngine: VoiceRecognitionEngine? = null,
     voicePermissionGrantedOverride: Boolean? = null,
     focusRequester: FocusRequester? = null,
@@ -623,6 +625,15 @@ internal fun ChatComposer(
                                     onPickFiles()
                                 },
                             )
+                            if (onTakePhoto != null)
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.remote_take_photo)) },
+                                    onClick = {
+                                        addMenu = false
+                                        onTakePhoto()
+                                    },
+                                    modifier = Modifier.testTag("takePhoto"),
+                                )
                         }
                     }
                 TextField(

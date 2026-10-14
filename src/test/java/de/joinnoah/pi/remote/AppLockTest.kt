@@ -261,6 +261,44 @@ class AppLockTest {
         assertEquals("now", pending(controller))
     }
 
+    // A share from ShareActivity is held behind the lock like a tap.
+
+    private fun shared() = LaunchIntents.share(context, ShareRequest(SharedContent("Shared"), ShareTarget.Pick))
+
+    private fun saved(controller: org.robolectric.android.controller.ActivityController<MainActivity>) =
+        Bundle().also { controller.saveInstanceState(it) }
+
+    @Test fun aShareWhileLockedIsHeldUntilUnlock() {
+        val (controller, prompt) = lockedActivity(shared())
+        assertEquals("the lock asks by itself", 1, prompt.shown)
+        assertNull("nothing reaches the app behind the lock", saved(controller).share("pendingShare"))
+        assertEquals("Shared", saved(controller).share("heldShare")?.content?.text)
+        controller.get().onAppLockResult(true)
+        assertEquals("Shared", saved(controller).share("pendingShare")?.content?.text)
+        assertNull(saved(controller).share("heldShare"))
+    }
+
+    @Test fun aShareWhileLockedIsDroppedOnCancel() {
+        val (controller, _) = lockedActivity(shared())
+        controller.get().onAppLockResult(false)
+        assertTrue(app.appLock.locked.value)
+        assertNull(saved(controller).share("heldShare"))
+        assertNull(saved(controller).share("pendingShare"))
+        // A later unlock brings nothing back.
+        controller.get().onAppLockResult(true)
+        assertNull(saved(controller).share("pendingShare"))
+    }
+
+    @Test fun aNewerLaunchWhileLockedReplacesAHeldShare() {
+        val (controller, _) = lockedActivity(shared())
+        controller.pause()
+        controller.newIntent(LaunchIntents.session(context, "route", "tapped"))
+        controller.resume()
+        controller.get().onAppLockResult(true)
+        assertNull(saved(controller).share("pendingShare"))
+        assertEquals("tapped", pending(controller))
+    }
+
     // The settings row.
 
     @Test fun theSettingRowSwitchesTheLockAndOffersTheTimeoutOnceOn() {

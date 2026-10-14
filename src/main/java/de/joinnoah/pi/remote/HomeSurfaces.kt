@@ -283,6 +283,9 @@ internal class HomeSurfaces(
                             // and the system keeps the shortcut while one of them is showing.
                             .setLongLived(true)
                             .setLocusId(LocusIdCompat(id))
+                            // A Direct Share target: the share sheet offers "PocketPi: <session>"
+                            // (the share-target of res/xml/shortcuts.xml, which opens ShareActivity).
+                            .setCategories(setOf(SHARE_TARGET_CATEGORY))
                             .build()
                     }
                 val shortcuts = chosen.mapIndexed { rank, session -> info(session, rank) }
@@ -410,6 +413,9 @@ internal fun shortcutTarget(id: String): Pair<String, String>? {
     val session = rest.substringAfter(':').takeIf(::isOpaqueId) ?: return null
     return route to session
 }
+
+/** The share-target category of res/xml/shortcuts.xml that session shortcuts carry. */
+internal const val SHARE_TARGET_CATEGORY = "de.joinnoah.pi.remote.category.SHARE_TARGET"
 
 internal const val PUBLISHED_SHORTCUTS_PREFS = "pocket_pi_shortcuts"
 internal const val PUBLISHED_SHORTCUTS_KEY = "signature"
