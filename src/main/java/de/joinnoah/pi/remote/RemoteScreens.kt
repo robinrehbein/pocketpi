@@ -3042,7 +3042,11 @@ internal fun RemoteScreen(
                             attachmentSelection = state.selection
                             filePicker.launch(arrayOf("*/*"))
                         },
-                        onPasteAttachments = { items -> chatKey?.let { chatModel?.acceptAttachments(it.selection(), items) {} } },
+                        onPasteAttachments = { items, onDone ->
+                            val selection = chatKey?.selection()
+                            if (selection != null && chatModel != null) chatModel.acceptAttachments(selection, items, onDone)
+                            else onDone()
+                        },
                         onTakePhoto =
                             if (!hasCamera) null
                             else {

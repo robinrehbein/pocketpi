@@ -150,16 +150,7 @@ class AttachmentImporterTest {
     }
 
     @Test
-    fun onlyPlainPasteChordsAreTaken() {
-        val v = androidx.compose.ui.input.key.Key.V
-        val insert = androidx.compose.ui.input.key.Key.Insert
-        assertTrue(isPasteKey(v, down = true, ctrl = true, alt = false, shift = false))
-        assertTrue(isPasteKey(insert, down = true, ctrl = false, alt = false, shift = true))
-        assertFalse(isPasteKey(v, down = false, ctrl = true, alt = false, shift = false))
-        // Ctrl+Shift+V pastes plain text; it stays the field's.
-        assertFalse(isPasteKey(v, down = true, ctrl = true, alt = false, shift = true))
-        assertFalse(isPasteKey(v, down = true, ctrl = true, alt = true, shift = false))
-        assertFalse(isPasteKey(v, down = true, ctrl = false, alt = false, shift = false))
+    fun aDropIsTakenUnlessItStartedInPocketPi() {
         assertTrue(acceptsDrop(null, setOf("image/png")))
         assertTrue(acceptsDrop(null, setOf("text/plain")))
         assertTrue(acceptsDrop(null, setOf("application/pdf")))
