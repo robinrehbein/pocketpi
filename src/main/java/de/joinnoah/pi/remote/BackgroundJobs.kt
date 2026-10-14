@@ -8,7 +8,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Refresh
@@ -926,25 +925,32 @@ internal fun jobOutputPrompt(intro: String, lines: List<JobOutputLine>, maxLines
     return "$intro\n\n$fence\n$text\n$fence"
 }
 
+/**
+ * The jobs overlay's header, in the same pill style as the other panes. A [nested] page (a job's
+ * detail) has Back to the list beside its Close; the list has Close alone.
+ */
 @Composable
-private fun JobsTopBar(title: String, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {}) {
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        IconButton(onClick = onBack, Modifier.testTag("jobsBack")) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.remote_back))
-        }
-        Text(
-            title,
-            Modifier.weight(1f),
-            style = MaterialTheme.typography.titleMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        actions()
-    }
+private fun JobsTopBar(
+    title: String,
+    nested: Boolean,
+    onBack: () -> Unit,
+    onClose: () -> Unit,
+    actions: List<PaneAction> = emptyList(),
+) {
+    PaneHeader(
+        title = title,
+        subtitle = null,
+        nested = nested,
+        busy = false,
+        tag = "jobs",
+        backLabel = stringResource(R.string.remote_back),
+        closeLabel = stringResource(R.string.remote_page_close),
+        reloadLabel = stringResource(R.string.remote_refresh),
+        onBack = onBack,
+        onClose = onClose,
+        onReload = null,
+        actions = actions,
+    )
 }
 
 /** The background jobs of the selected session, or the open job over them. */
@@ -961,11 +967,22 @@ internal fun BackgroundJobsScreen(state: JobsState, actions: JobsActions, modifi
 
 @Composable
 private fun JobList(state: JobsState, actions: JobsActions) {
-    JobsTopBar(stringResource(R.string.remote_jobs_title), actions.onClose) {
-        IconButton(onClick = actions.onRefresh, enabled = !state.loading, modifier = Modifier.testTag("jobsRefresh")) {
-            Icon(Icons.Default.Refresh, stringResource(R.string.remote_refresh))
-        }
-    }
+    JobsTopBar(
+        title = stringResource(R.string.remote_jobs_title),
+        nested = false,
+        onBack = actions.onClose,
+        onClose = actions.onClose,
+        actions =
+            listOf(
+                PaneAction(
+                    label = stringResource(R.string.remote_refresh),
+                    icon = Icons.Default.Refresh,
+                    tag = "jobsRefresh",
+                    enabled = !state.loading,
+                    onClick = actions.onRefresh,
+                )
+            ),
+    )
     HorizontalDivider()
     JobListContent(state, actions.onOpenJob, Modifier.fillMaxSize())
 }
@@ -1041,25 +1058,25 @@ private fun ColumnScope.JobDetail(view: JobView, actions: JobsActions) {
     val askIntro = stringResource(R.string.remote_jobs_ask_prompt, job?.command.orEmpty())
     val askPrompt = remember(view.lines, askIntro) { jobOutputPrompt(askIntro, view.lines) }
     var askFailed by remember { mutableStateOf(false) }
-    JobsTopBar(job?.command ?: stringResource(R.string.remote_jobs_title), actions.onCloseJob) {
+    val actionsList = buildList {
         val ask = actions.onAsk
-        if (ask != null && job != null && askPrompt != null) {
-            val label = stringResource(R.string.remote_jobs_ask)
-            ShortcutTooltip(label) {
-                IconButton(onClick = { askFailed = !ask(askPrompt) }, modifier = Modifier.testTag("jobAsk")) {
-                    Icon(Icons.AutoMirrored.Outlined.Chat, label)
-                }
-            }
-        }
-        if (job?.status == JobStatus.RUNNING && !view.vanished)
-            TextButton(
-                onClick = { confirmStop = true },
-                enabled = !view.stopping,
-                modifier = Modifier.testTag("jobStop"),
-            ) {
-                Text(stringResource(if (view.stopping) R.string.remote_jobs_stopping else R.string.remote_jobs_stop))
-            }
+        if (ask != null && job != null && askPrompt != null)
+            add(
+                PaneAction(
+                    label = stringResource(R.string.remote_jobs_ask),
+                    icon = Icons.AutoMirrored.Outlined.Chat,
+                    tag = "jobAsk",
+                    onClick = { askFailed = !ask(askPrompt) },
+                )
+            )
     }
+    JobsTopBar(
+        title = job?.command ?: stringResource(R.string.remote_jobs_title),
+        nested = true,
+        onBack = actions.onCloseJob,
+        onClose = actions.onClose,
+        actions = actionsList,
+    )
     HorizontalDivider()
     if (job != null)
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -1079,6 +1096,15 @@ private fun ColumnScope.JobDetail(view: JobView, actions: JobsActions) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            // Stopping stays one tap away: a header action would sit in the overflow menu on a phone.
+            if (job.status == JobStatus.RUNNING && !view.vanished)
+                TextButton(
+                    onClick = { confirmStop = true },
+                    enabled = !view.stopping,
+                    modifier = Modifier.testTag("jobStop"),
+                ) {
+                    Text(stringResource(if (view.stopping) R.string.remote_jobs_stopping else R.string.remote_jobs_stop))
+                }
         }
     if (askFailed)
         Text(

@@ -22,6 +22,12 @@ import org.robolectric.annotation.Config
 class BackgroundJobsPopoverUiTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
+    /** A narrow job header keeps Ask in its overflow menu; the menu opens first. */
+    private fun askAction() {
+        compose.onNodeWithTag("jobsMoreActions").performClick()
+        compose.onNodeWithTag("jobAsk").performClick()
+    }
+
     private fun job(id: String) = BackgroundJob(
         id, "echo $id", "/project", false, JobStatus.RUNNING, null, null, 1L, null, 0L, false,
     )
@@ -224,14 +230,14 @@ class BackgroundJobsPopoverUiTest {
                 )
             }
         }
-        compose.onNodeWithTag("jobAsk").performClick()
+        askAction()
         val prompt = prompts.single()
         assertTrue(prompt, prompt.startsWith(compose.activity.getString(R.string.remote_jobs_ask_prompt, "echo one")))
         assertTrue(prompt, prompt.endsWith("```\ncompiling\nerror: boom\n```"))
         compose.onNodeWithTag("jobAskFailed").assertDoesNotExist()
         // A draft too full for it says so; nothing is sent either way.
         accepted = false
-        compose.onNodeWithTag("jobAsk").performClick()
+        askAction()
         compose.onNodeWithTag("jobAskFailed").assertIsDisplayed()
     }
 

@@ -424,6 +424,9 @@ internal fun RemoteScreen(
         mutableStateOf(savedViewport?.following == false)
     }
     val listState = rememberLazyListState()
+    // The large page title leaves the list for the header's back pill once it scrolls under the header.
+    var headerSize by remember { mutableStateOf(IntSize.Zero) }
+    val titleInPill by remember(listState) { derivedStateOf { pageTitleScrolledAway(listState.layoutInfo, headerSize.height) } }
     val sessionSearchFocus = remember { FocusRequester() }
     if (key is RemoteNavKey.Sessions && shortcutTargets != null)
         LaunchedEffect(shortcutTargets.searchRequests) {
@@ -441,7 +444,6 @@ internal fun RemoteScreen(
         sessionQuery = ""
     }
     var composerSize by remember { mutableStateOf(IntSize.Zero) }
-    var headerSize by remember { mutableStateOf(IntSize.Zero) }
     val composerHeight = with(LocalDensity.current) { composerSize.height.toDp() }
     // The conversation list's after-padding: its last item can scroll to just above the composer.
     val conversationEndPadding = composerHeight + 24.dp
@@ -2000,7 +2002,7 @@ internal fun RemoteScreen(
                     headerHeight,
                 )
             if (key !is RemoteNavKey.Chat)
-                item(key = "page-title") {
+                item(key = PAGE_TITLE_KEY) {
                     Row(
                         Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -2709,74 +2711,57 @@ internal fun RemoteScreen(
             }
         }
         if (key !is RemoteNavKey.Chat) {
-            Box(
-                Modifier.align(Alignment.TopCenter).fillMaxWidth()
-                    .onSizeChanged { headerSize = it },
-            ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // Beside the projects column, its own Back pill leads back.
-                    if (key != RemoteNavKey.Hosts && listPane?.besideProjects != true)
-                        FloatingSurface(
-                            modifier = Modifier.testTag("navigationPill"),
-                            shape = CircleShape,
-                        ) {
-                            IconButton(onClick = navigator::back, modifier = Modifier.size(48.dp)) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowBack,
-                                    stringResource(R.string.remote_back),
-                                )
-                            }
-                        }
-                    Spacer(Modifier.weight(1f))
-                    // The full projects column beside the list already offers refresh and settings;
-                    // the strip beside a chat does not.
-                    if (!settings && !(listPane?.besideProjects == true && !listPane.projectsStrip))
-                        FloatingSurface(
-                            modifier = Modifier.testTag("headerActionsPill"),
-                            shape = CircleShape,
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (state.host != null) {
-                                    val rotation =
-                                        if (state.loading && ValueAnimator.areAnimatorsEnabled()) {
-                                            val transition = rememberInfiniteTransition(label = "refresh")
-                                            transition.animateFloat(
-                                                initialValue = 0f,
-                                                targetValue = 360f,
-                                                animationSpec = infiniteRepeatable(
-                                                    animation = tween(900, easing = LinearEasing),
-                                                    repeatMode = RepeatMode.Restart,
-                                                ),
-                                                label = "refresh-rotation",
-                                            ).value
-                                        } else 0f
-                                    val refreshing = stringResource(R.string.remote_refreshing)
-                                    IconButton(
-                                        onClick = model::refresh,
-                                        modifier = Modifier.size(48.dp).semantics {
-                                            if (state.loading) stateDescription = refreshing
-                                        },
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Refresh,
-                                            stringResource(R.string.remote_refresh),
-                                            modifier = Modifier.graphicsLayer { rotationZ = rotation },
-                                        )
-                                    }
-                                }
-                                IconButton(onClick = navigator::settings, modifier = Modifier.size(48.dp)) {
+            // The title of a Sessions page is its project's name, as in the list's large title.
+            val pageTitle = if (key is RemoteNavKey.Sessions) state.project?.optionalText("name")?.takeIf(String::isNotBlank) ?: title else title
+            // The beside-projects column of the wide layout keeps its own Back pill, and the strip
+            // beside a chat has no refresh and settings: the full projects column has them already.
+            val ownBack = key != RemoteNavKey.Hosts && listPane?.besideProjects != true
+            val actionsShown = !settings && !(listPane?.besideProjects == true && !listPane.projectsStrip)
+            PageHeader(
+                title = pageTitle,
+                titleInPill = titleInPill,
+                onBack = if (ownBack) navigator::back else null,
+                modifier = Modifier.align(Alignment.TopCenter).onSizeChanged { headerSize = it },
+                actions =
+                    if (actionsShown) {
+                        {
+                            if (state.host != null) {
+                                val rotation =
+                                    if (state.loading && ValueAnimator.areAnimatorsEnabled()) {
+                                        val transition = rememberInfiniteTransition(label = "refresh")
+                                        transition.animateFloat(
+                                            initialValue = 0f,
+                                            targetValue = 360f,
+                                            animationSpec = infiniteRepeatable(
+                                                animation = tween(900, easing = LinearEasing),
+                                                repeatMode = RepeatMode.Restart,
+                                            ),
+                                            label = "refresh-rotation",
+                                        ).value
+                                    } else 0f
+                                val refreshing = stringResource(R.string.remote_refreshing)
+                                IconButton(
+                                    onClick = model::refresh,
+                                    modifier = Modifier.size(48.dp).semantics {
+                                        if (state.loading) stateDescription = refreshing
+                                    },
+                                ) {
                                     Icon(
-                                        Icons.Default.Settings,
-                                        stringResource(R.string.remote_settings),
+                                        Icons.Default.Refresh,
+                                        stringResource(R.string.remote_refresh),
+                                        modifier = Modifier.graphicsLayer { rotationZ = rotation },
                                     )
                                 }
                             }
+                            IconButton(onClick = navigator::settings, modifier = Modifier.size(48.dp)) {
+                                Icon(
+                                    Icons.Default.Settings,
+                                    stringResource(R.string.remote_settings),
+                                )
+                            }
                         }
-                }
-            }
+                    } else null,
+            )
         }
         if (key is RemoteNavKey.Chat && !composerCovered) {
             // Writing with the S Pen in the empty space between the conversation and the composer
@@ -3043,6 +3028,7 @@ internal fun RemoteScreen(
                                 settingsSheetRequested = settingsSheetRequested,
                                 onSettingsSheetRequestHandled = { settingsSheetRequested = false },
                                 slashSuggestions = !composer.suggestionsClosed,
+                                onManageProviders = state.selection.routeId?.let { route -> { navigator.openProviders(route) } },
                             )
                         },
                         onRemoveAttachment = model::removeAttachment,

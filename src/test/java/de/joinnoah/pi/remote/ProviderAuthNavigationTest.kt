@@ -40,7 +40,7 @@ class ProviderAuthNavigationTest {
     }
 
     @Test
-    fun `beside the projects column the providers close the open project first`() = runTest {
+    fun `beside the open chat the providers open over it and back returns to it`() = runTest {
         for (open in listOf(RemoteSelection("host", "project"), RemoteSelection("host", "project", "s1"))) {
             val repository = NavigationFakeRepository()
             val stack = open.keys().toMutableList<NavKey>()
@@ -49,9 +49,47 @@ class ProviderAuthNavigationTest {
             assertEquals(open.keys(), stack)
             navigation.openProviders("host")
             runCurrent()
-            assertEquals(projects + RemoteNavKey.Providers("host"), stack)
-            assertEquals(RemoteSelection("host") to ActivationMode.RESTORE, repository.activations.last())
+            assertEquals(open.keys() + RemoteNavKey.Providers("host"), stack)
+            assertEquals(emptyList<Pair<RemoteSelection, ActivationMode>>(), repository.activations)
             assertEquals(listOf("host"), repository.providersBrowsed)
+            navigation.back()
+            runCurrent()
+            assertEquals(open.keys(), stack)
+            assertEquals(open to ActivationMode.RESTORE, repository.activations.last())
         }
+    }
+
+    @Test
+    fun `a reconnect that narrows the selection keeps the providers on top`() = runTest {
+        val open = RemoteSelection("host", "project", "s1")
+        val repository = NavigationFakeRepository()
+        val stack = (open.keys() + RemoteNavKey.Providers("host")).toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.reconcile(RemoteState(selection = RemoteSelection("host", "project")))
+        runCurrent()
+        assertEquals(RemoteSelection("host", "project").keys() + RemoteNavKey.Providers("host"), stack)
+    }
+
+    @Test
+    fun `settings pushed over the providers pops back to them`() = runTest {
+        val open = RemoteSelection("host", "project", "s1")
+        val repository = NavigationFakeRepository()
+        val stack = (open.keys() + RemoteNavKey.Providers("host")).toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.settings()
+        navigation.back()
+        assertEquals(open.keys() + RemoteNavKey.Providers("host"), stack)
+    }
+
+    @Test
+    fun restore_after_process_death_keeps_the_providers_over_the_chat() = runTest {
+        val open = RemoteSelection("host", "project", "s1")
+        val repository = NavigationFakeRepository()
+        repository.activation = { _, _ -> open }
+        val stack = (open.keys() + RemoteNavKey.Providers("host")).toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.restore()
+        runCurrent()
+        assertEquals(open.keys() + RemoteNavKey.Providers("host"), stack)
     }
 }

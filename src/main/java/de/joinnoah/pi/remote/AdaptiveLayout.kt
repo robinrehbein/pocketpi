@@ -651,10 +651,12 @@ internal fun navKeyMetadata(key: RemoteNavKey): Map<String, Any> = mapOf(NAV_KEY
 internal data class ColumnPanes(val projects: Int?, val list: Int?, val detail: Int?)
 
 /**
- * The column split of [keys], or null when the top destination is not part of it (hosts,
- * folders, providers, settings: those stay full screen). A chat pairs with the Sessions entry of
- * its project below it, skipping the parent chats a child chat is stacked on; the Sessions entry
- * pairs with its host's Projects right below it.
+ * The column split of [keys], or null when the top destination is not part of it (the hosts list,
+ * and the pages above it). A chat pairs with the Sessions entry of its project below it, skipping
+ * the parent chats a child chat is stacked on; the Sessions entry pairs with its host's Projects
+ * right below it. The folder browser, the providers and Settings take the detail column over the
+ * columns beneath them, so the projects column stays in view; a chat beneath them is out of view
+ * until they close.
  */
 internal fun columnPanes(keys: List<Any?>): ColumnPanes? {
     val lastIndex = keys.lastIndex
@@ -672,6 +674,12 @@ internal fun columnPanes(keys: List<Any?>): ColumnPanes? {
                 beneath.detail != null -> ColumnPanes(beneath.projects, lastIndex, beneath.detail)
                 else -> ColumnPanes(beneath.projects, null, lastIndex)
             }
+        }
+        is RemoteNavKey.FolderBrowser,
+        is RemoteNavKey.Providers,
+        RemoteNavKey.Settings -> {
+            val beneath = columnPanes(keys.subList(0, lastIndex)) ?: return null
+            ColumnPanes(beneath.projects, beneath.list, lastIndex)
         }
         is RemoteNavKey.Chat -> {
             var index = lastIndex - 1
@@ -713,14 +721,8 @@ internal class ProjectColumnsSceneStrategy(
         if (!layout.twoPane) return null
         val keys = entries.map { it.metadata[NAV_KEY_METADATA] }
         val panes = columnPanes(keys) ?: return null
-        val routeId =
-            when (val top = keys.last()) {
-                is RemoteNavKey.Projects -> top.routeId
-                is RemoteNavKey.Sessions -> top.routeId
-                is RemoteNavKey.Chat -> top.routeId
-                is RemoteNavKey.Activity -> top.routeId
-                else -> return null
-            }
+        // The nearest destination with a host: Settings on top takes the host of the columns beneath.
+        val routeId = keys.asReversed().firstNotNullOfOrNull { (it as? RemoteNavKey)?.selection()?.routeId } ?: return null
         val detail = panes.detail?.let(entries::get)
         val collapsed = panes.list != null && detail != null && listCollapsed
         return ProjectColumnsScene(
