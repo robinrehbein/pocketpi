@@ -82,6 +82,23 @@ class CompletionReplyTest {
     }
 
     @Test
+    fun aLiveSendRefusedBeforeItLeftGoesOnOverTheBackgroundConnection() = runTest {
+        // The app's connection dropped between the health check and the send.
+        val live = Socket { throw MutationNotSentException() }
+        val background = Socket()
+        val order = mutableListOf<String>()
+        assertEquals(ReplyOutcome.SENT, replier(live, background, order = order).send("r", "s", "Go on"))
+        assertEquals(listOf("live:r", "background:r"), order)
+        assertEquals("mutation-1", background.sent.single().first)
+        // Refused on both: nothing left the phone.
+        assertEquals(
+            ReplyOutcome.FAILED,
+            replier(Socket { throw MutationNotSentException() }, Socket { throw MutationNotSentException() })
+                .send("r", "s", "Go on"),
+        )
+    }
+
+    @Test
     fun aLostBackgroundConnectionAfterTheSendIsUncertain() = runTest {
         val background = Socket { throw RemoteConnectionException() }
         assertEquals(ReplyOutcome.UNCERTAIN, replier(live = null, background = background).send("r", "s", "Go on"))

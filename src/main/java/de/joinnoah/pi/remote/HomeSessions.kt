@@ -133,9 +133,14 @@ internal fun shortcutSessions(snapshot: HomeSnapshot, limit: Int = MAX_SHORTCUTS
 
 /**
  * Every launcher shortcut to publish, in rank order: the [shortcutSessions] first, which the
- * launcher shows, then the sessions notified within [NOTIFIED_SHORTCUT_MILLIS], newest first, so
- * their notifications stay conversations. [limit] is the launcher's per-activity limit; shortcuts
- * of [closed] sessions are left out.
+ * launcher shows, then the sessions notified within [NOTIFIED_SHORTCUT_MILLIS], so their
+ * notifications stay conversations. [limit] is the launcher's per-activity limit; when it leaves
+ * room for fewer notified sessions, the newest ones win. Shortcuts of [closed] sessions are left
+ * out.
+ *
+ * The notified ones are ordered by ID, not by time: another push for a session already in the set
+ * then changes nothing to publish. setDynamicShortcuts is rate-limited in the background, where
+ * pushes arrive, so only a session joining or leaving the set republishes it.
  */
 internal fun shortcutChoice(
     snapshot: HomeSnapshot,
@@ -158,9 +163,29 @@ internal fun shortcutChoice(
                     ?: HomeSession(it.routeId, "", it.projectName, it.sessionId, it.title, "idle", it.at)
             }
             .take((limit - top.size).coerceAtLeast(0))
+            .sortedWith(compareBy({ it.routeId }, { it.sessionId }))
             .toList()
     return top + notified
 }
+
+/**
+ * What [chosen] publishes, compared with the last publish to skip an unchanged one. Titles count
+ * for the sessions the app knows; a session that is only notified counts by its ID alone, so the
+ * name its notification looks up later does not cost another rate-limited publish from the
+ * background. Its label then follows with the next publish that happens anyway.
+ */
+internal fun shortcutSignature(chosen: List<HomeSession>, snapshot: HomeSnapshot): List<String> {
+    val known = snapshot.sessions.map { it.key() }.toSet()
+    return chosen.map {
+        if (it.key() in known) shortcutSignatureEntry(it.routeId, it.sessionId, it.title, it.projectName)
+        else shortcutSignatureEntry(it.routeId, it.sessionId, "", "")
+    }
+}
+
+/** Forgets the notifications of sessions known to be closed (by [shortcutId]). */
+internal fun HomeSnapshot.withoutNotified(closed: Set<String>): HomeSnapshot =
+    if (closed.isEmpty()) this
+    else copy(notified = notified.filter { shortcutId(it.routeId, it.sessionId) !in closed })
 
 /** Records a notification for a session; it keeps the title an earlier one named. */
 internal fun HomeSnapshot.withNotified(routeId: String, sessionId: String, now: Long): HomeSnapshot {

@@ -67,7 +67,13 @@ internal class CompletionReplier(
         val prompt: suspend (MutationCommands) -> Unit = { commands ->
             // Set before sending: a send that throws may still have reached the host.
             sent.set(true)
-            commands.prompt(sessionId, encoded, id)
+            try {
+                commands.prompt(sessionId, encoded, id)
+            } catch (e: MutationNotSentException) {
+                // Refused before anything was sent, so the background connection may still try.
+                sent.set(false)
+                throw e
+            }
         }
         return withTimeoutOrNull(timeoutMillis) { attempt(routeId, prompt, sent) }
             ?: if (sent.get()) ReplyOutcome.UNCERTAIN else ReplyOutcome.FAILED

@@ -37,6 +37,12 @@ internal interface MutationCommands : RemoteCommands {
 }
 
 /**
+ * A mutation refused before anything was sent, for example because the connection dropped in the
+ * meantime. Unlike other failures it proves the mutation never left, so it may go out elsewhere.
+ */
+internal class MutationNotSentException : IllegalStateException("The mutation was not sent")
+
+/**
  * One short-lived, authenticated connection for work outside the UI, such as reading a pending
  * question for a notification or answering it from a notification action. It is independent of the
  * app's foreground connection: the host accepts several peers per device, and each request carries

@@ -83,30 +83,37 @@ internal class HomeSurfaces(
         scope.launch {
             // The stored snapshot already shows the last rows: let the app's start settle first.
             delay(HOME_UPDATE_INTERVAL_MS)
-            homeUpdates(state).collect { current ->
-                try {
-                    // Pairing the same Mac again makes it known again.
-                    forgotten.removeAll(current.hostRoutes.toSet())
-                    update { previous ->
-                        val routes =
-                            (if (current.hostRoutes.isNotEmpty()) current.hostRoutes.toSet()
-                            else storedRoutes()) - forgotten
-                        pairedRoutes = routes
-                        closed += closedHomeSessions(previous, current)
-                        mergeHomeSnapshot(
-                            previous,
-                            current,
-                            routes.isNotEmpty(),
-                            routes,
-                            System.currentTimeMillis(),
-                        )
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    // The widget keeps its last content if storage fails.
-                }
+            homeUpdates(state).collect { onState(it) }
+        }
+    }
+
+    /** Folds the app's state into the snapshot, and marks sessions it shows closed. */
+    @androidx.annotation.VisibleForTesting
+    internal suspend fun onState(current: HomeInputs) {
+        try {
+            // Pairing the same Mac again makes it known again.
+            forgotten.removeAll(current.hostRoutes.toSet())
+            update { previous ->
+                val routes =
+                    (if (current.hostRoutes.isNotEmpty()) current.hostRoutes.toSet()
+                    else storedRoutes()) - forgotten
+                pairedRoutes = routes
+                val newlyClosed = closedHomeSessions(previous, current)
+                closed += newlyClosed
+                mergeHomeSnapshot(
+                        previous,
+                        current,
+                        routes.isNotEmpty(),
+                        routes,
+                        System.currentTimeMillis(),
+                    )
+                    // Otherwise its shortcut would come back once [closed] has disabled it.
+                    .withoutNotified(newlyClosed)
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // The widget keeps its last content if storage fails.
         }
     }
 
@@ -252,10 +259,9 @@ internal class HomeSurfaces(
                         )
                         .associate { it.id to it.isEnabled }
                 val routes = pairedRoutes ?: storedRoutes()
-                val present =
-                    (snapshot.sessions.map { shortcutId(it.routeId, it.sessionId) } +
-                            snapshot.notified.map { shortcutId(it.routeId, it.sessionId) })
-                        .toSet()
+                // Notified sessions count through [chosen] alone: one past its time, or beyond the
+                // limit, has nothing to enable it with.
+                val present = snapshot.sessions.map { shortcutId(it.routeId, it.sessionId) }.toSet()
                 val plan = shortcutPlan(chosenIds, existing, present, closed, routes - forgotten)
                 val localized = RemoteNotifications.localized(context)
                 fun info(session: HomeSession, rank: Int) =
@@ -290,8 +296,7 @@ internal class HomeSurfaces(
                     )
                 }
                 // Title changes matter; status changes don't, since it isn't shown.
-                val signature =
-                    chosen.map { shortcutSignatureEntry(it.routeId, it.sessionId, it.title, it.projectName) }
+                val signature = shortcutSignature(chosen, snapshot)
                 if (signature != publishedShortcuts || plan.enable.isNotEmpty()) {
                     if (ShortcutManagerCompat.setDynamicShortcuts(context, shortcuts)) {
                         publishedShortcuts = signature

@@ -553,28 +553,14 @@ internal object RemoteNotifications {
 
     /**
      * Cancels the summary of [routeId] unless a notification of that Mac other than the [gone] ones
-     * still shows. Those are left out explicitly: a cancel may not have reached the list yet.
+     * still shows. Those are left out explicitly: a cancel may not have reached the list yet. When
+     * only notifications that time out are left, the summary times out with the last of them.
      */
     private fun cancelEmptySummary(
         context: Context,
         routeId: String,
         gone: (String, Int) -> Boolean,
-    ) {
-        try {
-            if (!hasOtherChildren(context, routeId, gone))
-                NotificationManagerCompat.from(context).cancel(summaryTag(routeId), SUMMARY_ID)
-        } catch (_: Exception) {
-            // Unknown children: the summary stays, and the next cancel tries again.
-        }
-    }
-
-    private fun hasOtherChildren(context: Context, routeId: String, gone: (String, Int) -> Boolean) =
-        "pi:$routeId:".let { prefix ->
-            context.getSystemService(NotificationManager::class.java).activeNotifications.any {
-                val tag = it.tag
-                tag != null && tag.startsWith(prefix) && !gone(tag, it.id)
-            }
-        }
+    ) = syncSummary(context, routeId, gone, posted = emptyList())
 
     private fun post(
         context: Context,
@@ -594,25 +580,34 @@ internal object RemoteNotifications {
             notification.deleteIntent = dismissIntent(context, routeId, sessionId, id)
         try {
             NotificationManagerCompat.from(context).notify(notificationTag, id, notification)
-            postSummary(context, routeId, notificationTag, id, notification.timeoutAfter)
+            val now = System.currentTimeMillis()
+            syncSummary(
+                context,
+                routeId,
+                gone = { tag, other -> tag == notificationTag && other == id },
+                posted = listOf(notification.timeoutAfter.takeIf { it > 0 }?.let { now + it }),
+                now = now,
+            )
         } catch (_: SecurityException) {
             // Permission revoked between the check and the call.
         }
     }
 
     /**
-     * Posts or refreshes the summary of a Mac's group, silently: only the children alert. When
-     * the notification just posted is the group's only one and times out, the summary times out
-     * with it, so it is never left behind alone.
+     * Keeps the summary of a Mac's group in step with its children: posted silently (only the
+     * children alert), cancelled once the last child is gone, and timing out with the last child
+     * when every child times out ([summaryExpiry]), so it is never left behind alone. [posted] are
+     * the expiries of children just posted, which the active list may not show yet, [gone] the
+     * children just removed. An unchanged summary is not posted again: the system drops updates of
+     * an app that posts too fast, and a child's update matters more.
      */
-    private fun postSummary(
+    private fun syncSummary(
         context: Context,
         routeId: String,
-        childTag: String,
-        childId: Int,
-        childTimeout: Long,
+        gone: (String, Int) -> Boolean,
+        posted: List<Long?>,
+        now: Long = System.currentTimeMillis(),
     ) {
-        val localized = localized(context)
         val active =
             try {
                 context.getSystemService(NotificationManager::class.java).activeNotifications.toList()
@@ -620,18 +615,32 @@ internal object RemoteNotifications {
                 null
             }
         val prefix = "pi:$routeId:"
-        val alone =
-            active != null &&
-                active.none { it.tag?.startsWith(prefix) == true && !(it.tag == childTag && it.id == childId) }
+        val current = active?.find { it.tag == summaryTag(routeId) && it.id == SUMMARY_ID }
+        val shown = current?.notification?.extras?.getCharSequence(NotificationCompat.EXTRA_SUB_TEXT)?.toString()
         // A process that has not read the pairings yet keeps the name the summary already shows.
-        val name =
-            hostNames[routeId]
-                ?: active
-                    ?.find { it.tag == summaryTag(routeId) && it.id == SUMMARY_ID }
-                    ?.notification
-                    ?.extras
-                    ?.getCharSequence(NotificationCompat.EXTRA_SUB_TEXT)
-                    ?.toString()
+        val name = hostNames[routeId] ?: shown
+        val expiresAt =
+            if (active == null) {
+                // Unknown children: a removal leaves the summary as it is, and the next one tries
+                // again; a new child gets a summary that does not time out.
+                if (posted.isEmpty()) return
+                null
+            } else {
+                val children =
+                    active
+                        .filter { val tag = it.tag; tag != null && tag.startsWith(prefix) && !gone(tag, it.id) }
+                        .map(::expiry) + posted
+                if (children.isEmpty()) {
+                    try {
+                        NotificationManagerCompat.from(context).cancel(summaryTag(routeId), SUMMARY_ID)
+                    } catch (_: Exception) {}
+                    return
+                }
+                summaryExpiry(children)
+            }
+        if (current == null && posted.isEmpty()) return
+        if (current != null && name == shown && sameExpiry(expiry(current), expiresAt)) return
+        val localized = localized(context)
         val builder =
             NotificationCompat.Builder(context, UPDATES_CHANNEL)
                 .setSmallIcon(R.drawable.ic_remote)
@@ -641,7 +650,8 @@ internal object RemoteNotifications {
                 .setGroup(groupKey(routeId))
                 .setGroupSummary(true)
                 .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
-                .setAutoCancel(true)
+                // Not auto-cancel: a tap on the summary would take every child along, unanswered
+                // questions included.
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
                 .setOnlyAlertOnce(true)
@@ -652,13 +662,20 @@ internal object RemoteNotifications {
                         .setContentTitle(localized.getString(R.string.remote_notification_group_mac))
                         .build()
                 )
-        if (alone && childTimeout > 0) builder.setTimeoutAfter(childTimeout)
+        if (expiresAt != null) builder.setTimeoutAfter((expiresAt - now).coerceAtLeast(1))
         try {
             NotificationManagerCompat.from(context).notify(summaryTag(routeId), SUMMARY_ID, builder.build())
         } catch (_: SecurityException) {
             // Permission revoked since the child was posted.
         }
     }
+
+    /** When a showing notification times out, or null when it does not. */
+    private fun expiry(notification: android.service.notification.StatusBarNotification): Long? =
+        notification.notification.timeoutAfter.takeIf { it > 0 }?.let { notification.postTime + it }
+
+    private fun sameExpiry(a: Long?, b: Long?) =
+        if (a == null || b == null) a == b else kotlin.math.abs(a - b) < 1_000
 
     private fun dismissIntent(context: Context, routeId: String, sessionId: String, id: Int): PendingIntent =
         PendingIntent.getBroadcast(
@@ -925,3 +942,10 @@ internal object RemoteNotifications {
 }
 
 internal data class FailedReply(val questionId: String, val text: String)
+
+/**
+ * When a group summary times out, given when each of its children does (null for never): with
+ * the last child once every child times out, and never while one child stays.
+ */
+internal fun summaryExpiry(children: List<Long?>): Long? =
+    if (children.isEmpty() || children.any { it == null }) null else children.maxOf { it!! }

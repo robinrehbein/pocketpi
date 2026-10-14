@@ -121,14 +121,31 @@ class NotificationActionReceiver : BroadcastReceiver() {
         RemoteNotifications.postReply(app, routeId, sessionId, conversation, text, sending = true)
         val pending = goAsync()
         scope.launch {
+            var posted = false
             try {
                 val outcome = replier(app).send(routeId, sessionId, text)
                 RemoteNotifications.postReplyOutcome(app, routeId, sessionId, outcome, conversation, text)
+                posted = true
                 if (outcome == ReplyOutcome.SENT)
                     (app as? RemoteApplication)?.onRepliedInBackground(routeId, sessionId)
             } catch (swallowed: Exception) {
                 Diagnostics.caught("notificationAction.reply", swallowed)
-                // Never crash after the reply may already be sent; the session shows the truth.
+                // Never crash after the reply may already be sent, and never leave "Sending…"
+                // behind: without a known outcome the reply may or may not have arrived.
+                if (!posted) {
+                    try {
+                        RemoteNotifications.postReplyOutcome(
+                            app,
+                            routeId,
+                            sessionId,
+                            ReplyOutcome.UNCERTAIN,
+                            conversation,
+                            text,
+                        )
+                    } catch (alsoSwallowed: Exception) {
+                        Diagnostics.caught("notificationAction.reply.outcome", alsoSwallowed)
+                    }
+                }
             } finally {
                 pending.finish()
             }
@@ -137,17 +154,20 @@ class NotificationActionReceiver : BroadcastReceiver() {
 
     private fun replier(app: Context) =
         CompletionReplier(
-            pairedHost = { pairedHost(app, it) },
+            pairedHost = { app.pairedHost(it) },
             live = { routeId, block ->
                 (app as? RemoteApplication)?.healthyConnection()?.withHealthyConnection(routeId, block)
             },
             background = { host, block -> BackgroundRemoteClient().use(host, block) },
         )
 
-    /** The paired host of [routeId], or null when it is not paired or the pairings can't be read. */
-    private fun pairedHost(context: Context, routeId: String): PairedHost? =
+    /**
+     * The paired host of [routeId], or null when it is not paired or the pairings can't be read.
+     * The one lookup every receiver action uses.
+     */
+    private fun Context.pairedHost(routeId: String): PairedHost? =
         try {
-            PairingStore(context).load().find { it.routeId == routeId }
+            PairingStore(this).load().find { it.routeId == routeId }
                 ?.also(RemoteNotifications::rememberHost)
         } catch (swallowed: Exception) {
             Diagnostics.caught("notificationAction.pairedHost", swallowed)
@@ -161,7 +181,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
         questionId: String,
         answer: JsonObject,
     ): AnswerOutcome {
-        val host = pairedHost(context, routeId) ?: return AnswerOutcome.FAILED
+        val host = context.pairedHost(routeId) ?: return AnswerOutcome.FAILED
         var error: Throwable? = null
         val finished =
             withTimeoutOrNull(ANSWER_TIMEOUT_MILLIS) {

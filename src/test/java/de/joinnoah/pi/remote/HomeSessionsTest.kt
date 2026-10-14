@@ -391,19 +391,56 @@ class HomeSessionsTest {
                     ),
             )
         val chosen = shortcutChoice(snapshot, limit = 7, now = now)
-        // The four ranked sessions first, which the launcher shows; then the notified ones, an
-        // already ranked one only once, a known one with its known title, none older than 3 days.
-        assertEquals(listOf("a", "b", "c", "d", "n1", "e", "n2"), chosen.map { it.sessionId })
-        assertEquals("Named", chosen[4].title)
-        assertEquals("Project", chosen[4].projectName)
-        assertEquals("Title e", chosen[5].title)
+        // The four ranked sessions first, which the launcher shows; then the notified ones by ID,
+        // an already ranked one only once, a known one with its known title, none older than 3 days.
+        assertEquals(listOf("a", "b", "c", "d", "e", "n1", "n2"), chosen.map { it.sessionId })
+        assertEquals("Title e", chosen[4].title)
+        assertEquals("Named", chosen[5].title)
+        assertEquals("Project", chosen[5].projectName)
+        // With room for fewer, the newest win.
         assertEquals(listOf("a", "b", "c", "d", "n1"), shortcutChoice(snapshot, limit = 5, now = now).map { it.sessionId })
+        assertEquals(listOf("a", "b", "c", "d", "e", "n1"), shortcutChoice(snapshot, limit = 6, now = now).map { it.sessionId })
         assertEquals(listOf("a", "b"), shortcutChoice(snapshot, limit = 2, now = now).map { it.sessionId })
         // A closed session keeps no conversation shortcut.
         assertEquals(
             listOf("a", "b", "c", "d", "e", "n2"),
             shortcutChoice(snapshot, limit = 7, now = now, closed = setOf(shortcutId("r", "n1"))).map { it.sessionId },
         )
+    }
+
+    @Test
+    fun anotherPushForASessionAlreadyInTheSetPublishesNothingNewAndNeitherDoesItsName() {
+        val now = 10 * day
+        var snapshot =
+            HomeSnapshot(true, listOf(home("a")))
+                .withNotified("r", "n1", now = now - 3)
+                .withNotified("r", "n2", now = now - 2)
+                .withNotified("r", "a", now = now - 1)
+        fun signature(at: Long) = shortcutSignature(shortcutChoice(snapshot, limit = 8, now = at), snapshot)
+        val before = signature(now)
+        // A completion for the oldest notified session moves it to the front of the record only.
+        snapshot = snapshot.withNotified("r", "n1", now = now)
+        assertEquals(before, signature(now))
+        // Its name, read later in the background, waits for the next publish.
+        snapshot = snapshot.withNotifiedName("r", "n1", "Fix the bug", "pocketpi")
+        assertEquals(before, signature(now))
+        assertEquals("Fix the bug", shortcutChoice(snapshot, limit = 8, now = now).single { it.sessionId == "n1" }.title)
+        // A session joining the set does publish, and so does a title change of a known session.
+        snapshot = snapshot.withNotified("r", "n3", now = now)
+        assertTrue(before != signature(now))
+        val renamed = snapshot.copy(sessions = listOf(home("a").copy(title = "Renamed")))
+        assertTrue(
+            shortcutSignature(shortcutChoice(snapshot, 8, now), snapshot) !=
+                shortcutSignature(shortcutChoice(renamed, 8, now), renamed)
+        )
+    }
+
+    @Test
+    fun aClosedSessionsNotificationIsForgotten() {
+        val snapshot =
+            HomeSnapshot(true, notified = listOf(NotifiedSession("r", "a", at = 1), NotifiedSession("r", "b", at = 1)))
+        assertEquals(listOf("b"), snapshot.withoutNotified(setOf(shortcutId("r", "a"))).notified.map { it.sessionId })
+        assertEquals(snapshot, snapshot.withoutNotified(emptySet()))
     }
 
     @Test

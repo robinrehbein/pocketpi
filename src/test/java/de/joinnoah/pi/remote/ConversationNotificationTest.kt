@@ -11,6 +11,7 @@ import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -209,6 +210,34 @@ class ConversationNotificationTest {
         assertEquals(8_000L, summary()!!.timeoutAfter)
         RemoteNotifications.postComplete(context, PushPayload("r", "s2", "e5", PushEvent.COMPLETE))
         assertEquals(0L, summary()!!.timeoutAfter)
+    }
+
+    @Test
+    fun whenOnlyTimedNotificationsAreLeftTheSummaryTimesOutWithThem() {
+        RemoteNotifications.postOutcome(context, "r", "s", AnswerOutcome.SENT)
+        RemoteNotifications.postComplete(context, PushPayload("r", "s2", "e5", PushEvent.COMPLETE))
+        assertEquals(0L, summary()!!.timeoutAfter)
+        // The completion goes; the transient notice is left and times out on its own.
+        RemoteNotifications.cancel(context, "r", "s2")
+        val timeout = summary()!!.timeoutAfter
+        assertTrue("$timeout", timeout in 1L..8_000L)
+    }
+
+    @Test
+    fun theSummaryIsNotAutoCancelAndAnUnchangedOneIsNotPostedAgain() {
+        RemoteNotifications.rememberHost(PairedHost("r", "https://relay.example", "d", "secret", "Mac"))
+        RemoteNotifications.postComplete(context, complete)
+        val first = checkNotNull(active(RemoteNotifications.summaryTag("r"), RemoteNotifications.SUMMARY_ID))
+        assertEquals(0, first.notification.flags and Notification.FLAG_AUTO_CANCEL)
+        RemoteNotifications.postComplete(context, PushPayload("r", "s2", "e5", PushEvent.COMPLETE))
+        assertSame(first.notification, summary())
+    }
+
+    @Test
+    fun aSummaryTimesOutWithTheLastOfItsChildrenAndNeverWhileOneStays() {
+        assertNull(summaryExpiry(emptyList()))
+        assertEquals(9L, summaryExpiry(listOf(5L, 9L, 7L)))
+        assertNull(summaryExpiry(listOf(5L, null)))
     }
 
     @Test

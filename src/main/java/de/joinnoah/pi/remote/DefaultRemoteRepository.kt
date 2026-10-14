@@ -4823,10 +4823,11 @@ class DefaultRemoteRepository(
                     vararg fields: Pair<String, Any?>,
                 ): JsonObject =
                     withContext(main) {
-                        check(
-                            state.value.connected && activeHost?.routeId == routeId &&
-                                requestId !in folderCompletions && folderCompletions.size < 32
+                        if (
+                            !state.value.connected || activeHost?.routeId != routeId ||
+                                requestId in folderCompletions || folderCompletions.size >= 32
                         )
+                            throw MutationNotSentException()
                         val completion = CompletableDeferred<JsonObject>()
                         folderCompletions[requestId] = completion
                         try {
