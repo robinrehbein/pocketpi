@@ -111,6 +111,45 @@ class ChangesPaneTest {
     }
 
     @Test
+    fun theTimeOfTheShownStatusShowsOnlyWhileOffline() {
+        val at = System.currentTimeMillis()
+        var offline by mutableStateOf(false)
+        compose.setContent {
+            MaterialTheme {
+                ChangesPane(
+                    ChangesState("s", loading = false, status = status, log = GitLog(), fetchedAt = at),
+                    ChangesActions({}, {}, {}, {}, { true }, {}, { true }, { true }),
+                    offline = offline,
+                )
+            }
+        }
+        val updated = context.getString(R.string.remote_changes_updated_at, updatedTime(context, at))
+        compose.onNodeWithTag("changesUpdated").assertDoesNotExist()
+        offline = true
+        compose.onNodeWithTag("changesUpdated").assertTextEquals(updated)
+        offline = false
+        compose.onNodeWithTag("changesUpdated").assertDoesNotExist()
+    }
+
+    @Test
+    fun aStatusThatCouldNotBeReadAgainSaysWhenItWasReadAndOffersAReload() {
+        val at = System.currentTimeMillis()
+        var reloads = 0
+        compose.setContent {
+            MaterialTheme {
+                ChangesPane(
+                    ChangesState("s", loading = false, status = status, log = GitLog(), fetchedAt = at, stale = true),
+                    ChangesActions({}, {}, { reloads++ }, {}, { true }, {}, { true }, { true }),
+                )
+            }
+        }
+        compose.onNodeWithTag("changesUpdated")
+            .assertTextEquals(context.getString(R.string.remote_changes_stale_at, updatedTime(context, at)))
+        compose.onNodeWithText(context.getString(R.string.remote_changes_retry)).performClick()
+        assertEquals(1, reloads)
+    }
+
+    @Test
     fun longPressShowsDiffPeekWithoutOpeningFile() {
         val recorder = Recorder()
         val excerpt = "@@ -1 +1 @@\n-old\n+new\n context"

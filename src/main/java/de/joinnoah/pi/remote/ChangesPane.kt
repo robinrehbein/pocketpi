@@ -84,7 +84,14 @@ internal class ChangesActions(
  * later tablet inspector can share it.
  */
 @Composable
-internal fun ChangesPane(state: ChangesState, actions: ChangesActions, modifier: Modifier = Modifier, projectName: String? = null) {
+internal fun ChangesPane(
+    state: ChangesState,
+    actions: ChangesActions,
+    modifier: Modifier = Modifier,
+    projectName: String? = null,
+    /** No connection: a status shown says when it was read. */
+    offline: Boolean = false,
+) {
     PaneBackHandler { if (state.file != null) actions.onOpenFile(null) else actions.onClose() }
     // One state object for the remembered actions below; a failed prefill belongs to the file
     // and base it happened on, so it resets when either changes.
@@ -123,7 +130,7 @@ internal fun ChangesPane(state: ChangesState, actions: ChangesActions, modifier:
                 Box(Modifier.weight(1f).fillMaxWidth().parentOnLeft(focusManager, parent)) {
                     val inset = if (prefillFailed) 0.dp else headerHeight
                     val file = state.file
-                    if (file == null) ChangesOverview(state, checked, inset)
+                    if (file == null) ChangesOverview(state, checked, inset, offline)
                     else key(file) { ChangesFileDiff(state, file, checked, inset) }
                 }
                 if (state.comments.isNotEmpty()) ReviewBar(state.comments, state.devBase, checked)
@@ -153,6 +160,10 @@ private fun formatTime(context: Context, at: Long): String =
         at,
         DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_ABBREV_MONTH,
     )
+
+/** The time of day [at], with its date when that is not today. */
+internal fun updatedTime(context: Context, at: Long): String =
+    if (DateUtils.isToday(at)) DateUtils.formatDateTime(context, at, DateUtils.FORMAT_SHOW_TIME) else formatTime(context, at)
 
 private fun failureText(failure: ChangesFailure): Int =
     when (failure) {
@@ -211,6 +222,15 @@ private fun FailureNotice(failure: ChangesFailure, onRetry: () -> Unit) {
     }
 }
 
+/** The changes shown could not be read again; [onRetry] tries once more. */
+@Composable
+private fun StaleNotice(text: String, onRetry: () -> Unit) {
+    Column(Modifier.fillMaxWidth().testTag("changesStale")) {
+        Notice(text, Modifier.testTag("changesUpdated"))
+        TextButton(onClick = onRetry, Modifier.padding(horizontal = 8.dp)) { Text(stringResource(R.string.remote_changes_retry)) }
+    }
+}
+
 @Composable
 private fun Loading() {
     val label = stringResource(R.string.remote_changes_loading)
@@ -220,7 +240,7 @@ private fun Loading() {
 }
 
 @Composable
-private fun ChangesOverview(state: ChangesState, actions: ChangesActions, headerHeight: Dp) {
+private fun ChangesOverview(state: ChangesState, actions: ChangesActions, headerHeight: Dp, offline: Boolean = false) {
     val context = LocalContext.current
     val status = state.status
     val shownBase = status?.base ?: state.base
@@ -281,6 +301,13 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
             }
             status?.branch?.let { branch ->
                 item(key = "branch", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_branch, branch)) }
+            }
+            state.fetchedAt?.takeIf { (offline || state.stale) && status != null && state.failure == null }?.let { at ->
+                item(key = "updated", span = { GridItemSpan(maxLineSpan) }) {
+                    val time = updatedTime(context, at)
+                    if (offline) Notice(stringResource(R.string.remote_changes_updated_at, time), Modifier.testTag("changesUpdated"))
+                    else StaleNotice(stringResource(R.string.remote_changes_stale_at, time), actions.onReload)
+                }
             }
             val failure = state.failure
             when {
