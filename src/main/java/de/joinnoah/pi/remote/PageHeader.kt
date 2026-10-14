@@ -72,31 +72,34 @@ internal fun PageHeader(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             // The back pill takes what the actions pill leaves, so a long title cuts off instead of
             // pushing the actions out.
+            // The slot fills the row up to the actions pill, so the actions stay at the end.
             if (onBack != null)
-                FloatingSurface(Modifier.weight(1f, fill = false).testTag("navigationPill"), shape = CircleShape) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onBack, Modifier.size(48.dp)) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.remote_back))
-                        }
-                        AnimatedVisibility(
-                            visible = titleInPill,
-                            enter = fadeIn() + expandHorizontally(),
-                            exit = fadeOut() + shrinkHorizontally(),
-                        ) {
-                            Text(
-                                title,
-                                Modifier.padding(end = if (onClose == null) 16.dp else 0.dp)
-                                    .semantics { heading() }
-                                    .testTag("pageHeaderTitle"),
-                                style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        if (onClose != null)
-                            IconButton(onClick = onClose, Modifier.size(48.dp).testTag("pageHeaderClose")) {
-                                Icon(Icons.Default.Close, stringResource(R.string.remote_page_close))
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    FloatingSurface(Modifier.testTag("navigationPill"), shape = CircleShape) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = onBack, Modifier.size(48.dp)) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.remote_back))
                             }
+                            AnimatedVisibility(
+                                visible = titleInPill,
+                                enter = fadeIn() + expandHorizontally(),
+                                exit = fadeOut() + shrinkHorizontally(),
+                            ) {
+                                Text(
+                                    title,
+                                    Modifier.padding(end = if (onClose == null) 16.dp else 0.dp)
+                                        .semantics { heading() }
+                                        .testTag("pageHeaderTitle"),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            if (onClose != null)
+                                IconButton(onClick = onClose, Modifier.size(48.dp).testTag("pageHeaderClose")) {
+                                    Icon(Icons.Default.Close, stringResource(R.string.remote_page_close))
+                                }
+                        }
                     }
                 }
             else Spacer(Modifier.weight(1f))
