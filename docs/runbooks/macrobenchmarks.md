@@ -147,9 +147,11 @@ or `-miss`, read from the activation's diagnostics outcome. They recompose only 
 changes.
 
 - `coldStartToProjects` presses Home and lets Macrobenchmark kill the process and drop caches, then
-  launches `ConnectedFlowActivity`. Today a cold start shows the Macs, so it taps the fixture Mac;
-  once a cold start opens the last Mac's projects directly, the tap is skipped. `PocketPi.activate`
-  then covers the restore activation plus the connect and `projects.list` behind the tap.
+  launches `ConnectedFlowActivity`. A cold start opens the last Mac's projects directly (the stored
+  Mac, or the only paired one), so with the fixture's single Mac the flow lands on the projects and
+  the benchmark's tap on the Mac is skipped. The tap remains only as a fallback for a cold start
+  that still shows the Macs list. `PocketPi.activate` then covers the restore activation plus the
+  connect and `projects.list` behind the tap.
 - `openUncachedChat` and `openCachedChat` start a fresh process per iteration and navigate to the
   session list outside the measurement, then wait until it is settled, so no late reply lands in
   the measured block. The cached variant opens and leaves the chat once first. Each iteration fails

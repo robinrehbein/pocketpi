@@ -223,7 +223,10 @@ internal fun RemoteScreen(
     // benchmarks measure. A list from the caches is not it until the Mac confirms it.
     when (key) {
         RemoteNavKey.Hosts -> ReportDrawnWhen { state.hostsLoaded || state.hostsUnreadable || state.hosts.isNotEmpty() }
-        is RemoteNavKey.Projects, is RemoteNavKey.Sessions -> ReportDrawnWhen { state.connected && !state.loading }
+        // Offline or asleep, a Mac never confirms its lists: the cached page, settled, is what shows.
+        is RemoteNavKey.Projects, is RemoteNavKey.Sessions -> ReportDrawnWhen {
+            if (state.connected) !state.loading else state.hostsLoaded && !state.loading
+        }
         else -> Unit
     }
     val context = LocalContext.current
@@ -1191,7 +1194,11 @@ internal fun RemoteScreen(
     val projectsPage = key as? RemoteNavKey.Projects
     val macHost = projectsPage?.let { page -> state.hosts.firstOrNull { it.routeId == page.routeId } }
     val macName = macHost?.name?.takeIf(String::isNotBlank)
-    val macConnected = state.connected && projectsPage != null && projectsPage.routeId == state.host?.routeId
+    // The Mac's status in words, as the connection chip above says it, so the title and the details
+    // dialog never disagree with it. Another Mac's page is not connected, whatever the chip says.
+    val macStatus: Int =
+        if (projectsPage == null || projectsPage.routeId != state.host?.routeId) R.string.remote_design_not_connected
+        else connectionStatusLine(state) ?: if (state.connected) R.string.remote_connected else R.string.remote_design_not_connected
     // A pull refreshes the lists behind what they show, which answer later and change only when
     // the Mac's state did. The indicator therefore stays for a moment rather than until they answer.
     var pullRefreshing by remember(key) { mutableStateOf(false) }
@@ -2066,9 +2073,9 @@ internal fun RemoteScreen(
                                     )
                                 }
                             else if (macName != null)
-                                Column(Modifier.weight(1f)) {
+                                Column(Modifier.weight(1f).testTag("projectsMacHeading")) {
                                     Text(
-                                        stringResource(if (macConnected) R.string.remote_connected else R.string.remote_design_not_connected),
+                                        stringResource(macStatus),
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
@@ -2503,15 +2510,17 @@ internal fun RemoteScreen(
                             // What needs the user leads the page: the featured chats waiting for an answer, then
                             // the running ones. Then the shared projects, then the recent chats. Beside an open
                             // project the chats hide, as before.
-                            val featuredChats = if (projectSelected) emptyList() else state.projectChats.take(3)
+                            // Every waiting chat leads, since the heading promises all of them; running and recent
+                            // chats are capped at three each.
+                            val allChats = if (projectSelected) emptyList() else state.projectChats
                             val waitingChats =
-                                featuredChats.filter { it.verified && state.connected && it.session.text("status") == "waiting" }
+                                allChats.filter { it.verified && state.connected && it.session.text("status") == "waiting" }
                             val runningChats =
-                                featuredChats.filter { it.verified && state.connected && it.session.text("status") == "running" }
+                                allChats.filter { it.verified && state.connected && it.session.text("status") == "running" }.take(3)
                             val recentChats =
-                                featuredChats.filter {
+                                allChats.filter {
                                     !it.verified || !state.connected || it.session.text("status") !in setOf("waiting", "running")
-                                }
+                                }.take(3)
                             if (waitingChats.isNotEmpty()) {
                                 item(key = "project_chats_waiting_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_needs_you))
@@ -2831,6 +2840,8 @@ internal fun RemoteScreen(
                                         if (canOpenFolders(state)) {
                                             { navigator.openFolders(projectsPage.routeId) }
                                         } else null,
+                                    // The narrow column has no refresh button of its own; the overflow keeps the full reload.
+                                    refresh = if (projectsColumn != null) model::refresh else null,
                                     onDetails = { macDetails = true },
                                     onDisconnect = { disconnecting = true },
                                     onRemove = { removing = macHost },
@@ -3418,6 +3429,9 @@ internal fun RemoteScreen(
                 TextButton(
                     onClick = {
                         disconnecting = false
+                        // Disconnect keeps the pairing, but a cold launch should not reconnect to the Mac the
+                        // user just let go of: the next launch opens the hosts list (or the only Mac).
+                        projectsPage?.routeId?.let(navigator::forgetLastRoute)
                         navigator.disconnect()
                     },
                     modifier = Modifier.testTag("confirmDisconnect"),
@@ -3434,7 +3448,7 @@ internal fun RemoteScreen(
     if (macDetails && projectsPage != null && macHost != null)
         MacConnectionDetailsDialog(
             host = macHost,
-            connected = macConnected,
+            status = stringResource(macStatus),
             onDismiss = { macDetails = false },
         )
     removing?.let { host ->
@@ -3445,6 +3459,9 @@ internal fun RemoteScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
+                        // The Mac's own Projects page is on screen: leave it first. A removed Mac cannot stay
+                        // open, and an offline Mac's selection would otherwise outlive its pairing.
+                        if (projectsPage?.routeId == host.routeId) navigator.disconnect()
                         navigator.forgetLastRoute(host.routeId)
                         model.remove(host.routeId)
                         removing = null
@@ -3602,6 +3619,7 @@ private fun MacOverflow(
     enabled: Boolean,
     providers: (() -> Unit)?,
     folders: (() -> Unit)?,
+    refresh: (() -> Unit)?,
     onDetails: () -> Unit,
     onDisconnect: () -> Unit,
     onRemove: () -> Unit,
@@ -3613,6 +3631,13 @@ private fun MacOverflow(
             Icon(Icons.Default.MoreVert, label)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            refresh?.let { action ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.remote_refresh)) },
+                    onClick = { open = false; action() },
+                    modifier = Modifier.testTag("macRefresh"),
+                )
+            }
             providers?.let { action ->
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.providers_open)) },

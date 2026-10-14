@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -78,6 +79,7 @@ class MacHubUiTest {
         counts: Map<String, ProjectSessions> = emptyMap(),
         hosts: List<PairedHost> = listOf(studio, laptop),
         connected: Boolean = true,
+        connection: Int? = null,
     ) {
         repository.state.value =
             RemoteState(
@@ -86,7 +88,7 @@ class MacHubUiTest {
                 host = studio,
                 selection = RemoteSelection("studio"),
                 connected = connected,
-                connection = if (connected) R.string.remote_connected else R.string.remote_offline,
+                connection = connection ?: if (connected) R.string.remote_connected else R.string.remote_offline,
                 projects = projects,
                 projectChats = chats,
                 projectSessions = counts,
@@ -115,11 +117,47 @@ class MacHubUiTest {
     }
 
     @Test
-    fun theTitleSaysNotConnectedWhileTheMacIsOffline() {
+    fun theTitleSaysWhatTheConnectionChipSaysWhileTheMacIsOffline() {
         render(listOf(project("p1", "Alpha")), connected = false)
 
         compose.onNodeWithTag("projectsMacTitle").assertTextEquals("Studio")
-        compose.onNodeWithText(label(R.string.remote_design_not_connected)).assertIsDisplayed()
+        // The chip above says "Offline", and the status under the title says the same.
+        compose.onNode(underTheTitle(label(R.string.remote_offline))).assertIsDisplayed()
+        compose.onAllNodes(underTheTitle(label(R.string.remote_design_not_connected))).assertCountEquals(0)
+    }
+
+    /** A text under the Mac's name on its Projects page, where the status line is. */
+    private fun underTheTitle(text: String) = hasText(text) and hasAnyAncestor(hasTestTag("projectsMacHeading"))
+
+    /** A text in the Mac's connection details dialog. */
+    private fun inDetails(text: String) = hasText(text) and hasAnyAncestor(hasTestTag("macDetailsBody"))
+
+    @Test
+    fun theTitleSaysConnectingWhileTheConnectionIsMade() {
+        render(listOf(project("p1", "Alpha")), connected = false, connection = R.string.remote_connecting)
+
+        // The chip above and the status under the title say the same thing; the title never says "Not connected".
+        compose.onNode(underTheTitle(label(R.string.remote_connecting))).assertIsDisplayed()
+        compose.onAllNodes(underTheTitle(label(R.string.remote_design_not_connected))).assertCountEquals(0)
+    }
+
+    @Test
+    fun theTitleSaysCheckingWhileTheConnectionIsChecked() {
+        render(listOf(project("p1", "Alpha")), connected = true, connection = R.string.remote_checking_connection)
+
+        compose.onNode(underTheTitle(label(R.string.remote_checking_connection))).assertIsDisplayed()
+        compose.onAllNodes(underTheTitle(label(R.string.remote_connected))).assertCountEquals(0)
+    }
+
+    @Test
+    fun theDetailsDialogSaysWhatTheTitleSays() {
+        render(listOf(project("p1", "Alpha")), connected = false, connection = R.string.remote_reconnecting)
+
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macDetails").performClick()
+
+        compose.onNode(inDetails(label(R.string.remote_reconnecting))).assertIsDisplayed()
+        compose.onAllNodes(inDetails(label(R.string.remote_design_not_connected))).assertCountEquals(0)
     }
 
     @Test
@@ -193,6 +231,8 @@ class MacHubUiTest {
         compose.runOnIdle {
             assertEquals(1, repository.disconnects)
             assertTrue(repository.removed.isEmpty())
+            // A cold launch does not reconnect to the Mac the user just disconnected.
+            assertNull(LastRouteStore(context()).load())
         }
     }
 
@@ -204,10 +244,16 @@ class MacHubUiTest {
         compose.onNodeWithTag("macRemove").performClick()
         compose.onNode(hasText(label(R.string.remote_remove)) and hasClickAction() and hasAnyAncestor(isDialog()))
             .performClick()
+        compose.waitForIdle()
         compose.runOnIdle {
             assertEquals(listOf("studio"), repository.removed)
             assertNull(LastRouteStore(context()).load())
         }
+        // The fake keeps the selection on the removed Mac, as a Mac that never answered does. The page
+        // still leaves the removed Mac: its Projects page is gone and the hosts list is what shows.
+        compose.onAllNodesWithTag("projectsMacHeading").assertCountEquals(0)
+        compose.onAllNodesWithTag("macOverflow").assertCountEquals(0)
+        compose.runOnIdle { assertEquals(1, repository.disconnects) }
     }
 
     @Test

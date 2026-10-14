@@ -19,7 +19,8 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun MacConnectionDetailsDialog(
     host: PairedHost,
-    connected: Boolean,
+    /** The status the Mac's page shows under its name, so both say the same. */
+    status: String,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -27,10 +28,7 @@ internal fun MacConnectionDetailsDialog(
         title = { Text(stringResource(R.string.remote_mac_details)) },
         text = {
             Column(Modifier.testTag("macDetailsBody")) {
-                MacDetailRow(
-                    stringResource(R.string.remote_mac_details_status),
-                    stringResource(if (connected) R.string.remote_connected else R.string.remote_design_not_connected),
-                )
+                MacDetailRow(stringResource(R.string.remote_mac_details_status), status)
                 MacDetailRow(stringResource(R.string.remote_mac_details_relay), host.relay)
                 MacDetailRow(stringResource(R.string.remote_mac_details_device), host.deviceId)
             }
