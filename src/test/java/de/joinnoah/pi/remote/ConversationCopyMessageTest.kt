@@ -30,7 +30,7 @@ class ConversationCopyMessageTest {
     private fun show(item: ConversationItem.Bubble, copyButton: Boolean = true) =
         compose.setContent {
             MaterialTheme {
-                ConversationMessage(item, "hidden", thinkingActive = false, onQuote = {}, copyButton = copyButton)
+                ConversationMessage(item, ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}, copyButton = copyButton)
             }
         }
 

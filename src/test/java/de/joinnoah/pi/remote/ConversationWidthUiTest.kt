@@ -55,7 +55,7 @@ class ConversationWidthUiTest {
             MaterialTheme {
                 Box(Modifier.width(width)) {
                     ConversationItemColumn(item) {
-                        ConversationMessage(item, "hidden", thinkingActive = false, onQuote = {})
+                        ConversationMessage(item, ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {})
                     }
                 }
             }
@@ -80,8 +80,8 @@ class ConversationWidthUiTest {
             density = LocalDensity.current
             MaterialTheme {
                 Column(Modifier.width(1280.dp)) {
-                    ConversationItemColumn(plain) { ConversationMessage(plain, "hidden", thinkingActive = false, onQuote = {}) }
-                    ConversationItemColumn(wide) { ConversationMessage(wide, "hidden", thinkingActive = false, onQuote = {}) }
+                    ConversationItemColumn(plain) { ConversationMessage(plain, ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}) }
+                    ConversationItemColumn(wide) { ConversationMessage(wide, ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}) }
                 }
             }
         }

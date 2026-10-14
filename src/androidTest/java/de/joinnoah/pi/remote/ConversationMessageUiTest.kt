@@ -75,7 +75,7 @@ class ConversationMessageUiTest {
             MaterialTheme {
                 ConversationMessage(
                     item,
-                    thinkingDisplay = "text",
+                    thinkingDisplay = ThinkingDisplay.TEXT,
                     thinkingActive = false,
                     onQuote = {},
                     onOpenTool = onOpenTool,
@@ -268,7 +268,7 @@ class ConversationMessageUiTest {
                             truncated = false,
                             timestamp = null,
                         ),
-                        thinkingDisplay = "text",
+                        thinkingDisplay = ThinkingDisplay.TEXT,
                         thinkingActive = false,
                         onQuote = { quoted += it },
                     )

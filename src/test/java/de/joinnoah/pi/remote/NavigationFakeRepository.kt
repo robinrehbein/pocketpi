@@ -422,8 +422,12 @@ internal class NavigationFakeRepository : RemoteRepository {
 internal class FakeSettingsRepository : SettingsRepository {
     override val state = kotlinx.coroutines.flow.MutableStateFlow(RemoteSettings())
 
-    override fun setTheme(theme: String) {
+    override fun setTheme(theme: ThemePalette) {
         state.value = state.value.copy(theme = theme)
+    }
+
+    override fun setThemeMode(mode: ThemeMode) {
+        state.value = state.value.copy(themeMode = mode)
     }
 
     override fun setPushEnabled(enabled: Boolean) {
@@ -434,7 +438,7 @@ internal class FakeSettingsRepository : SettingsRepository {
         state.value = state.value.copy(notificationPromptShown = true)
     }
 
-    override fun setThinkingDisplay(display: String) {
+    override fun setThinkingDisplay(display: ThinkingDisplay) {
         state.value = state.value.copy(thinkingDisplay = display)
     }
 

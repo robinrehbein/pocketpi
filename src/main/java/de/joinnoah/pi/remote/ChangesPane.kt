@@ -388,7 +388,7 @@ private fun ChangesFileList(state: ChangesState, actions: ChangesActions, header
                     .heightIn(min = 48.dp)
                     .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Unspecified)
                     .openOnArrowRelease(if (selected) null else ({ actions.onOpenFile(file.path) }))
-                    .focusRing()
+                    .focusRing(MaterialTheme.shapes.small)
                     .selectable(selected) { actions.onOpenFile(file.path) }
                     .padding(horizontal = 16.dp, vertical = 6.dp)
                     .testTag("changesFileListItem"),

@@ -175,7 +175,7 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
                 action(R.string.wear_controls, !busy) { model.open(WatchScreen.CONTROLS) }
                 items(messages.takeLast(chatLimit).asReversed(), key = { it.id }) { message ->
                     WatchAction(watchMessageLabel(message), { model.open(WatchScreen.MESSAGE, message.id) }, !busy,
-                        if (message is ConversationItem.Thinking && preferences.thinkingDisplay != "text") stringResource(R.string.wear_thinking_status) else watchMessageText(message).take(160))
+                        if (message is ConversationItem.Thinking && preferences.thinkingDisplay != ThinkingDisplay.TEXT) stringResource(R.string.wear_thinking_status) else watchMessageText(message).take(160))
                 }
                 if (messages.size > chatLimit) action(R.string.wear_older) { chatLimit += 20 }
                 else if (state.nextCursor != null) action(R.string.wear_older, ready) { repository.older(); chatLimit += 20 }
@@ -184,7 +184,7 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
             WatchScreen.MESSAGE -> {
                 val message = messages.find { it.id == route.detailId }
                 if (message != null) {
-                    val content = if (message is ConversationItem.Thinking && preferences.thinkingDisplay != "text") ""
+                    val content = if (message is ConversationItem.Thinking && preferences.thinkingDisplay != ThinkingDisplay.TEXT) ""
                         else if (message is ConversationItem.Activity) state.toolOutput?.takeIf { it.toolCallId == message.toolCallId }?.text ?: watchMessageText(message)
                         else watchMessageText(message)
                     val truncated = when (message) {
@@ -320,7 +320,7 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
             WatchScreen.SETTINGS -> {
                 item { WatchAction(stringResource(R.string.wear_notifications), ::togglePush, app?.pushConfigured == true, selected = preferences.pushEnabled) }
                 if (app?.pushConfigured != true) notice(R.string.wear_push_unconfigured)
-                item { WatchAction(stringResource(R.string.wear_show_thinking), { settings.setThinkingDisplay(if (preferences.thinkingDisplay == "text") "status" else "text") }, selected = preferences.thinkingDisplay == "text") }
+                item { WatchAction(stringResource(R.string.wear_show_thinking), { settings.setThinkingDisplay(if (preferences.thinkingDisplay == ThinkingDisplay.TEXT) ThinkingDisplay.STATUS else ThinkingDisplay.TEXT) }, selected = preferences.thinkingDisplay == ThinkingDisplay.TEXT) }
                 item { WatchAction(stringResource(R.string.wear_hide_offline), { settings.setHideOfflineSessions(!preferences.hideOfflineSessions) }, selected = preferences.hideOfflineSessions) }
                 notice(R.string.wear_background_notice)
             }

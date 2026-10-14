@@ -23,7 +23,7 @@ class PendingSendLabelTest {
     private fun show(item: ConversationItem.Bubble) =
         compose.setContent {
             MaterialTheme {
-                ConversationMessage(item, "hidden", thinkingActive = false, onQuote = {})
+                ConversationMessage(item, ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {})
             }
         }
 

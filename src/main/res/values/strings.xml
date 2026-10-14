@@ -219,10 +219,6 @@
     </plurals>
     <string name="remote_notification_open">Open the session to see its current state.</string>
     <string name="remote_appearance">Appearance</string>
-    <string name="remote_theme_system">System</string>
-    <string name="remote_theme_light">Light</string>
-    <string name="remote_theme_synthwave">Synthwave</string>
-    <string name="remote_theme_dark">Dark</string>
     <string name="remote_pair_code">Pairing code</string>
     <string name="remote_status_idle">Ready</string>
     <string name="remote_status_running">Working</string>

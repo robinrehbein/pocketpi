@@ -219,10 +219,6 @@
     </plurals>
     <string name="remote_notification_open">Öffne die Sitzung, um ihren aktuellen Stand zu sehen.</string>
     <string name="remote_appearance">Darstellung</string>
-    <string name="remote_theme_system">System</string>
-    <string name="remote_theme_light">Hell</string>
-    <string name="remote_theme_synthwave">Synthwave</string>
-    <string name="remote_theme_dark">Dunkel</string>
     <string name="remote_pair_code">Kopplungscode</string>
     <string name="remote_status_idle">Bereit</string>
     <string name="remote_status_running">Arbeitet</string>

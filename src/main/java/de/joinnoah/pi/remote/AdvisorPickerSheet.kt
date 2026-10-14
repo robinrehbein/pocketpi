@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material3.*
@@ -78,7 +77,7 @@ internal fun AdvisorPickerSheet(
             } else {
                 item {
                     Surface(
-                        shape = RoundedCornerShape(20.dp),
+                        shape = MaterialTheme.shapes.medium,
                         color = MaterialTheme.colorScheme.surfaceContainerHigh,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
@@ -156,7 +155,7 @@ internal fun AdvisorPickerSheet(
                             contentDescription = description
                             if (current) stateDescription = currentLabel
                         },
-                        shape = RoundedCornerShape(18.dp),
+                        shape = MaterialTheme.shapes.medium,
                         color = if (selected) MaterialTheme.colorScheme.primaryContainer
                             else MaterialTheme.colorScheme.surfaceContainerHigh,
                         border = if (selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary)

@@ -260,7 +260,7 @@ private fun FolderSideList(state: FilesState, actions: FilesActions, headerHeigh
                     .heightIn(min = 48.dp)
                     .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Unspecified)
                     .openOnArrowRelease(if (entry.type == FileEntryType.FILE && !selected) ({ actions.onOpenFile(path) }) else null)
-                    .focusRing()
+                    .focusRing(MaterialTheme.shapes.small)
                     .selectable(selected) {
                         when (entry.type) {
                             FileEntryType.DIR -> actions.onOpenDir(path)

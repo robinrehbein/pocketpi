@@ -4,7 +4,6 @@ import android.content.Context
 import android.text.format.Formatter
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -156,13 +155,13 @@ internal fun ProjectArtifactCard(path: String, source: ProjectImageSource, modif
     val context = LocalContext.current
     Column(modifier.fillMaxWidth().testTag("projectArtifact-$path"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Surface(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small)
                 // Dragged into another app, the card is the HTML file.
                 .dragOut(ready?.artifact?.sha256, enabled = ready != null) {
                     ready?.artifact?.let { dragArtifact(context, path, it.html) }
                 },
             color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = RoundedCornerShape(12.dp),
+            shape = MaterialTheme.shapes.small,
         ) {
             Column {
                 if (ready != null) {
@@ -182,7 +181,7 @@ internal fun ProjectArtifactCard(path: String, source: ProjectImageSource, modif
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(6.dp)) {
+                        Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.extraSmall) {
                             Text(
                                 stringResource(R.string.remote_artifact_badge),
                                 Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
@@ -260,9 +259,9 @@ internal fun MermaidCard(code: String, modifier: Modifier = Modifier, codeBlock:
             .joinToString(" · ") + " · " + pluralStringResource(R.plurals.remote_mermaid_lines, lines, lines)
     Column(modifier.fillMaxWidth().testTag("mermaidCard"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Surface(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
+            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small),
             color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = RoundedCornerShape(12.dp),
+            shape = MaterialTheme.shapes.small,
         ) {
             Column {
                 ArtifactThumbnail(

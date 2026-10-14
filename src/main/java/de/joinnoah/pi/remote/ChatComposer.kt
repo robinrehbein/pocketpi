@@ -5,7 +5,6 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
@@ -316,7 +315,7 @@ internal fun QuotePreview(
 ) {
     Surface(
         modifier,
-        shape = RoundedCornerShape(14.dp),
+        shape = MaterialTheme.shapes.small,
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
     ) {
         Row(
@@ -1003,7 +1002,7 @@ internal fun ChatComposer(
                     lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = lineLimit),
                     keyboardOptions =
                         KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                    shape = RoundedCornerShape(24.dp),
+                    shape = MaterialTheme.shapes.large,
                 )
                 // Names what the primary button does now, and its key. While pi runs it never stops:
                 // with a draft it sends the chosen mode, and without one it stays a disabled Send.

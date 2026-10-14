@@ -7,7 +7,6 @@ import androidx.compose.foundation.draganddrop.dragAndDropSource
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DragIndicator
@@ -107,7 +106,7 @@ private fun MarkdownRunView(run: MarkdownRun, linkColor: Color, codeBackground: 
             Row(Modifier.widthIn(max = PROSE_READING_WIDTH).height(IntrinsicSize.Min)) {
                 Box(
                     Modifier.width(3.dp).fillMaxHeight()
-                        .background(MaterialTheme.colorScheme.outline, RoundedCornerShape(2.dp))
+                        .background(MaterialTheme.colorScheme.outline, MaterialTheme.shapes.extraSmall)
                 )
                 Spacer(Modifier.width(12.dp))
                 CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant) {
@@ -199,7 +198,7 @@ private fun CodeBlock(code: String, language: String? = null, closed: Boolean = 
     Surface(
         modifier = Modifier.fillMaxWidth().testTag("codeBlock"),
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.small,
         // The edge keeps the block apart from a bubble whose colour is close to its own.
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {

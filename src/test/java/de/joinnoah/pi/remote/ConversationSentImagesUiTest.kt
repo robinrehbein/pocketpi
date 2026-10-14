@@ -38,7 +38,7 @@ class ConversationSentImagesUiTest {
     private fun show(item: ConversationItem.Bubble, images: SentImageSource?) =
         compose.setContent {
             MaterialTheme {
-                ConversationMessage(item, "hidden", thinkingActive = false, onQuote = {}, images = images)
+                ConversationMessage(item, ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}, images = images)
             }
         }
 
@@ -110,7 +110,7 @@ class ConversationSentImagesUiTest {
         var calls = 0
         val current = androidx.compose.runtime.mutableStateOf(source { _, _ -> calls++; AttachmentReadResult.Loaded(png()) })
         compose.setContent {
-            MaterialTheme { ConversationMessage(bubble(image), "hidden", thinkingActive = false, onQuote = {}, images = current.value) }
+            MaterialTheme { ConversationMessage(bubble(image), ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}, images = current.value) }
         }
         val tag = "conversationAttachmentImage-Thumbnail-${image.id}"
         compose.waitUntil(5_000) { compose.onAllNodesWithTag(tag, true).fetchSemanticsNodes().isNotEmpty() }

@@ -37,7 +37,7 @@ class ForkControlUiTest {
     ) {
         compose.setContent {
             MaterialTheme {
-                ConversationMessage(item, "status", thinkingActive = false, onQuote = {}, fork = fork)
+                ConversationMessage(item, ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}, fork = fork)
             }
         }
     }

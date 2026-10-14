@@ -10,7 +10,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LaptopMac
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
@@ -288,10 +287,10 @@ internal fun ProjectRow(
             Modifier.fillMaxWidth()
                 .background(MaterialTheme.colorScheme.background)
                 // The press ripple follows the rounded selection instead of a square.
-                .clip(RoundedCornerShape(16.dp))
+                .clip(MaterialTheme.shapes.medium)
                 .then(
                     if (selected == true)
-                        Modifier.background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(16.dp))
+                        Modifier.background(MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.shapes.medium)
                     else Modifier
                 )
                 .semantics(mergeDescendants = badgeDescription != null) {
@@ -306,7 +305,7 @@ internal fun ProjectRow(
                         }
                     )
                 }
-                .focusRing(RoundedCornerShape(16.dp))
+                .focusRing(MaterialTheme.shapes.medium)
                 .then(regionChild)
                 .contextMenu { menu() }
                 .pointerHoverIcon(PointerIcon.Hand)
@@ -382,7 +381,7 @@ internal fun SwipeActionBackground(
 ) {
     Row(
         Modifier.fillMaxSize()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(MaterialTheme.shapes.medium)
             .background(containerColor)
             .padding(horizontal = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp, if (atEnd) Alignment.End else Alignment.Start),

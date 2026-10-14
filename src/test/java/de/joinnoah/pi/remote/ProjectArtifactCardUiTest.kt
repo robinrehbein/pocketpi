@@ -128,7 +128,7 @@ class ProjectArtifactCardUiTest {
                     LocalProjectImageSource provides source { _, _, _ -> ProjectArtifactResult.Unavailable },
                     LocalInspectorViewers provides InspectorViewers(show = { opened += it }),
                 ) {
-                    ConversationMessage(item, "hidden", thinkingActive = false, onQuote = { quotes++ },
+                    ConversationMessage(item, ThinkingDisplay.STATUS, thinkingActive = false, onQuote = { quotes++ },
                         projectImages = source { _, _, _ -> ProjectArtifactResult.Unavailable })
                 }
             }
@@ -155,7 +155,7 @@ class ProjectArtifactCardUiTest {
         )
         compose.setContent {
             MaterialTheme {
-                ConversationMessage(item, "hidden", thinkingActive = false, onQuote = {},
+                ConversationMessage(item, ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {},
                     projectImages = source { _, _, _ -> ProjectArtifactResult.Unavailable })
             }
         }

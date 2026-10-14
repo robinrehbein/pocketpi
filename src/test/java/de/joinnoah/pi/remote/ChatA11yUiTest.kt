@@ -78,7 +78,7 @@ class ChatA11yUiTest {
 
     private fun show(item: ConversationItem, onOpenTool: ((ConversationItem.Activity) -> Unit)? = null, onQuote: (String) -> Unit = {}) {
         compose.setContent {
-            MaterialTheme { ConversationMessage(item, "text", false, onQuote = onQuote, onOpenTool = onOpenTool) }
+            MaterialTheme { ConversationMessage(item, ThinkingDisplay.TEXT, false, onQuote = onQuote, onOpenTool = onOpenTool) }
         }
     }
 
@@ -158,7 +158,7 @@ class ChatA11yUiTest {
             legacy = false, output = "All done", truncated = false,
         )
         compose.setContent {
-            MaterialTheme { ConversationMessage(subagent, "text", false, onQuote = {}, onOpenAgent = { _, _ -> }) }
+            MaterialTheme { ConversationMessage(subagent, ThinkingDisplay.TEXT, false, onQuote = {}, onOpenAgent = { _, _ -> }) }
         }
         val header = compose.onNodeWithTag("subagentHeader")
         header.assertHeightIsAtLeast(48.dp).assert(roleIs(Role.Button)).assert(stateIs(R.string.remote_chat_a11y_collapsed))
@@ -218,7 +218,7 @@ class ChatA11yUiTest {
         val quoted = mutableListOf<String>()
         compose.setContent {
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                MaterialTheme { ConversationMessage(bubble(), "text", false, onQuote = { quoted += it }) }
+                MaterialTheme { ConversationMessage(bubble(), ThinkingDisplay.TEXT, false, onQuote = { quoted += it }) }
             }
         }
         compose.onNodeWithTag("messageBubble-b").performTouchInput { swipeLeft() }

@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -67,7 +66,7 @@ internal fun ConnectionStatusChip(@StringRes connection: Int, modifier: Modifier
             liveRegion = LiveRegionMode.Polite
         },
         // Round on one line, and still a pill rather than an oval once the text wraps.
-        shape = RoundedCornerShape(20.dp),
+        shape = MaterialTheme.shapes.medium,
     ) {
         Row(
             Modifier.padding(start = 12.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
@@ -128,7 +127,7 @@ internal fun ChatComposerNotices(@StringRes connection: Int?, uncertain: Boolean
         if (uncertain)
             FloatingSurface(
                 Modifier.fillMaxWidth().testTag("uncertainDraftNotice"),
-                shape = RoundedCornerShape(20.dp),
+                shape = MaterialTheme.shapes.medium,
                 color = MaterialTheme.colorScheme.errorContainer,
             ) {
                 Row(

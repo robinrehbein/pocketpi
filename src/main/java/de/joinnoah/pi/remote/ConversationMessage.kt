@@ -72,7 +72,11 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/** The bubble's corner radius and the length of its tail, which sits on the side of the sender. */
+/**
+ * The bubble's corner radius and the length of its tail, which sits on the side of the sender. A
+ * documented exception to the shape scale (MaterialTheme.shapes): a body with a tail on one side is
+ * not a rounded rectangle, so its corner radius stays here.
+ */
 private val BUBBLE_RADIUS = 20.dp
 private val BUBBLE_TAIL = 8.dp
 
@@ -272,7 +276,7 @@ private fun Modifier.jumpHighlight(highlighted: Boolean, shape: Shape? = null): 
 @Composable
 internal fun ConversationMessage(
     item: ConversationItem,
-    thinkingDisplay: String,
+    thinkingDisplay: ThinkingDisplay,
     thinkingActive: Boolean,
     onQuote: (String) -> Unit,
     onOpenTool: ((ConversationItem.Activity) -> Unit)? = null,
@@ -320,7 +324,7 @@ internal fun ConversationMessage(
 private fun ConversationMessageContent(
     item: ConversationItem,
     highlighted: Boolean,
-    thinkingDisplay: String,
+    thinkingDisplay: ThinkingDisplay,
     thinkingActive: Boolean,
     onQuote: (String) -> Unit,
     onOpenTool: ((ConversationItem.Activity) -> Unit)?,
@@ -668,7 +672,7 @@ private fun ConversationMessageContent(
         }
         // Mirrors conversationItemVisible: any other Thinking state renders nothing.
         is ConversationItem.Thinking -> {
-            if (thinkingDisplay == "text" && item.text.isNotEmpty())
+            if (thinkingDisplay == ThinkingDisplay.TEXT && item.text.isNotEmpty())
                 CompositionLocalProvider(
                     LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant
                 ) {

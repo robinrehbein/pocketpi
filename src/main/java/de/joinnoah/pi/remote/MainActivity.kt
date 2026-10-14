@@ -11,7 +11,6 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
@@ -78,6 +77,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val locked by app.appLock.locked.collectAsState()
             val preferences by app.settings.state.collectAsState()
+            val systemDark = isSystemInDarkTheme()
             CompositionLocalProvider(
                 LocalPromptPredictions provides app.predictions,
                 LocalAppLockStore provides app.appLock.store,
@@ -86,7 +86,10 @@ class MainActivity : ComponentActivity() {
                 AppLockGate(
                     locked,
                     onUnlock = ::unlock,
-                    colors = remoteColorScheme(isSystemInDarkTheme(), synthwave = preferences.theme == "synthwave"),
+                    colors =
+                        remember(preferences.themeMode, preferences.theme, systemDark) {
+                            appColorScheme(this@MainActivity, preferences.themeMode.isDark(systemDark), preferences.theme)
+                        },
                 ) {
                     RemoteApp(
                         app.repository,
@@ -273,12 +276,12 @@ internal fun RemoteApp(
     home: StateFlow<HomeSnapshot> = remember { MutableStateFlow(HomeSnapshot()) },
 ) {
     val preferences by settings.state.collectAsStateWithLifecycle()
-    val theme = preferences.theme
-    val dark = isSystemInDarkTheme()
+    // The chosen mode wins over the device setting; System follows it.
+    val dark = preferences.themeMode.isDark(isSystemInDarkTheme())
     val activity = LocalActivity.current
     val context = LocalContext.current
     val view = LocalView.current
-    val colors = remoteColorScheme(dark, synthwave = theme == "synthwave")
+    val colors = remember(context, dark, preferences.theme) { appColorScheme(context, dark, preferences.theme) }
     val windowInfo = LocalWindowInfo.current
     val uriHandler =
         remember(activity, context, windowInfo) {
@@ -319,12 +322,7 @@ internal fun RemoteApp(
         MaterialTheme(
             colorScheme = colors,
             typography = RemoteTypography,
-            shapes =
-                Shapes(
-                    extraLarge = RoundedCornerShape(28.dp),
-                    large = RoundedCornerShape(24.dp),
-                    medium = RoundedCornerShape(20.dp),
-                ),
+            shapes = RemoteShapes,
         ) {
             // Right-click and S Pen menus open here, over everything in the window.
             PointerMenuHost {
