@@ -7,6 +7,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.InputTransformation
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.content.contentReceiver
 import androidx.compose.foundation.text.handwriting.handwritingDetector
 import androidx.compose.foundation.text.handwriting.handwritingHandler
 import androidx.compose.material.icons.Icons
@@ -15,6 +19,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,7 +53,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.offset
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collectLatest
 
 /** How long typing pauses before the composer gives its text to the repository. */
@@ -65,6 +74,10 @@ private const val MAX_DRAFT_BYTES = 128 * 1024
  * after a send) come back through [sync] and replace the text, unless the user typed something
  * the repository has not seen yet: that typing wins, and the next push carries it. Until the chat
  * is selected the text is not [editable], so typing never lands on top of a draft not shown yet.
+ *
+ * The text lives in [textState], which the text field shows and edits. What the user types or pastes
+ * goes through [inputTransformation] first: it refuses a text the field may not take, and holds a
+ * long paste back as [longPaste] for the user to attach as a file or paste as text.
  */
 @Stable
 internal class ComposerDraft(
@@ -73,20 +86,75 @@ internal class ComposerDraft(
     initial: String,
     private val push: (RemoteSelection, String) -> Unit,
 ) {
-    private var current by mutableStateOf(TextFieldValue(initial, TextRange(initial.length)))
+    /** The text the composer field shows and edits. */
+    val textState = TextFieldState(initial, TextRange(initial.length))
 
-    var value: TextFieldValue
-        get() = current
-        private set(next) {
-            // A changed text brings back the suggestions Esc closed.
-            if (next.text != current.text) suggestionsClosedFor = null
-            current = next
+    /**
+     * Filters the user's own edits to [textState]. A programmatic edit ([apply]) does not pass it, so
+     * what the composer sets is never refused or held back.
+     */
+    val inputTransformation = InputTransformation {
+        val before = originalText.toString()
+        val after = asCharSequence().toString()
+        val inserted = insertedText(before, after)
+        when {
+            // The cursor moved, or only the selection changed.
+            after == before -> Unit
+            !this@ComposerDraft.editable -> revertAllChanges()
+            // A long paste is held before the draft limit is checked, so a paste over the limit can
+            // still become an attachment; its text never enters the field unless the user pastes it.
+            this@ComposerDraft.canOfferLongPaste && isLongPaste(inserted) -> {
+                this@ComposerDraft.holdLongPaste(inserted)
+                revertAllChanges()
+            }
+            this@ComposerDraft.tooLong(after) -> revertAllChanges()
+            else -> {
+                this@ComposerDraft.suggestionsClosedFor = null
+                this@ComposerDraft.onTyped(after)
+            }
         }
+    }
 
-    val text: String get() = value.text
+    /** Told each text the user typed, so voice input can tell its own text from the user's. */
+    var onTyped: (String) -> Unit = {}
+
+    /** Whether a long paste is held back for the user's choice; off where the composer takes no attachments. */
+    var canOfferLongPaste = true
+
+    val text: String get() = textState.text.toString()
+
+    /** The text and its selection, as the field holds them. */
+    val value: TextFieldValue get() = TextFieldValue(text, textState.selection)
 
     /** False until the chat is selected: edits are refused, so typing never lands on a draft not shown yet. */
     var editable = true
+
+    /**
+     * A pasted text too long for the field, held until the user attaches or pastes it. Null when none
+     * is held. A newer long paste replaces the held one: the offer always shows the latest paste.
+     */
+    var longPaste by mutableStateOf<String?>(null)
+        private set
+
+    private fun holdLongPaste(text: String) {
+        longPaste = text
+    }
+
+    /** Drops the held long paste: a send takes what is on screen, so the offer goes with it. */
+    fun clearLongPaste() {
+        longPaste = null
+    }
+
+    /**
+     * Puts the held long paste into the field at the cursor and drops the offer. False, and the offer
+     * stays, when the field does not take it: the text is never lost by a refused insert.
+     */
+    fun insertLongPaste(): Boolean {
+        val held = longPaste ?: return false
+        if (!insert(held)) return false
+        longPaste = null
+        return true
+    }
 
     /** The repository's draft as [sync] last saw it. */
     private var observed = initial
@@ -102,14 +170,14 @@ internal class ComposerDraft(
      * over the draft limit, as the repository would refuse it. A selection-only change always applies.
      */
     fun edit(next: TextFieldValue): Boolean {
-        if (next.text != value.text && (!editable || tooLong(next.text))) return false
-        value = next
+        if (next.text != text && (!editable || tooLong(next.text))) return false
+        apply(next)
         return true
     }
 
     /** Replaces the text with the cursor at its end: an accepted prediction or a voice result. */
     fun setText(text: String): Boolean =
-        text == value.text || edit(TextFieldValue(text, TextRange(text.length)))
+        text == this.text || edit(TextFieldValue(text, TextRange(text.length)))
 
     /** Replaces the text and pushes it at once, for a change the chat makes (a picked command). */
     fun replace(text: String) {
@@ -152,7 +220,7 @@ internal class ComposerDraft(
         echoes.clear()
         val typing = text != known
         known = draft
-        if (!typing && draft != text) value = TextFieldValue(draft, TextRange(draft.length))
+        if (!typing && draft != text) apply(TextFieldValue(draft, TextRange(draft.length)), forgetUndo = true)
     }
 
     /** The text whose slash suggestions Esc closed, until the text changes. */
@@ -166,9 +234,35 @@ internal class ComposerDraft(
 
     /** Types [typed] over the selection, as a key press in the field would. */
     fun insert(typed: String): Boolean {
-        val start = value.selection.min
-        val next = text.substring(0, start) + typed + text.substring(value.selection.max)
-        return edit(TextFieldValue(next, TextRange(start + typed.length)))
+        val start = textState.selection.min
+        return edit(TextFieldValue(textWith(typed), TextRange(start + typed.length)))
+    }
+
+    /** Whether [typed] would go into the field at the cursor: the field is editable and the draft stays within its limit. */
+    fun canInsert(typed: String): Boolean = editable && !tooLong(textWith(typed))
+
+    /** The text with [typed] over the selection. */
+    private fun textWith(typed: String): String {
+        val start = textState.selection.min
+        val end = textState.selection.max
+        return text.substring(0, start) + typed + text.substring(end)
+    }
+
+    /**
+     * Sets [next] as the field's text and selection; a changed text brings back the suggestions Esc
+     * closed. [forgetUndo] drops the field's undo history for a text the repository changed, so Ctrl+Z
+     * cannot bring back a message that was sent. Edits the user makes stay undoable.
+     */
+    private fun apply(next: TextFieldValue, forgetUndo: Boolean = false) {
+        val previous = text
+        textState.edit {
+            if (previous != next.text) replace(0, length, next.text)
+            selection = next.selection
+        }
+        if (previous != next.text) {
+            suggestionsClosedFor = null
+            if (forgetUndo) textState.undoState.clearHistory()
+        }
     }
 
     private fun tooLong(text: String) =
@@ -271,10 +365,11 @@ internal fun ChatComposer(
     onPickPhotos: () -> Unit = {},
     onPickFiles: () -> Unit = {},
     /**
-     * Takes the images and files a paste brings (Ctrl+V, or "Paste image or file" in the + menu) as one
-     * batch; null leaves every paste to the field.
+     * Takes the images and files the keyboard commits, a paste (Ctrl+V, the paste menu) brings, or a long
+     * text the user attaches as a file, as one batch; `onDone` runs once the batch has been read. Null
+     * leaves every paste to the field.
      */
-    onPasteAttachments: ((List<Picked>) -> Unit)? = null,
+    onPasteAttachments: ((List<Picked>, onDone: () -> Unit) -> Unit)? = null,
     /** Takes a photo for the draft; null where there is no camera. */
     onTakePhoto: (() -> Unit)? = null,
     voiceEngine: VoiceRecognitionEngine? = null,
@@ -295,7 +390,8 @@ internal fun ChatComposer(
     @Suppress("NAME_SHADOWING")
     val state = remember(repositoryState, draft.text) { repositoryState.copy(draft = draft.text) }
     // A send reads the repository's draft, so it first gets exactly the text on screen.
-    val flushed: (() -> Unit) -> () -> Unit = { action -> { draft.flush(force = true); action() } }
+    // A send also drops a held long paste: the offer is for text that is not sent.
+    val flushed: (() -> Unit) -> () -> Unit = { action -> { draft.flush(force = true); draft.clearLongPaste(); action() } }
     @Suppress("NAME_SHADOWING") val onSend = flushed(onSend)
     @Suppress("NAME_SHADOWING") val onFollowUp = flushed(onFollowUp)
     @Suppress("NAME_SHADOWING") val onSteer = flushed(onSteer)
@@ -409,7 +505,6 @@ internal fun ChatComposer(
         if (route != null && project != null) predictions?.record(route, project, state.draft)
     }
     var addMenu by remember { mutableStateOf(false) }
-    val context = LocalContext.current
     val clipboardEmpty = stringResource(R.string.remote_drop_clipboard_empty)
     var preferredBusyAction by remember(state.selection.sessionId) {
         mutableStateOf(BusyComposerAction.Steer)
@@ -436,7 +531,21 @@ internal fun ChatComposer(
     val send: () -> Unit = if (childResume) onResumeChild else onSend
     val showBusyAction = busyAction != null && hasDraft
     val voiceInput = rememberVoiceInputBinding(state.draft, { draft.setText(it) }, voiceEngine)
-    val shown = draft.value
+    SideEffect {
+        draft.onTyped = voiceInput::userEdited
+        draft.canOfferLongPaste = onPasteAttachments != null
+    }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // One listener for the composer's life; it reads the latest attach callback when content arrives.
+    // A keyboard image keeps its read grant after this returns: Compose asks the IME for it
+    // (InputContentInfo.requestPermission) before the listener runs and does not release it, and a
+    // drop's grant is requested by the receiver node itself. So the queued import can read it later.
+    val latestAttach by rememberUpdatedState(onPasteAttachments)
+    val receiveContent = remember(context) {
+        composerContentListener(context) { items -> latestAttach?.invoke(items) {} }
+    }
+    val latestSelection by rememberUpdatedState(repositoryState.selection)
     // Esc closes the prediction until something is typed.
     var predictionClosed by remember(state.selection) { mutableStateOf(false) }
     val draftEmpty = state.draft.isEmpty()
@@ -614,6 +723,41 @@ internal fun ChatComposer(
                             .testTag("promptSuggestion"),
                 )
             }
+            draft.longPaste?.let { held ->
+                LongPasteOffer(
+                    onAttach = {
+                        val attach = onPasteAttachments ?: return@LongPasteOffer
+                        scope.launch {
+                            // Not cancelled with the composer: once started, the write ends, so the
+                            // text is attached, put into the field or still held, never dropped.
+                            val file = withContext(Dispatchers.IO + NonCancellable) {
+                                runCatching { writePastedText(context, held) }.getOrNull()
+                            }
+                            // The offer may have gone meanwhile (a send, a newer paste, another chat).
+                            if (draft.longPaste != held || draft.selection != latestSelection) {
+                                file?.delete()
+                                return@launch
+                            }
+                            if (file == null) {
+                                // The write failed: the text goes into the field, as a paste without the offer would.
+                                if (draft.insertLongPaste()) voiceInput.userEdited(draft.text)
+                            } else {
+                                draft.clearLongPaste()
+                                attach(listOf(Picked(pastedTextUri(context, file).toString(), photo = false))) {
+                                    file.delete()
+                                }
+                            }
+                        }
+                    },
+                    // Offered only when the field takes the text: a text over the draft limit is attached or nothing.
+                    onPaste =
+                        if (draft.canInsert(held)) {
+                            { if (draft.insertLongPaste()) voiceInput.userEdited(draft.text) }
+                        } else {
+                            null
+                        },
+                )
+            }
             Row(
                 // Writing with the S Pen anywhere on the row, beside the field too, writes into it.
                 Modifier.handwritingDetector { focusRequester?.let { runCatching { it.requestFocus() } } },
@@ -665,7 +809,7 @@ internal fun ChatComposer(
                                     onClick = {
                                         addMenu = false
                                         val pasted = clipboardIntake(context)
-                                        if (pasted != null) onPasteAttachments(pasted.attachments)
+                                        if (pasted != null) onPasteAttachments(pasted.attachments) {}
                                         else Toast.makeText(context, clipboardEmpty, Toast.LENGTH_SHORT).show()
                                     },
                                     modifier = Modifier.testTag("pasteAttachment"),
@@ -674,11 +818,9 @@ internal fun ChatComposer(
                     }
                 val promptLabel = stringResource(R.string.remote_prompt)
                 TextField(
-                    value = shown,
-                    onValueChange = {
-                        val typed = it.text != draft.text
-                        if (draft.edit(it) && typed) voiceInput.userEdited(it.text)
-                    },
+                    state = draft.textState,
+                    // What the user types or pastes passes the draft first: see ComposerDraft.inputTransformation.
+                    inputTransformation = draft.inputTransformation,
                     // The visible hint stays a placeholder: a floating label would grow the field and
                     // shift the chat when the first character arrives. The name for TalkBack is the
                     // field's description below, and only while the field is empty; the suggestion is
@@ -703,36 +845,18 @@ internal fun ChatComposer(
                     modifier =
                         Modifier.weight(1f)
                             .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
+                            // Images and files from the keyboard and a paste go to the attachments, not the field.
+                            .then(if (onPasteAttachments != null) Modifier.contentReceiver(receiveContent) else Modifier)
                             // The name only while the field is empty: a content description on an
                             // editable node can replace the typed text for TalkBack, so it stops once
                             // there is text to read.
                             .then(
-                                if (shown.text.isEmpty()) Modifier.semantics { contentDescription = promptLabel }
+                                if (draft.textState.text.isEmpty()) Modifier.semantics { contentDescription = promptLabel }
                                 else Modifier
                             )
                             .handwritingHandler()
                             .onFocusChanged { keyTarget?.composerFocused = it.isFocused }
                             .onPreviewKeyEvent { event ->
-                                // A paste of images or files attaches them; any other paste,
-                                // text above all, stays the field's.
-                                if (
-                                    onPasteAttachments != null &&
-                                        isPasteKey(
-                                            event.key,
-                                            event.type == KeyEventType.KeyDown,
-                                            ctrl = event.isCtrlPressed || event.isMetaPressed,
-                                            alt = event.isAltPressed,
-                                            shift = event.isShiftPressed,
-                                        )
-                                ) {
-                                    val pasted = clipboardIntake(context)
-                                    if (pasted != null) {
-                                        onPasteAttachments(pasted.attachments)
-                                        if (pasted.text.isNotEmpty() && draft.insert(pasted.text))
-                                            voiceInput.userEdited(draft.text)
-                                        return@onPreviewKeyEvent true
-                                    }
-                                }
                                 if (
                                     hardwareKeyboard && otherBusyActionOffered &&
                                         event.type == KeyEventType.KeyDown &&
@@ -760,7 +884,7 @@ internal fun ChatComposer(
                                         highlightTyped =
                                             commandName(draft.text)?.equals(names.getOrNull(highlight), ignoreCase = true) == true,
                                         predictionShown = prediction != null,
-                                        draftEmpty = draft.text.isEmpty(),
+                                        draftEmpty = draft.textState.text.isEmpty(),
                                         recalling = recalling,
                                     )
                                 when (completion) {
@@ -798,17 +922,13 @@ internal fun ChatComposer(
                                         true
                                     }
                                     ComposerEnter.NEWLINE -> {
-                                        val text = shown.text
-                                        val start = shown.selection.min
-                                        val next = text.substring(0, start) + "\n" + text.substring(shown.selection.max)
-                                        if (draft.edit(TextFieldValue(next, TextRange(start + 1))))
-                                            voiceInput.userEdited(next)
+                                        if (draft.insert("\n")) voiceInput.userEdited(draft.text)
                                         true
                                     }
                                 }
                             }
                             .testTag("composerField"),
-                    maxLines = 6,
+                    lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
                     keyboardOptions =
                         KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     shape = RoundedCornerShape(24.dp),
