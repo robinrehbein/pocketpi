@@ -211,6 +211,9 @@ internal fun FolderBrowserContent(
             Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            connectionStatusLine(connected, connection, hostChosen = true)?.let { line ->
+                ConnectionStatusChip(line)
+            }
             folders.notice?.let { notice ->
                 FolderNotice(stringResource(notice), onDismissNotice)
             }
@@ -224,8 +227,8 @@ internal fun FolderBrowserContent(
                 )
             }
             when {
-                !connected ->
-                    FolderMessage(stringResource(connection), Modifier.testTag("folderOffline"))
+                // The connection chip above says why there is no listing.
+                !connected -> Unit
                 !available ->
                     FolderMessage(
                         stringResource(R.string.remote_folders_unavailable),

@@ -10,6 +10,8 @@ data class FileTilePreview(
     val binary: Boolean = false,
     val tooLarge: Boolean = false,
     val failure: FilesFailure? = null,
+    /** [content] is the whole file, not just its first [FILE_TILE_PREVIEW_CHARS] characters. */
+    val complete: Boolean = false,
 )
 
 data class FilesPeek(

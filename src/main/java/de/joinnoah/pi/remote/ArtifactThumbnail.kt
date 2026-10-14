@@ -47,7 +47,8 @@ internal const val THUMBNAIL_TIMEOUT_MS = 5_000L
 internal object ArtifactThumbnails {
     data class Key(val kind: ArtifactKind, val sha256: String, val widthPx: Int, val dark: Boolean)
 
-    private const val CAPACITY_BYTES = 8 * 1024 * 1024
+    /** The most the cache holds, on a device with a large heap; [BitmapCaches] sizes it for others. */
+    const val MAX_BYTES = 8 * 1024 * 1024
     private const val MAX_LIVE_VIEWS = 2
 
     /** At most [MAX_LIVE_VIEWS] thumbnail WebViews exist at once; other cards wait with a skeleton. */
@@ -56,10 +57,20 @@ internal object ArtifactThumbnails {
     // Made on first use: the repository clears this on disconnect, also where no Android runtime exists.
     private var cache: LruCache<Key, Bitmap>? = null
 
+    @get:Synchronized
+    var capacityBytes = MAX_BYTES
+        private set
+
+    @Synchronized
+    fun resize(bytes: Int) {
+        capacityBytes = bytes
+        cache?.resize(bytes)
+    }
+
     @Synchronized
     private fun cache() =
         cache
-            ?: object : LruCache<Key, Bitmap>(CAPACITY_BYTES) {
+            ?: object : LruCache<Key, Bitmap>(capacityBytes) {
                     override fun sizeOf(key: Key, value: Bitmap) = value.byteCount
                 }
                 .also { cache = it }
@@ -209,7 +220,7 @@ internal fun ArtifactThumbnail(
                 live?.let { capture ->
                     AndroidView(
                         factory = { context ->
-                            createArtifactWebView(context, capture.page, capture.callbacks, background).also {
+                            createArtifactWebView(context, capture.page, capture.callbacks, background, thumbnail = true).also {
                                 capture.view = it
                                 it.isFocusable = false
                                 it.isFocusableInTouchMode = false

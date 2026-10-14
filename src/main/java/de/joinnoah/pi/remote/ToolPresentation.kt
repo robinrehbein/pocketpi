@@ -6,6 +6,11 @@ import java.math.RoundingMode
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Locale
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.*
 
 // ---- Edit diffs ---------------------------------------------------------------------------
@@ -195,7 +200,10 @@ private val toolDiffCache =
             size > 64
     }
 
-/** The diff of an edit call: pi's own patch when the host forwarded it, else the arguments. */
+/**
+ * The diff of an edit call: pi's own patch when the host forwarded it, else the arguments. The
+ * cache serves the edit cards on screen; the chat's line counts use a [TouchedLineCache].
+ */
 internal fun toolDiff(item: ConversationItem.Activity): ToolDiff? {
     if (item.name != "edit") return null
     val key = item.arguments to item.details
@@ -237,24 +245,38 @@ internal data class TouchedFiles(val changed: List<TouchedFile>, val read: List<
 
 private class FileUse(var count: Int = 0, var latestIndex: Int = -1, var latestItemId: String = "")
 
-internal fun touchedFiles(items: List<ConversationItem>): TouchedFiles {
+/** The file one tool item reads or changes, as [touchedFiles] counts it. */
+internal class FileTouch(val path: String, val changed: Boolean, val itemId: String)
+
+internal fun fileTouch(item: ConversationItem): FileTouch? {
+    if (item !is ConversationItem.Activity) return null
+    val changed =
+        when (item.name) {
+            "read" -> false
+            // A failed edit or write changed nothing.
+            "edit",
+            "write" -> if (item.state == "error") return null else true
+            else -> return null
+        }
+    val path = toolPath(item) ?: return null
+    return FileTouch(path, changed, item.id)
+}
+
+internal fun touchedFiles(items: List<ConversationItem>): TouchedFiles =
+    groupTouchedFiles { visit -> items.forEachIndexed { index, item -> fileTouch(item)?.let { visit(index, it) } } }
+
+/**
+ * Groups the touches that [each] visits, in item order with each one's index in the item list:
+ * changed files, then files only read, the most recently used first.
+ */
+internal fun groupTouchedFiles(each: (visit: (index: Int, touch: FileTouch) -> Unit) -> Unit): TouchedFiles {
     val changed = LinkedHashMap<String, FileUse>()
     val read = LinkedHashMap<String, FileUse>()
-    for ((index, item) in items.withIndex()) {
-        if (item !is ConversationItem.Activity) continue
-        val target =
-            when (item.name) {
-                "read" -> read
-                // A failed edit or write changed nothing.
-                "edit",
-                "write" -> if (item.state == "error") continue else changed
-                else -> continue
-            }
-        val path = toolPath(item) ?: continue
-        val use = target.getOrPut(path) { FileUse() }
+    each { index, touch ->
+        val use = (if (touch.changed) changed else read).getOrPut(touch.path) { FileUse() }
         use.count++
         use.latestIndex = index
-        use.latestItemId = item.id
+        use.latestItemId = touch.itemId
     }
     fun sorted(uses: Map<String, FileUse>) =
         uses.entries
@@ -270,18 +292,91 @@ internal data class TouchedLineCounts(val added: Int, val removed: Int)
  * Sums the diffs of the edits that did not fail; null when no edit has a diff. A `write` call
  * carries no old text, so it counts as a touched file but not as lines.
  */
-internal fun touchedLineCounts(items: List<ConversationItem>): TouchedLineCounts? {
+internal fun touchedLineCounts(items: List<ConversationItem>): TouchedLineCounts? =
+    sumTouchedLines(items, { computeToolDiff(it.arguments, it.details, it.argumentsTruncated)?.lineCount() }) {}
+
+private fun ToolDiff.lineCount() = TouchedLineCounts(added, removed)
+
+private inline fun sumTouchedLines(
+    items: List<ConversationItem>,
+    count: (ConversationItem.Activity) -> TouchedLineCounts?,
+    checkpoint: () -> Unit,
+): TouchedLineCounts? {
     var added = 0
     var removed = 0
     var any = false
     for (item in items) {
-        if (item !is ConversationItem.Activity || item.state == "error") continue
-        val diff = toolDiff(item) ?: continue
-        added += diff.added
-        removed += diff.removed
+        checkpoint()
+        if (item !is ConversationItem.Activity || item.state == "error" || item.name != "edit") continue
+        val lines = count(item) ?: continue
+        added += lines.added
+        removed += lines.removed
         any = true
     }
     return if (any) TouchedLineCounts(added, removed) else null
+}
+
+/**
+ * [touchedLineCounts] for one chat, which keeps each edit's line count by item ID. A streamed delta
+ * then diffs only the edits it added or changed, however many the chat holds; the counts of edits
+ * no longer in the chat are dropped on the next pass.
+ */
+internal class TouchedLineCache {
+    private class Entry(
+        val arguments: String?,
+        val details: ToolDetails?,
+        val argumentsTruncated: Boolean,
+        val lines: TouchedLineCounts?,
+    ) {
+        fun matches(item: ConversationItem.Activity) =
+            arguments == item.arguments && details == item.details && argumentsTruncated == item.argumentsTruncated
+    }
+
+    private val mutex = Mutex()
+    private var entries = HashMap<String, Entry>()
+
+    /** Diffs computed since this cache was made; a cache hit computes none. */
+    @Volatile
+    var computed = 0
+        private set
+
+    /** Checks for cancellation before each item and yields after each diff it computes. */
+    suspend fun counts(items: List<ConversationItem>): TouchedLineCounts? = mutex.withLock {
+        val previous = entries
+        val next = HashMap<String, Entry>()
+        val context = currentCoroutineContext()
+        var fresh = false
+        var done = false
+        try {
+            sumTouchedLines(
+                items,
+                { item ->
+                    val entry =
+                        previous[item.id]?.takeIf { it.matches(item) }
+                            ?: Entry(
+                                item.arguments,
+                                item.details,
+                                item.argumentsTruncated,
+                                computeToolDiff(item.arguments, item.details, item.argumentsTruncated)?.lineCount(),
+                            ).also {
+                                computed++
+                                fresh = true
+                            }
+                    next[item.id] = entry
+                    entry.lines
+                },
+            ) {
+                context.ensureActive()
+                if (fresh) {
+                    fresh = false
+                    yield()
+                }
+            }.also { done = true }
+        } finally {
+            // A cancelled pass keeps what it diffed; only a complete one forgets edits that left.
+            entries = if (done) next else previous.apply { putAll(next) }
+        }
+    }
 }
 
 /** Git-style "+12" and "−4" (a real minus sign) for the touched-files summary. */
@@ -441,8 +536,13 @@ internal sealed interface ChildResolution {
 }
 
 /** Session rows that parse; a malformed row is dropped instead of failing the whole list. */
-internal fun sessionListItems(sessions: List<JsonObject>, connected: Boolean, loading: Boolean): List<SessionListItem> =
-    sessions.mapNotNull { runCatching { sessionListItem(it, connected, loading) }.getOrNull() }
+internal fun sessionListItems(
+    sessions: List<JsonObject>,
+    connected: Boolean,
+    loading: Boolean,
+    stale: Boolean = false,
+): List<SessionListItem> =
+    sessions.mapNotNull { runCatching { sessionListItem(it, connected, loading, stale) }.getOrNull() }
 
 internal fun SessionListItem.live(): Boolean =
     availability == SessionAvailability.RUNNING || availability == SessionAvailability.WAITING

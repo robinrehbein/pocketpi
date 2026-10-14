@@ -21,7 +21,11 @@ class RemoteNotificationsChannelOnAndroid13Test {
         RemoteNotifications.createChannel(context)
         val manager = context.getSystemService(NotificationManager::class.java)
         assertEquals(
-            setOf(RemoteNotifications.QUESTIONS_CHANNEL, RemoteNotifications.UPDATES_CHANNEL),
+            setOf(
+                RemoteNotifications.QUESTIONS_CHANNEL,
+                RemoteNotifications.UPDATES_CHANNEL,
+                RemoteNotifications.LIVE_RUN_CHANNEL,
+            ),
             manager.notificationChannels.map { it.id }.toSet(),
         )
         assertNull(manager.getNotificationChannel(RemoteNotifications.SYNC_CHANNEL))
@@ -42,6 +46,16 @@ class RemoteNotificationsChannelOnAndroid13Test {
     }
 
     @Test
+    fun theLiveRunChannelNeverAlerts() {
+        RemoteNotifications.createChannel(context)
+        val channel =
+            context.getSystemService(NotificationManager::class.java)
+                .getNotificationChannel(RemoteNotifications.LIVE_RUN_CHANNEL)
+        assertEquals(NotificationManager.IMPORTANCE_LOW, channel?.importance)
+        assertEquals(false, channel?.canShowBadge())
+    }
+
+    @Test
     fun createChannelRemovesTheLegacySingleChannel() {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
@@ -55,7 +69,7 @@ class RemoteNotificationsChannelOnAndroid13Test {
         assertNull(manager.getNotificationChannel(RemoteNotifications.LEGACY_CHANNEL))
         // Running it again on the next start changes nothing.
         RemoteNotifications.createChannel(context)
-        assertEquals(2, manager.notificationChannels.size)
+        assertEquals(3, manager.notificationChannels.size)
     }
 
     @Test

@@ -18,6 +18,8 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun MarkdownText(text: String) {
     val linkColor = MaterialTheme.colorScheme.primary
+    // In a chat, a `path:line` opens the file in Files.
+    val files = LocalFileOpener.current
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         remember(text) { markdownSegments(text) }.forEach { segment ->
             val part = segment.text
@@ -59,9 +61,9 @@ fun MarkdownText(text: String) {
                         else line.replace(markdownBulletRegex, "• ")
                     if (line.trim() == "---") HorizontalDivider()
                     else if (content.isNotEmpty())
-                        Text(
-                            remember(content, linkColor) {
-                                inlineMarkdown(content, linkColor)
+                        LinkMenuText(
+                            remember(content, linkColor, files) {
+                                inlineMarkdown(content, linkColor, files)
                             },
                             style =
                                 when (level) {

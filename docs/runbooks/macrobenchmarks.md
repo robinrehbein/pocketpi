@@ -3,12 +3,16 @@
 ## Scope
 
 The `benchmarks` Android test module runs AndroidX Macrobenchmark against a separate,
-non-debuggable, shell-profileable APK: `de.robinrehbein.pocketpi.benchmark`.
+non-debuggable, shell-profileable APK: `de.robinrehbein.pocketpi.benchmark`. The app's
+`benchmarkProfile` build type builds the same APK without R8, only for the
+[baseline profile](#baseline-profile) generator.
 
-This APK uses the app's current release configuration (including its current **disabled** R8),
-but is debug-key signed. It needs no Play upload key or Firebase secrets. All four Firebase
-BuildConfig fields are empty. Its application ID gives it separate pairings, drafts, files,
-notifications and preferences. It must never be uploaded to Play.
+This APK uses the app's release configuration, R8 included: it is shrunk, optimized and has its
+unused resources removed like release, but keeps its original class and method names
+(`benchmark-rules.pro` adds `-dontobfuscate`), so traces stay readable. It is debug-key signed.
+It needs no Play upload key or Firebase secrets. All four Firebase BuildConfig fields are empty.
+Its application ID gives it separate pairings, drafts, files, notifications and preferences. It
+must never be uploaded to Play.
 
 `PerformanceFixtureActivity`, `FullChatFixtureActivity` and `ConnectedFlowActivity` exist only in
 `src/benchmark`: no fixture activity or profileable manifest addition is included in normal
@@ -36,11 +40,22 @@ APKs contain no fake relay or fixture; CI checks the debug APK's dex files for t
 | `coldStartToProjects` | Cold process on the fake relay, paired with the fixture Mac: launch, tap the Mac, wait for the projects | TTID (TTFD once the app reports it), `PocketPi.activate` sum |
 | `openUncachedChat` | Fresh process on the session list; tap a 48-turn chat never opened in this process, wait for its tail | `PocketPi.activate` (first), `PocketPi.publishTimeline` and `PocketPi.conversationItems` sums, frame timing |
 | `openCachedChat` | Same, after opening and leaving that chat once in the process, so the repository's chat cache holds it | Same as `openUncachedChat` |
+| `resumeAfterBackground` | Settled on a 48-turn chat; Home, 20 s away, the task brought back to the front; wait until the chat was read again | `ConnectedFlow.resumeToFresh`, the three `PocketPi.*` sums, frame timing |
+| `reconnectAfterDrop` | Settled on the same chat; the fake relay fails the socket; wait until the chat was read again | `ConnectedFlow.dropToConnected`, `ConnectedFlow.dropToFresh`, the three `PocketPi.*` sums |
+| `streamingThroughRepository` | Settled on the same chat; 120 scripted upserts at 20 per second with an edit tool call midway, while following the tail | Frame CPU duration and overrun percentiles, the three `PocketPi.*` sums and counts |
 
 All tests use `CompilationMode.None()` so compilation policy is explicit and repeatable. This is
 not representative of an app already optimized by Play/baseline profiles; keep the same policy for
-before/after comparisons. `coldStartup` is first-screen display, **not** connected-data readiness;
-`coldStartToProjects` waits for the projects of a paired Mac.
+before/after comparisons. To see what the [baseline profile](#baseline-profile) buys, run a
+scenario once with `CompilationMode.None()` and once with `CompilationMode.Partial()` (the
+profile installed by profileinstaller) on the same build.
+
+Since R8 was turned on for release (and so for this APK), numbers from earlier commits measure an
+unshrunk app and are not comparable with later ones; take a new baseline on the first commit with
+R8.
+
+`coldStartup` is first-screen display, **not** connected-data readiness; `coldStartToProjects`
+waits for the projects of a paired Mac.
 
 The synthetic tests use the production `MarkdownText` renderer (including tables) in a simple lazy
 list. They deliberately exclude transport, repository/timeline projection, full chat navigation,
@@ -105,13 +120,16 @@ authentication). The profiles, with a fixed random seed per process:
 | `lte` (default) | 150 ms ± 50 ms | none |
 | `bad` | 400 ms ± 100 ms | 2 % of replies held another 5 s |
 
-The fake relay can also stream the fixture's scripted answer (120 `message.upsert` events, 50 ms
-apart, with `session.status` running/idle and consecutive revisions) and fail the socket with
+The fake relay can also stream the fixture's scripted answer and fail the socket with
 `failed(true)`, so the repository reconnects. `ConnectedFlowActivity` takes them as the `command`
-extra (`stream`, `drop`) for later flow benchmarks; the three tests here do not use them. Streamed
-events skip the latency profile and arrive at once, while replies wait a round trip, so a
-`session.snapshot` answered at revision R can arrive after events R+1 and later. A real relay keeps
-host frames in order; start a stream only once the chat's snapshot is in.
+extra (`stream`, `drop`); the flow scenarios below send them. The stream (the `stream` block of the
+fixture) is 120 chunks, 50 ms apart: `session.status` running, 60 upserts growing a first Markdown
+answer (headings, lists, links, a fenced Kotlin block and a table, cycled), that answer completed,
+an edit tool call and its result, 60 upserts into a second answer, a separate completion marker and
+`session.status` idle, all with consecutive revisions. Streamed events skip the latency profile and
+arrive at once, while replies wait a round trip, so a `session.snapshot` answered at revision R can
+arrive after events R+1 and later. A real relay keeps host frames in order; start a stream only
+once the chat's snapshot is in.
 
 Before its first iteration each test clears the app and starts `ConnectedFlowActivity` with the
 `prepare` extra. That pass pairs with the fixture Mac through `repository.pair()` (the real pairing
@@ -139,13 +157,64 @@ changes.
 - An uncached open leaves that chat in the navigation snapshot, and the next cold start would
   restore it into the chat cache. `openUncachedChat` therefore runs the prepare pass again before
   every iteration after the first, which stores the cached chat as the last one.
-  Both still wait for `sessions.open` and `session.snapshot`; the cached one shows the cached
-  messages while they are in flight. `PocketPi.activate` ends when the snapshot is published, so
+  Both still wait for `sessions.open` and `session.snapshot` (sent right behind it for a live
+  chat); the cached one shows the cached messages from the first frame while they are in flight. `PocketPi.activate` ends when the snapshot is published, so
   the difference between the two shows mostly in frame timing and in when the tail appears, not in
   the activate duration.
 
 The trace sections come from `Diagnostics.kt` (connection diagnostics, PR #78). `PocketPi.activate`
 is an async section and needs API 29 or newer, as the benchmark module does.
+
+### Resume, reconnect and streaming
+
+The flow scenarios start each iteration in a fresh process, open the uncached chat (48 turns, no
+draft, so no keyboard) from the session list and wait until it is settled. Only then does the
+measured block start. Each iteration ends on that chat, so every iteration after the first runs
+the prepare pass again first; the stored navigation snapshot then names the cached chat, the open
+stays uncached and every iteration starts from the same state.
+
+- `resumeAfterBackground` presses Home, waits `pocketpi.resumeAwaySeconds` (20 by default) and
+  brings the app's task back with `am start`, as the launcher icon does. The process and the
+  activity stay alive, so this is a warm process with a hot activity; ProcessLifecycleOwner reports
+  the stop and the return to `RemoteApplication`, which hands them to the repository exactly as on
+  a phone. The time away picks the repository's resume tier: below 15 s with a live socket it does
+  nothing (and the scenario would time out), up to 60 s it probes the socket with a snapshot and
+  reads the lists again in place, beyond 60 s with a quiet socket it reconnects quietly. 20 s
+  measures the probe; pass 65 for the reconnect. ProcessLifecycleOwner reports the stop about
+  0.7 s late, so the scenario refuses values below 16 and from 59 to 62, which would land on or
+  near a tier boundary.
+- `reconnectAfterDrop` sends `drop`: the fake relay closes the socket with code 1006 and fails it,
+  as a dead socket does. The repository keeps the chat on screen as stale, waits its first backoff
+  (about one second with jitter) and reconnects.
+- `streamingThroughRepository` sends `stream` and waits for the completion marker, which shows only
+  while the list follows the tail. The prepare pass before each iteration also keeps an earlier
+  iteration's stream out of the stored navigation snapshot.
+
+Commands reach `ConnectedFlowActivity` through `am start --activity-single-top`, which pauses and
+resumes the activity once at the start of the measured block. `PocketPi.publishTimelineCount` and
+the other `Count` entries say how many times each section ran.
+
+**Fresh.** `FlowFreshness` (in `src/benchmark`) decides when the app has the open screen again.
+A mark starts a wait: every return of the process to the foreground after a stop, and every `drop`.
+The screen is fresh once the fake relay delivered, after the mark, a reply to each read that shows
+it (`projects.list`, `sessions.list` of the open project, the newest `session.snapshot` page of the
+open chat) and the repository is connected, not loading and no longer stale. Both resume tiers and
+the reconnect read all three again. The wait ends at the reply that completed the set; the
+repository applies it in the same main-thread turn or the next one. `ConnectedFlowActivity` shows
+the newest mark as `connected-flow-mark-<n>-<fresh|pending>`, and the benchmarks wait for mark n+1
+to turn fresh, so a stale node from the previous mark never ends a measurement.
+
+The harness's own async trace sections:
+
+| Section | From | To |
+| --- | --- | --- |
+| `ConnectedFlow.resumeToFresh` | ProcessLifecycleOwner's `ON_START` after a stop, right after the repository picked its tier | Fresh |
+| `ConnectedFlow.dropToConnected` | Just before the socket fails | The next connection is ready and the state says connected |
+| `ConnectedFlow.dropToFresh` | Just before the socket fails | Fresh |
+
+They include the fake relay's latency: one round trip per read, four for the handshake. A mark
+that never turns fresh (the tier did nothing, or no reconnect happened) fails the iteration after
+90 s instead of measuring nothing.
 
 Pass the latency profile as an instrumentation argument:
 
@@ -159,7 +228,120 @@ What the fake relay does not model: TLS and encryption cost, the relay's and Mac
 processing time, frame chunking of large replies, the real host's page size, background and push
 paths, and anything behind a capability. Use the Diagnostics report on a real phone for those.
 
+## Baseline profile
+
+`src/main/baseline-prof.txt` lists the classes and methods ART compiles ahead of time at install,
+so cold start and the first chat run less interpreted and JIT code. AGP merges it with every file
+in `src/main/baselineProfiles/`. Play compiles the result from the bundle;
+`androidx.profileinstaller` (an app-only dependency: no phone source may reference it, since the
+wear module compiles the same sources) installs it for sideloaded and benchmark APKs. R8 reads the
+profile in source names and rewrites it to the release build's optimized, obfuscated names.
+
+### Generating it
+
+`BaselineProfileGenerator` writes `baseline-prof.txt`. Before collecting, it clears the app and
+runs the connected-flow prepare pass, so the app is paired with the fixture Mac. Each iteration
+then cold starts `MainActivity` from its launcher intent, waits for the fixture projects (tapping
+the Mac when the Macs show first), opens the project's session list and the 48-turn uncached chat,
+and swipes four times toward history and four times back. Everything runs on the fake relay, so
+the connected screens and the repository are profiled, not just the first frame. Rules for
+classes that exist only in `src/benchmark` are filtered out.
+
+The generator runs against the app's `benchmarkProfile` build type, never against `benchmark`:
+`benchmarkProfile` is the benchmark app (same application ID, fixture activities, fake relay and
+manifest) **without R8**. A profile recorded on the shrunk APK would name classes as R8 left them:
+merged, inlined or moved into a library's synthetic class. R8 would then apply those rules to the
+wrong code in release and leave the inlined code without any. The benchmarks module has the same
+build type, so its tests run against either build; only the generator belongs on
+`benchmarkProfile`, and timing stays on the shrunk `benchmark` build.
+
+The fake relay replaces `SecureRemoteTransport`, so the generated profile never covers the real
+transport, encryption and WebSocket that every release start goes through.
+`src/main/baselineProfiles/real-transport.txt` holds hand-written rules for them; keep it when the
+generated file is replaced, and extend it when the real transport path gains classes.
+
+BaselineProfileRule needs API 33 or newer (or a rooted device). An emulator is fine, since a
+profile records which code runs, not how fast. On the module's managed device (the same Pixel 2
+API 36 image the app's emulator tests use):
+
+```sh
+./gradlew :benchmarks:pixel2Api36BenchmarkProfileAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=de.robinrehbein.pocketpi.benchmarks.BaselineProfileGenerator \
+  -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.enabledRules=BaselineProfile
+cp "$(find benchmarks/build/outputs/managed_device_android_test_additional_output \
+  -name 'BaselineProfileGenerator_generate-baseline-prof.txt')" src/main/baseline-prof.txt
+```
+
+On a phone, run `:benchmarks:connectedBenchmarkProfileAndroidTest` with the same arguments and copy
+the same file from `benchmarks/build/outputs/connected_android_test_additional_output/`.
+
+Without a local emulator, the **Baseline profile** workflow (`.github/workflows/baseline-profile.yml`)
+does the same on GitHub's runners: it starts by hand (`workflow_dispatch`) and on pull requests
+that touch the profile, the benchmarks or the keep rules. It measures `BaselineProfileBenchmarks`
+with the committed profile, generates a new one on `benchmarkProfile`, measures again with that
+one, and publishes the generated file (artifact `baseline-profile`, and gzip/base64 in the log
+between `BEGIN` and `END` lines), the results and both APK sizes in the job summary. It never
+commits; copy the file into `src/main/baseline-prof.txt` yourself. Regenerate the profile after a
+change to the start path, the projects, the session list or the chat screen, and commit it with
+that change.
+
+### Measuring it
+
+`BaselineProfileBenchmarks` measures the generator's path (paired cold start to the projects, the
+session list and the 48-turn chat, ten iterations) twice on the shrunk benchmark build:
+`startupWithoutCompilation` with `CompilationMode.None()` and `startupWithBaselineProfile` with
+`CompilationMode.Partial(BaselineProfileMode.Require)`, which compiles only what the profile lists,
+as Play does at install. Compare `timeToInitialDisplayMs` and `PocketPi.activateSumMs` between the
+two on the same device. The workflow's emulator numbers show whether the profile is applied and
+roughly what it buys; claims about phones need a phone run:
+
+```sh
+ANDROID_SERIAL=<serial> ./gradlew :benchmarks:connectedBenchmarkAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=de.robinrehbein.pocketpi.benchmarks.BaselineProfileBenchmarks
+```
+
+### The full suite
+
+`connectedBenchmarkAndroidTest` without a class filter runs every test in the module, the
+generator included, and the generator fails below API 33. On an API 29 to 32 phone pass
+`-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.enabledRules=Macrobenchmark`,
+which skips it. A full run also runs `MinifiedSmokeTest` and `BaselineProfileBenchmarks`, which
+clear the benchmark app's data like the other tests' prepare passes do.
+
+### Smoke checks of the shrunk APK
+
+A keep rule R8 needs but does not have shows only at runtime. `MinifiedSmokeTest` drives the
+shrunk benchmark APK from outside like a user. Each test first clears the benchmark app's data and
+runs the prepare pass, then:
+
+- `pairedAppOpensChat`: a launcher start, the projects, a session list and a chat (the wire's JSON
+  through kotlinx-serialization).
+- `backStackSurvivesProcessDeath`: the same chat, then Home and `am kill`; the launcher brings the
+  task back and the restored back stack (saved by class name through kotlinx-serialization) shows
+  the chat again.
+- `sharedTextOpensPickedSession`: text shared to `ShareActivity`; the session picked there opens
+  through `LaunchIntents` and the `InternalLaunch` alias.
+- `runningSessionStaysLiveInBackground`: a chat in `ConnectedFlowActivity` (which hands its pause
+  to `LiveRun` as `MainActivity` does), the fake relay's slowed `stream` marks it running, Home;
+  `LiveRunService` must then run as a foreground service.
+
+CI runs it on every pull request (job **Minified smoke tests**). Locally:
+
+```sh
+./gradlew :benchmarks:pixel2Api36BenchmarkAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=de.robinrehbein.pocketpi.benchmarks.MinifiedSmokeTest
+```
+
+What the fake relay cannot reach stays a device check with the minified release from the internal
+track: push delivery and `RemoteMessagingService`, notification actions
+(`NotificationActionReceiver`), WorkManager's upgrade workers, opening an artifact (the fixture has
+none, and the `ArtifactSandbox` WebView needs the host's files), the widget and the watch handoff.
+
 ## Comparing before and after
+
+Numbers are comparable only within one device, or one emulator image (system image, API level,
+ABI, RAM and host machine), one profile and one `CompilationMode`. Never compare an emulator run
+with a phone run, or runs on two emulator images.
 
 1. Pick one device, one profile and the same `CompilationMode` for both runs.
 2. Check out the baseline commit, run the scenarios, and archive the output directory (see
@@ -172,7 +354,34 @@ paths, and anything behind a capability. Use the Diagnostics report on a real ph
 5. When the change is about latency rather than CPU, compare under `lte` and `bad` as well: the
    fake relay's delays are part of every activation.
 
-A baseline needs the trace sections, so it must be a commit that contains `Diagnostics.kt`.
+For the flow scenarios:
+
+1. Run all three on the baseline and the candidate with the same arguments:
+
+   ```sh
+   ANDROID_SERIAL=<serial> ./gradlew :benchmarks:connectedBenchmarkAndroidTest \
+     -Pandroid.testInstrumentationRunnerArguments.class=de.robinrehbein.pocketpi.benchmarks.ConnectedFlowBenchmarks#resumeAfterBackground,de.robinrehbein.pocketpi.benchmarks.ConnectedFlowBenchmarks#reconnectAfterDrop,de.robinrehbein.pocketpi.benchmarks.ConnectedFlowBenchmarks#streamingThroughRepository \
+     -Pandroid.testInstrumentationRunnerArguments.pocketpi.relayProfile=lte
+   ```
+
+2. Resume: compare `ConnectedFlow.resumeToFreshFirstMs` once with the default 20 s away (probe)
+   and once with `-Pandroid.testInstrumentationRunnerArguments.pocketpi.resumeAwaySeconds=65`
+   (reconnect). `PocketPi.activateSumMs` is 0 for a probe and covers the restore activation for a
+   reconnect, which tells which tier ran.
+3. Reconnect: compare `ConnectedFlow.dropToConnectedFirstMs` (backoff and handshake) and
+   `ConnectedFlow.dropToFreshFirstMs`; their difference is the time from ready to the chat read
+   again, which is what a faster reconnect path should shrink.
+4. Streaming: compare the frame percentiles and `frameOverrunMs`, then `PocketPi.publishTimelineSumMs`
+   and `PocketPi.conversationItemsSumMs` with their counts: a lower sum at the same count means
+   cheaper publishes, a lower count means fewer of them.
+5. When the candidate is a rewrite of the resume or reconnect path, also run the commit just before
+   it, so the table in the pull request shows before and after on the same image.
+
+A baseline needs the trace sections, so it must be a commit that contains `Diagnostics.kt`. A
+baseline for the flow scenarios also needs this harness (`FlowFreshness.kt`): to measure an older
+commit, check it out and copy `src/benchmark` and `benchmarks/` from the candidate over it. The
+harness compiles against the app's repository, so that works only back to commits whose
+`RemoteState` already has `stale`.
 
 ## Build and correctness checks
 
@@ -186,7 +395,8 @@ python3 scripts/check-benchmark-isolation.py \
   build/intermediates/merged_manifests/benchmark/processBenchmarkManifest/AndroidManifest.xml
 ```
 
-Normal PR CI compiles both benchmark APKs and checks isolation, but does not gate performance on
+Normal PR CI compiles both benchmark APKs and checks isolation, runs release's obfuscating R8
+pass and `MinifiedSmokeTest` on the emulator, but does not gate performance on
 shared-runner/emulator timings. Existing debug instrumentation tests still run in CI.
 
 ## Real-device measurement (Robin)
@@ -199,6 +409,10 @@ transport is the fake relay.
 ```sh
 ANDROID_SERIAL=<serial> ./gradlew :benchmarks:connectedBenchmarkAndroidTest
 ```
+
+The full suite includes the baseline profile generator, which needs API 33+; on an older phone add
+`-Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.enabledRules=Macrobenchmark`
+([The full suite](#the-full-suite)).
 
 To run a single workload:
 
@@ -238,7 +452,7 @@ In `*-benchmarkData.json`:
 - `metrics.timeToInitialDisplayMs` contains startup median and all ten iteration values;
   `timeToFullDisplayMs` appears once the app reports itself fully drawn.
 - `metrics.PocketPi.activateFirstMs` / `SumMs` and the other `<section><Mode>Ms` entries come from
-  the connected-flow trace sections.
+  the connected-flow trace sections; `ConnectedFlow.*FirstMs` come from the flow harness.
 - `PocketPi.fullChat.timelineEvent` trace sections cover real Timeline ingestion only; subsequent
   repository publication, conversation projection and Compose work are outside that section.
 - `sampledMetrics.frameDurationCpuMs` and `frameOverrunMs` contain P50/P90/P95/P99 and raw frame samples.
@@ -257,4 +471,5 @@ small baseline; collect more repeated runs before drawing conclusions about tail
 3. Use those traces to prioritize incremental streaming processing and frame-aligned auto-follow;
    retain the full-chat workloads and their follow/no-follow assertions as regression checks.
 4. Validate [per-session scroll restoration](chat-scroll-restoration.md) on physical devices.
-5. Add Baseline Profile generation and a matching compilation-mode comparison in a later PR.
+5. Run `BaselineProfileBenchmarks` on a physical device to confirm what the baseline profile
+   buys there.

@@ -86,10 +86,8 @@
     <string name="remote_local_command_export">Export the session as an HTML file</string>
     <string name="remote_export_running">Exporting the session…</string>
     <string name="remote_local_command_reload">Reload extensions, skills, prompts and context files</string>
-    <string name="remote_local_command_reload_terminal">Not possible in terminal sessions yet. Only for sessions started from the app.</string>
-    <string name="remote_reload_terminal_hint">Reload only works for sessions started from the app. In the terminal it is not possible yet.</string>
+    <string name="remote_reload_terminal_hint">Not possible in terminal sessions yet, only for sessions started from the app.</string>
     <string name="remote_reload_running">Reloading…</string>
-    <string name="remote_local_command_reload_running">Reloading…</string>
     <string name="remote_reload_done">Extensions, skills, prompts, themes and context files reloaded</string>
     <string name="remote_reload_busy">The session is busy. Try again when it is idle.</string>
     <string name="remote_reload_unsupported">This computer cannot reload this session from the phone.</string>
@@ -189,6 +187,10 @@
     <string name="remote_answer_sending">Sending answer…</string>
     <string name="remote_recommended">Recommended</string>
     <string name="remote_local_required">Input needed on the Mac</string>
+    <string name="remote_question_answered_elsewhere">Answered elsewhere</string>
+    <string name="remote_question_session_offline">The session is offline</string>
+    <string name="remote_question_answer_on_mac">Answer this on the Mac</string>
+    <string name="remote_question_answer_uncertain">The answer may have been delivered; waiting for the session</string>
     <string name="remote_yes">Yes</string>
     <string name="remote_no">No</string>
     <string name="remote_other">Other answer</string>
@@ -375,11 +377,8 @@
     <string name="remote_session_search">Search sessions</string>
     <string name="remote_session_search_empty">No session matches your search.</string>
     <string name="remote_keyboard_title">Hardware keyboard</string>
-    <string name="remote_keyboard_help">In the two-pane layout on wide screens, while a keyboard such as a Book Cover Keyboard is attached. On a phone, Enter keeps adding a line.</string>
+    <string name="remote_keyboard_help">With any hardware keyboard attached, such as the Book Cover Keyboard or a Bluetooth keyboard on a phone, Enter sends and these shortcuts work at every window size. %1$s lists the keys for where you are.</string>
     <string name="remote_keyboard_enter_sends">Enter sends, Shift+Enter adds a line</string>
-    <string name="remote_keyboard_shortcut_send">Ctrl+Enter: send</string>
-    <string name="remote_keyboard_shortcut_search">Ctrl+K or Ctrl+F: search sessions</string>
-    <string name="remote_keyboard_shortcut_switch">Ctrl+Up/Down or Alt+Up/Down: previous or next session</string>
     <string name="wear_pair">Pair Mac</string>
     <string name="wear_pair_instructions">Start /remote on your Mac. Enter its full pairing code and approve this watch on the Mac.</string>
     <string name="wear_refresh">Refresh</string>
@@ -491,7 +490,6 @@
     <string name="wear_advisor_share">Draft context-sharing request</string>
     <string name="wear_notifications">Watch notifications</string>
     <string name="wear_push_unconfigured">Push is unavailable in this build because Firebase is not configured. Reopen the app to refresh your sessions.</string>
-    <string name="remote_keyboard_shortcut_project">Alt+Page Up/Page Down: previous or next project</string>
     <string name="providers_title">Providers</string>
     <string name="providers_open">Providers and sign-in</string>
     <string name="providers_host_fallback">the Mac</string>

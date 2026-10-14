@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.core.app.ApplicationProvider
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
@@ -210,5 +211,32 @@ class SessionSwipeTest {
         compose.onNodeWithText("noah").performTouchInput { longClick() }
         compose.waitForIdle()
         assertNull(ShadowToast.getTextOfLatestToast())
+    }
+
+    @Test
+    fun withSwipeActionsOffALongPressStillReachesRenameAndClose() {
+        val counts = IntArray(2)
+        compose.setContent {
+            MaterialTheme {
+                PointerMenuHost {
+                    SessionListRow(
+                        item = item,
+                        enabled = true,
+                        closeAvailable = true,
+                        onClick = {},
+                        onClose = { counts[0]++ },
+                        onRename = { counts[1]++ },
+                        swipe = SwipeAction.NONE to SwipeAction.NONE,
+                    )
+                }
+            }
+        }
+        compose.onNodeWithText(item.title).performTouchInput { longClick() }
+        compose.onNodeWithTag("menu_session_rename").assertExists()
+        compose.onNodeWithTag("menu_session_close").performClick()
+        assertEquals(listOf(1, 0), counts.toList())
+        compose.onNodeWithText(item.title).performTouchInput { longClick() }
+        compose.onNodeWithTag("menu_session_rename").performClick()
+        assertEquals(listOf(1, 1), counts.toList())
     }
 }

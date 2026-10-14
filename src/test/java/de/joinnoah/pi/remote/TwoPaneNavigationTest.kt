@@ -9,7 +9,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.geometry.Offset
@@ -19,12 +22,21 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.doubleClick
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.performSemanticsAction
+import org.junit.Assert.assertFalse
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasText
@@ -35,10 +47,16 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasScrollToKeyAction
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.performScrollToKey
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -54,6 +72,8 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -123,7 +143,8 @@ class TwoPaneNavigationTest {
         }
     }
 
-    private val notification = RemoteNotification("host", "s1", 1)
+    /** Consumed once opened, as MainActivity does, so a recreation restores the stack instead. */
+    private var notification by mutableStateOf<RemoteNotification?>(RemoteNotification("host", "s1", 1))
 
     @Composable
     private fun App(hardwareKeyboard: Boolean = false) {
@@ -140,7 +161,9 @@ class TwoPaneNavigationTest {
             }
         focusManager = androidx.compose.ui.platform.LocalFocusManager.current
         CompositionLocalProvider(LocalConfiguration provides configuration) {
-            MaterialTheme { RemoteNavigation(repository, settings, false, {}, notification) }
+            MaterialTheme {
+                RemoteNavigation(repository, settings, false, {}, notification, { if (notification == it) notification = null })
+            }
         }
     }
 
@@ -205,7 +228,137 @@ class TwoPaneNavigationTest {
         assertEquals(0, repository.prompts)
     }
 
+    /** The index-for-key lookup of the list page in view: the lazy list keyed with its page title. */
+    private fun pageIndexForKey(): (Any) -> Int =
+        compose.onAllNodes(hasScrollToKeyAction()).fetchSemanticsNodes()
+            .map { it.config[SemanticsProperties.IndexForKey] }
+            .single { it("page-title") >= 0 }
+
+    /** The chip is the list's first item and keyed, whether it says something or not. */
+    private fun assertConnectionChipLeads(text: String?) {
+        val indexForKey = pageIndexForKey()
+        assertEquals(0, indexForKey(CONNECTION_STATUS_KEY))
+        assertEquals(1, indexForKey("page-title"))
+        if (text == null) compose.onNodeWithTag("connectionStatusChip").assertDoesNotExist()
+        else compose.onNode(hasTestTag("connectionStatusChip") and hasText(text)).assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun everyListPageLeadsWithTheKeyedConnectionChipAndStaleRowsKeepTheirStatus() {
+        render()
+        back()
+        assertConnectionChipLeads(null)
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(connected = false, stale = true, connection = R.string.remote_reconnecting)
+        }
+        compose.waitForIdle()
+        val reconnecting = label(R.string.remote_reconnecting)
+        assertConnectionChipLeads(reconnecting)
+        // The rows keep the status the Mac last reported, and say it is the last-known one.
+        compose.onNodeWithText("Second session").assertIsDisplayed()
+        assertTrue(
+            compose.onAllNodesWithText(
+                compose.activity.getString(R.string.remote_status_last_known, label(R.string.remote_status_idle))
+            ).fetchSemanticsNodes().isNotEmpty()
+        )
+        assertTrue(compose.onAllNodesWithText(label(R.string.remote_status_idle), substring = true).fetchSemanticsNodes().isNotEmpty())
+        assertTrue(compose.onAllNodesWithText(label(R.string.remote_status_offline), substring = true).fetchSemanticsNodes().isEmpty())
+        compose.onAllNodesWithContentDescription(label(R.string.remote_settings)).onFirst().performClick()
+        compose.waitForIdle()
+        assertConnectionChipLeads(reconnecting)
+        back()
+        back()
+        compose.onNodeWithText("pocketpi").assertIsDisplayed()
+        assertConnectionChipLeads(reconnecting)
+        back()
+        assertConnectionChipLeads(reconnecting)
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(connected = false, stale = false, connection = R.string.remote_offline)
+        }
+        compose.waitForIdle()
+        // No Mac chosen and nothing under way: nothing to say, and the title keeps its index.
+        assertConnectionChipLeads(null)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun theConnectionChipStaysBelowTheHeaderWhileTheListScrolls() {
+        val many = (1..40).map { session("many-$it", "Session %02d".format(it)) }
+        repository.state.value =
+            repository.state.value.copy(
+                sessions = many,
+                connected = false,
+                stale = true,
+                connection = R.string.remote_waiting_for_network,
+            )
+        render()
+        back()
+        val chip = compose.onNode(hasTestTag("connectionStatusChip") and hasText(label(R.string.remote_waiting_for_network)))
+        val atTop = chip.assertIsDisplayed().getUnclippedBoundsInRoot()
+        val header = compose.onNodeWithTag("navigationPill").getUnclippedBoundsInRoot()
+        assertTrue("The chip at ${atTop.top} starts under the header ending at ${header.bottom}", atTop.top >= header.bottom)
+        compose.onNode(hasScrollToKeyAction()).performScrollToKey("many-40")
+        compose.waitForIdle()
+        compose.onNodeWithText("Session 40").assertIsDisplayed()
+        val scrolled = chip.assertIsDisplayed().getUnclippedBoundsInRoot()
+        assertTrue("The scrolled chip at ${scrolled.top} slid under the header ending at ${header.bottom}", scrolled.top >= header.bottom)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun aScrolledListKeepsItsPlaceWhileTheConnectionChipComesAndGoes() {
+        val many = (1..40).map { session("many-$it", "Session %02d".format(it)) }
+        repository.state.value = repository.state.value.copy(sessions = many)
+        render()
+        back()
+        compose.onNode(hasScrollToKeyAction()).performScrollToKey("many-20")
+        compose.waitForIdle()
+        fun top() = compose.onNodeWithText("Session 20").assertIsDisplayed().getUnclippedBoundsInRoot().top
+        val before = top()
+        for (line in listOf(R.string.remote_reconnecting, R.string.remote_offline, R.string.remote_connected)) {
+            compose.runOnIdle {
+                repository.state.value =
+                    repository.state.value.copy(
+                        connected = line == R.string.remote_connected,
+                        stale = line != R.string.remote_connected,
+                        connection = line,
+                    )
+            }
+            compose.waitForIdle()
+            // The sticky chip changes only its own height; the rows in view stay where they were.
+            assertEquals("Session 20 moved with ${label(line)}", before.value, top().value, 0.5f)
+        }
+    }
+
     // ---- Two panes -----------------------------------------------------------------------
+
+    /** The connection chips on screen; [pane] names the pane the only one is in. */
+    private fun assertOneConnectionChipIn(pane: String) {
+        compose.onAllNodesWithTag("connectionStatusChip").assertCountEquals(1)
+        compose.onNode(hasTestTag("connectionStatusChip") and hasAnyAncestor(hasTestTag(pane))).assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun onlyOnePaneShowsTheConnection() {
+        render()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(connected = false, stale = true, connection = R.string.remote_reconnecting)
+        }
+        compose.waitForIdle()
+        // The chat beside the list says it above its composer; the list stays quiet.
+        assertOneConnectionChipIn("chatPane")
+        back()
+        // The projects column beside a project's sessions: the sessions say it.
+        compose.onNodeWithTag("projectsPane").assertIsDisplayed()
+        assertOneConnectionChipIn("sessionListPane")
+        back()
+        assertOneConnectionChipIn("projectsPane")
+    }
 
     @Test
     @Config(qualifiers = "w900dp-h1200dp")
@@ -268,7 +421,7 @@ class TwoPaneNavigationTest {
     }
 
     @Test
-    @Config(qualifiers = "w900dp-h1200dp")
+    @Config(qualifiers = "w740dp-h1200dp")
     fun belowTheInspectorWidthToolDetailsCoverTheChatPane() {
         render()
         openTool()
@@ -346,6 +499,271 @@ class TwoPaneNavigationTest {
         compose.onNodeWithTag("toolDetail").assertDoesNotExist()
         compose.onNodeWithTag("inspectorPlaceholder").assertIsDisplayed()
         assertChatShown()
+    }
+
+    // ---- Inspector tabs ------------------------------------------------------------------
+
+    private fun click(tag: String) {
+        compose.onNodeWithTag(tag).performClick()
+        compose.waitForIdle()
+    }
+
+    /** Selects a tab; a tap on its centre would hit its close button. */
+    private fun selectTab(tab: String) {
+        compose.onNodeWithTag("inspectorTab_$tab").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+    }
+
+    private fun assertInInspector(tag: String) =
+        compose.onNode(hasTestTag(tag) and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
+
+    /** The chat's own width beside the inspector, which shares the chat's pane. */
+    private fun chatBesideInspector(): Dp = widthOf("chatPane") - widthOf("inspectorPane") - PANE_DIVIDER_WIDTH
+
+    /**
+     * Changes open beside the chat with the list out of the way, Files joins them as a second tab
+     * and the list comes back with the last one.
+     */
+    private fun changesAndFilesOpenBesideTheChat() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY, FILES_CAPABILITY))
+        render()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        click("chatAction_changes")
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        assertInInspector("changesPane")
+        assertChatShown()
+        assertTrue("chat ${chatBesideInspector()}", chatBesideInspector() >= CHAT_PANE_MIN_WIDTH)
+        assertTrue("inspector ${widthOf("inspectorPane")}", widthOf("inspectorPane") >= SIDE_INSPECTOR_MIN_WIDTH)
+        // Files open as a second tab and keep the changes.
+        click("chatActionsMore")
+        click("chatActionMenu_files")
+        assertInInspector("filesPane")
+        compose.onNodeWithTag("inspectorTab_files").assertIsSelected()
+        compose.onNodeWithTag("inspectorTab_changes").assertIsNotSelected()
+        compose.onNodeWithTag("changesPane").assertDoesNotExist()
+        assertTrue(repository.state.value.changes != null)
+        selectTab("changes")
+        assertInInspector("changesPane")
+        // Closing a tab shows the one before it; the last one takes the pane and brings the list back.
+        click("inspectorTabClose_changes")
+        assertInInspector("filesPane")
+        assertNull(repository.state.value.changes)
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        click("inspectorTabClose_files")
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        assertChatShown()
+    }
+
+    @Test
+    @Config(qualifiers = "w753dp-h1205dp")
+    fun aPortraitTabletOpensChangesBesideTheChat() = changesAndFilesOpenBesideTheChat()
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp")
+    fun aPortraitTabletAtTheSmallerZoomOpensChangesBesideTheChat() = changesAndFilesOpenBesideTheChat()
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun aLandscapeTabletOpensChangesBesideTheChat() = changesAndFilesOpenBesideTheChat()
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun aToolClickSwitchesToTheToolTabAndBackClosesIt() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        render()
+        click("chatAction_changes")
+        openTool()
+        compose.onNodeWithTag("inspectorTab_tool").assertIsSelected()
+        assertInInspector("toolDetail")
+        compose.onNodeWithTag("inspectorTab_changes").assertExists()
+        // Back (and Esc) closes the active tab, which hands the pane to the one before it.
+        back()
+        compose.onNodeWithTag("inspectorTab_tool").assertDoesNotExist()
+        assertInInspector("changesPane")
+        back()
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp")
+    fun jobsOpenInTheInspectorBesideTheChat() {
+        render()
+        compose.runOnIdle {
+            repository.state.value = repository.state.value.copy(jobs = JobsState("s1", loaded = true, listOpen = true))
+        }
+        compose.waitForIdle()
+        assertInInspector("jobsScreen")
+        compose.onNodeWithTag("inspectorTab_jobs").assertIsSelected()
+        // The chat stays usable beside the jobs, and the list made way for them.
+        assertChatShown()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        click("inspectorTabClose_jobs")
+        assertEquals(false, repository.state.value.jobs?.listOpen)
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun aListTheUserHidOnItsOwnStaysHiddenWhenTheInspectorCloses() {
+        render()
+        openTool()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        // Shown and hidden again by hand: the state is the user's now.
+        click("toggleSessionList")
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        assertInInspector("toolDetail")
+        click("toggleSessionList")
+        back()
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp")
+    fun aPortraitListShownByHandLetsTheInspectorCoverTheChat() {
+        render()
+        openTool()
+        assertInInspector("toolDetail")
+        // The list and the inspector do not fit beside the chat: the tool covers it, as on a phone.
+        click("toggleSessionList")
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNode(hasTestTag("toolDetail") and hasAnyAncestor(hasTestTag("chatPane"))).assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-keysexposed-qwerty")
+    fun keysOpenWidenAndHideTheInspector() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        render(hardwareKeyboard = true)
+        val shift = android.view.KeyEvent.META_SHIFT_ON or android.view.KeyEvent.META_SHIFT_LEFT_ON
+        windowKey(android.view.KeyEvent.KEYCODE_G, ctrlMeta or shift)
+        assertInInspector("changesPane")
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(400.dp)
+        // Ctrl+Shift+B widens it past its usual cap and leaves the chat its minimum.
+        windowKey(android.view.KeyEvent.KEYCODE_B, ctrlMeta or shift)
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(1280.dp - PROJECT_STRIP_RESERVE - CHAT_PANE_MIN_WIDTH - PANE_DIVIDER_WIDTH)
+        assertEquals(CHAT_PANE_MIN_WIDTH, chatBesideInspector())
+        compose.onNodeWithTag("chatStrip").assertDoesNotExist()
+        windowKey(android.view.KeyEvent.KEYCODE_B, ctrlMeta or shift)
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(400.dp)
+        // Ctrl+\ hides the pane and its tabs stay; the list comes back meanwhile.
+        windowKey(android.view.KeyEvent.KEYCODE_BACKSLASH, ctrlMeta)
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        assertTrue(repository.state.value.changes != null)
+        windowKey(android.view.KeyEvent.KEYCODE_BACKSLASH, ctrlMeta)
+        assertInInspector("changesPane")
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        // The shown tab's key closes it.
+        windowKey(android.view.KeyEvent.KEYCODE_G, ctrlMeta or shift)
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        assertNull(repository.state.value.changes)
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp")
+    fun aWidenedPortraitInspectorLeavesTheChatAStrip() {
+        render()
+        openTool()
+        click("inspectorExpand")
+        compose.onNodeWithTag("chatStrip").assertIsDisplayed()
+        compose.onNodeWithTag("chatStripStatus").assertExists()
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(800.dp - PROJECT_STRIP_RESERVE - CHAT_STRIP_WIDTH - PANE_DIVIDER_WIDTH)
+        // The chat behind the strip is out of TalkBack's reach.
+        compose.onNodeWithTag("composerField").assertDoesNotExist()
+        click("chatStripShow")
+        compose.onNodeWithTag("chatStrip").assertDoesNotExist()
+        assertChatShown()
+        assertInInspector("toolDetail")
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp-keysexposed-qwerty")
+    fun hiddenPortraitTabsStayOffTheChat() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        render(hardwareKeyboard = true)
+        val shift = android.view.KeyEvent.META_SHIFT_ON or android.view.KeyEvent.META_SHIFT_LEFT_ON
+        windowKey(android.view.KeyEvent.KEYCODE_G, ctrlMeta or shift)
+        windowKey(android.view.KeyEvent.KEYCODE_H, ctrlMeta)
+        compose.onNodeWithTag("inspectorTab_history").assertIsSelected()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        // Ctrl+\ hides the tabs and the list comes back; nothing of them covers the chat meanwhile.
+        windowKey(android.view.KeyEvent.KEYCODE_BACKSLASH, ctrlMeta)
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("changesPane").assertDoesNotExist()
+        compose.onNodeWithTag("chatHistorySheet").assertDoesNotExist()
+        compose.onNodeWithTag("chatHistoryPane").assertDoesNotExist()
+        assertChatShown()
+        assertTrue(repository.state.value.changes != null)
+        // A hidden tab's key shows it again instead of closing it, and the list makes way at once.
+        windowKey(android.view.KeyEvent.KEYCODE_G, ctrlMeta or shift)
+        assertInInspector("changesPane")
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        assertTrue(repository.state.value.changes != null)
+        compose.onNodeWithTag("inspectorTab_history").assertExists()
+        // Hidden and shown again with Ctrl+\, the active tab comes back beside the chat.
+        windowKey(android.view.KeyEvent.KEYCODE_BACKSLASH, ctrlMeta)
+        compose.onNodeWithTag("changesPane").assertDoesNotExist()
+        windowKey(android.view.KeyEvent.KEYCODE_BACKSLASH, ctrlMeta)
+        assertInInspector("changesPane")
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        assertChatShown()
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp")
+    fun theHistoryActionSwitchesToTheHistoryTabBehindAnother() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        render()
+        fun history() {
+            if (compose.onAllNodesWithTag("chatAction_history").fetchSemanticsNodes().isEmpty()) {
+                click("chatActionsMore")
+                click("chatActionMenu_history")
+            } else click("chatAction_history")
+        }
+        history()
+        assertInInspector("chatHistoryPane")
+        click("chatAction_changes")
+        assertInInspector("changesPane")
+        // History behind Changes: the action brings it to the front, and only then closes it.
+        history()
+        assertInInspector("chatHistoryPane")
+        history()
+        compose.onNodeWithTag("inspectorTab_history").assertDoesNotExist()
+        assertInInspector("changesPane")
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp")
+    fun askingAboutAJobBehindTheStripBringsTheChatBack() {
+        val job = BackgroundJob("one", "echo one", "/project", false, JobStatus.RUNNING, null, null, 1L, null, 0L, false)
+        render()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(
+                    jobs =
+                        JobsState(
+                            "s1", listOf(job), loaded = true,
+                            view = JobView("one", job, lines = listOf(JobOutputLine.Text("error: boom")), loaded = true),
+                        )
+                )
+        }
+        compose.waitForIdle()
+        assertInInspector("jobAsk")
+        click("inspectorExpand")
+        compose.onNodeWithTag("chatStrip").assertIsDisplayed()
+        click("jobAsk")
+        // The prompt went into the draft, and the chat that holds it shows again beside the jobs.
+        assertTrue(repository.state.value.draft, repository.state.value.draft.contains("error: boom"))
+        compose.onNodeWithTag("chatStrip").assertDoesNotExist()
+        assertChatShown()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        assertInInspector("jobAsk")
     }
 
     // ---- Projects column -----------------------------------------------------------------
@@ -653,7 +1071,7 @@ class TwoPaneNavigationTest {
     }
 
     @Test
-    @Config(qualifiers = "w900dp-h1200dp")
+    @Config(qualifiers = "w740dp-h1200dp")
     fun aCollapsedListHasNoDivider() {
         render()
         compose.onNodeWithTag("toggleSessionList").performClick()
@@ -696,24 +1114,382 @@ class TwoPaneNavigationTest {
 
     @Test
     @Config(qualifiers = "w1700dp-h1000dp")
-    fun aNewLayoutBucketResetsTheDraggedWidths() {
+    fun draggedWidthsSurviveAnotherBucketAndARestart() {
         val window = mutableStateOf<Dp>(1300.dp)
+        val launch = mutableStateOf(0)
         compose.setContent {
-            Box(Modifier.width(window.value).fillMaxHeight()) { App() }
+            Box(Modifier.width(window.value).fillMaxHeight()) { key(launch.value) { App() } }
         }
         compose.waitForIdle()
         accessibilityAction("sessionListDivider", label(R.string.remote_pane_wider))
         compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
-        // Within the bucket the dragged width stays.
+        // Within the bucket the width keeps its share of the window.
         window.value = 1400.dp
         compose.waitForIdle()
-        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo((400f / 1300f * 1400f).dp)
+        // Another bucket shows its own default and keeps the first one's width aside.
         window.value = 900.dp
         compose.waitForIdle()
         compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(280.dp)
         window.value = 1300.dp
         compose.waitForIdle()
-        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(360.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
+        // A cold start reads it back from the preferences. It opens the chat from its
+        // notification again: the first one was consumed, and a fresh stack starts at Hosts.
+        notification = RemoteNotification("host", "s1", 2)
+        launch.value++
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
+        assertTrue(PaneLayoutStore(compose.activity).load().isNotEmpty())
+    }
+
+    // ---- Artifacts beside the chat -------------------------------------------------------
+
+    private val page = "<html><head><title>Quarterly report</title></head><body>v1</body></html>"
+
+    /** A chat whose answer names an HTML page the Mac serves. */
+    private fun artifactChat() {
+        repository.artifact = { _, path, _ -> ProjectArtifactResult.Loaded(path, "1".repeat(64), page, page.length) }
+        repository.state.value =
+            repository.state.value.copy(
+                capabilities = setOf(FILES_ARTIFACT_CAPABILITY),
+                capabilitiesKnown = true,
+                messages =
+                    listOf(
+                        buildJsonObject {
+                            put("id", "answer")
+                            put("role", "assistant")
+                            put("text", "[the report](out/report.html)")
+                        }
+                    ),
+            )
+    }
+
+    private fun openArtifact() {
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Quarterly report").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(label(R.string.remote_artifact_open_action)).performClick()
+        compose.waitForIdle()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun anArtifactOpensInItsTabBesideTheChatAndPopsOut() {
+        artifactChat()
+        render()
+        openArtifact()
+        compose.onNodeWithTag("inspectorTab_artifact").assertIsSelected()
+        assertInInspector("artifactTab")
+        compose.onNodeWithTag("artifactViewer").assertDoesNotExist()
+        // The chat stays usable beside the page, with the list out of the way.
+        assertChatShown()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        // Pop out opens the full-screen dialog; closing it brings the page back into the tab.
+        click("artifactPopOut")
+        compose.onNodeWithTag("artifactViewer").assertIsDisplayed()
+        compose.onNodeWithTag("artifactTab").assertDoesNotExist()
+        compose.onNodeWithTag("artifactViewerClose").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("artifactViewer").assertDoesNotExist()
+        assertInInspector("artifactTab")
+        // Closing the tab closes the pane and brings the list back.
+        click("inspectorTabClose_artifact")
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun aPhoneOpensTheArtifactInItsDialog() {
+        artifactChat()
+        render()
+        openArtifact()
+        compose.onNodeWithTag("artifactViewer").assertIsDisplayed()
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("artifactPopOut").assertDoesNotExist()
+    }
+
+    /** The chat edits out/report.html, after which the Mac serves [text]. */
+    private fun editReport(text: String) {
+        repository.artifact = { _, path, _ -> ProjectArtifactResult.Loaded(path, "2".repeat(64), text, text.length) }
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(
+                    messages =
+                        repository.state.value.messages +
+                            buildJsonObject {
+                                put("id", "editing")
+                                put("role", "assistant")
+                                put("text", "")
+                                put(
+                                    "parts",
+                                    buildJsonArray {
+                                        addJsonObject {
+                                            put("type", "toolCall")
+                                            put("id", "call-edit")
+                                            put("name", "edit")
+                                            // Absolute, where the message named it relative to the project.
+                                            put("arguments", "{\"path\":\"/Users/robin/project/out/report.html\"}")
+                                        }
+                                    },
+                                )
+                            } +
+                            buildJsonObject {
+                                put("id", "edited")
+                                put("role", "tool")
+                                put("text", "Edited")
+                                put("state", "complete")
+                                put("toolName", "edit")
+                                put("toolCallId", "call-edit")
+                            }
+                )
+        }
+        compose.waitForIdle()
+    }
+
+    private fun assertArtifactCode(text: String) {
+        compose.onNodeWithTag("artifactTabCode").performClick()
+        compose.waitForIdle()
+        compose.onNode(hasText(text) and hasAnyAncestor(hasTestTag("artifactTab"))).assertExists()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun theChatsEditOfAnOpenPageOffersItsNewVersion() {
+        artifactChat()
+        render()
+        openArtifact()
+        compose.onNodeWithTag("artifactChanged").assertDoesNotExist()
+        val newer = page.replace("v1", "v2")
+        editReport(newer)
+        // Nothing reloads until the user says so.
+        compose.onNodeWithTag("artifactChanged").assertIsDisplayed()
+        assertFalse(repository.artifactReads.any { it.second })
+        click("artifactChangedReload")
+        compose.waitUntil(5_000) { repository.artifactReads.any { it == "out/report.html" to true } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("artifactChanged").assertDoesNotExist()
+        assertArtifactCode(newer)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun aCardLoadedBeforeTheChatsEditOpensWhatIsOnTheMacNow() {
+        artifactChat()
+        render()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Quarterly report").fetchSemanticsNodes().isNotEmpty() }
+        // The card shows v1; the chat then edits the file before the user taps the card.
+        val newer = page.replace("v1", "v2")
+        editReport(newer)
+        openArtifact()
+        compose.waitUntil(5_000) { repository.artifactReads.any { it == "out/report.html" to true } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("artifactChanged").assertDoesNotExist()
+        assertArtifactCode(newer)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun anotherArtifactReplacesTheOpenOneWithItsOwnPage() {
+        val other = "<html><head><title>Other page</title></head><body>other</body></html>"
+        artifactChat()
+        repository.artifact = { _, path, _ ->
+            val text = if (path == "out/other.html") other else page
+            ProjectArtifactResult.Loaded(path, (if (path == "out/other.html") "2" else "1").repeat(64), text, text.length)
+        }
+        repository.state.value =
+            repository.state.value.copy(
+                messages =
+                    listOf(
+                        buildJsonObject {
+                            put("id", "answer")
+                            put("role", "assistant")
+                            put("text", "[the report](out/report.html)\n\n[the other](out/other.html)")
+                        }
+                    )
+            )
+        render()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Other page").fetchSemanticsNodes().isNotEmpty() }
+        // The first card sits above the chat's end: its action, not a tap, opens it.
+        val open = compose.onAllNodes(hasText(label(R.string.remote_artifact_open_action)) and !hasAnyAncestor(hasTestTag("inspectorPane")))
+        open[0].performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        compose.onNode(hasText("Quarterly report") and hasAnyAncestor(hasTestTag("artifactTab"))).assertExists()
+        open[1].performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        compose.onNode(hasText("Other page") and hasAnyAncestor(hasTestTag("artifactTab"))).assertExists()
+        compose.onNode(hasText("Quarterly report") and hasAnyAncestor(hasTestTag("artifactTab"))).assertDoesNotExist()
+        // Robolectric has no WebView to draw in; ArtifactSandboxEmulatorTest checks the new view.
+        assertArtifactCode(other)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun anImageOpensInTheArtifactTabAndBackClosesIt() {
+        val png =
+            java.io.ByteArrayOutputStream().also {
+                android.graphics.Bitmap.createBitmap(40, 20, android.graphics.Bitmap.Config.ARGB_8888)
+                    .compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+            }.toByteArray()
+        repository.image = { path -> ProjectImageResult.Loaded(path, "image/png", "0".repeat(64), png) }
+        repository.state.value =
+            repository.state.value.copy(
+                capabilities = setOf(FILES_MEDIA_CAPABILITY),
+                capabilitiesKnown = true,
+                messages =
+                    listOf(
+                        buildJsonObject {
+                            put("id", "answer")
+                            put("role", "assistant")
+                            put("text", "![Result](build/shot.png)")
+                        }
+                    ),
+            )
+        render()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("projectImagePicture-build/shot.png", true).fetchSemanticsNodes().isNotEmpty()
+        }
+        click("projectImage-build/shot.png")
+        compose.onNodeWithTag("inspectorTab_artifact").assertIsSelected()
+        assertInInspector("imageTab")
+        compose.onNodeWithTag("imageViewer").assertDoesNotExist()
+        back()
+        compose.onNodeWithTag("imageTab").assertDoesNotExist()
+        compose.onNodeWithTag("inspectorTab_artifact").assertDoesNotExist()
+        assertChatShown()
+    }
+
+    /** A chat whose host keeps session artifacts, with one HTML page among them. */
+    private fun galleryChat() {
+        val listed = SessionArtifact("Zk3_xY9aB-0qWe7RtYuI1o", "Gallery page", ArtifactType.HTML, 1, "a".repeat(64), 100, 0, 0)
+        val text = "<html><head><title>Gallery page</title></head><body>listed</body></html>"
+        repository.sessionArtifacts = listOf(listed)
+        repository.openArtifact = { id, version ->
+            SessionArtifactOpenResult.Text(
+                ArtifactType.HTML, ProjectArtifactResult.Loaded("artifacts/$id/$version.html", "1".repeat(64), text, text.length),
+            )
+        }
+        repository.state.value = repository.state.value.copy(capabilities = setOf(ARTIFACTS_CAPABILITY), capabilitiesKnown = true)
+    }
+
+    private fun runArtifactsCommand() {
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performTextReplacement("/artifacts")
+        compose.waitForIdle()
+        compose.onNodeWithTag("composerField").performKeyInput { pressKey(Key.Enter) }
+        compose.waitForIdle()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun artifactsOpensTheGalleryTabAndSelectsItAgainBehindTheArtifact() {
+        galleryChat()
+        render(hardwareKeyboard = true)
+        runArtifactsCommand()
+        compose.onNodeWithTag("inspectorTab_gallery").assertIsSelected()
+        assertInInspector("artifactsPane")
+        // No sheet over the chat besides the tab.
+        compose.onAllNodesWithTag("artifactGallery").assertCountEquals(1)
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("artifactCard-Zk3_xY9aB-0qWe7RtYuI1o").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(hasTestTag("artifactCard-Zk3_xY9aB-0qWe7RtYuI1o") and SemanticsMatcher.keyIsDefined(SemanticsActions.OnClick))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        click("artifactCard-Zk3_xY9aB-0qWe7RtYuI1o")
+        compose.onNodeWithTag("inspectorTab_artifact").assertIsSelected()
+        assertInInspector("artifactTab")
+        // /artifacts again brings the gallery forward from behind the artifact.
+        runArtifactsCommand()
+        compose.onNodeWithTag("inspectorTab_gallery").assertIsSelected()
+        assertInInspector("artifactsPane")
+        // It shows the list it had, without asking the Mac again.
+        compose.onNodeWithTag("artifactCard-Zk3_xY9aB-0qWe7RtYuI1o").assertExists()
+        assertEquals(1, repository.artifactLists)
+        // Back closes the gallery's tab.
+        back()
+        compose.onNodeWithTag("inspectorTab_gallery").assertDoesNotExist()
+        compose.onNodeWithTag("inspectorTab_artifact").assertIsSelected()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun aPhoneShowsTheGalleryInItsSheet() {
+        galleryChat()
+        render(hardwareKeyboard = true)
+        runArtifactsCommand()
+        compose.onNodeWithTag("artifactGallery").assertIsDisplayed()
+        compose.onNodeWithTag("artifactsPane").assertDoesNotExist()
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+    }
+
+    /** A chat that read one file, so the touched files summary shows. */
+    private fun touchedChat() {
+        repository.state.value =
+            repository.state.value.copy(
+                messages =
+                    listOf(
+                        buildJsonObject {
+                            put("id", "reading")
+                            put("role", "assistant")
+                            put("text", "")
+                            put(
+                                "parts",
+                                buildJsonArray {
+                                    addJsonObject {
+                                        put("type", "toolCall")
+                                        put("id", "call-read")
+                                        put("name", "read")
+                                        put("arguments", "{\"path\":\"src/App.kt\"}")
+                                    }
+                                },
+                            )
+                        },
+                        buildJsonObject {
+                            put("id", "read")
+                            put("role", "tool")
+                            put("text", "fun main() {}")
+                            put("state", "complete")
+                            put("toolName", "read")
+                            put("toolCallId", "call-read")
+                        },
+                    )
+            )
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun theTouchedFilesOpenInTheirTabBesideTheChat() {
+        touchedChat()
+        render()
+        click("touchedFilesSummary")
+        compose.onNodeWithTag("inspectorTab_touched").assertIsSelected()
+        assertInInspector("touchedFilesPane")
+        compose.onNodeWithTag("touchedFilesSheet").assertDoesNotExist()
+        back()
+        compose.onNodeWithTag("inspectorTab_touched").assertDoesNotExist()
+        compose.onNodeWithTag("touchedFilesPane").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun aPhoneShowsTheTouchedFilesInTheirSheet() {
+        touchedChat()
+        render()
+        click("touchedFilesSummary")
+        compose.onNodeWithTag("touchedFilesSheet").assertIsDisplayed()
+        compose.onNodeWithTag("touchedFilesPane").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun aLongPressPeekShowsTheWholeOutputInTheToolTab() {
+        render()
+        compose.onNodeWithTag("toolCardHeader").performTouchInput { longClick() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("inspectorTab_tool").assertIsSelected()
+        assertInInspector("toolDetail")
+        // Pop out opens the dialog a phone peeks with.
+        click("toolDetailPopOut")
+        compose.onNodeWithText(label(R.string.remote_output_close)).assertIsDisplayed()
     }
 
     // ---- Hardware keyboard ---------------------------------------------------------------
@@ -755,15 +1531,141 @@ class TwoPaneNavigationTest {
 
     @Test
     @Config(qualifiers = "w900dp-h1200dp")
-    fun ctrlKFocusesTheSessionSearchEvenFromACollapsedList() {
+    fun ctrlFFocusesTheSessionSearchEvenFromACollapsedList() {
         render(hardwareKeyboard = true)
         compose.onNodeWithTag("toggleSessionList").performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("composerField").performClick()
-        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.K) } }
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.F) } }
         compose.waitForIdle()
         compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
         compose.onNodeWithTag("sessionSearch").assertIsFocused()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun ctrlKOpensThePaletteAndEnterOpensTheSessionItFinds() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.K) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").assertIsFocused()
+        compose.onNodeWithTag("paletteField").performTextInput("#second")
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").performKeyInput { pressKey(Key.Enter) }
+        compose.waitForIdle()
+        assertEquals(RemoteSelection("host", "project", "s2"), repository.activations.last().first)
+        compose.onNodeWithTag("paletteField").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun escClosesThePaletteAndLeavesTheChat() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.K) } }
+        compose.waitForIdle()
+        val count = repository.activations.size
+        compose.onNodeWithTag("paletteField").performKeyInput { pressKey(Key.Escape) }
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").assertDoesNotExist()
+        assertEquals(count, repository.activations.size)
+    }
+
+    @Test
+    @Config(qualifiers = "w400dp-h800dp")
+    fun tappingTheChatTitleOpensTheSessionSwitcher() {
+        render()
+        compose.onNodeWithTag("chatTitle").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").assertTextEquals("#")
+        compose.onNodeWithTag("paletteField").performTextInput("third")
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteRow").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w400dp-h800dp")
+    fun theChatTitleIsATallEnoughTargetWithASwitchLabel() {
+        render()
+        val label = label(R.string.remote_palette_switch_session)
+        compose.onNodeWithTag("chatTitle")
+            .assert(
+                androidx.compose.ui.test.SemanticsMatcher("click label is $label") {
+                    androidx.compose.ui.semantics.SemanticsActions.OnClick.let { action ->
+                        action in it.config && it.config[action].label == label
+                    }
+                }
+            )
+            .assertHeightIsAtLeast(48.dp)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun aHostCommandChosenInThePaletteKeepsTheTypedDraft() {
+        repository.state.value =
+            repository.state.value.copy(
+                capabilities = setOf(COMMANDS_CAPABILITY),
+                commands = listOf(RemoteCommand("review", "Review the diff", "prompt")),
+            )
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performTextInput("fix the bug")
+        compose.waitForIdle()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.K) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").performTextInput("/review")
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").performKeyInput { pressKey(Key.Enter) }
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").assertDoesNotExist()
+        compose.onNodeWithTag("composerField").assert(hasText("/review fix the bug"))
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun aHostChosenInThePaletteOpensItsProjects() {
+        val studio = PairedHost("mac-a", "relay", "device", "secret", "Studio")
+        val laptop = PairedHost("mac-b", "relay", "device", "secret", "Laptop")
+        repository.state.value = repository.state.value.copy(hosts = listOf(studio, laptop), hostsLoaded = true, host = studio)
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.K) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").performTextInput("Laptop")
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").performKeyInput { pressKey(Key.Enter) }
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").assertDoesNotExist()
+        assertEquals("mac-b", repository.activations.last().first.routeId)
+        assertNull(repository.activations.last().first.projectId)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun noFileRowIsOfferedWhileTheEditorHoldsAnEdit() {
+        val listing = FileListing(path = "", entries = listOf(FileEntry("Main.kt", FileEntryType.FILE)))
+        repository.state.value =
+            repository.state.value.copy(
+                capabilities = setOf(FILES_CAPABILITY),
+                files =
+                    FilesState(
+                        "s1",
+                        loading = false,
+                        listing = listing,
+                        editor = FileEditor("Main.kt", "v1", "original", text = "edited"),
+                    ),
+            )
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.K) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").performTextInput("@")
+        compose.waitForIdle()
+        compose.onAllNodesWithTag("paletteRow").assertCountEquals(0)
+        compose.onNodeWithTag("paletteEmpty").assertExists()
+        compose.onNodeWithTag("paletteField").performKeyInput { pressKey(Key.Enter) }
+        compose.waitForIdle()
+        assertEquals("edited", repository.state.value.files?.editor?.text)
     }
 
     @Test
@@ -1023,9 +1925,9 @@ class TwoPaneNavigationTest {
 
     @Test
     @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
-    fun splitScreenCtrlKOpensTheSessionsAndFocusesTheirSearch() {
+    fun splitScreenCtrlFOpensTheSessionsAndFocusesTheirSearch() {
         render(hardwareKeyboard = true)
-        composerKeys { withKeyDown(Key.CtrlLeft) { pressKey(Key.K) } }
+        composerKeys { withKeyDown(Key.CtrlLeft) { pressKey(Key.F) } }
         compose.onNodeWithTag("composerField").assertDoesNotExist()
         compose.onNodeWithTag("sessionSearch").assertIsFocused()
         compose.onNodeWithTag("sessionSearch").performTextInput("Third")
@@ -1227,6 +2129,326 @@ class TwoPaneNavigationTest {
         compose.onNodeWithText("First session").assertIsDisplayed()
     }
 
+    // ---- Discoverability, completion, focus and scrolling ----------------------------------
+
+    private val ctrlMeta = android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_CTRL_LEFT_ON
+
+    private fun openSettings() {
+        back()
+        compose.onAllNodesWithContentDescription(label(R.string.remote_settings)).onFirst().performClick()
+        compose.waitForIdle()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h3000dp")
+    fun aPhoneWithoutAKeyboardHasNoKeyboardSettings() {
+        render(hardwareKeyboard = false)
+        openSettings()
+        compose.onNodeWithText(label(R.string.remote_swipe_title)).assertExists()
+        compose.onNodeWithTag("keyboardSettings").assertDoesNotExist()
+        compose.onNodeWithTag("enterSendsSwitch").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h3000dp-keysexposed-qwerty")
+    fun aPhoneWithAKeyboardListsEveryShortcutInSettings() {
+        render(hardwareKeyboard = true)
+        windowKey(android.view.KeyEvent.KEYCODE_COMMA, ctrlMeta)
+        compose.onNodeWithTag("keyboardSettings").assertExists()
+        compose.onNodeWithTag("enterSendsSwitch").assertExists()
+        // Generated from the keymap: Ctrl+N and Ctrl+B are there now, and the chat's own keys.
+        for (keys in listOf("Ctrl+N", "Ctrl+B", "Ctrl+K", "Ctrl+F", "Ctrl+.", "F6, Ctrl+Alt+→", "Ctrl+End"))
+            compose.onNode(hasText(keys) and hasAnyAncestor(hasTestTag("keyboardShortcuts"))).assertExists()
+        // The help no longer claims the keys need the two-pane layout.
+        val help = compose.activity.getString(R.string.remote_keyboard_help, "Ctrl+/")
+        compose.onNodeWithText(help).assertExists()
+        assertFalse(help.contains("two-pane"))
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h3000dp")
+    fun theTwoPaneLayoutShowsTheKeyboardSettingsWithoutAKeyboard() {
+        render(hardwareKeyboard = false)
+        openSettings()
+        compose.onNodeWithTag("keyboardSettings").assertExists()
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun ctrlSlashListsTheKeysOfWhereTheUserIs() {
+        render(hardwareKeyboard = true)
+        windowKey(android.view.KeyEvent.KEYCODE_SLASH, ctrlMeta)
+        compose.onNodeWithTag("shortcutHelp").assertExists()
+        // In a chat: the chat's and the composer's keys too.
+        compose.onNode(hasText("Ctrl+.") and hasAnyAncestor(hasTestTag("shortcutHelp"))).assertExists()
+        compose.onNode(hasText("Tab") and hasAnyAncestor(hasTestTag("shortcutHelp"))).assertExists()
+        compose.onNodeWithTag("shortcutHelpClose").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("shortcutHelp").assertDoesNotExist()
+        assertChatShown()
+        // On the session list only the keys that work there.
+        back()
+        windowKey(android.view.KeyEvent.KEYCODE_SLASH, ctrlMeta)
+        compose.onNode(hasText("Ctrl+N") and hasAnyAncestor(hasTestTag("shortcutHelp"))).assertExists()
+        compose.onNode(hasText("Ctrl+.") and hasAnyAncestor(hasTestTag("shortcutHelp"))).assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun enterWithAPartialSlashCommandPicksItInsteadOfSendingIt() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performTextInput("/ne")
+        compose.waitForIdle()
+        compose.onNodeWithTag("slashHighlight").assert(hasText("/new"))
+        composerKeys { pressKey(Key.Enter) }
+        compose.onNodeWithTag("composerField").assert(hasText("/new"))
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
+        assertEquals(0, repository.prompts)
+        assertEquals(0, repository.createdSessions)
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun arrowsMoveTheSlashHighlightAndTabPicksIt() {
+        repository.state.value =
+            repository.state.value.copy(
+                capabilities = setOf(COMMANDS_CAPABILITY),
+                commands = listOf(RemoteCommand("review", "Review the diff", "prompt"), RemoteCommand("refactor", null, "skill")),
+            )
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performTextInput("/re")
+        compose.waitForIdle()
+        compose.onNodeWithTag("slashHighlight").assert(hasText("/review"))
+        composerKeys { pressKey(Key.DirectionDown) }
+        compose.onNodeWithTag("slashHighlight").assert(hasText("/refactor"))
+        // Past the last one the highlight wraps to the first.
+        composerKeys { pressKey(Key.DirectionDown) }
+        compose.onNodeWithTag("slashHighlight").assert(hasText("/review"))
+        composerKeys { pressKey(Key.DirectionUp) }
+        composerKeys { pressKey(Key.Tab) }
+        compose.onNodeWithTag("composerField").assert(hasText("/refactor"))
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
+        assertEquals(0, repository.prompts)
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun upInAnEmptyComposerRecallsThisSessionsLastMessage() {
+        repository.state.value =
+            repository.state.value.copy(
+                messages =
+                    listOf(
+                        buildJsonObject {
+                            put("id", "u1")
+                            put("role", "user")
+                            put("text", "first question")
+                        },
+                        buildJsonObject {
+                            put("id", "u2")
+                            put("role", "user")
+                            put("text", "second question")
+                        },
+                    )
+            )
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        composerKeys { pressKey(Key.DirectionUp) }
+        compose.onNodeWithTag("composerField").assert(hasText("second question"))
+        composerKeys { pressKey(Key.DirectionUp) }
+        compose.onNodeWithTag("composerField").assert(hasText("first question"))
+        composerKeys { pressKey(Key.DirectionDown) }
+        composerKeys { pressKey(Key.DirectionDown) }
+        compose.onNodeWithTag("composerField").assert(hasText(""))
+        assertEquals(0, repository.prompts)
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun aRecalledSlashCommandKeepsUpForTheHistory() {
+        repository.state.value =
+            repository.state.value.copy(
+                capabilities = setOf(COMMANDS_CAPABILITY),
+                commands = listOf(RemoteCommand("review", "Review the diff", "prompt")),
+                messages =
+                    listOf(
+                        buildJsonObject {
+                            put("id", "u1")
+                            put("role", "user")
+                            put("text", "first question")
+                        },
+                        buildJsonObject {
+                            put("id", "u2")
+                            put("role", "user")
+                            put("text", "/review")
+                        },
+                    ),
+            )
+        render(hardwareKeyboard = true)
+        composerKeys { pressKey(Key.DirectionUp) }
+        compose.onNodeWithTag("composerField").assert(hasText("/review"))
+        // The recalled command opens the suggestions, but Up still walks the history.
+        composerKeys { pressKey(Key.DirectionUp) }
+        compose.onNodeWithTag("composerField").assert(hasText("first question"))
+        assertEquals(0, repository.prompts)
+    }
+
+    private fun longChat() {
+        repository.state.value =
+            repository.state.value.copy(
+                messages =
+                    (1..80).map {
+                        buildJsonObject {
+                            put("id", "m$it")
+                            put("role", "assistant")
+                            put("text", "Line $it of the chat")
+                        }
+                    }
+            )
+    }
+
+    private fun scrollToLatestShown() =
+        compose.onAllNodesWithContentDescription(label(R.string.remote_scroll_to_bottom)).fetchSemanticsNodes().isNotEmpty()
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun pageKeysScrollTheChatWhileTheComposerKeepsFocus() {
+        longChat()
+        render(hardwareKeyboard = true)
+        compose.onNodeWithText("Line 80 of the chat").assertIsDisplayed()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        composerKeys { pressKey(Key.PageUp) }
+        compose.onNodeWithText("Line 80 of the chat").assertIsNotDisplayed()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        // Reading back stops following new output, as a scroll by hand does.
+        assertTrue(scrollToLatestShown())
+        repeat(3) { composerKeys { pressKey(Key.PageDown) } }
+        compose.onNodeWithText("Line 80 of the chat").assertIsDisplayed()
+        assertFalse(scrollToLatestShown())
+        assertEquals(0, repository.prompts)
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun ctrlHomeGoesToTheStartAndCtrlEndFollowsTheChatAgain() {
+        longChat()
+        render(hardwareKeyboard = true)
+        composerKeys { withKeyDown(Key.CtrlLeft) { pressKey(Key.MoveHome) } }
+        compose.onNodeWithText("Line 1 of the chat").assertIsDisplayed()
+        compose.onNodeWithText("Line 80 of the chat").assertDoesNotExist()
+        assertTrue(scrollToLatestShown())
+        // With nothing typed the key goes to the chat; the composer keeps focus.
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        composerKeys { withKeyDown(Key.CtrlLeft) { pressKey(Key.MoveEnd) } }
+        compose.onNodeWithText("Line 80 of the chat").assertIsDisplayed()
+        assertFalse(scrollToLatestShown())
+        // Following again: new output scrolls into view.
+        repository.state.value =
+            repository.state.value.copy(
+                messages =
+                    repository.state.value.messages +
+                        buildJsonObject {
+                            put("id", "m81")
+                            put("role", "assistant")
+                            put("text", "Line 81 of the chat")
+                        }
+            )
+        compose.waitForIdle()
+        compose.onNodeWithText("Line 81 of the chat").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
+    fun ctrlHomeWithADraftReachesTheChatOnlyAfterTheFieldLeftIt() {
+        longChat()
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performTextInput("first line\nsecond line")
+        compose.waitForIdle()
+        // Sent to the field alone, the key is the field's: the layout leaves it alone.
+        composerKeys { withKeyDown(Key.CtrlLeft) { pressKey(Key.MoveHome) } }
+        compose.onNodeWithText("Line 80 of the chat").assertIsDisplayed()
+        assertFalse(scrollToLatestShown())
+        // Through the window, the field ignores Ctrl+Home, so the chat goes to its start.
+        windowKey(android.view.KeyEvent.KEYCODE_MOVE_HOME, ctrlMeta)
+        compose.onNodeWithText("Line 1 of the chat").assertIsDisplayed()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        compose.onNodeWithTag("composerField").assert(hasText("first line\nsecond line"))
+        assertEquals(0, repository.prompts)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp-keysexposed-qwerty")
+    fun f6CyclesThePanesAndComesBackToTheRowItLeft() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        val inList = hasAnyAncestor(hasTestTag("sessionListPane"))
+        // From the chat F6 wraps around to the project strip, then goes on to the sessions.
+        windowKey(android.view.KeyEvent.KEYCODE_F6)
+        compose.onNode(isFocused() and hasAnyAncestor(hasTestTag("projectStripList"))).assertExists()
+        windowKey(android.view.KeyEvent.KEYCODE_F6)
+        compose.onNode(isFocused() and inList).assertExists()
+        compose.onNodeWithTag("composerField").assertIsNotFocused()
+        // Down moves to the next row, which shows its focus ring.
+        windowKey(android.view.KeyEvent.KEYCODE_DPAD_DOWN)
+        val row = compose.onNode(isFocused() and inList).fetchSemanticsNode()
+        compose.onNode(isFocused() and inList).assert(SemanticsMatcher.expectValue(FocusRingShown, true))
+        // Ctrl+Alt+Right goes on to the chat's composer, Shift+F6 back to the same row.
+        windowKey(android.view.KeyEvent.KEYCODE_DPAD_RIGHT, ctrlMeta or android.view.KeyEvent.META_ALT_ON or android.view.KeyEvent.META_ALT_LEFT_ON)
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        windowKey(android.view.KeyEvent.KEYCODE_F6, android.view.KeyEvent.META_SHIFT_ON or android.view.KeyEvent.META_SHIFT_LEFT_ON)
+        assertEquals(row.id, compose.onNode(isFocused() and inList).fetchSemanticsNode().id)
+    }
+
+    @Test
+    @Config(qualifiers = "w1205dp-h753dp-keysexposed-qwerty")
+    fun f6ReachesTheProjectStripBesideAChat() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        val inStrip = hasAnyAncestor(hasTestTag("projectStripList"))
+        // From the chat F6 wraps around to the projects, then goes on to the sessions.
+        windowKey(android.view.KeyEvent.KEYCODE_F6)
+        compose.onNode(isFocused() and inStrip).assertExists()
+        compose.onNode(isFocused() and inStrip).assert(SemanticsMatcher.expectValue(FocusRingShown, true))
+        windowKey(android.view.KeyEvent.KEYCODE_F6)
+        compose.onNode(isFocused() and hasAnyAncestor(hasTestTag("sessionListPane"))).assertExists()
+        windowKey(android.view.KeyEvent.KEYCODE_F6)
+        compose.onNodeWithTag("composerField").assertIsFocused()
+    }
+
+    @Test
+    @Config(qualifiers = "w1700dp-h1000dp-keysexposed-qwerty")
+    fun f6StillReachesTheSideInspectorAfterTheJobsClose() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(BACKGROUND_JOBS_CAPABILITY))
+        render(hardwareKeyboard = true)
+        openTool()
+        compose.onNode(hasTestTag("toolDetail") and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
+        // The jobs join the inspector as a tab of their own, then close again.
+        compose.runOnIdle {
+            repository.state.value = repository.state.value.copy(jobs = JobsState("s1", loaded = true, listOpen = true))
+        }
+        compose.waitForIdle()
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(jobs = null) }
+        compose.waitForIdle()
+        compose.onNodeWithTag("composerField").requestFocusAndWait()
+        windowKey(android.view.KeyEvent.KEYCODE_F6)
+        compose.onNode(isFocused() and hasAnyAncestor(hasTestTag("inspectorPane"))).assertExists()
+    }
+
+    private fun androidx.compose.ui.test.SemanticsNodeInteraction.requestFocusAndWait() {
+        performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.waitForIdle()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp-keysexposed-qwerty")
+    fun hoveringAHeaderButtonNamesItAndItsShortcut() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("chatAction_changes").performMouseInput { moveTo(center) }
+        compose.waitForIdle()
+        compose.onNodeWithText(label(R.string.remote_changes_open) + " · Ctrl+Shift+G").assertExists()
+    }
+
     // ---- Code editor ---------------------------------------------------------------------
 
     private fun openEditor(text: String) {
@@ -1245,7 +2467,7 @@ class TwoPaneNavigationTest {
     }
 
     @Test
-    @Config(qualifiers = "w900dp-h1200dp")
+    @Config(qualifiers = "w740dp-h1200dp")
     fun anOpenEditorKeepsTheShortcutKeys() {
         render(hardwareKeyboard = true)
         openEditor("hello\n")
@@ -1270,7 +2492,7 @@ class TwoPaneNavigationTest {
     }
 
     @Test
-    @Config(qualifiers = "w900dp-h1200dp")
+    @Config(qualifiers = "w740dp-h1200dp")
     fun aShortcutOutsideTheEditorAsksBeforeItDropsAnUnsavedEdit() {
         render(hardwareKeyboard = true)
         openEditor("changed\n")
@@ -1284,7 +2506,7 @@ class TwoPaneNavigationTest {
     }
 
     @Test
-    @Config(qualifiers = "w900dp-h1200dp")
+    @Config(qualifiers = "w740dp-h1200dp")
     fun aDiscardPromptOnlyDropsTheEditItAskedAbout() {
         render(hardwareKeyboard = true)
         openEditor("changed\n")
@@ -1314,7 +2536,7 @@ class TwoPaneNavigationTest {
     }
 
     @Test
-    @Config(qualifiers = "w900dp-h1200dp")
+    @Config(qualifiers = "w740dp-h1200dp")
     fun anotherSessionAsksBeforeItDropsAnUnsavedEdit() {
         render(hardwareKeyboard = true)
         openEditor("changed\n")
@@ -1332,5 +2554,172 @@ class TwoPaneNavigationTest {
         compose.waitForIdle()
         assertEquals(RemoteSelection("host", "project", "s2"), repository.activations.last().first)
         assertNull(repository.state.value.files?.editor)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-keysexposed-qwerty")
+    fun anUnsavedEditBehindAnotherTabStillAsksBeforeAnotherSession() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY, FILES_CAPABILITY))
+        render(hardwareKeyboard = true)
+        openEditor("changed\n")
+        assertInInspector("filesPane")
+        click("chatAction_changes")
+        assertInInspector("changesPane")
+        compose.onNodeWithTag("inspectorTab_files").assertIsNotSelected()
+        // The list shown by hand fits beside the chat and the inspector here.
+        click("toggleSessionList")
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        assertInInspector("changesPane")
+        val count = repository.activations.size
+        compose.onNodeWithText("Second session").performClick()
+        compose.waitForIdle()
+        assertEquals(count, repository.activations.size)
+        compose.onNodeWithTag("filesEditorKeep").performClick()
+        compose.waitForIdle()
+        assertEquals(count, repository.activations.size)
+        assertEquals("changed\n", repository.state.value.files?.editor?.text)
+        compose.onNodeWithText("Second session").performClick()
+        compose.onNodeWithTag("filesEditorDiscard").performClick()
+        compose.waitForIdle()
+        assertEquals(RemoteSelection("host", "project", "s2"), repository.activations.last().first)
+        assertNull(repository.state.value.files?.editor)
+    }
+
+    // ---- Review mode -----------------------------------------------------------------------
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-keysexposed-qwerty")
+    fun reviewModeTakesTheWindowKeepsItsKeysFromTheComposerAndEscGivesItBack() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        repository.changedFiles = listOf(GitFile("a.kt", GitChange.MODIFIED, 1, 1), GitFile("b.kt", GitChange.MODIFIED, 1, 1))
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performTextInput("abc")
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
+        val shift = android.view.KeyEvent.META_SHIFT_ON or android.view.KeyEvent.META_SHIFT_LEFT_ON
+        windowKey(android.view.KeyEvent.KEYCODE_G, ctrlMeta or shift)
+        assertInInspector("changesPane")
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(400.dp)
+        // Ctrl+Shift+D: the strip and the list make way and the chat shrinks to its strip.
+        windowKey(android.view.KeyEvent.KEYCODE_D, ctrlMeta or shift)
+        compose.onNodeWithTag("chatStrip").assertIsDisplayed()
+        compose.onNodeWithTag("projectStrip").assertWidthIsEqualTo(0.dp)
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(1280.dp - CHAT_STRIP_WIDTH - PANE_DIVIDER_WIDTH)
+        // The first file opens beside the list, old and new side by side.
+        assertEquals(listOf<String?>("a.kt"), repository.openedChangesFiles)
+        assertInInspector("changesFileList")
+        compose.onNodeWithTag("changesReview").assertIsOn()
+        // "n" is review's: the next file, and nothing for the composer behind the strip.
+        windowKey(android.view.KeyEvent.KEYCODE_N)
+        assertEquals("b.kt", repository.openedChangesFiles.last())
+        windowKey(android.view.KeyEvent.KEYCODE_ENTER)
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
+        assertEquals("abc", repository.state.value.draft)
+        assertEquals(0, repository.prompts)
+        // Esc leaves review mode before it closes anything, and the panes get their widths back.
+        windowKey(android.view.KeyEvent.KEYCODE_ESCAPE, time = 1_000)
+        compose.onNodeWithTag("chatStrip").assertDoesNotExist()
+        assertInInspector("changesPane")
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(400.dp)
+        compose.onNodeWithTag("projectStrip").assertWidthIsEqualTo(PROJECT_STRIP_WIDTH)
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        // Outside review mode the composer has its focus back, and a letter is just a letter.
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        windowKey(android.view.KeyEvent.KEYCODE_N)
+        compose.onNodeWithTag("composerField").assert(hasText("abcn"))
+        assertEquals(2, repository.openedChangesFiles.size)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-keysexposed-qwerty")
+    fun reviewModeHidesAKeptProjectsColumnAndGivesItBack() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        repository.changedFiles = listOf(GitFile("a.kt", GitChange.MODIFIED, 1, 1))
+        render(hardwareKeyboard = true)
+        click("expandProjects")
+        compose.onNodeWithTag("projectsPane").assertIsDisplayed()
+        val shift = android.view.KeyEvent.META_SHIFT_ON or android.view.KeyEvent.META_SHIFT_LEFT_ON
+        windowKey(android.view.KeyEvent.KEYCODE_D, ctrlMeta or shift)
+        // The kept column makes way like the strip does, and offers neither to grow nor to shrink.
+        compose.onNodeWithTag("chatStrip").assertIsDisplayed()
+        compose.onNodeWithTag("projectsPane").assertDoesNotExist()
+        compose.onNodeWithTag("projectStrip").assertWidthIsEqualTo(0.dp)
+        compose.onNodeWithTag("expandProjects").assertDoesNotExist()
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(1280.dp - CHAT_STRIP_WIDTH - PANE_DIVIDER_WIDTH)
+        windowKey(android.view.KeyEvent.KEYCODE_ESCAPE, time = 1_000)
+        compose.onNodeWithTag("chatStrip").assertDoesNotExist()
+        compose.onNodeWithTag("projectsPane").assertIsDisplayed()
+        compose.onNodeWithTag("collapseProjects").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-keysexposed-qwerty")
+    fun aLetterReviewDoesNotUseEndsReviewModeAndTypesIntoTheComposer() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        repository.changedFiles = listOf(GitFile("a.kt", GitChange.MODIFIED, 1, 1), GitFile("b.kt", GitChange.MODIFIED, 1, 1))
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performTextInput("abc")
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
+        val shift = android.view.KeyEvent.META_SHIFT_ON or android.view.KeyEvent.META_SHIFT_LEFT_ON
+        windowKey(android.view.KeyEvent.KEYCODE_D, ctrlMeta or shift)
+        compose.onNodeWithTag("chatStrip").assertIsDisplayed()
+        // "x" is no review key: the chat comes back with its composer, which takes the letter.
+        windowKey(android.view.KeyEvent.KEYCODE_X)
+        windowKey(android.view.KeyEvent.KEYCODE_Y)
+        compose.onNodeWithTag("chatStrip").assertDoesNotExist()
+        compose.onNodeWithTag("projectStrip").assertWidthIsEqualTo(PROJECT_STRIP_WIDTH)
+        assertInInspector("changesPane")
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(400.dp)
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        compose.onNodeWithTag("composerField").assert(hasText("abcxy"))
+        assertEquals(listOf<String?>("a.kt"), repository.openedChangesFiles)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-keysexposed-qwerty")
+    fun reviewModeEndsWhenTheChangesItOpenedNeverShow() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        repository.changesNeverOpen = true
+        render(hardwareKeyboard = true)
+        val shift = android.view.KeyEvent.META_SHIFT_ON or android.view.KeyEvent.META_SHIFT_LEFT_ON
+        windowKey(android.view.KeyEvent.KEYCODE_D, ctrlMeta or shift)
+        compose.mainClock.advanceTimeBy(5_000)
+        compose.waitForIdle()
+        compose.onNodeWithTag("chatStrip").assertDoesNotExist()
+        compose.onNodeWithTag("projectStrip").assertWidthIsEqualTo(PROJECT_STRIP_WIDTH)
+        compose.onNodeWithTag("changesPane").assertDoesNotExist()
+        assertChatShown()
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp")
+    fun theReviewButtonTakesThePortraitWindowAndClosingChangesEndsIt() {
+        repository.state.value = repository.state.value.copy(capabilities = setOf(GIT_CAPABILITY))
+        repository.changedFiles = listOf(GitFile("a.kt", GitChange.MODIFIED, 1, 1))
+        render()
+        click("chatAction_changes")
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        val before = widthOf("inspectorPane")
+        if (compose.onAllNodesWithTag("changesReview").fetchSemanticsNodes().isEmpty()) {
+            click("changesMoreActions")
+        }
+        click("changesReview")
+        compose.onNodeWithTag("chatStrip").assertIsDisplayed()
+        compose.onNodeWithTag("inspectorPane").assertWidthIsEqualTo(800.dp - CHAT_STRIP_WIDTH - PANE_DIVIDER_WIDTH)
+        // Back leaves review mode first, as Esc does.
+        back()
+        compose.onNodeWithTag("chatStrip").assertDoesNotExist()
+        assertEquals(before, widthOf("inspectorPane"))
+        assertInInspector("changesPane")
+        // Closing Changes in review mode ends it and brings the list back.
+        if (compose.onAllNodesWithTag("changesReview").fetchSemanticsNodes().isEmpty()) click("changesMoreActions")
+        click("changesReview")
+        compose.onNodeWithTag("chatStrip").assertIsDisplayed()
+        click("inspectorTabClose_changes")
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("chatStrip").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+        compose.onNodeWithTag("projectStrip").assertWidthIsEqualTo(PROJECT_STRIP_WIDTH)
+        assertChatShown()
     }
 }

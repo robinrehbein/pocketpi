@@ -151,4 +151,24 @@ class EscapeGestureTest {
         target.questionFieldFocus(field, focused = false, blank = true)
         assertFalse(target.questionFieldFocused)
     }
+
+    @Test
+    fun escLeavesReviewModeBeforeAnythingElse() {
+        assertEquals(
+            EscapeStep.LEAVE_REVIEW,
+            escapeStep(true, true, true, composerFocused = true, composerBlank = false, running = true, reviewing = true),
+        )
+        val target = ChatKeyTarget()
+        var reviewing = true
+        var closedPanes = 0
+        target.reviewing = { reviewing }
+        target.leaveReview = { reviewing = false }
+        target.addPane { closedPanes++ }
+        target.escape(0)
+        assertFalse(reviewing)
+        assertEquals(0, closedPanes)
+        // The next Esc closes the pane as before.
+        target.escape(10)
+        assertEquals(1, closedPanes)
+    }
 }

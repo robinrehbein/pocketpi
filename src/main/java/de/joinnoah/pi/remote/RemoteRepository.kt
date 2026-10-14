@@ -51,16 +51,66 @@ data class RemoteSelection(
     val sessionId: String? = null,
 )
 
+/**
+ * What a chat showed when it was last open, read while it opens again: a read-only preview, never
+ * the chat's selection. [messages] may be empty for a session known only from its list row.
+ */
+data class ChatPreview(
+    val session: JsonObject?,
+    val messages: List<JsonObject>,
+    val draft: String,
+)
+
 enum class ActivationMode {
     RESTORE,
     USER_OPEN,
 }
 
+/** Where a plain prompt stands between tapping send and the host's timeline having it. */
+enum class PendingSendState {
+    /** Journaled and on its way; the host has not answered yet. */
+    SENDING,
+
+    /** The host acknowledged it; the timeline may not show it yet. */
+    CONFIRMED,
+
+    /** The send failed or may not have left the phone. */
+    NOT_CONFIRMED,
+}
+
+/**
+ * A plain prompt the chat shows at its tail until the host's timeline has it. It lives in memory
+ * for this run only; after a restart the unresolved send is back in the composer instead.
+ * [afterMessageId] is the newest message the chat showed when the prompt was sent: only messages
+ * after it can be the host's copy of this prompt, so an identical earlier prompt never matches.
+ */
+data class PendingSend(
+    val mutationId: String,
+    val text: String,
+    val quote: MessageQuote?,
+    val attachments: List<LocalAttachment>,
+    val state: PendingSendState,
+    val afterMessageId: String? = null,
+)
+
 data class RemoteState(
     val hosts: List<PairedHost> = emptyList(),
+    /**
+     * [hosts] were read from storage. Until then an empty list says nothing, so screens show a
+     * placeholder instead of the first-run text, and nothing prunes state of Macs it lacks. Stays
+     * false when the read failed.
+     */
+    val hostsLoaded: Boolean = false,
+    /** Reading [hosts] from storage failed: no list is coming, though [hostsLoaded] stays false. */
+    val hostsUnreadable: Boolean = false,
     val host: PairedHost? = null,
     val selection: RemoteSelection = RemoteSelection(),
     val loading: Boolean = false,
+    /**
+     * A chat destination shows [ChatPreview] content while its open runs: read-only, and only on
+     * that destination's own state, never the repository's.
+     */
+    val preview: Boolean = false,
     val connection: Int = R.string.remote_offline,
     val connected: Boolean = false,
     /**
@@ -84,6 +134,12 @@ data class RemoteState(
     val pairingDeadline: Long? = null,
     val projects: List<JsonObject> = emptyList(),
     val projectChats: List<ProjectChatSummary> = emptyList(),
+    /**
+     * Each project's sessions by project ID, for views across projects: every list the Mac sent
+     * for [host] on this or an earlier connection, kept fresh by live status events. Unlike
+     * [projectChats] it is not cut to the featured few.
+     */
+    val projectSessions: Map<String, ProjectSessions> = emptyMap(),
     val project: JsonObject? = null,
     val sessions: List<JsonObject> = emptyList(),
     /** [sessions] came from a sessions.list on the current connection, not from a cache. */
@@ -101,6 +157,8 @@ data class RemoteState(
     val sending: Boolean = false,
     val uncertain: Boolean = false,
     val followUps: List<PendingFollowUp> = emptyList(),
+    /** The plain prompt the chat shows at its tail until the timeline has it; null when none. */
+    val pendingSend: PendingSend? = null,
     /**
      * Phone stops and resumes of subagent children, by child session ID. Memory only on purpose:
      * "stopped by you" describes this app run; after a restart the host's status is the truth.
@@ -113,6 +171,8 @@ data class RemoteState(
      */
     val childControlUnsupported: Set<String> = emptySet(),
     val answering: Set<String> = emptySet(),
+    /** Questions the user cannot answer from here right now, by question ID. */
+    val questionBlocks: Map<String, QuestionBlock> = emptyMap(),
     val capabilities: Set<String> = emptySet(),
     /** True once the connection's `projects.list` reply has added its route capabilities. */
     val capabilitiesKnown: Boolean = false,
@@ -145,6 +205,15 @@ data class RemoteState(
     val providerAuth: ProviderAuthState = ProviderAuthState(),
 )
 
+/** The app's connection counts as healthy for a notification's request while a frame arrived this recently. */
+internal const val HEALTHY_CONNECTION_MILLIS = 25_000L
+
+/** How long a notification's request waits on the app's connection before it uses its own. */
+internal const val HEALTHY_REQUEST_TIMEOUT_MILLIS = 3_000L
+
+/** One content URI to attach; [photo] imports it as an image (scaled JPEG), otherwise as a file. */
+data class Picked(val uri: String, val photo: Boolean)
+
 interface RemoteRepository {
     val state: StateFlow<RemoteState>
 
@@ -156,6 +225,31 @@ interface RemoteRepository {
     suspend fun createSession(routeId: String, projectId: String): RemoteSelection
 
     suspend fun openNotification(routeId: String, sessionId: String): RemoteSelection?
+
+    /**
+     * The project of [sessionId] on the paired [routeId] as the app already knows it, from its
+     * caches and stores, without asking the Mac; null when only the Mac knows. A tapped
+     * notification shows its chat at once when this knows the project.
+     */
+    suspend fun notificationProject(routeId: String, sessionId: String): String? = null
+
+    /**
+     * Runs [block] over the app's own connection when it is connected to [routeId] and heard from
+     * the Mac within [HEALTHY_CONNECTION_MILLIS]; each request on it gives up after
+     * [HEALTHY_REQUEST_TIMEOUT_MILLIS]. Returns null without running [block] when the connection is
+     * not known to be healthy, so the caller opens a connection of its own. A host error passes
+     * through as a [RemoteCommandException]. A plain [RemoteCommands.request] that was not sent,
+     * timed out or was lost also ends the call with null; a [MutationCommands.mutate] under the
+     * caller's mutation ID instead throws [MutationNotSentException] when nothing was sent, and the
+     * timeout or loss otherwise, so the caller decides whether to send it again. Any thread may
+     * call it. [onSent] runs as each request goes out, so a caller that falls back after a timeout
+     * knows the Mac may already have it.
+     */
+    suspend fun <T> withHealthyConnection(
+        routeId: String,
+        onSent: () -> Unit = {},
+        block: suspend (MutationCommands) -> T,
+    ): T? = null
 
     /**
      * Starts a new session that continues from just before the user message [messageId] of the
@@ -176,6 +270,9 @@ interface RemoteRepository {
 
     fun cancelSelection()
 
+    /** The cached content of the chat [selection] for a preview while it opens, or null. */
+    fun peekCachedChat(selection: RemoteSelection): ChatPreview? = null
+
     suspend fun pair(text: String): RemoteSelection?
 
     /** Gives up the pairing that is running, so [pair] returns without a host and loading ends. */
@@ -187,7 +284,15 @@ interface RemoteRepository {
 
     fun setForeground(foreground: Boolean) {}
 
-    fun setValidatedNetwork(identity: String?) {}
+    /** A validated default network, or none: [setNetwork] for callers that only see validation. */
+    fun setValidatedNetwork(identity: String?) = setNetwork(identity, validated = identity != null)
+
+    /**
+     * The default network once it can carry traffic, or null when there is none. [validated] says
+     * whether Android validated it; one that never validates still allows reconnects. [path]
+     * fingerprints its route, so a route that moves on the same network is probed, not torn down.
+     */
+    fun setNetwork(identity: String?, validated: Boolean, path: String? = null) {}
 
     fun refresh()
 
@@ -214,6 +319,20 @@ interface RemoteRepository {
     fun quote(messageId: String?)
 
     fun importAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) {}
+
+    /**
+     * Imports a mixed [batch] of images and files into [selection]'s draft in one run, with the
+     * same limits as [importAttachments]. [onDone] runs exactly once, after the import read every
+     * URI or refused the batch, so a caller can then give back the URIs' read grants (a drop's
+     * permissions). This default suits a repository whose single import reads synchronously.
+     */
+    fun importAttachments(selection: RemoteSelection, batch: List<Picked>, onDone: () -> Unit) {
+        try {
+            batch.groupBy { it.photo }.forEach { (photo, items) -> importAttachments(selection, items.map { it.uri }, photo) }
+        } finally {
+            onDone()
+        }
+    }
 
     fun removeAttachment(id: String) {}
 
@@ -261,6 +380,13 @@ interface RemoteRepository {
 
     fun refreshSessions() {}
 
+    /**
+     * Reads the lists on screen again behind what they show, for a pull to refresh: the projects,
+     * and the selected project's sessions or every project's featured chats. Without a connection
+     * it asks for one, as [refresh] does.
+     */
+    fun revalidateLists() {}
+
     fun loadToolOutput(toolCallId: String) {}
 
     fun cancelToolOutput() {}
@@ -296,6 +422,12 @@ interface RemoteRepository {
 
     /** Opens [RemoteState.changes] for the selected session, starting at session start. */
     fun openChanges() {}
+
+    /**
+     * Like [openChanges]; with [exclusive] false the files stay open beside the changes, as tabs
+     * of a side inspector do. Exclusive, as the phone shows one at a time, it closes them.
+     */
+    fun openChanges(exclusive: Boolean) = openChanges()
 
     fun closeChanges() {}
 
@@ -410,6 +542,9 @@ interface RemoteRepository {
     /** Opens [RemoteState.files] for the selected session at its folder. */
     fun openFiles() {}
 
+    /** Like [openFiles]; with [exclusive] false the changes stay open beside the files. */
+    fun openFiles(exclusive: Boolean) = openFiles()
+
     fun closeFiles() {}
 
     /** Shows the folder [path], `""` being the session folder. */
@@ -417,6 +552,20 @@ interface RemoteRepository {
 
     /** Shows the file [path], or the folder again for null. */
     fun openFilesFile(path: String?) {}
+
+    /**
+     * Opens Files at the folder of [path] (relative to the session folder) with the file open and
+     * [lines] picked and in view; [exclusive] as for [openFiles]. False, with nothing opened, for a
+     * path outside the session folder or while an open editor keeps the pane.
+     */
+    fun openFileAt(path: String, lines: LineSelection?, exclusive: Boolean = true): Boolean {
+        if (!isSessionPath(path)) return false
+        openFiles(exclusive)
+        openFilesDir(parentPath(path))
+        openFilesFile(path)
+        selectFileLines(lines)
+        return true
+    }
 
     /** The next page of the open file, or of the shown folder. */
     fun loadMoreFiles() {}

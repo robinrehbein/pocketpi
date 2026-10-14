@@ -70,6 +70,12 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     var messages = listOf<JsonObject>()
         private set
 
+    /**
+     * Where each message ID sits in [messages], so a streamed upsert finds its message without a
+     * scan. [showMessages] rebuilds it; an upsert keeps it current itself.
+     */
+    private var indexById = HashMap<String, Int>()
+
     var questions = listOf<JsonObject>()
         private set
 
@@ -80,6 +86,18 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
 
     var compaction: SessionCompaction? = null
         private set
+
+    /**
+     * Whether a snapshot of this epoch has been applied. Until then [messages], [questions] and
+     * [nextCursor] are empty placeholders, not the session's state, and the owner keeps showing
+     * what it had.
+     */
+    var hasSnapshot = false
+        private set
+
+    /** Pages shown before this epoch began, kept as the prefix of a snapshot that overlaps them. */
+    private var retained = listOf<JsonObject>()
+    private var retainedCursor: String? = null
     private val pendingEvents = sortedMapOf<Long, JsonObject>()
     private var snapshotRevision = -1L
     val needsSnapshot: Boolean
@@ -95,7 +113,9 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     fun beginSnapshotEpoch(status: String) {
         revision = -1L
         snapshotRevision = -1L
-        messages = emptyList()
+        hasSnapshot = false
+        if (messages.isNotEmpty()) retain(messages, nextCursor)
+        showMessages(emptyList())
         questions = emptyList()
         nextCursor = null
         pendingEvents.clear()
@@ -103,13 +123,22 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         this.status = status
     }
 
+    /**
+     * Keeps [messages] (with the cursor before them) that an earlier Timeline of this session
+     * showed, so the first snapshot keeps the older pages it overlaps.
+     */
+    fun retain(messages: List<JsonObject>, nextCursor: String?) {
+        if (hasSnapshot) return
+        retained = messages
+        retainedCursor = nextCursor
+    }
+
     fun snapshot(data: JsonObject, older: Boolean = false) {
         if (data.text("sessionId") != sessionId) return
         val incomingRevision = data.long("revision")
         if (older) {
             if (incomingRevision != snapshotRevision || snapshotRevision < 0) return
-            messages =
-                (data.array("messages") + messages).associateBy { it.text("id") }.values.toList()
+            showMessages((data.array("messages") + messages).associateBy { it.text("id") }.values.toList())
             nextCursor = data.optionalText("nextCursor")
             return
         }
@@ -119,9 +148,24 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         snapshotRevision = incomingRevision
         revision = incomingRevision
         status = incomingStatus
-        messages = data.array("messages")
+        val page = data.array("messages")
+        // A resync of the same session keeps the older pages loaded before it: they end where the
+        // new page begins, so the prefix before its oldest message and the cursor before them stay.
+        val shown = if (hasSnapshot) messages else retained
+        val shownCursor = if (hasSnapshot) nextCursor else retainedCursor
+        val oldest = page.firstOrNull()?.optionalText("id")
+        val overlap = if (oldest == null) -1 else shown.indexOfFirst { it.optionalText("id") == oldest }
+        if (overlap > 0) {
+            showMessages((shown.subList(0, overlap) + page).associateBy { it.text("id") }.values.toList())
+            nextCursor = shownCursor
+        } else {
+            showMessages(page)
+            nextCursor = data.optionalText("nextCursor")
+        }
+        retained = emptyList()
+        retainedCursor = null
+        hasSnapshot = true
         questions = data.array("pendingQuestions")
-        nextCursor = data.optionalText("nextCursor")
         compaction =
             if ((data["compacting"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull == true)
                 compaction ?: SessionCompaction(null, now())
@@ -134,6 +178,19 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
             } catch (malformed: Exception) {
                 // The snapshot itself is applied; a bad buffered event only asks for another one.
                 unknownKindSeen = true
+            }
+        }
+    }
+
+    /** The index of the message with [id] in [messages], or -1. */
+    internal fun messageIndex(id: String): Int = indexById[id] ?: -1
+
+    private fun showMessages(value: List<JsonObject>) {
+        messages = value
+        indexById = HashMap<String, Int>(value.size * 2).apply {
+            // The first message with an ID wins, as a scan from the start would find it.
+            value.forEachIndexed { index, message ->
+                (message["id"] as? JsonPrimitive)?.takeIf { it.isString }?.let { putIfAbsent(it.content, index) }
             }
         }
     }
@@ -154,10 +211,15 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         when (event.text("kind")) {
             "message.upsert" -> {
                 val message = event.obj("message")
-                val index = messages.indexOfFirst { it.text("id") == message.text("id") }
-                messages =
-                    if (index < 0) messages + message
-                    else messages.toMutableList().apply { set(index, message) }
+                val id = message.text("id")
+                val index = messageIndex(id)
+                if (index < 0) {
+                    // Appending moves no other message, so only the new ID is added.
+                    messages = messages + message
+                    indexById[id] = messages.lastIndex
+                } else {
+                    messages = messages.toMutableList().apply { set(index, message) }
+                }
             }
             "command.status" -> Unit
             "session.title" -> Unit
@@ -181,6 +243,11 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
             else -> unknownKindSeen = true
         }
         return false
+    }
+
+    /** Forgets a question the host reported as answered or closed elsewhere. */
+    fun dropQuestion(questionId: String) {
+        questions = questions.filterNot { it.text("id") == questionId }
     }
 
     private fun compaction(event: JsonObject) {

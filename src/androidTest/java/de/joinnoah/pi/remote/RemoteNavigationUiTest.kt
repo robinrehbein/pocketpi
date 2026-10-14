@@ -175,6 +175,48 @@ class RemoteNavigationUiTest {
         compose.onNodeWithTag("composerField").assertIsFocused().assert(hasText("hi"))
     }
 
+    private fun longChat() {
+        repository.messagesForSession = { id ->
+            (1..80).map { Wire.objectOf("id" to "message-$id-$it", "role" to "assistant", "text" to "Line $it of $id") }
+        }
+    }
+
+    private fun scrollToLatestShown() =
+        compose.onAllNodesWithContentDescription(label(R.string.remote_scroll_to_bottom)).fetchSemanticsNodes().isNotEmpty()
+
+    @Test
+    fun pageDownScrollsTheChatWhileTheComposerKeepsFocus() {
+        attachHardwareKeyboard()
+        longChat()
+        openChat()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        compose.onNodeWithText("Line 80 of live").assertIsDisplayed()
+        key(android.view.KeyEvent.KEYCODE_PAGE_UP)
+        key(android.view.KeyEvent.KEYCODE_PAGE_UP)
+        compose.onNodeWithText("Line 80 of live").assertIsNotDisplayed()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        assertTrue(scrollToLatestShown())
+        repeat(3) { key(android.view.KeyEvent.KEYCODE_PAGE_DOWN) }
+        compose.onNodeWithText("Line 80 of live").assertIsDisplayed()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        assertFalse(scrollToLatestShown())
+    }
+
+    @Test
+    fun ctrlEndGoesToTheLatestMessageAndFollowsAgain() {
+        attachHardwareKeyboard()
+        longChat()
+        openChat()
+        val ctrl = android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_CTRL_LEFT_ON
+        key(android.view.KeyEvent.KEYCODE_MOVE_HOME, ctrl)
+        compose.onNodeWithText("Line 1 of live").assertIsDisplayed()
+        assertTrue(scrollToLatestShown())
+        key(android.view.KeyEvent.KEYCODE_MOVE_END, ctrl)
+        compose.onNodeWithText("Line 80 of live").assertIsDisplayed()
+        assertFalse(scrollToLatestShown())
+        compose.onNodeWithTag("composerField").assertIsFocused()
+    }
+
     @Test
     fun aTypedSlashOpensTheSlashSuggestions() {
         attachHardwareKeyboard()
@@ -1039,6 +1081,62 @@ class RemoteNavigationUiTest {
                     "settings put secure show_ime_with_hard_keyboard $previousIme"
                 )
         }
+    }
+
+    @Test
+    fun reconnectingAndUncertainNoticesStayAboveTheComposerWhileScrolledUp() {
+        repositoryFactory = { activity ->
+            UiRemoteRepository(isolatedDrafts(activity)).apply {
+                messagesForSession = { longConversation() }
+            }
+        }
+        compose.runOnIdle { repository.messagesForSession = { longConversation() } }
+        openChat()
+        enterReadingPosition()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(
+                    connected = false,
+                    stale = true,
+                    connection = R.string.remote_reconnecting,
+                    uncertain = true,
+                )
+        }
+        compose.waitForIdle()
+        // The chat stays where the reader left it; the notices sit right above the field.
+        compose.onNodeWithText("Scroll message 06").assertIsDisplayed()
+        val field = compose.onNode(hasSetTextAction()).fetchSemanticsNode().boundsInRoot
+        for (text in listOf(label(R.string.remote_reconnecting), label(R.string.remote_draft_uncertain))) {
+            val notice =
+                compose.onNode(hasText(text) and hasAnyAncestor(hasTestTag("floatingComposer")))
+                    .assertIsDisplayed()
+                    .fetchSemanticsNode()
+                    .boundsInRoot
+            assertTrue("'$text' ends at ${notice.bottom}, below the field at ${field.top}", notice.bottom <= field.top)
+        }
+    }
+
+    @Test
+    fun listPagesLeadWithTheKeyedConnectionChip() {
+        compose.onNodeWithText("Test computer").performClick()
+        compose.waitForIdle()
+        fun assertChipLeads() {
+            val indexForKey =
+                compose.onAllNodes(hasScrollToKeyAction()).fetchSemanticsNodes()
+                    .map { it.config[SemanticsProperties.IndexForKey] }
+                    .single { it("page-title") >= 0 }
+            assertEquals(0, indexForKey(CONNECTION_STATUS_KEY))
+            assertEquals(1, indexForKey("page-title"))
+        }
+        assertChipLeads()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(connected = false, stale = true, connection = R.string.remote_reconnecting)
+        }
+        compose.waitForIdle()
+        compose.onNode(hasTestTag("connectionStatusChip") and hasText(label(R.string.remote_reconnecting)))
+            .assertIsDisplayed()
+        assertChipLeads()
     }
 
     @Test

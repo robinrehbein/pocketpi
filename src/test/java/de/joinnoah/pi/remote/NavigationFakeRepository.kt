@@ -10,7 +10,15 @@ internal class NavigationFakeRepository : RemoteRepository {
         selection
     }
     var notification: RemoteSelection? = null
+    val cachedChats = mutableMapOf<RemoteSelection, ChatPreview>()
+
+    override fun peekCachedChat(selection: RemoteSelection): ChatPreview? = cachedChats[selection]
     var notificationLookup: suspend () -> RemoteSelection? = { notification }
+    /** What [notificationProject] knows without asking the Mac, by route and session. */
+    val knownProjects = mutableMapOf<Pair<String, String>, String>()
+
+    override suspend fun notificationProject(routeId: String, sessionId: String): String? =
+        knownProjects[routeId to sessionId]
     var answers = 0
     var prompts = 0
     val imports = mutableListOf<Triple<RemoteSelection, List<String>, Boolean>>()
@@ -39,6 +47,10 @@ internal class NavigationFakeRepository : RemoteRepository {
 
     override fun openJob(jobId: String) {
         jobOpens += jobId
+    }
+
+    override fun closeJobs() {
+        state.value = state.value.copy(jobs = state.value.jobs?.copy(listOpen = false, view = null))
     }
     val toolOutputRequests = mutableListOf<String>()
     var sessionRefreshes = 0
@@ -104,13 +116,51 @@ internal class NavigationFakeRepository : RemoteRepository {
         state.value = state.value.copy(changes = null, files = filesOnOpen(checkNotNull(state.value.selection.sessionId)))
     }
 
+    /** The files [openChanges] lists. */
+    var changedFiles: List<GitFile> = emptyList()
+
+    /** The host never answers [openChanges]: the pane never opens. */
+    var changesNeverOpen = false
+
     override fun openChanges() {
+        if (changesNeverOpen) return
         val sessionId = checkNotNull(state.value.selection.sessionId)
         state.value =
             state.value.copy(
                 files = null,
-                changes = ChangesState(sessionId, loading = false, status = GitStatus(GitBase.SESSION, "Q2hhbmdlc1NuYXBzaG90MQ"), log = GitLog()),
+                changes =
+                    ChangesState(
+                        sessionId,
+                        loading = false,
+                        status = GitStatus(GitBase.SESSION, "Q2hhbmdlc1NuYXBzaG90MQ", changedFiles),
+                        log = GitLog(),
+                    ),
             )
+    }
+
+    val openedChangesFiles = mutableListOf<String?>()
+
+    override fun openChangesFile(path: String?) {
+        openedChangesFiles += path
+        val changes = state.value.changes ?: return
+        state.value = state.value.copy(changes = changes.copy(file = path))
+    }
+
+    // Beside the chat both stay open, each in its own inspector tab.
+    override fun openFiles(exclusive: Boolean) {
+        if (exclusive) return openFiles()
+        filesOpens++
+        state.value = state.value.copy(files = filesOnOpen(checkNotNull(state.value.selection.sessionId)))
+    }
+
+    var sharedChangesOpens = 0
+
+    override fun openChanges(exclusive: Boolean) {
+        if (exclusive || changesNeverOpen) return openChanges()
+        sharedChangesOpens++
+        val files = state.value.files
+        openChanges()
+        state.value = state.value.copy(files = files)
     }
 
     override fun closeChanges() {
@@ -124,6 +174,20 @@ internal class NavigationFakeRepository : RemoteRepository {
     override fun openFilesFile(path: String?) {
         val files = state.value.files ?: return
         state.value = state.value.copy(files = files.copy(file = path?.let { OpenFile(it, loading = false) }))
+    }
+
+    /** Every [openFileAt]: the path and the lines. */
+    val filesOpenedAt = mutableListOf<Pair<String, LineSelection?>>()
+
+    // Like the real repository: the file's folder, the file as [filesOnOpen] has it, and the lines.
+    override fun openFileAt(path: String, lines: LineSelection?, exclusive: Boolean): Boolean {
+        if (!super.openFileAt(path, lines, exclusive)) return false
+        filesOpenedAt += path to lines
+        val files = state.value.files ?: return true
+        val known = filesOnOpen(files.sessionId).file?.takeIf { it.path == path } ?: OpenFile(path, loading = false)
+        state.value =
+            state.value.copy(files = files.copy(path = parentPath(path), file = known.copy(selection = lines, revealLine = lines?.first)))
+        return true
     }
 
     override fun selectFileLines(selection: LineSelection?) {
@@ -156,8 +220,21 @@ internal class NavigationFakeRepository : RemoteRepository {
         state.value = state.value.copy(files = files.copy(editor = null))
     }
 
+    /** Imports mark themselves running like the real repository's; a test ends them. */
+    var importsRun = false
+
     override fun importAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) {
         imports += Triple(selection, uris, photo)
+        if (importsRun) state.value = state.value.copy(importingAttachments = true)
+    }
+
+    /** With this on, a batch import is only recorded; the test calls its `onDone` itself. */
+    var holdBatches = false
+    val batches = mutableListOf<Triple<RemoteSelection, List<Picked>, () -> Unit>>()
+
+    override fun importAttachments(selection: RemoteSelection, batch: List<Picked>, onDone: () -> Unit) {
+        if (holdBatches) batches += Triple(selection, batch, onDone)
+        else super.importAttachments(selection, batch, onDone)
     }
 
     override suspend fun activate(
@@ -172,6 +249,42 @@ internal class NavigationFakeRepository : RemoteRepository {
         return result
     }
 
+    /** Answers [readProjectArtifact]; `fresh` is a reload from the viewer. */
+    var artifact: suspend (sessionId: String, path: String, fresh: Boolean) -> ProjectArtifactResult = { _, _, _ ->
+        ProjectArtifactResult.Unavailable
+    }
+    val artifactReads = mutableListOf<Pair<String, Boolean>>()
+
+    override suspend fun readProjectArtifact(sessionId: String, path: String, fresh: Boolean): ProjectArtifactResult {
+        artifactReads += path to fresh
+        return artifact(sessionId, path, fresh)
+    }
+
+    /** Answers [listSessionArtifacts] and [openSessionArtifact]. */
+    var sessionArtifacts: List<SessionArtifact> = emptyList()
+    var openArtifact: suspend (artifactId: String, version: Int?) -> SessionArtifactOpenResult = { _, _ ->
+        SessionArtifactOpenResult.Unavailable
+    }
+    var artifactLists = 0
+
+    override suspend fun listSessionArtifacts(sessionId: String): SessionArtifactListResult {
+        artifactLists++
+        return SessionArtifactListResult.Loaded(SessionArtifactList(sessionArtifacts, false))
+    }
+
+    override suspend fun openSessionArtifact(
+        sessionId: String,
+        artifactId: String,
+        version: Int?,
+        type: ArtifactType?,
+        sha256: String?,
+    ): SessionArtifactOpenResult = openArtifact(artifactId, version)
+
+    /** Answers [readProjectImage]. */
+    var image: suspend (path: String) -> ProjectImageResult = { ProjectImageResult.Unavailable }
+
+    override suspend fun readProjectImage(sessionId: String, path: String, fresh: Boolean): ProjectImageResult = image(path)
+
     var createdSessions = 0
     var create: suspend (String, String) -> RemoteSelection = { routeId, projectId ->
         RemoteSelection(routeId, projectId, "created")
@@ -182,7 +295,12 @@ internal class NavigationFakeRepository : RemoteRepository {
         return create(routeId, projectId)
     }
 
-    override suspend fun openNotification(routeId: String, sessionId: String) = notificationLookup()
+    val notificationRequests = mutableListOf<Pair<String, String>>()
+
+    override suspend fun openNotification(routeId: String, sessionId: String): RemoteSelection? {
+        notificationRequests += routeId to sessionId
+        return notificationLookup()
+    }
 
     var pairResult: RemoteSelection? = null
 
@@ -235,8 +353,18 @@ internal class NavigationFakeRepository : RemoteRepository {
         toolOutputRequests += toolCallId
     }
 
+    /** Whether [prompt] sends the draft, like the real repository, instead of only counting. */
+    var sendsPrompts = false
+
+    /** The drafts [prompt] sent while [sendsPrompts]. */
+    val sentPrompts = mutableListOf<String>()
+
     override fun prompt() {
         prompts++
+        if (sendsPrompts) {
+            sentPrompts += state.value.draft
+            state.value = state.value.copy(draft = "", sending = true)
+        }
     }
 
     var aborts = 0

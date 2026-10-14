@@ -114,7 +114,7 @@ internal class PreferenceUpgradeState(
     /** The routes currently paired, used to prune events of routes no longer paired. */
     private val pairedRoutes: () -> Set<String> = {
         try {
-            PairingStore(context).load().map { it.routeId }.toSet()
+            context.stores.pairings.load().map { it.routeId }.toSet()
         } catch (swallowed: Exception) {
             Diagnostics.caught("question.pairedRoutes", swallowed)
             emptySet()
@@ -247,13 +247,14 @@ class QuestionUpgradeWorker(context: Context, parameters: WorkerParameters) :
         val app = context as? RemoteApplication ?: return Result.success()
         val paired = {
             try {
-                PairingStore(context).load().find { it.routeId == payload.routeId }
+                app.stores.pairings.load().find { it.routeId == payload.routeId }
             } catch (swallowed: Exception) {
                 Diagnostics.caught("question.doWork", swallowed)
                 null
             }
         }
         val host = paired() ?: return Result.success()
+        RemoteNotifications.rememberHost(host)
         val tag = RemoteNotifications.tag(payload.routeId, payload.sessionId)
         val upgrader =
             QuestionUpgrader(

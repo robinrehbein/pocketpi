@@ -97,11 +97,13 @@ def prepare(service, closed):
         service.edits().delete(packageName=PACKAGE_NAME, editId=edit_id).execute()
 
 
-def publish(service, closed, version, bundle):
+def publish(service, closed, version, bundle, mapping=None):
     from googleapiclient.http import MediaFileUpload
 
     if not bundle.is_file() or bundle.stat().st_size == 0:
         raise ValueError("Signed AAB is missing or empty")
+    if mapping is not None and (not mapping.is_file() or mapping.stat().st_size == 0):
+        raise ValueError("R8 mapping file is missing or empty")
     if version < 1 or version > MAX_VERSION_CODE:
         raise ValueError("Invalid versionCode")
     edit_id = new_edit(service)
@@ -118,6 +120,15 @@ def publish(service, closed, version, bundle):
         ).execute()
         if int(uploaded["versionCode"]) != version:
             raise ValueError("Uploaded AAB versionCode does not match the planned version")
+        if mapping is not None:
+            # R8's mapping, so Play's crash and ANR reports show readable stack traces.
+            service.edits().deobfuscationfiles().upload(
+                packageName=PACKAGE_NAME,
+                editId=edit_id,
+                apkVersionCode=version,
+                deobfuscationFileType="proguard",
+                media_body=MediaFileUpload(str(mapping), mimetype="application/octet-stream", resumable=True),
+            ).execute()
         release = {
             "name": f"PocketPi {version}",
             "versionCodes": [str(version)],
@@ -162,6 +173,7 @@ def main():
     publish_command = subcommands.add_parser("publish")
     publish_command.add_argument("--version-code", type=int, required=True)
     publish_command.add_argument("--bundle", type=Path, required=True)
+    publish_command.add_argument("--mapping", type=Path)
     args = parser.parse_args()
     closed = closed_track()
     if args.command == "validate-track":
@@ -171,7 +183,7 @@ def main():
     if args.command == "prepare":
         print(prepare(service, closed))
     else:
-        publish(service, closed, args.version_code, args.bundle)
+        publish(service, closed, args.version_code, args.bundle, args.mapping)
         print(f"Committed versionCode {args.version_code} to {' and '.join(target_tracks(closed))}")
 
 

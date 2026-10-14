@@ -121,54 +121,80 @@ internal fun middleEllipsis(text: String, maxChars: Int = 40): String {
 internal fun TouchedFilesSheet(files: TouchedFiles, onDismiss: () -> Unit, onOpen: (itemId: String) -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        LazyColumn(
+        TouchedFilesList(
+            files,
+            onOpen = {
+                onOpen(it)
+                onDismiss()
+            },
             Modifier.fillMaxWidth().testTag("touchedFilesSheet").navigationBarsPadding(),
-            contentPadding = PaddingValues(bottom = 16.dp),
-        ) {
-            item {
-                Text(
-                    stringResource(R.string.remote_panel_files_title),
-                    Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
-                    style = MaterialTheme.typography.titleLarge,
-                )
+            // Files opens over the chat; the sheet would cover it.
+            onOpenedInFiles = onDismiss,
+        )
+    }
+}
+
+/** The touched files as an inspector tab beside the chat; a row jumps to its card and stays. */
+@Composable
+internal fun TouchedFilesPane(files: TouchedFiles, onOpen: (itemId: String) -> Unit, onClose: () -> Unit) {
+    PaneBackHandler(onBack = onClose)
+    Surface(Modifier.fillMaxSize()) {
+        TouchedFilesList(
+            files,
+            onOpen,
+            Modifier.fillMaxSize().testTag("touchedFilesPane").windowInsetsPadding(WindowInsets.safeDrawing),
+        )
+    }
+}
+
+@Composable
+private fun TouchedFilesList(
+    files: TouchedFiles,
+    onOpen: (itemId: String) -> Unit,
+    modifier: Modifier,
+    onOpenedInFiles: () -> Unit = {},
+) {
+    LazyColumn(modifier, contentPadding = PaddingValues(bottom = 16.dp)) {
+        item {
+            Text(
+                stringResource(R.string.remote_panel_files_title),
+                Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                style = MaterialTheme.typography.titleLarge,
+            )
+        }
+        for ((title, list) in
+            listOf(
+                R.string.remote_panel_files_changed to files.changed,
+                R.string.remote_panel_files_read to files.read,
+            )) {
+            if (list.isEmpty()) continue
+            item(key = "header-$title") {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(title),
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        list.size.toString(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-            for ((title, list) in
-                listOf(
-                    R.string.remote_panel_files_changed to files.changed,
-                    R.string.remote_panel_files_read to files.read,
-                )) {
-                if (list.isEmpty()) continue
-                item(key = "header-$title") {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            stringResource(title),
-                            Modifier.weight(1f),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Text(
-                            list.size.toString(),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                items(list, key = { "$title-${it.path}" }) { file ->
-                    TouchedFileRow(file) {
-                        onOpen(file.latestItemId)
-                        onDismiss()
-                    }
-                }
+            items(list, key = { "$title-${it.path}" }) { file ->
+                TouchedFileRow(file, onOpenedInFiles) { onOpen(file.latestItemId) }
             }
         }
     }
 }
 
 @Composable
-private fun TouchedFileRow(file: TouchedFile, onClick: () -> Unit) {
+private fun TouchedFileRow(file: TouchedFile, onOpenedInFiles: () -> Unit, onClick: () -> Unit) {
     val trimmed = file.path.trimEnd('/')
     val name = trimmed.substringAfterLast('/').ifEmpty { file.path }
     val parent = trimmed.substringBeforeLast('/', missingDelimiterValue = "")
@@ -209,6 +235,8 @@ private fun TouchedFileRow(file: TouchedFile, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
             )
         }
+        // The row jumps to the message; the icon opens the file itself.
+        OpenInFilesButton(file.path, null, onDone = onOpenedInFiles)
     }
 }
 

@@ -35,6 +35,9 @@ class AttentionNotificationTest {
     /** The one attention notification posted under [id] (2 for `*.done`, 3 for `*.stuck`). */
     private fun posted(id: Int) = manager.activeNotifications.single { it.id == id }
 
+    /** The ids posted for the session, leaving out its Mac's group summary. */
+    private fun sessionIds() = manager.activeNotifications.filter { it.tag == "pi:r:s" }.map { it.id }.toSet()
+
     private fun title(notification: android.app.Notification) =
         notification.extras.getCharSequence(NotificationCompat.EXTRA_TITLE).toString()
 
@@ -66,7 +69,7 @@ class AttentionNotificationTest {
     fun anAttentionNoticeKeepsTheSessionsQuestionNotification() {
         RemoteNotifications.postGenericQuestion(context, push("event" to "question"))
         RemoteNotifications.postAttention(context, push("event" to "job.done", "jobId" to "job_1"))
-        assertEquals(setOf(1, 2), manager.activeNotifications.map { it.id }.toSet())
+        assertEquals(setOf(1, 2), sessionIds())
         RemoteNotifications.cancel(context, "r", "s")
         assertTrue(manager.activeNotifications.isEmpty())
     }
@@ -75,7 +78,7 @@ class AttentionNotificationTest {
     fun stuckAndDoneNoticesForTheSameSessionBothShow() {
         RemoteNotifications.postAttention(context, push("event" to "job.stuck", "jobId" to "job_1"))
         RemoteNotifications.postAttention(context, push("event" to "job.done", "jobId" to "job_2"))
-        assertEquals(setOf(2, 3), manager.activeNotifications.map { it.id }.toSet())
+        assertEquals(setOf(2, 3), sessionIds())
         assertEquals("Background job looks stuck", title(posted(3).notification))
         assertEquals("Background job finished", title(posted(2).notification))
         RemoteNotifications.cancel(context, "r", "s")
@@ -84,18 +87,30 @@ class AttentionNotificationTest {
 
     @Test
     fun jobIntentsCarryTheJobAndDifferFromTheSessionIntent() {
-        val session = sessionIntent(context, "r", "s")
-        val job = notificationIntent(context, NotificationTarget("r", "s", jobs = true, jobId = "job_1"))
-        val list = notificationIntent(context, NotificationTarget("r", "s", jobs = true))
+        val session = LaunchIntents.session(context, "r", "s")
+        val job = LaunchIntents.notification(context, NotificationTarget("r", "s", jobs = true, jobId = "job_1"))
+        val list = LaunchIntents.notification(context, NotificationTarget("r", "s", jobs = true))
         assertEquals("s", job.getStringExtra(RemoteNotifications.EXTRA_TARGET))
         assertTrue(job.getBooleanExtra(RemoteNotifications.EXTRA_JOBS, false))
         assertEquals("job_1", job.getStringExtra(RemoteNotifications.EXTRA_JOB))
         assertNull(list.getStringExtra(RemoteNotifications.EXTRA_JOB))
         assertEquals(3, setOf(session.data, job.data, list.data).size)
         assertNotEquals(session.data, job.data)
-        val plain = notificationIntent(context, NotificationTarget("r", "s"))
+        val plain = LaunchIntents.notification(context, NotificationTarget("r", "s"))
         assertEquals(session.data, plain.data)
         assertFalse(plain.hasExtra(RemoteNotifications.EXTRA_JOBS))
+    }
+
+    @Test
+    fun notificationsOpenTheirSessionThroughTheAlias() {
+        RemoteNotifications.postComplete(context, push("event" to "complete"))
+        RemoteNotifications.postAttention(context, push("event" to "job.done", "jobId" to "job_1"))
+        listOf(1 to NotificationTarget("r", "s"), 2 to NotificationTarget("r", "s", jobs = true, jobId = "job_1"))
+            .forEach { (id, target) ->
+                val intent = shadowOf(posted(id).notification.contentIntent).savedIntent
+                assertEquals(LaunchIntents.ALIAS, intent.component?.className)
+                assertEquals(target, LaunchIntents.target(intent))
+            }
     }
 
     @Test

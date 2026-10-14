@@ -26,30 +26,53 @@ import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 
-/** Everything a hardware keyboard can do in PocketPi; [KEYMAP] binds the keys. */
-internal enum class Shortcut {
-    SEARCH,
-    PREVIOUS_SESSION,
-    NEXT_SESSION,
-    NEW_SESSION,
-    TOGGLE_LIST,
-    PREVIOUS_PROJECT,
-    NEXT_PROJECT,
-    FOCUS_COMPOSER,
-    STOP,
-    CHANGES,
-    FILES,
-    JOBS,
-    HISTORY,
-    SETTINGS,
-    HELP,
-    EXPAND_INSPECTOR,
-    TOGGLE_INSPECTOR,
-    OTHER_BUSY_ACTION,
-    REFRESH,
-    RENAME,
-    FORK,
-    ESCAPE,
+/** The sections of the shortcut lists (the system's Meta+/ helper, Ctrl+/ and Settings). */
+internal enum class ShortcutGroup(@StringRes val titleRes: Int) {
+    NAVIGATION(R.string.remote_shortcut_group_navigation),
+    CHAT(R.string.remote_shortcut_group_chat),
+    COMPOSER(R.string.remote_shortcut_group_composer),
+    PANES(R.string.remote_shortcut_group_panes),
+}
+
+/**
+ * Everything a hardware keyboard can do in PocketPi; [KEYMAP] binds the keys. A shortcut that is
+ * not [listed] has a key but no action yet, so the shortcut lists leave it out.
+ */
+internal enum class Shortcut(val group: ShortcutGroup, val listed: Boolean = true) {
+    PALETTE(ShortcutGroup.NAVIGATION),
+    SEARCH(ShortcutGroup.NAVIGATION),
+    PREVIOUS_SESSION(ShortcutGroup.NAVIGATION),
+    NEXT_SESSION(ShortcutGroup.NAVIGATION),
+    NEW_SESSION(ShortcutGroup.NAVIGATION),
+    TOGGLE_LIST(ShortcutGroup.PANES),
+    PREVIOUS_PROJECT(ShortcutGroup.NAVIGATION),
+    NEXT_PROJECT(ShortcutGroup.NAVIGATION),
+    FOCUS_COMPOSER(ShortcutGroup.CHAT),
+    STOP(ShortcutGroup.CHAT),
+    CHANGES(ShortcutGroup.PANES),
+    FILES(ShortcutGroup.PANES),
+    JOBS(ShortcutGroup.PANES),
+    HISTORY(ShortcutGroup.PANES),
+    SETTINGS(ShortcutGroup.NAVIGATION),
+    HELP(ShortcutGroup.NAVIGATION),
+    EXPAND_INSPECTOR(ShortcutGroup.PANES),
+    TOGGLE_INSPECTOR(ShortcutGroup.PANES),
+    REVIEW(ShortcutGroup.PANES),
+    OTHER_BUSY_ACTION(ShortcutGroup.COMPOSER),
+    SELECT_ALL_LINES(ShortcutGroup.PANES),
+    COPY_LINES(ShortcutGroup.PANES),
+    ZOOM_IN(ShortcutGroup.PANES),
+    ZOOM_OUT(ShortcutGroup.PANES),
+    REFRESH(ShortcutGroup.NAVIGATION),
+    RENAME(ShortcutGroup.CHAT),
+    FORK(ShortcutGroup.CHAT),
+    ESCAPE(ShortcutGroup.CHAT),
+    NEXT_REGION(ShortcutGroup.NAVIGATION),
+    PREVIOUS_REGION(ShortcutGroup.NAVIGATION),
+    PAGE_UP(ShortcutGroup.CHAT),
+    PAGE_DOWN(ShortcutGroup.CHAT),
+    CHAT_START(ShortcutGroup.CHAT),
+    CHAT_END(ShortcutGroup.CHAT),
 }
 
 /** Where a binding applies. A context also takes the bindings of its [parent]. */
@@ -61,7 +84,10 @@ internal enum class KeyContext(val parent: KeyContext?) {
     CHAT(GLOBAL),
 
     /** Keyboard focus is in the chat's composer. */
-    COMPOSER(CHAT);
+    COMPOSER(CHAT),
+
+    /** Keyboard focus is in a code pane (Files or Changes). It acts on the lines there, not on the chat. */
+    CODE(GLOBAL);
 
     fun includes(other: KeyContext): Boolean = generateSequence(this) { it.parent }.any { it == other }
 }
@@ -78,13 +104,15 @@ internal data class KeyBinding(
 )
 
 /**
- * The whole keymap, in the order a shortcut list shows it. Ctrl+Tab and Ctrl+digits stay free
- * for pinned sessions later; Ctrl+F stays session search until there is a find in the chat. The
- * Book Cover Keyboard needs Fn for F-keys, so each one also has a Ctrl chord.
+ * The whole keymap, in the order a shortcut list shows it. Ctrl+K opens the command palette, which
+ * also finds sessions of every project; Ctrl+F stays the session list's search. Ctrl+Tab and
+ * Ctrl+digits stay free for pinned sessions later. The
+ * Book Cover Keyboard needs Fn for F-keys, so each one also has a Ctrl chord. Ctrl+Down stays
+ * the next session, so the chat's end is Ctrl+End only.
  */
 internal val KEYMAP: List<KeyBinding> =
     listOf(
-        KeyBinding(Shortcut.SEARCH, Key.K, ctrl = true, labelRes = R.string.remote_keymap_search),
+        KeyBinding(Shortcut.PALETTE, Key.K, ctrl = true, labelRes = R.string.remote_keymap_palette),
         KeyBinding(Shortcut.SEARCH, Key.F, ctrl = true, labelRes = R.string.remote_keymap_search),
         KeyBinding(Shortcut.NEW_SESSION, Key.N, ctrl = true, labelRes = R.string.remote_keymap_new_session),
         KeyBinding(Shortcut.PREVIOUS_SESSION, Key.DirectionUp, ctrl = true, labelRes = R.string.remote_keymap_previous_session),
@@ -98,21 +126,46 @@ internal val KEYMAP: List<KeyBinding> =
         KeyBinding(Shortcut.REFRESH, Key.F5, labelRes = R.string.remote_keymap_refresh),
         KeyBinding(Shortcut.SETTINGS, Key.Comma, ctrl = true, labelRes = R.string.remote_keymap_settings),
         KeyBinding(Shortcut.HELP, Key.Slash, ctrl = true, labelRes = R.string.remote_keymap_help),
+        KeyBinding(Shortcut.NEXT_REGION, Key.F6, labelRes = R.string.remote_keymap_next_region),
+        KeyBinding(Shortcut.NEXT_REGION, Key.DirectionRight, ctrl = true, alt = true, labelRes = R.string.remote_keymap_next_region),
+        KeyBinding(Shortcut.PREVIOUS_REGION, Key.F6, shift = true, labelRes = R.string.remote_keymap_previous_region),
+        KeyBinding(Shortcut.PREVIOUS_REGION, Key.DirectionLeft, ctrl = true, alt = true, labelRes = R.string.remote_keymap_previous_region),
         KeyBinding(Shortcut.FOCUS_COMPOSER, Key.L, ctrl = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_focus_composer),
         KeyBinding(Shortcut.STOP, Key.Period, ctrl = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_stop),
         KeyBinding(Shortcut.ESCAPE, Key.Escape, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_escape),
+        KeyBinding(Shortcut.PAGE_UP, Key.PageUp, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_page_up),
+        KeyBinding(Shortcut.PAGE_DOWN, Key.PageDown, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_page_down),
+        KeyBinding(Shortcut.CHAT_START, Key.MoveHome, ctrl = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_chat_start),
+        KeyBinding(Shortcut.CHAT_END, Key.MoveEnd, ctrl = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_chat_end),
         KeyBinding(Shortcut.CHANGES, Key.G, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_changes),
         KeyBinding(Shortcut.FILES, Key.E, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_files),
         KeyBinding(Shortcut.JOBS, Key.J, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_jobs),
         KeyBinding(Shortcut.HISTORY, Key.H, ctrl = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_history),
         KeyBinding(Shortcut.EXPAND_INSPECTOR, Key.B, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_expand_inspector),
         KeyBinding(Shortcut.TOGGLE_INSPECTOR, Key.Backslash, ctrl = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_toggle_inspector),
+        KeyBinding(Shortcut.REVIEW, Key.D, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_review),
         KeyBinding(Shortcut.RENAME, Key.F2, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_rename),
         KeyBinding(Shortcut.RENAME, Key.R, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_rename),
         KeyBinding(Shortcut.FORK, Key.N, ctrl = true, shift = true, context = KeyContext.CHAT, labelRes = R.string.remote_keymap_fork),
         KeyBinding(Shortcut.OTHER_BUSY_ACTION, Key.Enter, alt = true, context = KeyContext.COMPOSER, labelRes = R.string.remote_keymap_other_busy_action),
         KeyBinding(Shortcut.OTHER_BUSY_ACTION, Key.NumPadEnter, alt = true, context = KeyContext.COMPOSER, labelRes = R.string.remote_keymap_other_busy_action),
+        KeyBinding(Shortcut.SELECT_ALL_LINES, Key.A, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_select_all),
+        KeyBinding(Shortcut.COPY_LINES, Key.C, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_copy_lines),
+        KeyBinding(Shortcut.ZOOM_IN, Key.Equals, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_IN, Key.Equals, ctrl = true, shift = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_IN, Key.Plus, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_IN, Key.Plus, ctrl = true, shift = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_IN, Key.NumPadAdd, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_OUT, Key.Minus, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_out),
+        KeyBinding(Shortcut.ZOOM_OUT, Key.NumPadSubtract, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_out),
     )
+
+/** The shortcuts a focused code pane takes itself: they select, copy and zoom its lines. */
+internal val CODE_SHORTCUTS: Set<Shortcut> = setOf(Shortcut.SELECT_ALL_LINES, Shortcut.COPY_LINES, Shortcut.ZOOM_IN, Shortcut.ZOOM_OUT)
+
+/** The code pane shortcut [event] is, or null. Only a code pane with focus asks for these. */
+internal fun resolveCodeShortcut(event: KeyEvent): Shortcut? =
+    resolveShortcut(event, KeyContext.CODE)?.takeIf { it in CODE_SHORTCUTS }
 
 /**
  * The shortcut [key] with exactly these modifiers runs in [context], or null. Callers pass Meta
@@ -123,8 +176,56 @@ internal fun resolveShortcut(key: Key, ctrl: Boolean, alt: Boolean, shift: Boole
         it.key == key && it.ctrl == ctrl && it.alt == alt && it.shift == shift && context.includes(it.context)
     }?.shortcut
 
-internal fun resolveShortcut(event: KeyEvent, context: KeyContext): Shortcut? =
-    resolveShortcut(event.key, event.isCtrlPressed || event.isMetaPressed, event.isAltPressed, event.isShiftPressed, context)
+internal fun resolveShortcut(event: KeyEvent, context: KeyContext): Shortcut? {
+    val ctrl = event.isCtrlPressed || event.isMetaPressed
+    return resolveShortcut(event.key, ctrl, event.isAltPressed, event.isShiftPressed, context)
+        ?: typedShortcut(typedWithCtrl(event), ctrl, event.isAltPressed)
+}
+
+/**
+ * A shortcut named after the character its key types rather than the key: Ctrl with whatever
+ * types "/" opens the help, also where "/" is Shift+7 (German) and not the slash key.
+ */
+internal fun typedShortcut(typed: Int, ctrl: Boolean, alt: Boolean): Shortcut? =
+    if (ctrl && !alt && typed == '/'.code) Shortcut.HELP else null
+
+/** The character [event]'s key types with its modifiers but Ctrl and Meta; 0 for none. */
+private fun typedWithCtrl(event: KeyEvent): Int {
+    val native = event.nativeKeyEvent
+    val ctrlMeta = android.view.KeyEvent.META_CTRL_MASK or android.view.KeyEvent.META_META_MASK
+    return runCatching { native.getUnicodeChar(native.metaState and ctrlMeta.inv()) }.getOrDefault(0)
+}
+
+/**
+ * The keys of review mode ([TwoPaneState.reviewing]). They are single letters, so unlike [KEYMAP]
+ * they act only while review mode is on and no text field has focus; then they never reach the
+ * composer.
+ */
+internal enum class ReviewKey {
+    NEXT_FILE,
+    PREVIOUS_FILE,
+    NEXT_HUNK,
+    PREVIOUS_HUNK,
+    COMMENT,
+    USE_REVIEW,
+}
+
+/** The review key [key] is without any modifier: n/p files, j/k changes, c comment, Enter. */
+internal fun reviewKey(key: Key, ctrl: Boolean, alt: Boolean, shift: Boolean, meta: Boolean = false): ReviewKey? {
+    if (ctrl || alt || shift || meta) return null
+    return when (key) {
+        Key.N -> ReviewKey.NEXT_FILE
+        Key.P -> ReviewKey.PREVIOUS_FILE
+        Key.J -> ReviewKey.NEXT_HUNK
+        Key.K -> ReviewKey.PREVIOUS_HUNK
+        Key.C -> ReviewKey.COMMENT
+        Key.Enter, Key.NumPadEnter -> ReviewKey.USE_REVIEW
+        else -> null
+    }
+}
+
+internal fun reviewKey(event: KeyEvent): ReviewKey? =
+    reviewKey(event.key, event.isCtrlPressed, event.isAltPressed, event.isShiftPressed, event.isMetaPressed)
 
 /** How long a first Esc waits for the second one that stops pi. */
 internal const val ESCAPE_STOP_WINDOW_MILLIS = 1500L
@@ -167,13 +268,19 @@ internal class EscapeGesture(private val windowMillis: Long = ESCAPE_STOP_WINDOW
 
 /** The one thing an Esc in a chat does, closest first. */
 internal enum class EscapeStep {
+    /** Review mode ends and the panes get their widths back, before anything else. */
+    LEAVE_REVIEW,
+
     /** Slash suggestions or the prompt prediction. Menus and dialogs are windows of their own. */
     CLOSE_TRANSIENT,
 
     /** A text selection in the chat or a line selection in Files. */
     CLEAR_SELECTION,
 
-    /** The topmost tool detail, Files, Changes, jobs or history, as Back closes it. */
+    /**
+     * The topmost pane, as Back closes it: the inspector's active tab beside the chat, or the
+     * tool detail, Files, Changes or jobs over it.
+     */
     CLOSE_PANE,
 
     /** Leaves the composer; the draft stays. */
@@ -197,8 +304,10 @@ internal fun escapeStep(
     composerFocused: Boolean,
     composerBlank: Boolean,
     running: Boolean,
+    reviewing: Boolean = false,
 ): EscapeStep =
     when {
+        reviewing -> EscapeStep.LEAVE_REVIEW
         transientOpen -> EscapeStep.CLOSE_TRANSIENT
         selectionActive -> EscapeStep.CLEAR_SELECTION
         paneOpen -> EscapeStep.CLOSE_PANE
@@ -269,6 +378,12 @@ internal class ChatKeyTarget {
     }
 
     /**
+     * A text field with text has focus, the composer or a question's field: text-editing chords
+     * such as Ctrl+Home and Ctrl+End are its own.
+     */
+    val editingText: Boolean get() = (composerFocused && !composerBlank) || (questionFieldFocused && !questionFieldBlank)
+
+    /**
      * Files, Changes, a tool detail or the jobs lie over the chat, hiding the composer: typed
      * keys must not land in it.
      */
@@ -276,6 +391,15 @@ internal class ChatKeyTarget {
 
     /** The slash suggestions under the composer show; [SessionControls] reports it. */
     var slashShown = false
+
+    /** The highlighted slash suggestion, which Tab or Enter runs ([composerKey]). */
+    var slashHighlight by mutableIntStateOf(0)
+
+    /** The slash suggestions' command names in list order; [SessionControls] reports them. */
+    var slashNames: List<String> = emptyList()
+
+    /** Runs the suggestion at an index of [slashNames], as a tap on it does. */
+    var runSlash: (Int) -> Unit = {}
 
     /** Slash suggestions or the prompt prediction show; [closeTransient] closes them. */
     var transientOpen: () -> Boolean = { false }
@@ -291,8 +415,48 @@ internal class ChatKeyTarget {
     /** Focuses the composer and types [text] at its cursor; never while [composerCovered]. */
     var type: (String) -> Unit = {}
 
+    /**
+     * Text went into the composer's draft from outside the field (a drop): dictation stops, so
+     * it cannot overwrite that text.
+     */
+    var draftEdited: () -> Unit = {}
+
     /** Runs a chat shortcut ([KeyContext.CHAT]); false when it does not apply now. */
     var shortcut: (Shortcut) -> Boolean = { false }
+
+    /** Runs a row the command palette chose in this chat, as the chat's own control would. */
+    var perform: (ChatCommand) -> Unit = {}
+
+    /** Review mode is on ([TwoPaneState.reviewing]): Esc leaves it first, and [ReviewKey]s act. */
+    var reviewing: () -> Boolean = { false }
+    var leaveReview: () -> Unit = {}
+
+    /**
+     * A printable key review mode does not use: review mode ends, so the chat comes back from
+     * its strip, and the composer gets focus. False where that does not uncover the composer.
+     */
+    var leaveReviewToType: () -> Boolean = { false }
+
+    /** The Changes pane's handler of review keys while it shows; false when a key did nothing. */
+    private var reviewHandler: ((ReviewKey) -> Boolean)? = null
+
+    fun addReviewHandler(handler: (ReviewKey) -> Boolean) {
+        reviewHandler = handler
+    }
+
+    fun removeReviewHandler(handler: (ReviewKey) -> Boolean) {
+        if (reviewHandler === handler) reviewHandler = null
+    }
+
+    /**
+     * A review key nothing on screen took: used up by review mode, also where it did nothing, so
+     * it never types into the composer. False outside review mode or with a text field focused.
+     */
+    fun reviewKey(key: ReviewKey): Boolean {
+        if (!reviewing() || composerFocused || questionFieldFocused) return false
+        reviewHandler?.invoke(key)
+        return true
+    }
 
     /** The open panes' Back actions, oldest first, as [PaneBackHandler] registered them. */
     private val panes = mutableListOf<() -> Unit>()
@@ -318,12 +482,13 @@ internal class ChatKeyTarget {
     fun escape(nowMillis: Long) {
         val fieldFocused = composerFocused || questionFieldFocused
         val fieldBlank = if (questionFieldFocused) questionFieldBlank else composerBlank
-        val step = escapeStep(transientOpen(), selectionActive(), paneOpen, fieldFocused, fieldBlank, running)
+        val step = escapeStep(transientOpen(), selectionActive(), paneOpen, fieldFocused, fieldBlank, running, reviewing())
         if (step != EscapeStep.STOP_GESTURE) {
             escape.reset()
             stopHint = false
         }
         when (step) {
+            EscapeStep.LEAVE_REVIEW -> leaveReview()
             EscapeStep.CLOSE_TRANSIENT -> closeTransient()
             EscapeStep.CLEAR_SELECTION -> clearSelection()
             EscapeStep.CLOSE_PANE -> closeTopPane()
@@ -396,7 +561,20 @@ internal fun PaneBackHandler(enabled: Boolean = true, onBack: () -> Unit) {
  * and the chats on screen. The screens fill it in; [RemoteNavigation] provides it.
  */
 internal class ShortcutTargets {
-    /** Ctrl+K asks the session list to focus its search field; the list handles each request once. */
+    /** The panes F6 and Ctrl+Alt+Left/Right move between. */
+    val regions = FocusRegions()
+
+    /** The Ctrl+/ list shows, with the keys of this context; null while it is closed. */
+    var help by mutableStateOf<KeyContext?>(null)
+
+    /** The command palette's mode while it is open; null while it is closed. */
+    var palette by mutableStateOf<PaletteMode?>(null)
+
+    fun openPalette(mode: PaletteMode) {
+        palette = mode
+    }
+
+    /** Ctrl+F asks the session list to focus its search field; the list handles each request once. */
     var searchRequests by mutableIntStateOf(0)
     var searchHandled by mutableIntStateOf(0)
 

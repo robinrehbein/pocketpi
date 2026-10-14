@@ -10,6 +10,9 @@ import kotlinx.coroutines.launch
 /** How many earlier unanswered saves an editor remembers ([FileEditor.superseded]). */
 private const val MAX_SUPERSEDED_WRITES = 4
 
+/** How many folder listings [ProjectFilesLoader] keeps for an instant reopen. */
+private const val MAX_REMEMBERED_LISTINGS = 16
+
 /** The `session.files.*` commands. Implementations throw [RemoteRequestException] on errors. */
 internal interface FileSource {
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing
@@ -25,7 +28,9 @@ internal interface FileSource {
  * Loads the file browser into [RemoteState.files]. Folders and files load a page at a time; a
  * later file page that comes back `not_found` (the file changed, so its version no longer
  * matches) reads the file once more from the start. A response for a folder or file that is no
- * longer shown is dropped, and so is a save reply once its editor is gone.
+ * longer shown is dropped, and so is a save reply once its editor is gone. The last listing of
+ * each folder stays in memory, so a connected browser opens a folder on it at once and lists it
+ * again in place.
  */
 internal class ProjectFilesLoader(
     private val scope: CoroutineScope,
@@ -44,6 +49,20 @@ internal class ProjectFilesLoader(
     private var drainingPreviews = false
     private var peekJob: Job? = null
     private var editorVersion = 0L
+    /** By Mac, session and folder. */
+    private val remembered = NavigationMemoryCache<Triple<String?, String, String>, FileListing>(MAX_REMEMBERED_LISTINGS)
+
+    /** Drops every remembered listing: the Mac is gone, or its navigation starts over. */
+    fun forget() = remembered.clear()
+
+    private fun key(sessionId: String, path: String) = Triple(current().selection.routeId, sessionId, path)
+
+    /** Keeps the listing [sessionId]'s browser shows now for the folder's next opening. */
+    private fun remember(sessionId: String) {
+        val files = files()?.takeIf { it.sessionId == sessionId } ?: return
+        val listing = files.listing?.takeIf { it.unavailable == null && files.failure == null } ?: return
+        remembered[key(sessionId, files.path)] = listing
+    }
 
     private fun files(): FilesState? =
         current().files?.takeIf { it.sessionId == current().selection.sessionId }
@@ -152,6 +171,8 @@ internal class ProjectFilesLoader(
                                 content = if (chunk.binary || chunk.tooLarge) null else chunk.content.take(FILE_TILE_PREVIEW_CHARS),
                                 binary = chunk.binary,
                                 tooLarge = chunk.tooLarge,
+                                complete = !chunk.binary && !chunk.tooLarge && chunk.nextOffset == null &&
+                                    chunk.content.length <= FILE_TILE_PREVIEW_CHARS,
                             )
                             write(sessionId) { state ->
                                 if (state.path != folder) state
@@ -241,8 +262,11 @@ internal class ProjectFilesLoader(
         files()?.let { files -> write(files.sessionId) { it.copy(peek = null) } }
     }
 
-    /** Opens the browser at the session folder. */
-    fun open() {
+    /**
+     * Opens the browser at the session folder, or at its folder [path] with [file] open: the
+     * browser as a return to the session left it. [lines] are picked in [file] and scrolled to.
+     */
+    fun open(path: String = "", file: String? = null, lines: LineSelection? = null) {
         stopList()
         stopFile()
         stopPreviews()
@@ -255,8 +279,34 @@ internal class ProjectFilesLoader(
                 !state.connected -> FilesFailure.OFFLINE
                 else -> null
             }
-        update { it.copy(files = FilesState(sessionId, loading = failure == null, failure = failure)) }
-        if (failure == null) list(sessionId, "", after = null)
+        val opened = file?.takeIf { failure == null }
+        val known = remembered[key(sessionId, path)].takeIf { failure == null }
+        update {
+            it.copy(
+                files = FilesState(
+                    sessionId,
+                    path = path,
+                    loading = failure == null && known == null,
+                    listing = known,
+                    failure = failure,
+                    file = opened?.let { OpenFile(it, selection = lines, revealLine = lines?.first) },
+                )
+            )
+        }
+        if (failure != null) return
+        if (known != null) relist(sessionId, path, revalidate = true) else list(sessionId, path, after = null)
+        if (opened != null) read(sessionId, opened, 0, null, reopen = false)
+    }
+
+    /**
+     * Opens the browser at the folder of [path] with the file open, [lines] picked and in view:
+     * a file the chat named. False, with nothing opened, when [path] is not relative to the session
+     * folder; `session.files.*` reads nothing outside it.
+     */
+    fun openAt(path: String, lines: LineSelection?): Boolean {
+        if (!isSessionPath(path)) return false
+        open(parentPath(path), path, lines)
+        return true
     }
 
     fun close() {
@@ -271,7 +321,10 @@ internal class ProjectFilesLoader(
      * Shows the folder [path]: a child of the shown folder keeps the shown listing for Back, and
      * an ancestor comes back from those kept listings without a request.
      */
-    fun openDir(path: String) {
+    fun openDir(path: String) = openDir(path, cached = true)
+
+    /** [cached] shows the folder's last listing while it is listed again, if there is one. */
+    private fun openDir(path: String, cached: Boolean) {
         val files = files() ?: return
         stopList()
         stopFile()
@@ -301,12 +354,13 @@ internal class ProjectFilesLoader(
                 files.parents + listOfNotNull(files.listing?.takeIf { it.unavailable == null })
             else files.parents.filter { path.startsWith(if (it.path.isEmpty()) "" else it.path + "/") && it.path != path }
         val offline = !current().connected
+        val known = remembered[key(files.sessionId, path)].takeIf { cached && !offline }
         write(files.sessionId) {
             it.copy(
                 path = path,
                 parents = parents,
-                loading = !offline,
-                listing = null,
+                loading = !offline && known == null,
+                listing = known,
                 failure = if (offline) FilesFailure.OFFLINE else null,
                 moreLoading = false,
                 moreFailure = null,
@@ -316,7 +370,11 @@ internal class ProjectFilesLoader(
                 editor = null,
             )
         }
-        if (!offline) list(files.sessionId, path, after = null)
+        when {
+            offline -> Unit
+            known != null -> relist(files.sessionId, path, revalidate = true)
+            else -> list(files.sessionId, path, after = null)
+        }
     }
 
     /** Reloads what is shown: the open file from its start, or the shown folder's first page. */
@@ -325,7 +383,106 @@ internal class ProjectFilesLoader(
         stopPreviews()
         write(files.sessionId) { it.copy(previews = emptyMap(), peek = null) }
         val file = files.file
-        if (file != null) openFile(file.path) else openDir(files.path)
+        // Reload by hand shows the read and its failure; it does not stand behind a remembered listing.
+        if (file != null) openFile(file.path) else openDir(files.path, cached = false)
+    }
+
+    /**
+     * Reads the shown file or folder again in place, as after a reconnect: what is shown stays
+     * until the reply replaces it, and a failure leaves it. An open editor keeps its own text and
+     * version; a file or folder with nothing shown yet loads again.
+     */
+    fun refresh() {
+        val files = files() ?: return
+        if (files.editor != null || !current().connected) return
+        stopPreviews()
+        // A preview or peek still loading lost its request; loaded ones stay.
+        write(files.sessionId) {
+            it.copy(
+                previews = it.previews.filterValues { preview -> !preview.loading && preview.failure == null },
+                peek = it.peek?.takeIf { peek -> !peek.loading && peek.failure == null },
+            )
+        }
+        val file = files.file
+        when {
+            file != null && file.version != null && !file.loading && file.failure == null ->
+                reread(files.sessionId, file)
+            file != null -> openFile(file.path)
+            files.listing != null && !files.loading && files.failure == null -> relist(files.sessionId, files.path)
+            else -> openDir(files.path)
+        }
+        // The shown file's folder is listed again too, for Back.
+        if (file != null && files.listing != null && files.failure == null) relist(files.sessionId, files.path)
+    }
+
+    /** The open file's first page again: the same version keeps every page shown. */
+    private fun reread(sessionId: String, shown: OpenFile) {
+        stopFile()
+        val requestVersion = ++fileVersion
+        fun active() =
+            requestVersion == fileVersion &&
+                files()?.let { it.sessionId == sessionId && it.file?.path == shown.path && it.editor == null } == true
+        writeFile(sessionId, shown.path) { it.copy(moreLoading = false) }
+        fileJob = scope.launch {
+            try {
+                val chunk = source.filesRead(sessionId, shown.path, 0, null)
+                if (!active() || chunk.version == shown.version) return@launch
+                writeFile(sessionId, shown.path) {
+                    OpenFile(
+                        shown.path,
+                        loading = false,
+                        version = chunk.version,
+                        size = chunk.size,
+                        content = chunk.content,
+                        binary = chunk.binary,
+                        tooLarge = chunk.tooLarge,
+                        nextOffset = chunk.nextOffset,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Diagnostics.caught("files.reread", e)
+            }
+        }
+    }
+
+    /**
+     * The shown folder's first page again; previews of entries listed the same stay. A failure
+     * leaves the listing shown, except when [revalidate] checks a remembered listing just opened:
+     * then the folder may be gone or unreadable since, and the failure replaces it.
+     */
+    private fun relist(sessionId: String, path: String, revalidate: Boolean = false) {
+        stopList()
+        val version = ++listVersion
+        fun active() = version == listVersion && files()?.let { it.sessionId == sessionId && it.path == path } == true
+        write(sessionId) { it.copy(moreLoading = false, moreFailure = null) }
+        listJob = scope.launch {
+            try {
+                val page = source.filesList(sessionId, path, null)
+                if (!active()) return@launch
+                write(sessionId) { files ->
+                    val before = files.listing?.entries.orEmpty().associateBy { it.name }
+                    val listed = page.entries.associateBy { it.name }
+                    files.copy(
+                        listing = page,
+                        previews = files.previews.filterKeys { preview ->
+                            val name = preview.substringAfterLast('/')
+                            listed[name] != null && listed[name] == before[name]
+                        },
+                    )
+                }
+                remember(sessionId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Diagnostics.caught("files.relist", e)
+                if (revalidate && active()) {
+                    remembered.remove(key(sessionId, path))
+                    write(sessionId) { it.copy(loading = false, failure = failure(e)) }
+                }
+            }
+        }
     }
 
     /** The next page of the open file, or of the shown folder. */
@@ -379,6 +536,7 @@ internal class ProjectFilesLoader(
                         }
                     files.copy(loading = false, listing = listing, failure = null, moreLoading = false, moreFailure = null)
                 }
+                remember(sessionId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -423,25 +581,39 @@ internal class ProjectFilesLoader(
                 val chunk = source.filesRead(sessionId, path, offset, version)
                 if (!active()) return@launch
                 writeFile(sessionId, path) { file ->
-                    when {
-                        offset == 0L ->
-                            OpenFile(
-                                path,
-                                loading = false,
-                                version = chunk.version,
-                                size = chunk.size,
-                                content = chunk.content,
-                                binary = chunk.binary,
-                                tooLarge = chunk.tooLarge,
-                                nextOffset = chunk.nextOffset,
-                                reopened = file.reopened,
-                            )
-                        // The host decides per page: a later binary page makes the whole file binary.
-                        chunk.binary ->
-                            file.copy(binary = true, content = "", nextOffset = null, moreLoading = false, selection = null)
-                        else ->
-                            file.copy(content = file.content + chunk.content, nextOffset = chunk.nextOffset, moreLoading = false)
-                    }
+                    val read =
+                        when {
+                            offset == 0L ->
+                                OpenFile(
+                                    path,
+                                    loading = false,
+                                    version = chunk.version,
+                                    size = chunk.size,
+                                    content = chunk.content,
+                                    binary = chunk.binary,
+                                    tooLarge = chunk.tooLarge,
+                                    nextOffset = chunk.nextOffset,
+                                    reopened = file.reopened,
+                                    // Lines picked before the text came are those the chat opened it at.
+                                    selection = file.selection,
+                                    revealLine = file.revealLine,
+                                )
+                            // The host decides per page: a later binary page makes the whole file binary.
+                            chunk.binary ->
+                                file.copy(binary = true, content = "", nextOffset = null, moreLoading = false, selection = null)
+                            else ->
+                                file.copy(content = file.content + chunk.content, nextOffset = chunk.nextOffset, moreLoading = false)
+                        }
+                    revealed(read)
+                }
+                // The lines the chat opened the file at lie further on: read on to them.
+                val file = files()?.file?.takeIf { it.path == path }
+                val wanted = file?.revealLine?.let { file.selection?.last ?: it }
+                val next = file?.nextOffset
+                if (file != null && wanted != null && next != null && !file.binary && lineCount(file.content) < wanted) {
+                    writeFile(sessionId, path) { it.copy(moreLoading = true, moreFailure = null) }
+                    // Once only: a file that keeps changing shows the failure instead of reading again and again.
+                    read(sessionId, path, next, chunk.version, reopen = !file.reopened)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -450,8 +622,11 @@ internal class ProjectFilesLoader(
                 if (!active()) return@launch
                 val reason = failure(e)
                 if (offset > 0 && reason == FilesFailure.NOT_FOUND && reopen) {
-                    // "File changed; reopen": the pages so far belong to the old version.
-                    writeFile(sessionId, path) { OpenFile(path, reopened = true) }
+                    // "File changed; reopen": the pages so far belong to the old version. Lines the
+                    // chat opened it at are still wanted; the read on from the start reaches them.
+                    writeFile(sessionId, path) {
+                        OpenFile(path, reopened = true, selection = it.selection.takeIf { _ -> it.revealLine != null }, revealLine = it.revealLine)
+                    }
                     read(sessionId, path, 0, null, reopen = false)
                     return@launch
                 }
@@ -460,6 +635,25 @@ internal class ProjectFilesLoader(
                     else it.copy(moreLoading = false, moreFailure = reason)
                 }
             }
+        }
+    }
+
+    /** Lines a final line end does not start; see [fileLines]. */
+    private fun lineCount(content: String): Int =
+        if (content.isEmpty()) 0 else content.count { it == '\n' } + if (content.endsWith('\n')) 0 else 1
+
+    /**
+     * [file] once it is read whole: the lines it was opened at are cut to the lines it has, and
+     * dropped when it has none of them.
+     */
+    private fun revealed(file: OpenFile): OpenFile {
+        val selection = file.selection
+        if (file.revealLine == null || selection == null || file.loading || file.nextOffset != null) return file
+        val count = lineCount(file.content)
+        return when {
+            file.binary || file.tooLarge || selection.first > count -> file.copy(selection = null, revealLine = null)
+            selection.last > count -> file.copy(selection = LineSelection(selection.first, count.takeIf { it > selection.first }))
+            else -> file
         }
     }
 

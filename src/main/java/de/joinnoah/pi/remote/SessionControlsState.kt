@@ -210,6 +210,13 @@ internal fun selectCommand(text: String, command: RemoteCommand): String =
 internal fun selectCommandName(text: String, name: String): String =
     "/" + name + text.dropWhile { !it.isWhitespace() }
 
+/**
+ * The draft after the command palette chose the host command [name]: a draft that starts with a
+ * command swaps that name, any other draft keeps its text behind the command.
+ */
+internal fun paletteCommandDraft(text: String, name: String): String =
+    if (text.startsWith("/")) selectCommandName(text, name) else "/$name $text"
+
 /** The Compact action is offered: the host advertises [COMPACT_CAPABILITY] and did not withdraw it. */
 internal fun compactAvailable(state: RemoteState): Boolean =
     COMPACT_CAPABILITY in state.capabilities && COMPACT_CAPABILITY !in state.unavailableCapabilities
@@ -284,8 +291,8 @@ internal fun localCommandDescription(
             R.string.remote_local_command_artifacts_host_outdated
         command != LocalCommand.RELOAD -> command.description
         reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY ->
-            R.string.remote_local_command_reload_terminal
-        reloading -> R.string.remote_local_command_reload_running
+            R.string.remote_reload_terminal_hint
+        reloading -> R.string.remote_reload_running
         else -> command.description
     }
 

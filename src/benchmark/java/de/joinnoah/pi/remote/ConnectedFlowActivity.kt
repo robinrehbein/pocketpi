@@ -41,6 +41,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 internal const val EXTRA_PROFILE = "profile"
 internal const val EXTRA_PREPARE = "prepare"
 internal const val EXTRA_COMMAND = "command"
+internal const val EXTRA_STREAM_INTERVAL = "streamIntervalMs"
 
 /**
  * Benchmark-only entry to the normal app UI on the fake relay. It hosts [RemoteApp] with the
@@ -53,12 +54,16 @@ internal const val EXTRA_COMMAND = "command"
  *   navigation snapshot on disk holds that chat and the refreshed quick chats, so the pairing,
  *   draft and snapshot sit in the app's real stores as after a normal visit, whatever the profile.
  * - `command`: `drop` fails the socket (the repository reconnects); `stream` streams the fixture
- *   answer into the open chat. Send it again with FLAG_ACTIVITY_SINGLE_TOP to reach this activity.
+ *   answer into the open chat (`streamIntervalMs` replaces the fixture's chunk interval). Send it
+ *   again with FLAG_ACTIVITY_SINGLE_TOP to reach this activity.
+ *   A drop starts a [FlowFreshness] mark, as does every return of the process to the foreground.
  *
- * Over the app it lays two 1 dp nodes whose content descriptions the benchmarks wait for:
+ * Over the app it lays 1 dp nodes whose content descriptions the benchmarks wait for:
  * `connected-flow-<macs|projects|sessions|chat>-<settled|busy>` (settled: connected, not loading,
- * and no request waiting for the fake relay) and, once a chat finished opening,
- * `connected-flow-cache-<hit|miss>` (whether that open found the chat in the chat cache).
+ * and no request waiting for the fake relay); once a chat finished opening,
+ * `connected-flow-cache-<hit|miss>` (whether that open found the chat in the chat cache); and
+ * `connected-flow-mark-<n>-<fresh|pending>`, the newest [FlowFreshness] mark and whether the app
+ * has read the open screen again since.
  */
 class ConnectedFlowActivity : ComponentActivity() {
     private val app
@@ -69,6 +74,8 @@ class ConnectedFlowActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Before the first command, so a drop sent with the launch is marked too.
+        ConnectedFlowRelay.freshness(app.repository)
         apply(intent)
         if (savedInstanceState == null && intent.getBooleanExtra(EXTRA_PREPARE, false)) {
             // The navigator would restore and activate its own selection meanwhile, so the
@@ -95,7 +102,8 @@ class ConnectedFlowActivity : ComponentActivity() {
     private fun FlowStatus(modifier: Modifier) {
         val statuses by remember {
             val inFlight = ConnectedFlowRelay.transport?.inFlight ?: flowOf(0)
-            combine(app.repository.state, inFlight) { state, requests ->
+            val freshness = ConnectedFlowRelay.freshness(app.repository)?.status ?: flowOf(null)
+            combine(app.repository.state, inFlight, freshness) { state, requests, fresh ->
                 val selection = state.selection
                 val screen = when {
                     selection.routeId == null -> "macs"
@@ -104,15 +112,18 @@ class ConnectedFlowActivity : ComponentActivity() {
                     else -> "chat"
                 }
                 val idle = state.connected && !state.loading
-                Triple(screen, idle && requests == 0, screen == "chat" && idle)
+                StatusNodes(screen, idle && requests == 0, screen == "chat" && idle, fresh)
             }
                 .distinctUntilChanged()
-                .map { (screen, settled, chatOpened) ->
+                .map { status ->
                     listOfNotNull(
-                        "connected-flow-$screen-" + if (settled) "settled" else "busy",
+                        "connected-flow-${status.screen}-" + if (status.settled) "settled" else "busy",
                         ConnectedFlowPreparation.lastChatCache()
-                            ?.takeIf { chatOpened }
+                            ?.takeIf { status.chatOpened }
                             ?.let { "connected-flow-cache-$it" },
+                        status.fresh?.let {
+                            "connected-flow-mark-${it.mark}-" + if (it.fresh) "fresh" else "pending"
+                        },
                     )
                 }
         }.collectAsState(initial = emptyList())
@@ -123,10 +134,28 @@ class ConnectedFlowActivity : ComponentActivity() {
         }
     }
 
+    private data class StatusNodes(
+        val screen: String,
+        val settled: Boolean,
+        val chatOpened: Boolean,
+        val fresh: FlowFreshness.Status?,
+    )
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         apply(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // As MainActivity: a running session stays live in the background (LiveRunService).
+        LiveRun.onResume()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        if (!isChangingConfigurations) LiveRun.onPause(this)
     }
 
     override fun onStop() {
@@ -147,8 +176,14 @@ class ConnectedFlowActivity : ComponentActivity() {
         val relay = ConnectedFlowRelay.transport ?: return
         intent.getStringExtra(EXTRA_PROFILE)?.let { relay.profile = it }
         when (intent.getStringExtra(EXTRA_COMMAND)) {
-            "drop" -> relay.drop()
-            "stream" -> app.repository.state.value.selection.sessionId?.let(relay::stream)
+            "drop" -> {
+                ConnectedFlowRelay.freshness(app.repository)?.mark(FlowFreshness.Cause.DROP)
+                relay.drop()
+            }
+            "stream" -> {
+                val interval = intent.getLongExtra(EXTRA_STREAM_INTERVAL, 0L).takeIf { it > 0 }
+                app.repository.state.value.selection.sessionId?.let { relay.stream(it, interval) }
+            }
         }
     }
 

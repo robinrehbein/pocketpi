@@ -39,6 +39,13 @@ interface RemoteTransport {
 
         fun paired(host: PairedHost)
 
+        /**
+         * An established connection received a frame. Called on the transport's scope at receipt,
+         * before the frame is decrypted and parsed off that thread; [message] follows with its
+         * payload, or [broken] and [failed] when it cannot be read.
+         */
+        fun inbound() {}
+
         fun message(payload: JsonObject)
 
         fun failed(reconnect: Boolean, error: Int)
@@ -67,12 +74,23 @@ interface RemoteTransport {
     fun close()
 }
 
+/** The foreground relay socket's client, derived from [baseHttpClient]. */
+internal val foregroundHttp: OkHttpClient by lazy {
+    baseHttpClient.newBuilder().pingInterval(20, TimeUnit.SECONDS).build()
+}
+
+/**
+ * The handshake runs on [scope], which is also where every [RemoteTransport.Listener] call
+ * happens. Once the connection is active, each frame is decrypted and parsed on [decoder] instead,
+ * and its payload handed back to [scope]: one frame at a time, so frames keep their order.
+ */
 class SecureRemoteTransport(
     private val scope: CoroutineScope,
-    private val http: WebSocket.Factory =
-        OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build(),
+    private val http: WebSocket.Factory = foregroundHttp,
     /** Names this transport's connections in [Diagnostics], such as `foreground` or `background`. */
     private val diagnosticsName: String = "foreground",
+    /** Decodes an active connection's frames; it must run one task at a time, in order. */
+    private val decoder: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1),
     private val deviceName: () -> String = { (Build.MANUFACTURER + " " + Build.MODEL).take(100) },
 ) : RemoteTransport {
     override lateinit var listener: RemoteTransport.Listener
@@ -147,6 +165,27 @@ class SecureRemoteTransport(
         var approvedHost: PairedHost? = null
         // Set once the Mac denied this device, even with a reply this app cannot read.
         var denied = false
+        // The latest active frame on its way through [decoder]; a close waits for it, so the
+        // frames that came before the close are still delivered.
+        var delivery: Job? = null
+        fun broke(e: Exception) {
+            Diagnostics.caught("transport.message", e)
+            if (epoch == generation) {
+                trace.end("protocol." + phase.name.lowercase())
+                val error =
+                    if (phase == HandshakePhase.PERSISTING) R.string.remote_storage_error
+                    else R.string.remote_connection_error
+                close()
+                listener.broken()
+                // A frame that fails to decrypt, arrives out of sequence or breaks the handshake
+                // ends this connection, and a paired device tries again. A pairing code is
+                // single-use, a storage error needs the user, and a denial stays one.
+                listener.failed(
+                    pairing == null && !denied && phase != HandshakePhase.PERSISTING,
+                    error,
+                )
+            }
+        }
         val request =
             Request.Builder()
                 .url(relay.replaceFirst("https://", "wss://") + "/v1/peer/" + routeId)
@@ -187,6 +226,30 @@ class SecureRemoteTransport(
                     override fun onMessage(webSocket: WebSocket, text: String) {
                         scope.launch {
                             if (epoch != generation) return@launch
+                            if (phase == HandshakePhase.ACTIVE) {
+                                listener.inbound()
+                                val open = checkNotNull(channel)
+                                // Launched in arrival order, so each reaches the one-at-a-time
+                                // decoder in that order and resumes here in it.
+                                delivery = scope.launch {
+                                    try {
+                                        // A frame queued behind a close or an unreadable frame is
+                                        // dropped without parsing it.
+                                        val payload =
+                                            withContext(decoder) {
+                                                if (open.isClosed) null else open.open(Wire.parse(text))
+                                            }
+                                        if (payload != null && epoch == generation) listener.message(payload)
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        // Only a failure on the live connection is recorded; one
+                                        // racing a close is that close, not a broken frame.
+                                        if (epoch == generation) broke(e)
+                                    }
+                                }
+                                return@launch
+                            }
                             try {
                                 val frame = Wire.parse(text)
                                 if (phase == HandshakePhase.CHALLENGE || phase == HandshakePhase.OPENING) {
@@ -294,27 +357,10 @@ class SecureRemoteTransport(
                                                 ?.toSet() ?: emptySet()
                                         )
                                     }
-                                    HandshakePhase.ACTIVE -> listener.message(payload)
                                     else -> error("Unexpected handshake")
                                 }
                             } catch (e: Exception) {
-                                Diagnostics.caught("transport.message", e)
-                                if (epoch == generation) {
-                                    trace.end("protocol." + phase.name.lowercase())
-                                    val error =
-                                        if (phase == HandshakePhase.PERSISTING) R.string.remote_storage_error
-                                        else R.string.remote_connection_error
-                                    close()
-                                    listener.broken()
-                                    // A frame that fails to decrypt, arrives out of sequence or breaks
-                                    // the handshake ends this connection, and a paired device tries
-                                    // again. A pairing code is single-use, a storage error needs the
-                                    // user, and a denial stays one.
-                                    listener.failed(
-                                        pairing == null && !denied && phase != HandshakePhase.PERSISTING,
-                                        error,
-                                    )
-                                }
+                                broke(e)
                             }
                         }
                     }
@@ -325,6 +371,7 @@ class SecureRemoteTransport(
 
                     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                         scope.launch {
+                            delivery?.join()
                             if (epoch == generation) {
                                 val approved = approvedHost
                                 if (approved == null) trace.end("closed.$code")
@@ -347,6 +394,7 @@ class SecureRemoteTransport(
                         response: Response?,
                     ) {
                         scope.launch {
+                            delivery?.join()
                             if (epoch == generation) {
                                 val approved = approvedHost
                                 if (approved == null) trace.end("failure." + t.javaClass.simpleName.ifEmpty { "Throwable" })

@@ -82,7 +82,20 @@ class RemoteTransportTest {
             paired = true
         }
 
-        override fun message(payload: JsonObject) {}
+        /** What reached the listener once the connection was active, in order. */
+        val events = mutableListOf<String>()
+        val messages = mutableListOf<JsonObject>()
+        val messageThreads = mutableSetOf<Thread>()
+
+        override fun inbound() {
+            events += "inbound"
+        }
+
+        override fun message(payload: JsonObject) {
+            events += "message"
+            messages += payload
+            messageThreads += Thread.currentThread()
+        }
 
         var brokenCount = 0
 
@@ -94,6 +107,7 @@ class RemoteTransportTest {
         val errors = mutableListOf<Int>()
 
         override fun failed(reconnect: Boolean, error: Int) {
+            events += "failed"
             errors += error
             failed = true
             failureCount++
@@ -168,10 +182,14 @@ class RemoteTransportTest {
     private fun TestScope.authenticated(
         capabilities: List<String> = emptyList(),
         socket: Socket = Socket(),
+        listener: Listener = Listener { },
+        // Decodes on the test's scheduler, so runCurrent() also runs the decoding.
+        decoder: CoroutineDispatcher = StandardTestDispatcher(testScheduler),
+        created: (SecureRemoteTransport) -> Unit = {},
     ): Pair<Listener, SecureChannel> {
-        val listener = Listener { }
-        val transport = SecureRemoteTransport(backgroundScope, socket) { "Test device" }
+        val transport = SecureRemoteTransport(backgroundScope, socket, decoder = decoder) { "Test device" }
             .also { it.listener = listener }
+            .also(created)
         val deviceKey = Wire.random(32)
         transport.connect(PairedHost(Wire.random(), "https://relay.test", Wire.random(), deviceKey, "Host"))
         socket.open()
@@ -212,6 +230,145 @@ class RemoteTransportTest {
         socket.receive(server.seal(reply))
         runCurrent()
         return listener
+    }
+
+    /** A decoder that runs nothing until the test says so, to look between receipt and decoding. */
+    private class HeldDecoder : CoroutineDispatcher() {
+        val queued = ArrayDeque<Runnable>()
+
+        override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+            synchronized(queued) { queued.addLast(block) }
+        }
+
+        fun runAll() {
+            while (true) (synchronized(queued) { queued.removeFirstOrNull() } ?: return).run()
+        }
+    }
+
+    @Test
+    fun activeFramesDecodeOffTheScopeAndArriveInOrder() = runTest {
+        val socket = Socket()
+        val decoded = java.util.concurrent.atomic.AtomicInteger()
+        val decoderThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val random = java.util.Random(7)
+        // One thread, as Dispatchers.Default.limitedParallelism(1), with a random pause per frame.
+        val decoder =
+            object : CoroutineDispatcher() {
+                override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+                    val pause = synchronized(random) { random.nextInt(3).toLong() }
+                    executor.execute {
+                        Thread.sleep(pause)
+                        decoderThread.set(Thread.currentThread())
+                        decoded.incrementAndGet()
+                        block.run()
+                    }
+                }
+            }
+        try {
+            val (listener, server) = authenticated(socket = socket, decoder = decoder)
+            // The handshake never went through the decoder.
+            assertEquals(0, decoded.get())
+            val count = 200
+            repeat(count) { socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to it))) }
+            val deadline = System.currentTimeMillis() + 10_000
+            while (listener.messages.size < count && System.currentTimeMillis() < deadline) {
+                runCurrent()
+                Thread.sleep(1)
+            }
+
+            assertEquals((0 until count).toList(), listener.messages.map { it.long("n").toInt() })
+            assertEquals(count, decoded.get())
+            // Decoded on the decoder's thread, delivered on the scope's (the test's) thread.
+            assertNotEquals(Thread.currentThread(), decoderThread.get())
+            assertEquals(setOf(Thread.currentThread()), listener.messageThreads)
+            assertFalse(listener.failed)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun inboundIsReportedAtReceiptBeforeTheFrameIsDecoded() = runTest {
+        val socket = Socket()
+        val decoder = HeldDecoder()
+        val (listener, server) = authenticated(socket = socket, decoder = decoder)
+        // Every handshake frame ran on the scope, none on the decoder.
+        assertTrue(decoder.queued.isEmpty())
+        assertEquals(HandshakePhase.ACTIVE, listener.phases.last())
+
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 1)))
+        runCurrent()
+        assertEquals(listOf("inbound"), listener.events)
+        assertEquals(1, decoder.queued.size)
+
+        decoder.runAll()
+        runCurrent()
+        assertEquals(listOf("inbound", "message"), listener.events)
+        assertEquals(1L, listener.messages.single().long("n"))
+    }
+
+    @Test
+    fun aCloseWaitsForTheFramesStillBeingDecoded() = runTest {
+        val socket = Socket()
+        val decoder = HeldDecoder()
+        val (listener, server) = authenticated(socket = socket, decoder = decoder)
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 1)))
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 2)))
+        runCurrent()
+        socket.incoming.onClosed(socket, 1012, "restart")
+        runCurrent()
+        assertFalse(listener.failed)
+
+        decoder.runAll()
+        runCurrent()
+        assertEquals(listOf("inbound", "inbound", "message", "message", "failed"), listener.events)
+        assertEquals(listOf(true), listener.reconnects)
+    }
+
+    private fun caughtEntries() = Diagnostics.report().entries.filter { it.kind == Diagnostics.Kind.CAUGHT }
+
+    @Test
+    fun anUnreadableActiveFrameDropsTheFramesQueuedBehindIt() = runTest {
+        val socket = Socket()
+        val decoder = HeldDecoder()
+        val (listener, server) = authenticated(socket = socket, decoder = decoder)
+        val broken = server.seal(Wire.objectOf("type" to "event", "n" to 1))
+        socket.receive(JsonObject(broken + ("ciphertext" to JsonPrimitive(Wire.random(48)))))
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 2)))
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 3)))
+        runCurrent()
+        Diagnostics.clear()
+
+        decoder.runAll()
+        runCurrent()
+        assertEquals(listOf("inbound", "inbound", "inbound", "failed"), listener.events)
+        assertEquals(1, listener.brokenCount)
+        assertTrue(listener.messages.isEmpty())
+        // The unreadable frame is recorded once; the frames behind it add nothing.
+        assertEquals(listOf("transport.message"), caughtEntries().map { it.label })
+        Diagnostics.clear()
+    }
+
+    @Test
+    fun aLocalCloseDropsQueuedFramesWithoutRecordingThem() = runTest {
+        val socket = Socket()
+        val decoder = HeldDecoder()
+        var transport: SecureRemoteTransport? = null
+        val (listener, server) = authenticated(socket = socket, decoder = decoder, created = { transport = it })
+        repeat(3) { socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to it))) }
+        runCurrent()
+        Diagnostics.clear()
+
+        // A host switch or a move to the background closes while frames wait for the decoder.
+        checkNotNull(transport).close()
+        decoder.runAll()
+        runCurrent()
+        assertEquals(listOf("inbound", "inbound", "inbound"), listener.events)
+        assertEquals(0, listener.brokenCount)
+        assertFalse(listener.failed)
+        assertTrue(caughtEntries().isEmpty())
+        Diagnostics.clear()
     }
 
     private val deviceAccess =
