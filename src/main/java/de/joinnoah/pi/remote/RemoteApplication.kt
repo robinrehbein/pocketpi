@@ -53,6 +53,8 @@ class RemoteApplication : Application() {
         Thread { runCatching { ImageStorage.clear(cacheDir) } }.start()
         // Opened or shared artifacts are copies of project files too.
         Thread { runCatching { ArtifactStorage.clear(cacheDir) } }.start()
+        // So are files dragged into other apps.
+        Thread { runCatching { DragStorage.clear(cacheDir) } }.start()
         settings = DefaultSettingsRepository(this)
         appLock = AppLock(AppLockStore(this), deviceSecure = { deviceSecure(this) })
         val attachments = AttachmentStore(this)

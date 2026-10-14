@@ -3,4 +3,5 @@
     <cache-path name="exports" path="exports/" />
     <cache-path name="images" path="images/" />
     <cache-path name="artifacts" path="artifacts/" />
+    <cache-path name="drag" path="drag/" />
 </paths>

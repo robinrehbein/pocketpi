@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import android.content.Context
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -9,10 +10,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draganddrop.DragAndDropTransferData
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -20,6 +23,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * What an assistant message needs to show the project images it mentions; [read] is
@@ -105,6 +110,7 @@ internal fun ProjectImageCard(alt: String, path: String, source: ProjectImageSou
     val ready = state as? ProjectImageState.Ready
     val label = stringResource(R.string.remote_image_open, fileName)
     val viewers = LocalInspectorViewers.current
+    val context = LocalContext.current
     // Beside the chat the image opens in the inspector's tab instead of a dialog.
     fun view() {
         val image = ready ?: return
@@ -119,6 +125,8 @@ internal fun ProjectImageCard(alt: String, path: String, source: ProjectImageSou
                     .heightIn(max = 320.dp)
                     .aspectRatio(CARD_ASPECT)
                     .clip(RoundedCornerShape(12.dp))
+                    // Dragged into another app, the card is the image file.
+                    .dragOut(ready?.sha256, enabled = ready != null) { dragImage(context, source, path) }
                     .then(
                         if (ready != null)
                             Modifier.clickable(role = Role.Button, onClickLabel = label, onClick = ::view)
@@ -147,6 +155,14 @@ internal fun ProjectImageCard(alt: String, path: String, source: ProjectImageSou
         )
     }
     if (viewing && ready != null) ImageViewer(path, ready.sha256, ready.mimeType, source) { viewing = false }
+}
+
+/** The image at [path] as a file another app can take, written to the drag folder; null when unreadable. */
+private suspend fun dragImage(context: Context, source: ProjectImageSource, path: String): DragAndDropTransferData? {
+    val image = source.read(source.sessionId, path, false) as? ProjectImageResult.Loaded ?: return null
+    val mime = MediaMime.fromWire(image.mimeType) ?: return null
+    val uri = withContext(Dispatchers.IO) { storeDragFile(context, ImageStorage.safeName(path, mime), image.bytes) }
+    return fileTransfer(path.substringAfterLast('/'), uri, image.mimeType)
 }
 
 @Composable

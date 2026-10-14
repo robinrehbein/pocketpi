@@ -98,4 +98,105 @@ class AttachmentImporterTest {
             AttachmentImportRules.sampleSize(Int.MAX_VALUE, Int.MAX_VALUE)
         }
     }
+
+    @Test
+    fun dropAttachesEveryContentUriAndKeepsPlainTextForTheDraft() {
+        val intake =
+            clipIntake(
+                listOf(
+                    ClipPart("content://media/shot.png", "image/png", null),
+                    ClipPart("content://docs/spec.pdf", "application/pdf", null),
+                    ClipPart("content://docs/build.log", "text/plain", null),
+                    ClipPart("content://docs/icon.svg", "image/svg+xml", null),
+                    ClipPart("content://docs/unknown", null, null),
+                    ClipPart(null, null, "first line"),
+                    ClipPart(null, null, "  "),
+                    ClipPart("https://example.com/page", "text/html", null),
+                    ClipPart("file:///sdcard/secret", null, null),
+                    ClipPart(null, null, "second line"),
+                ),
+                textFiles = true,
+            )
+        assertEquals(
+            listOf(
+                Picked("content://media/shot.png", photo = true),
+                Picked("content://docs/spec.pdf", photo = false),
+                Picked("content://docs/build.log", photo = false),
+                Picked("content://docs/icon.svg", photo = false),
+                Picked("content://docs/unknown", photo = false),
+            ),
+            intake.attachments,
+        )
+        // Only content URIs are read; a web link goes into the draft, a file URI nowhere.
+        assertEquals("first line\nhttps://example.com/page\nsecond line", intake.text)
+    }
+
+    @Test
+    fun pasteLeavesTextAndTextUrisToTheField() {
+        assertTrue(clipIntake(listOf(ClipPart(null, null, "hello")), textFiles = false).attachments.isEmpty())
+        assertTrue(
+            clipIntake(listOf(ClipPart("content://notes/note", "text/plain", "note")), textFiles = false)
+                .attachments.isEmpty()
+        )
+        assertEquals(
+            listOf(Picked("content://clip/shot", photo = true)),
+            clipIntake(listOf(ClipPart("content://clip/shot", "IMAGE/PNG", null)), textFiles = false).attachments,
+        )
+        assertFalse(mayHoldAttachments(listOf("text/plain")))
+        assertFalse(mayHoldAttachments(listOf("text/plain", "text/html")))
+        assertTrue(mayHoldAttachments(listOf("text/uri-list")))
+        assertTrue(mayHoldAttachments(listOf("image/png")))
+        assertTrue(mayHoldAttachments(listOf("text/plain", "application/pdf")))
+    }
+
+    @Test
+    fun onlyPlainPasteChordsAreTaken() {
+        val v = androidx.compose.ui.input.key.Key.V
+        val insert = androidx.compose.ui.input.key.Key.Insert
+        assertTrue(isPasteKey(v, down = true, ctrl = true, alt = false, shift = false))
+        assertTrue(isPasteKey(insert, down = true, ctrl = false, alt = false, shift = true))
+        assertFalse(isPasteKey(v, down = false, ctrl = true, alt = false, shift = false))
+        // Ctrl+Shift+V pastes plain text; it stays the field's.
+        assertFalse(isPasteKey(v, down = true, ctrl = true, alt = false, shift = true))
+        assertFalse(isPasteKey(v, down = true, ctrl = true, alt = true, shift = false))
+        assertFalse(isPasteKey(v, down = true, ctrl = false, alt = false, shift = false))
+        assertTrue(acceptsDrop(setOf("image/png")))
+        assertTrue(acceptsDrop(setOf("text/plain")))
+        assertTrue(acceptsDrop(setOf("application/pdf")))
+        assertFalse(acceptsDrop(setOf("video/mp4")))
+    }
+
+    @Test
+    fun dropReleasesItsGrantsOnlyAfterTheImportIsDone() {
+        var released = 0
+        var batch: Pair<List<Picked>, () -> Unit>? = null
+        val inserted = mutableListOf<String>()
+        val taken =
+            acceptChatDrop(
+                listOf(
+                    ClipPart("content://media/shot.png", "image/png", null),
+                    ClipPart("content://docs/spec.pdf", "application/pdf", null),
+                ),
+                attach = { items, onDone -> batch = items to onDone },
+                insertText = { inserted += it; true },
+                release = { released++ },
+            )
+        assertTrue(taken)
+        assertEquals(2, batch!!.first.size)
+        assertEquals(0, released)
+        batch!!.second()
+        batch!!.second()
+        assertEquals(1, released)
+        assertTrue(inserted.isEmpty())
+
+        // Text alone goes into the draft and gives the grants back at once.
+        released = 0
+        assertTrue(
+            acceptChatDrop(listOf(ClipPart(null, null, "fix this")), { _, _ -> fail() }, { inserted += it; true }) { released++ }
+        )
+        assertEquals(listOf("fix this"), inserted)
+        assertEquals(1, released)
+        assertFalse(acceptChatDrop(listOf(ClipPart(null, null, " ")), { _, _ -> fail() }, { true }) { released++ })
+        assertEquals(2, released)
+    }
 }

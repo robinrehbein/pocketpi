@@ -1,5 +1,8 @@
 package de.joinnoah.pi.remote
 
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -52,6 +55,57 @@ class RemoteViewModelsTest {
         )
         runCurrent()
         assertEquals(1, repository.imports.size)
+    }
+
+    @Test
+    fun batchWaitsForItsChatAndIsDoneOnceWhenRefusedReplacedOrClosed() = runTest {
+        val repository = NavigationFakeRepository().apply { holdBatches = true }
+        val selection = RemoteSelection("host", "project", "session")
+        val store = ViewModelStore()
+        val model =
+            ViewModelProvider(
+                store,
+                object : ViewModelProvider.Factory {
+                    @Suppress("UNCHECKED_CAST")
+                    override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                        ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "session"), FakeSettingsRepository()) as T
+                },
+            )[ChatViewModel::class.java]
+        val done = mutableListOf<String>()
+        val shot = Picked("content://fixture/shot", photo = true)
+        val pdf = Picked("content://fixture/spec.pdf", photo = false)
+        repository.state.value = RemoteState(selection = selection, loading = true)
+
+        // Another chat's batch never waits.
+        model.acceptAttachments(selection.copy(sessionId = "other"), listOf(shot)) { done += "other" }
+        model.acceptAttachments(selection, emptyList()) { done += "empty" }
+        assertEquals(listOf("other", "empty"), done)
+
+        // A newer batch replaces one that has not started; the older one is given back.
+        model.acceptAttachments(selection, listOf(shot)) { done += "first" }
+        model.acceptAttachments(selection, listOf(shot, pdf)) { done += "second" }
+        runCurrent()
+        assertEquals(listOf("other", "empty", "first"), done)
+        assertTrue(repository.batches.isEmpty())
+
+        repository.state.value = RemoteState(selection = selection)
+        runCurrent()
+        val (target, items, onDone) = repository.batches.single()
+        assertEquals(selection, target)
+        assertEquals(listOf(shot, pdf), items)
+        assertEquals(listOf("other", "empty", "first"), done)
+        onDone()
+        assertEquals(listOf("other", "empty", "first", "second"), done)
+
+        // A batch still waiting when the chat closes is given back too.
+        repository.state.value = RemoteState(selection = selection, loading = true)
+        model.acceptAttachments(selection, listOf(pdf)) { done += "closed" }
+        runCurrent()
+        store.clear()
+        assertEquals("closed", done.last())
+        assertEquals(1, repository.batches.size)
+        model.acceptAttachments(selection, listOf(pdf)) { done += "after" }
+        assertEquals("after", done.last())
     }
 
     @Test

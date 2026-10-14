@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.scan
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -272,10 +273,11 @@ internal class ChatViewModel(
 
     fun recordChatAction(action: ChatAction) = settings.recordChatAction(action)
 
-    private data class PickerResult(
+    /** A picked, dropped or pasted batch waiting for its chat; identity matters, so not a data class. */
+    private class PickerResult(
         val selection: RemoteSelection,
-        val uris: List<String>,
-        val photo: Boolean,
+        val items: List<Picked>,
+        val onDone: () -> Unit,
     )
 
     private val pendingPicker = MutableStateFlow<PickerResult?>(null)
@@ -284,10 +286,11 @@ internal class ChatViewModel(
         viewModelScope.launch {
             combine(repository.state, pendingPicker) { state, result -> state to result }
                 .collect { (state, result) ->
-                    if (result != null && !state.loading && state.selection == result.selection) {
-                        pendingPicker.value = null
-                        repository.importAttachments(result.selection, result.uris, result.photo)
-                    }
+                    if (
+                        result != null && !state.loading && state.selection == result.selection &&
+                            pendingPicker.compareAndSet(result, null)
+                    )
+                        repository.importAttachments(result.selection, result.items, result.onDone)
                 }
         }
     }
@@ -460,9 +463,26 @@ internal class ChatViewModel(
         return true
     }
 
-    fun acceptAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) {
-        if (selection != key.selection() || uris.isEmpty() || cleared) return
-        pendingPicker.value = PickerResult(selection, uris, photo)
+    fun acceptAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) =
+        acceptAttachments(selection, uris.map { Picked(it, photo) }) {}
+
+    /**
+     * Imports a mixed batch of images and files into [selection]'s draft once that chat is shown
+     * and loaded, as one run (see [RemoteRepository.importAttachments]). [onDone] runs exactly
+     * once: after the import read every URI or refused the batch, when a later batch replaces this
+     * one before it started, or when this chat closes first. A drop releases its grants there.
+     */
+    fun acceptAttachments(selection: RemoteSelection, items: List<Picked>, onDone: () -> Unit) {
+        if (selection != key.selection() || items.isEmpty() || cleared) {
+            onDone()
+            return
+        }
+        pendingPicker.getAndUpdate { PickerResult(selection, items, onDone) }?.onDone?.invoke()
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        pendingPicker.getAndUpdate { null }?.onDone?.invoke()
     }
 }
 

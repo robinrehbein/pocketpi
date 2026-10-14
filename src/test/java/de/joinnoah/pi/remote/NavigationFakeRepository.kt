@@ -184,6 +184,15 @@ internal class NavigationFakeRepository : RemoteRepository {
         imports += Triple(selection, uris, photo)
     }
 
+    /** With this on, a batch import is only recorded; the test calls its `onDone` itself. */
+    var holdBatches = false
+    val batches = mutableListOf<Triple<RemoteSelection, List<Picked>, () -> Unit>>()
+
+    override fun importAttachments(selection: RemoteSelection, batch: List<Picked>, onDone: () -> Unit) {
+        if (holdBatches) batches += Triple(selection, batch, onDone)
+        else super.importAttachments(selection, batch, onDone)
+    }
+
     override suspend fun activate(
         selection: RemoteSelection,
         mode: ActivationMode,

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_drop_to_attach">Zum Anhängen loslassen</string>
+    <string name="remote_drop_paste_image">Bild einfügen</string>
+    <string name="remote_drop_clipboard_empty">In der Zwischenablage ist kein Bild und keine Datei</string>
+</resources>

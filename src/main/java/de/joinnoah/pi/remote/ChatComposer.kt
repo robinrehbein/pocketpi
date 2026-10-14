@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import android.widget.Toast
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -31,6 +32,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -268,6 +270,11 @@ internal fun ChatComposer(
     onCancelAttachments: () -> Unit = {},
     onPickPhotos: () -> Unit = {},
     onPickFiles: () -> Unit = {},
+    /**
+     * Takes the images and files a paste brings (Ctrl+V, or "Paste image" in the + menu) as one
+     * batch; null leaves every paste to the field.
+     */
+    onPasteAttachments: ((List<Picked>) -> Unit)? = null,
     voiceEngine: VoiceRecognitionEngine? = null,
     voicePermissionGrantedOverride: Boolean? = null,
     focusRequester: FocusRequester? = null,
@@ -358,6 +365,8 @@ internal fun ChatComposer(
         if (route != null && project != null) predictions?.record(route, project, state.draft)
     }
     var addMenu by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val clipboardEmpty = stringResource(R.string.remote_drop_clipboard_empty)
     var preferredBusyAction by remember(state.selection.sessionId) {
         mutableStateOf(BusyComposerAction.Steer)
     }
@@ -623,6 +632,17 @@ internal fun ChatComposer(
                                     onPickFiles()
                                 },
                             )
+                            if (onPasteAttachments != null)
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.remote_drop_paste_image)) },
+                                    onClick = {
+                                        addMenu = false
+                                        val pasted = clipboardIntake(context)
+                                        if (pasted != null) onPasteAttachments(pasted.attachments)
+                                        else Toast.makeText(context, clipboardEmpty, Toast.LENGTH_SHORT).show()
+                                    },
+                                    modifier = Modifier.testTag("pasteAttachment"),
+                                )
                         }
                     }
                 TextField(
@@ -661,6 +681,26 @@ internal fun ChatComposer(
                             ) { latestAccept.value() }
                             .onFocusChanged { keyTarget?.composerFocused = it.isFocused }
                             .onPreviewKeyEvent { event ->
+                                // A paste of images or files attaches them; any other paste,
+                                // text above all, stays the field's.
+                                if (
+                                    onPasteAttachments != null &&
+                                        isPasteKey(
+                                            event.key,
+                                            event.type == KeyEventType.KeyDown,
+                                            ctrl = event.isCtrlPressed || event.isMetaPressed,
+                                            alt = event.isAltPressed,
+                                            shift = event.isShiftPressed,
+                                        )
+                                ) {
+                                    val pasted = clipboardIntake(context)
+                                    if (pasted != null) {
+                                        onPasteAttachments(pasted.attachments)
+                                        if (pasted.text.isNotEmpty() && draft.insert(pasted.text))
+                                            voiceInput.userEdited(draft.text)
+                                        return@onPreviewKeyEvent true
+                                    }
+                                }
                                 if (
                                     hardwareKeyboard && otherBusyActionOffered &&
                                         event.type == KeyEventType.KeyDown &&
