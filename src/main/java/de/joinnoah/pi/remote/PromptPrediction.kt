@@ -12,6 +12,8 @@ import kotlinx.serialization.json.longOrNull
 // prompts. No network and no model; everything here is pure and unit-tested.
 
 internal enum class PredictionRule(val text: Int) {
+    CONTINUE(R.string.remote_prediction_continue),
+    ACCEPT_OFFER(R.string.remote_prediction_accept_offer),
     FIX_TESTS(R.string.remote_prediction_fix_tests),
     FIX_ERROR(R.string.remote_prediction_fix_error),
     IMPLEMENT_PLAN(R.string.remote_prediction_implement_plan),
@@ -36,6 +38,8 @@ private val testCommand =
         RegexOption.IGNORE_CASE,
     )
 
+private val gitPublish = Regex("\\b(git\\s+push|gh\\s+pr\\s+create)\\b", RegexOption.IGNORE_CASE)
+
 /** How many edits make a change worth a pull request. */
 internal const val PR_EDIT_THRESHOLD = 3
 
@@ -45,6 +49,7 @@ private data class ToolEvent(
     val index: Int,
     val edit: Boolean,
     val test: Boolean,
+    val publish: Boolean,
     val failed: Boolean,
     val timestamp: Long?,
 )
@@ -86,6 +91,7 @@ private fun toolEvents(messages: List<JsonObject>): Pair<List<ToolEvent>, Int> {
                         index,
                         edit = name in editTools,
                         test = name == "bash" && call != null && testCommand.containsMatchIn(command(call.arguments)),
+                        publish = name == "bash" && call != null && gitPublish.containsMatchIn(command(call.arguments)),
                         failed = message.optionalText("state") == "error",
                         timestamp = call?.timestamp,
                     )
@@ -98,10 +104,12 @@ private fun toolEvents(messages: List<JsonObject>): Pair<List<ToolEvent>, Int> {
 /**
  * Suggests the next prompt for an idle conversation, or null.
  *
- * In order: a tool that failed in the latest turn → fix it; an approved plan without edits since →
- * implement it; edits since the last test run → run the tests; several edits and a green test run
- * in the latest turn → prepare a PR; otherwise the user's most frequent prompt in this project. A
- * running session, an open question or a fresh session gets no suggestion.
+ * In order: a turn that ended in an error → continue; a tool that failed in the latest turn → fix
+ * it; a reply that ends by offering a next step ("Shall I …?") → accept it; an approved plan
+ * without edits since → implement it; edits since the last test run → run the tests; several edits
+ * and a green test run in the latest turn, not yet pushed → prepare a PR; otherwise the user's
+ * most frequent prompt in this project. A running session, an open question or a fresh session
+ * gets no suggestion.
  */
 internal fun predictPrompt(
     messages: List<JsonObject>,
@@ -113,10 +121,19 @@ internal fun predictPrompt(
     if (status == "running" || status == "waiting" || hasQuestions || messages.isEmpty()) return null
     if (messages.last().optionalText("state") == "streaming") return null
     val (events, lastUser) = toolEvents(messages)
+    val reply = messages.withIndex().lastOrNull { it.index > lastUser && it.value.optionalText("role") == "assistant" }
+    if (reply?.value?.optionalText("state") == "error") return PromptPrediction.Rule(PredictionRule.CONTINUE)
     val latest = events.lastOrNull()
-    if (latest != null && latest.failed && latest.index > lastUser) {
-        return PromptPrediction.Rule(if (latest.test) PredictionRule.FIX_TESTS else PredictionRule.FIX_ERROR)
+    val fix =
+        if (latest != null && latest.failed && latest.index > lastUser)
+            PromptPrediction.Rule(if (latest.test) PredictionRule.FIX_TESTS else PredictionRule.FIX_ERROR)
+        else null
+    // A failure the reply came after may be what the reply offers to handle, so the offer wins.
+    if (fix != null && (reply == null || latest!!.index > reply.index)) return fix
+    if (reply != null && offersNextStep(reply.value.optionalText("text").orEmpty())) {
+        return PromptPrediction.Rule(PredictionRule.ACCEPT_OFFER)
     }
+    if (fix != null) return fix
     if (planApprovedAt != null &&
         events.none { it.edit && (it.timestamp == null || it.timestamp >= planApprovedAt) }
     ) return PromptPrediction.Rule(PredictionRule.IMPLEMENT_PLAN)
@@ -126,12 +143,83 @@ internal fun predictPrompt(
     val edits = events.count { it.edit && !it.failed }
     if (lastTest >= 0 && edits >= PR_EDIT_THRESHOLD) {
         val test = events[lastTest]
-        if (!test.failed && test.index > lastUser) return PromptPrediction.Rule(PredictionRule.PREPARE_PR)
+        val published = events.drop(lastTest + 1).any { it.publish && !it.failed }
+        if (!test.failed && test.index > lastUser && !published) return PromptPrediction.Rule(PredictionRule.PREPARE_PR)
     }
     val lastPrompt = messages.getOrNull(lastUser)?.optionalText("text")?.let(::normalizePrompt)?.lowercase()
     return frequentPrompts
         .firstOrNull { normalizePrompt(it)?.lowercase() != lastPrompt }
         ?.let { PromptPrediction.History(it) }
+}
+
+// ---- What the latest reply asks, and which language the conversation is in ----
+
+private val offerOpenings =
+    Regex(
+        "^(shall i|should i|do you want me to|want me to|would you like me to|shall we|should we|" +
+            "can i go ahead|ok to|okay to|soll ich|sollen wir|möchtest du, dass ich|willst du, dass ich|" +
+            "darf ich|wollen wir)\\b",
+        RegexOption.IGNORE_CASE,
+    )
+
+private val alternatives = Regex("\\b(or|oder)\\b", RegexOption.IGNORE_CASE)
+
+/**
+ * True when [text] ends with a yes/no offer of a next step, such as "Shall I commit this?" or
+ * "Soll ich die Tests anpassen?". A question between alternatives ("… or …?") has no single
+ * answer, so it does not count.
+ */
+internal fun offersNextStep(text: String): Boolean {
+    val trimmed = text.trimEnd().trimEnd('*', '_', '`', ' ')
+    if (!trimmed.endsWith("?")) return false
+    val sentence =
+        trimmed.dropLast(1)
+            .split(Regex("(?<=[.!?:])\\s+|\\n+"))
+            .last()
+            .trimStart('-', '*', '>', ' ', '\t')
+    return offerOpenings.containsMatchIn(sentence) && !alternatives.containsMatchIn(sentence)
+}
+
+private val germanWords =
+    setOf(
+        "und", "ist", "nicht", "ich", "du", "das", "der", "den", "dem", "mit", "für", "auf", "bitte",
+        "mach", "mache", "noch", "auch", "wir", "ein", "eine", "es", "kannst", "soll", "jetzt",
+        "dann", "wie", "warum", "ja", "nein", "aber", "bei", "zu", "im", "von", "wenn", "dass",
+    )
+
+private val englishWords =
+    setOf(
+        "the", "and", "is", "not", "i", "you", "it", "with", "for", "on", "please", "make", "also",
+        "we", "a", "an", "can", "should", "now", "then", "how", "what", "why", "yes", "but", "this",
+        "that", "to", "of", "in", "if", "do", "run",
+    )
+
+/**
+ * The language of the user's recent prompts as a language tag ("de" or "en"), or null when they
+ * give no clear signal. Rule suggestions use it, so they match how the user talks to pi rather
+ * than the phone's language.
+ */
+internal fun conversationLanguage(messages: List<JsonObject>): String? {
+    var german = 0
+    var english = 0
+    messages.asReversed()
+        .asSequence()
+        .filter { it.optionalText("role") == "user" }
+        .take(3)
+        .forEach { message ->
+            val text = message.optionalText("text").orEmpty().lowercase()
+            if (text.startsWith("/")) return@forEach
+            if (text.any { it in "äöüß" }) german += 2
+            Regex("[\\p{L}']+").findAll(text).forEach { word ->
+                if (word.value in germanWords) german++
+                if (word.value in englishWords) english++
+            }
+        }
+    return when {
+        german > english -> "de"
+        english > german -> "en"
+        else -> null
+    }
 }
 
 // ---- The user's own prompt history, per project ----

@@ -42,7 +42,8 @@ class PromptPredictionTest {
 
     private fun test(failed: Boolean = false) = tool("bash", """{"command":"npm test"}""", failed)
 
-    private fun reply() = Wire.objectOf("id" to "m${next++}", "role" to "assistant", "text" to "Done.", "state" to "complete")
+    private fun reply(text: String = "Done.", state: String = "complete") =
+        Wire.objectOf("id" to "m${next++}", "role" to "assistant", "text" to text, "state" to state)
 
     private fun rule(rule: PredictionRule) = PromptPrediction.Rule(rule)
 
@@ -126,6 +127,68 @@ class PromptPredictionTest {
         assertEquals(rule(PredictionRule.FIX_TESTS), predictPrompt(listOf(user()) + deno, "idle", false))
         val build = tool("bash", """{"command":"./gradlew assembleDebug"}""", failed = true)
         assertEquals(rule(PredictionRule.FIX_ERROR), predictPrompt(listOf(user()) + build, "idle", false))
+    }
+
+    @Test
+    fun aTurnThatEndedInAnErrorSuggestsContinuing() {
+        val stopped = reply("The host stopped while running a turn. Nothing was resent.", state = "error")
+        assertEquals(rule(PredictionRule.CONTINUE), predictPrompt(listOf(user()) + edit() + stopped, "idle", false))
+        // An error before the latest prompt was already answered.
+        assertNull(predictPrompt(listOf(user(), stopped, user("Never mind"), reply()), "idle", false))
+    }
+
+    @Test
+    fun aReplyOfferingANextStepSuggestsAcceptingIt() {
+        for (text in listOf(
+            "All tests pass. Shall I commit this?",
+            "Done.\n\nWould you like me to open a PR?",
+            "Ich habe die Validierung angepasst. Soll ich die Tests auch erweitern?",
+            "**Möchtest du, dass ich das auch im Wear-Modul ändere?**",
+        )) assertEquals(text, rule(PredictionRule.ACCEPT_OFFER), predictPrompt(listOf(user(), reply(text)), "idle", false))
+    }
+
+    @Test
+    fun openOrEitherOrQuestionsAreNotOffers() {
+        for (text in listOf(
+            "Which of the two approaches do you prefer?",
+            "Soll ich A nehmen oder B?",
+            "Shall I commit this? I also updated the README.",
+            "What should the default be?",
+        )) assertNull(text, predictPrompt(listOf(user(), reply(text)), "idle", false))
+    }
+
+    @Test
+    fun anOfferAfterAFailureWinsButALaterFailureDoesNot() {
+        val offered = listOf(user()) + test(failed = true) + reply("Two tests fail. Should I fix them?")
+        assertEquals(rule(PredictionRule.ACCEPT_OFFER), predictPrompt(offered, "idle", false))
+        val failedAfter = listOf(user(), reply("Shall I run it?")) + tool("bash", """{"command":"ls"}""", failed = true)
+        assertEquals(rule(PredictionRule.FIX_ERROR), predictPrompt(failedAfter, "idle", false))
+    }
+
+    @Test
+    fun anOfferWinsOverRunningTests() {
+        val messages = listOf(user()) + edit() + reply("Shall I run the tests now?")
+        assertEquals(rule(PredictionRule.ACCEPT_OFFER), predictPrompt(messages, "idle", false))
+    }
+
+    @Test
+    fun aPushedChangeIsNotSuggestedAsAPr() {
+        val pushed = listOf(user()) + edit() + edit() + edit() + test() + tool("bash", """{"command":"git push -u origin fix"}""") + reply()
+        assertNull(predictPrompt(pushed, "idle", false))
+        val opened = listOf(user()) + edit() + edit() + edit() + test() + tool("bash", """{"command":"gh pr create --draft"}""") + reply()
+        assertNull(predictPrompt(opened, "idle", false))
+    }
+
+    @Test
+    fun conversationLanguageFollowsTheRecentPrompts() {
+        assertEquals("de", conversationLanguage(listOf(user("Kannst du die Tests fixen?"), reply())))
+        assertEquals("de", conversationLanguage(listOf(user("Prüf das bitte"))))
+        assertEquals("en", conversationLanguage(listOf(user("Can you fix the tests?"), reply())))
+        assertNull(conversationLanguage(listOf(user("/compact"), user("ok"))))
+        assertNull(conversationLanguage(emptyList()))
+        // The last three prompts count, so one English command does not flip a German chat.
+        val mixed = listOf(user("Mach das bitte auch für die Wear-App"), user("Und dann noch die Tests"), user("run it"))
+        assertEquals("de", conversationLanguage(mixed))
     }
 
     @Test

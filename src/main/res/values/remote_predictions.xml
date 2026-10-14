@@ -1,5 +1,7 @@
 <resources>
     <!-- English fallback for all unsupported locales. -->
+    <string name="remote_prediction_continue">Continue where you left off</string>
+    <string name="remote_prediction_accept_offer">Yes, go ahead</string>
     <string name="remote_prediction_fix_tests">Fix the failing tests</string>
     <string name="remote_prediction_fix_error">Fix the error and try again</string>
     <string name="remote_prediction_implement_plan">Implement the plan</string>
