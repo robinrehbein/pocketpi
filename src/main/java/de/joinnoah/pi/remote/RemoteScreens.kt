@@ -919,6 +919,8 @@ internal fun RemoteScreen(
                                         }
                                     }
                                 },
+                                // Picked code lines go in quoted with their path and numbers, as "Send lines" writes them.
+                                localState = dragEvent.localState,
                                 release = { permissions?.release() },
                             )
                         }

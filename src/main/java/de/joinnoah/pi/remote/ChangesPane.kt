@@ -16,6 +16,10 @@ import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.focus.onFocusChanged
@@ -31,6 +35,7 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -74,6 +79,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -754,7 +763,8 @@ private fun ChangesFileDiff(
     val diff = state.diff?.takeIf { it.path == path }
     val lines = remember(diff?.patch) { diff?.patch?.let(::patchDiff).orEmpty() }
     val splitRows = remember(diff?.patch, lines, split) { if (split) diff?.patch?.let { splitDiff(it, lines) } else null }
-    val rowStyle = rememberDiffRowStyle(lines)
+    val zoom = CodeZoom.scale(CodeZoom.CHANGES)
+    val rowStyle = rememberDiffRowStyle(lines, zoom = zoom)
     val scroll = rememberScrollState()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -769,8 +779,29 @@ private fun ChangesFileDiff(
     var editing by remember { mutableStateOf<DiffLine?>(null) }
     val copyLine = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_line))
     val copyHunk = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_hunk))
+    val copyPicked = rememberCopyToClipboard(stringResource(R.string.remote_code_copy_label))
+    val pickColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f)
     val addLabel = stringResource(R.string.remote_changes_comment_add)
     val editLabel = stringResource(R.string.remote_changes_comment_edit)
+    val pickLabel = stringResource(R.string.remote_changes_diff_pick)
+    // The picked lines, by their 1-based index into [lines]. A new patch starts with none.
+    var picked by rememberSaveable(path, base, diff?.patch, stateSaver = LineSelectionSaver) { mutableStateOf<LineSelection?>(null) }
+    val gutterRows = remember(listState) { GutterRows(listState) }
+    val focus = remember { FocusRequester() }
+    var paneFocused by remember { mutableStateOf(false) }
+    // Where a drag over the number cells began; the drag reads it, not a pick composition may lag behind.
+    var dragFrom by remember { mutableIntStateOf(1) }
+    // Ctrl+A picks every line, Ctrl+C copies the picked ones without their prefixes, Ctrl+= and Ctrl+- zoom.
+    val onCodeKey: (KeyEvent) -> Boolean = { event ->
+        if (event.type != KeyEventType.KeyDown) false
+        else when (resolveCodeShortcut(event)) {
+            Shortcut.SELECT_ALL_LINES -> allLines(lines.size)?.let { picked = it; true } ?: false
+            Shortcut.COPY_LINES -> picked?.let { copyPicked(selectedDiffText(lines, it, prefixed = false)); true } ?: false
+            Shortcut.ZOOM_IN -> { CodeZoom.step(CodeZoom.CHANGES, inward = true); true }
+            Shortcut.ZOOM_OUT -> { CodeZoom.step(CodeZoom.CHANGES, inward = false); true }
+            else -> false
+        }
+    }
     // A subagent's file: its changes are not the session's to comment on or act on from here.
     val subagent = state.fileSession?.let { id -> state.subagents.firstOrNull { it.sessionId == id } }
     val readOnly = state.fileSession != null
@@ -800,12 +831,18 @@ private fun ChangesFileDiff(
             val first = (listState.firstVisibleItemIndex - leading).coerceIn(0, maxOf(rowCount - 1, 0))
             // The first changed line from the hunk in view on, else the first line that takes one.
             val start = splitRows?.getOrNull(first)?.let { it.old ?: it.new } ?: first
+            // The picked line comes first: a click picks it, and the keyboard follows what the user chose.
+            val pickedLine = picked?.let { range -> (range.first..range.last).asSequence().mapNotNull { lines.getOrNull(it - 1) }.firstOrNull { it.kind != DiffKind.HUNK } }
             val target =
-                focusedLine
+                pickedLine
+                    ?: focusedLine
                     ?: (start until lines.size).asSequence().map(lines::get).firstOrNull { it.kind == DiffKind.ADDED || it.kind == DiffKind.REMOVED }
                     ?: lines.firstOrNull { it.kind != DiffKind.HUNK }
             target?.let { editing = it } != null
         }
+    }
+    SideEffect {
+        gutterRows.lineOfItem = { item -> (item - leading).takeIf { it in lines.indices && lines[it].kind != DiffKind.HUNK }?.plus(1) }
     }
     DisposableEffect(keys) {
         onDispose {
@@ -813,10 +850,21 @@ private fun ChangesFileDiff(
             keys.comment = { false }
         }
     }
-    fun Modifier.commentable(line: DiffLine): Modifier =
+    // A click picks the line; a second click on the only picked line clears the pick.
+    fun pickLine(number: Int) {
+        picked = if (picked == LineSelection(number)) null else LineSelection(number)
+    }
+    fun Modifier.pickable(line: DiffLine, number: Int): Modifier =
         onFocusChanged { if (it.isFocused) focusedLine = line else if (focusedLine == line) focusedLine = null }
-            .clickable(onClickLabel = addLabel) { editing = line }
+            .clickable(onClickLabel = pickLabel) {
+                // The row keeps the keyboard it has; the list takes it only when nothing in it has.
+                if (!paneFocused) focus.requestFocus()
+                pickLine(number)
+            }
             .testTag("changesDiffLine")
+    // A screen reader lists the comment next to the pick, as the gutter button does for the eye.
+    fun Modifier.commentAction(line: DiffLine, commentable: Boolean): Modifier =
+        if (!commentable) this else semantics { customActions = listOf(CustomAccessibilityAction(addLabel) { editing = line; true }) }
     // The session's own file opens in Files at the line as it is now; a subagent's lies elsewhere.
     val fileOpener = LocalFileOpener.current?.takeIf { !readOnly }
     fun lineMenu(line: DiffLine, index: Int, commentable: Boolean): Modifier =
@@ -824,11 +872,14 @@ private fun ChangesFileDiff(
             val opening =
                 if (line.kind == DiffKind.HUNK) null
                 else newLineNear(lines, index)?.let { at -> fileOpener?.action(path, LineSelection(at)) as? FileOpenAction.Open }
-            diffLineMenuActions(commentable, openable = opening != null).map { action ->
+            diffLineMenuActions(commentable, openable = opening != null, copyWithPrefix = true).map { action ->
                 MenuItem(action.label, "diff_${action.name.lowercase()}") {
                     when (action) {
                         DiffLineMenuAction.COMMENT -> editing = line
                         DiffLineMenuAction.COPY_LINE -> copyLine(line.text)
+                        // The picked lines when this one is among them, else this line alone.
+                        DiffLineMenuAction.COPY_WITH_PREFIX ->
+                            copyPicked(selectedDiffText(lines, picked?.takeIf { index + 1 in it.first..it.last } ?: LineSelection(index + 1), prefixed = true))
                         DiffLineMenuAction.COPY_HUNK -> copyHunk(diffHunkText(lines, index))
                         DiffLineMenuAction.OPEN_FILE -> opening?.let { fileOpener?.perform(it) }
                     }
@@ -849,7 +900,20 @@ private fun ChangesFileDiff(
             )
         }
     }
-    LazyColumn(Modifier.fillMaxSize().testTag("changesDiff"), state = listState, contentPadding = PaddingValues(top = headerHeight)) {
+    LazyColumn(
+        Modifier.fillMaxSize()
+            .testTag("changesDiff")
+            .onPlaced { gutterRows.coordinates = it }
+            .focusRequester(focus)
+            .onFocusChanged { paneFocused = it.hasFocus }
+            .focusable()
+            // After the rows: an in-row text selection copies its own text first.
+            .onKeyEvent(onCodeKey)
+            .takeFocusOnPress(focus, { paneFocused })
+            .codeZoomGestures(CodeZoom.CHANGES),
+        state = listState,
+        contentPadding = PaddingValues(top = headerHeight),
+    ) {
         if (readOnly)
             item(key = "subagent") {
                 Notice(
@@ -909,7 +973,18 @@ private fun ChangesFileDiff(
                         wrap,
                         cell = { line, index ->
                             val commentable = line.kind != DiffKind.HUNK && !readOnly
-                            lineMenu(line, index, commentable).then(if (commentable) Modifier.commentable(line) else Modifier)
+                            val number = index + 1
+                            val pickedHere = picked?.let { number in it.first..it.last } == true
+                            lineMenu(line, index, commentable)
+                                .then(if (line.kind != DiffKind.HUNK) Modifier.pickable(line, number) else Modifier)
+                                .then(if (pickedHere) Modifier.background(pickColor) else Modifier)
+                                .commentAction(line, commentable)
+                        },
+                        // Touch has no menu key here: the picked cell carries the gutter's comment button.
+                        leading = { line, index ->
+                            val number = index + 1
+                            if (line.kind != DiffKind.HUNK && !readOnly && picked?.let { number in it.first..it.last } == true)
+                                GutterCommentButton(true, addLabel) { editing = line }
                         },
                     ) { LineComment(it) }
                 }
@@ -921,13 +996,46 @@ private fun ChangesFileDiff(
                 // an accepted trade-off, as in the tool detail diff.
                 itemsIndexed(lines, contentType = { _, line -> line.kind }) { index, line ->
                     val commentable = line.kind != DiffKind.HUNK && !readOnly
+                    val number = index + 1
+                    val (hover, hovered) = rememberRowHover()
+                    val pickedHere = picked?.let { number in it.first..it.last } == true
+                    // The gutter takes a press on a line number: a tap picks, Shift extends, a drag picks a range.
+                    val gutter =
+                        if (line.kind == DiffKind.HUNK) Modifier
+                        else
+                            Modifier.codeGutter(
+                                line = number,
+                                rows = gutterRows,
+                                tapLabel = pickLabel,
+                                onTap = { extend ->
+                                    if (!paneFocused) focus.requestFocus()
+                                    if (extend) picked = picked.extendTo(number) else pickLine(number)
+                                },
+                                onStart = { start, extend ->
+                                    if (!paneFocused) focus.requestFocus()
+                                    dragFrom = dragAnchor(picked, start, extend)
+                                    picked = dragRange(dragFrom, start)
+                                },
+                                onDrag = { end -> picked = dragRange(dragFrom, end) },
+                                // The row is the focus stop and Enter on it picks; two more stops per row would crowd the Tab order.
+                                focusable = false,
+                            ).testTag("changesGutter:$number")
+                    val comment: @Composable () -> Unit = { GutterCommentButton(hovered || pickedHere, addLabel) { editing = line } }
                     Column {
                         DiffRow(
                             line,
                             rowStyle,
                             scroll,
-                            lineMenu(line, index, commentable).then(if (commentable) Modifier.commentable(line) else Modifier),
+                            hover
+                                .then(lineMenu(line, index, commentable))
+                                .then(if (line.kind != DiffKind.HUNK) Modifier.pickable(line, number) else Modifier)
+                                .commentAction(line, commentable),
                             wrap,
+                            selected = pickedHere,
+                            selectable = true,
+                            // Every row of a session's diff keeps the button's width, so the code lines up under a hunk header too.
+                            leading = if (commentable) comment else if (!readOnly) ({ GutterCommentSpace() }) else null,
+                            gutter = gutter,
                         )
                         LineComment(line)
                     }

@@ -98,11 +98,12 @@ internal fun mayHoldAttachments(mimeTypes: List<String>): Boolean =
     mimeTypes.any { !it.startsWith("text/") || it == ClipDescription.MIMETYPE_TEXT_URILIST }
 
 /**
- * A drag the chat takes: images, text and other files (`application/…`) from another app. A drag
- * with a [localState] started in PocketPi ([OwnDrag]) and is meant for another app.
+ * A drag the chat takes: images, text and other files (`application/…`) from another app, and
+ * picked code lines from Files ([CodeLinesDrag]). Any other drag with a [localState] started in
+ * PocketPi ([OwnDrag]) and is meant for another app.
  */
 internal fun acceptsDrop(localState: Any?, mimeTypes: Set<String>): Boolean =
-    localState == null &&
+    (localState == null || localState is CodeLinesDrag) &&
         mimeTypes.any { type -> listOf("image/", "text/", "application/").any { type.startsWith(it, ignoreCase = true) } }
 
 /** Ctrl+V and Shift+Insert paste; Ctrl+Shift+V pastes plain text, so it stays the field's. */
@@ -124,16 +125,18 @@ internal fun clipboardIntake(context: Context): ClipIntake? {
  * Takes a drop on the chat: its attachments go to [attach] as one batch, its plain text to
  * [insertText]. [release] gives back the drop's read grants exactly once: after the import read
  * every URI (the `onDone` [attach] gets), or at once when nothing is imported. False when the drop
- * brought nothing the chat took.
+ * brought nothing the chat took. Picked code lines from Files ([localState] is a [CodeLinesDrag])
+ * go in as their quoted prompt, with path and line numbers, instead of the bare text.
  */
 internal fun acceptChatDrop(
     parts: List<ClipPart>,
     attach: (items: List<Picked>, onDone: () -> Unit) -> Unit,
     insertText: (String) -> Boolean,
+    localState: Any? = null,
     release: () -> Unit,
 ): Boolean {
     val intake = clipIntake(parts, textFiles = true)
-    val inserted = intake.text.isNotEmpty() && insertText(intake.text)
+    val inserted = intake.text.isNotEmpty() && insertText((localState as? CodeLinesDrag)?.prompt ?: intake.text)
     if (intake.attachments.isEmpty()) {
         release()
         return inserted

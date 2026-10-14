@@ -108,6 +108,7 @@ internal fun SplitDiffItem(
     scroll: ScrollState,
     wrap: Boolean,
     cell: (DiffLine, Int) -> Modifier = { _, _ -> Modifier },
+    leading: @Composable (DiffLine, Int) -> Unit = { _, _ -> },
     below: @Composable (DiffLine) -> Unit = {},
 ) {
     val old = row.old?.let(lines::get)
@@ -115,7 +116,17 @@ internal fun SplitDiffItem(
     Column(Modifier.testTag("changesSplitRow")) {
         if (old != null && old.kind == DiffKind.HUNK) DiffRow(old, rowStyle, rememberScrollState(), cell(old, checkNotNull(row.old)), wrap)
         else {
-            SplitDiffRow(old, new, rowStyle, scroll, wrap) { line ->
+            SplitDiffRow(
+                old,
+                new,
+                rowStyle,
+                scroll,
+                wrap,
+                leading = { line ->
+                    val index = if (line === old) row.old else row.new
+                    if (index != null) leading(line, index)
+                },
+            ) { line ->
                 val index = if (line === old) row.old else row.new
                 if (line == null || index == null) Modifier else cell(line, index)
             }
@@ -150,17 +161,26 @@ internal fun SplitDiffRow(
     scroll: ScrollState,
     wrap: Boolean,
     modifier: Modifier = Modifier,
+    leading: @Composable (DiffLine) -> Unit = {},
     cell: (DiffLine?) -> Modifier = { Modifier },
 ) {
     Row(modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-        SplitCell(old, old?.oldLine, rowStyle, scroll, wrap, cell(old))
+        SplitCell(old, old?.oldLine, rowStyle, scroll, wrap, cell(old), leading)
         VerticalDivider(Modifier.fillMaxHeight())
-        SplitCell(new, new?.newLine, rowStyle, scroll, wrap, cell(new))
+        SplitCell(new, new?.newLine, rowStyle, scroll, wrap, cell(new), leading)
     }
 }
 
 @Composable
-private fun RowScope.SplitCell(line: DiffLine?, number: Int?, rowStyle: DiffRowStyle, scroll: ScrollState, wrap: Boolean, modifier: Modifier) {
+private fun RowScope.SplitCell(
+    line: DiffLine?,
+    number: Int?,
+    rowStyle: DiffRowStyle,
+    scroll: ScrollState,
+    wrap: Boolean,
+    modifier: Modifier,
+    leading: @Composable (DiffLine) -> Unit,
+) {
     val (container, content) =
         when (line?.kind) {
             DiffKind.ADDED -> (rowStyle.addedContainer as Color?) to rowStyle.addedContent
@@ -175,6 +195,7 @@ private fun RowScope.SplitCell(line: DiffLine?, number: Int?, rowStyle: DiffRowS
             .then(modifier)
             .semantics(mergeDescendants = true) {}
     ) {
+        if (line != null) leading(line)
         if (rowStyle.numbered) GutterNumber(number, rowStyle.numberWidth, rowStyle.text, rowStyle.muted)
         if (line != null) DiffLineText(line, diffPrefix(line.kind), content, rowStyle, scroll, wrap)
     }
