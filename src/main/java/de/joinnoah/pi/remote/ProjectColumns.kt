@@ -38,7 +38,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
-import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.automirrored.filled.LastPage
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -129,7 +129,7 @@ internal fun ProjectStrip(
             Spacer(Modifier.height(8.dp))
             FloatingSurface(modifier = Modifier.testTag("expandProjects"), shape = CircleShape) {
                 IconButton(onClick = { twoPane.projectsExpanded = true }, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Default.Menu, stringResource(R.string.remote_projects_expand))
+                    Icon(Icons.AutoMirrored.Filled.LastPage, stringResource(R.string.remote_projects_expand))
                 }
             }
         }

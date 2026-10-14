@@ -620,12 +620,40 @@ class AdaptiveLayoutTest {
     }
 
     @Test
-    fun fullProjectsColumnFitsOnlyWhereTheChatKeepsItsMinimum() {
+    fun fullProjectsColumnDecidesTheInspectorForTheRoomItLeaves() {
+        // Tab S11 landscape: beside the strip the inspector opens beside the list.
+        val landscape = paneLayout(1205.dp, TALL)
+        assertTrue(landscape.inspectorBesideList)
+        val kept = checkNotNull(projectsColumnLayout(1205.dp, landscape))
+        // Beside the full column it would leave the chat under its minimum: the list makes way.
+        assertFalse(kept.inspectorBesideList)
+        assertTrue(kept.autoCollapseList)
+        assertEquals(landscape.sizeKey(), kept.sizeKey())
+        // Once the list has made way, the chat keeps its minimum beside the narrowest inspector.
+        val room = 1205.dp - landscape.projectsWidth - PANE_DIVIDER_WIDTH
+        assertTrue(room - landscape.inspectorMinWidth - PANE_DIVIDER_WIDTH >= CHAT_PANE_MIN_WIDTH)
+        // Where the narrowest list and the chat no longer fit beside it, the strip stays.
+        val portrait = paneLayout(800.dp, TALL)
+        assertNull(projectsColumnLayout(800.dp, portrait))
+        assertNull(projectsColumnLayout(400.dp, PaneLayout.Phone))
+        // 280 dp of projects, a divider, 400 dp of chat, a divider and a 300 dp inspector need 982 dp.
+        val wide = paneLayout(1300.dp, TALL)
+        assertNull(projectsColumnLayout(981.dp, wide))
+        assertTrue(projectsColumnLayout(982.dp, wide) != null)
+        // Without an inspector beside the chat, the narrowest list is what has to fit: 922 dp.
+        val overlay = wide.copy(inspector = InspectorMode.OVERLAY)
+        assertNull(projectsColumnLayout(921.dp, overlay))
+        assertTrue(projectsColumnLayout(922.dp, overlay) != null)
+    }
+
+    @Test
+    fun aListShownAgainIsNoLayoutToReset() {
         val layout = paneLayout(1300.dp, TALL)
-        assertTrue(projectsColumnFits(1300.dp, layout, listShown = true))
-        // 280 dp of projects, 240 dp of list, two dividers and 400 dp of chat need 922 dp.
-        assertTrue(projectsColumnFits(922.dp, layout, listShown = true))
-        assertFalse(projectsColumnFits(921.dp, layout, listShown = true))
-        assertTrue(projectsColumnFits(921.dp, layout, listShown = false))
+        val state = TwoPaneState()
+        state.adopt(layout)
+        state.listCollapsed = true
+        assertTrue(state.customized)
+        state.listCollapsed = false
+        assertFalse(state.customized)
     }
 }
