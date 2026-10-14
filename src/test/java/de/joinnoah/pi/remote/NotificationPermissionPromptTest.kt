@@ -86,10 +86,11 @@ class NotificationPermissionPromptTest {
     }
 
     @Test
-    fun aDenialOnTheCardIsAnAnswerToo() {
+    fun aRecordedPromptCountsAsAnAnswerAndHidesTheCard() {
         val settings = FakeSettingsRepository()
 
-        // The card's own permission request, denied: the card's denial is recorded like the pairing's.
+        // What the card records when its own permission request is denied, as the pairing's does.
+        // The launcher that calls it is not exercised here.
         settings.markNotificationPromptShown()
 
         assertTrue(settings.state.value.notificationsDecided)

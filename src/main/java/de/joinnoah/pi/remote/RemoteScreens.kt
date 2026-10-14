@@ -1989,10 +1989,11 @@ internal fun RemoteScreen(
                     enabled = !state.loading,
                     onClick = { navigator.openFolders(key.routeId) },
                 )
-            // An empty session list names its one action beside the list, so its button stands out. It keeps this
-            // shape while the list loads, so the button does not jump when the list arrives; disabled, it is greyed.
+            // An empty session list names its one action beside the list, so its button stands out; disabled, it is
+            // greyed. A list still loading keeps the small button: most projects have sessions, so the button
+            // changes its shape only for a list that turns out empty.
             val newSessionEnabled = state.connected && !state.loading && !navigator.mutating
-            if (key is RemoteNavKey.Sessions && state.sessions.isEmpty()) {
+            if (key is RemoteNavKey.Sessions && state.sessions.isEmpty() && !state.loading) {
                 val labelColor =
                     if (newSessionEnabled) MaterialTheme.colorScheme.onPrimary
                     else MaterialTheme.colorScheme.onSurfaceVariant
@@ -2678,7 +2679,6 @@ internal fun RemoteScreen(
                                             if (folders) {
                                                 Button(
                                                     onClick = { navigator.openFolders(key.routeId) },
-                                                    enabled = !state.loading,
                                                     modifier = Modifier.testTag("emptyOpenFolder"),
                                                 ) {
                                                     Icon(Icons.Default.FolderOpen, contentDescription = null)
@@ -2774,6 +2774,9 @@ internal fun RemoteScreen(
                                 }
                             if (state.sessions.isEmpty()) {
                                 if (state.loading) item { SessionListSkeleton() }
+                                // Only a list read from the Mac, now or before, says there are no sessions.
+                                else if (!state.connected && !state.stale)
+                                    item(key = "sessions_unread") { Text(stringResource(R.string.remote_sessions_unread)) }
                                 else item(key = "sessions_empty") {
                                     EmptyState(
                                         icon = Icons.Outlined.ChatBubbleOutline,

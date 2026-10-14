@@ -153,6 +153,32 @@ class EmptyStateUiTest {
     }
 
     @Test
+    fun anOfflineMacThatNeverListedSessionsDoesNotClaimThereAreNone() {
+        render(projects = listOf(project("p1", "Alpha")))
+        compose.onNodeWithTag("projectRow-p1").performClick()
+        compose.waitForIdle()
+
+        repository.state.value = repository.state.value.copy(connected = false, stale = false, loading = false)
+        compose.waitForIdle()
+
+        compose.onNodeWithText(label(R.string.remote_sessions_unread)).assertIsDisplayed()
+        compose.onAllNodesWithText(label(R.string.remote_empty_sessions_title)).assertCountEquals(0)
+        compose.onAllNodesWithTag("extendedNewSession").assertCountEquals(1)
+    }
+
+    @Test
+    fun aLoadingSessionListKeepsTheSmallNewSessionButton() {
+        render(projects = listOf(project("p1", "Alpha")))
+        compose.onNodeWithTag("projectRow-p1").performClick()
+        compose.waitForIdle()
+
+        repository.state.value = repository.state.value.copy(loading = true)
+        compose.waitForIdle()
+
+        compose.onAllNodesWithTag("extendedNewSession").assertCountEquals(0)
+    }
+
+    @Test
     fun theEmptySessionStateLeavesOnceASessionArrives() {
         render(
             projects = listOf(project("p1", "Alpha")),
