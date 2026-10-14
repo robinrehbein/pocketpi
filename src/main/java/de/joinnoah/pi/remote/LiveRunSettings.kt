@@ -37,9 +37,17 @@ internal class LiveRunSettings(private val preferences: SharedPreferences) {
         mutable.value = enabled
     }
 
-    private companion object {
-        const val FILE = "live_run"
-        const val KEY_ENABLED = "enabled"
+    companion object {
+        private const val FILE = "live_run"
+        private const val KEY_ENABLED = "enabled"
+
+        /**
+         * Starts reading the file in the background, so the first pause after a cold start does
+         * not read it on the main thread.
+         */
+        fun preload(context: Context) {
+            context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+        }
     }
 }
 

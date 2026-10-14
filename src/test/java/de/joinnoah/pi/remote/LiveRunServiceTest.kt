@@ -120,6 +120,19 @@ class LiveRunStateTest {
     }
 
     @Test
+    fun aPromptFromAClockAheadGivesTheSameStartOnEveryCall() {
+        val fallback = STARTED_AT
+        val now = STARTED_AT + 5 * 60_000L
+        val messages = listOf(prompt(now + 30_000L), reply(bash))
+        assertEquals(fallback, runStartedAt(messages, fallback, now))
+        assertEquals(fallback, runStartedAt(messages, fallback, now + 1_000L))
+        assertEquals(
+            liveRunContent(liveState(messages = messages), null, fallback, now),
+            liveRunContent(liveState(messages = messages), null, fallback, now + 1_000L),
+        )
+    }
+
+    @Test
     fun aWaitingSessionShowsNoTool() {
         val content = liveRunContent(liveState("waiting", listOf(prompt(), reply(bash))), null, 0, STARTED_AT)
         assertTrue(content.waiting)
@@ -190,6 +203,19 @@ class LiveRunServiceTest {
 
         state.value = liveState("idle")
         controller.pause()
+        assertNull(startedService())
+        assertFalse(LiveRun.wanted)
+    }
+
+    @Test
+    fun aConfigurationChangeStartsNoService() {
+        val controller = Robolectric.buildActivity(MainActivity::class.java, LaunchIntents.app(context)).create().start().resume()
+        // The activity handles rotation and resizing itself; a language change recreates it.
+        controller.configurationChange(
+            android.content.res.Configuration(context.resources.configuration).apply {
+                setLocale(if (locales[0].language == "de") java.util.Locale.ENGLISH else java.util.Locale.GERMAN)
+            }
+        )
         assertNull(startedService())
         assertFalse(LiveRun.wanted)
     }
@@ -310,6 +336,37 @@ class LiveRunServiceTest {
             shadowOf(controller.get()).lastForegroundNotificationId,
         )
         assertStopped(controller, LiveRunStop.FOREGROUND)
+    }
+
+    @Test
+    fun aResumeWhileANewerStartIsPendingLeavesTheServiceForThatStart() {
+        val controller = running()
+        // The app comes back and pauses again: a second start is on its way.
+        LiveRun.onResume()
+        assertTrue(LiveRun.onPause(context))
+        val second = checkNotNull(startedService())
+        LiveRun.onResume()
+        // The service has seen start #1 only; stopping for it leaves start #2 to arrive.
+        assertEquals(LiveRunStop.FOREGROUND, LiveRun.lastStop)
+        assertEquals(1, shadowOf(controller.get()).stopSelfId)
+        controller.withIntent(second).startCommand(0, 2)
+        assertStopped(controller, LiveRunStop.FOREGROUND)
+        assertEquals(2, shadowOf(controller.get()).stopSelfId)
+    }
+
+    @Test
+    fun aPendingStartTriesStartForegroundBeforeItLooksAtWanted() {
+        val controller = running()
+        LiveRun.onResume()
+        assertTrue(LiveRun.onPause(context))
+        val second = checkNotNull(startedService())
+        LiveRun.onResume()
+        // The shadow clears the notification on stop, so a throwing startForeground shows the
+        // call: start #2 reaches it although the app no longer wants the service.
+        shadowOf(controller.get()).setThrowInStartForeground(IllegalStateException("not allowed"))
+        controller.withIntent(second).startCommand(0, 2)
+        assertEquals(LiveRunStop.REFUSED, LiveRun.lastStop)
+        assertEquals(2, shadowOf(controller.get()).stopSelfId)
     }
 
     @Test

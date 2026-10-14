@@ -140,13 +140,15 @@ private val OPEN_TOOL_STATES = setOf("streaming", "running")
 
 /**
  * When the run started: the latest prompt's time, or [fallback] when it has none or one that
- * makes no sense here (another clock in the future, or more than a day ago).
+ * makes no sense here (later than [now], from a Mac clock that runs ahead, or more than a day
+ * ago). The result never depends on [now] otherwise, so the notification's content stays the same
+ * between calls and the chronometer does not jump.
  */
 internal fun runStartedAt(messages: List<JsonObject>, fallback: Long, now: Long): Long {
     val prompt = messages.lastOrNull { it.safeText("role") == "user" } ?: return fallback
     val timestamp =
         (prompt["timestamp"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull ?: return fallback
-    return timestamp.takeIf { it in (now - DAY_MILLIS)..(now + CLOCK_SKEW_MILLIS) }?.coerceAtMost(now) ?: fallback
+    return timestamp.takeIf { it in (now - DAY_MILLIS)..now } ?: fallback
 }
 
 private fun JsonObject.safeText(key: String): String? =
@@ -154,7 +156,6 @@ private fun JsonObject.safeText(key: String): String? =
 
 private const val MAX_TEXT = 200
 private const val DAY_MILLIS = 24 * 60 * 60_000L
-private const val CLOCK_SKEW_MILLIS = 60_000L
 
 /** Why the service ended, for tests and diagnostics. */
 internal enum class LiveRunStop {
