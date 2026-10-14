@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
@@ -19,6 +20,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.doubleClick
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.platform.LocalConfiguration
@@ -65,6 +67,8 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -1102,24 +1106,163 @@ class TwoPaneNavigationTest {
 
     @Test
     @Config(qualifiers = "w1700dp-h1000dp")
-    fun aNewLayoutBucketResetsTheDraggedWidths() {
+    fun draggedWidthsSurviveAnotherBucketAndARestart() {
         val window = mutableStateOf<Dp>(1300.dp)
+        val launch = mutableStateOf(0)
         compose.setContent {
-            Box(Modifier.width(window.value).fillMaxHeight()) { App() }
+            Box(Modifier.width(window.value).fillMaxHeight()) { key(launch.value) { App() } }
         }
         compose.waitForIdle()
         accessibilityAction("sessionListDivider", label(R.string.remote_pane_wider))
         compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
-        // Within the bucket the dragged width stays.
+        // Within the bucket the width keeps its share of the window.
         window.value = 1400.dp
         compose.waitForIdle()
-        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo((400f / 1300f * 1400f).dp)
+        // Another bucket shows its own default and keeps the first one's width aside.
         window.value = 900.dp
         compose.waitForIdle()
         compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(280.dp)
         window.value = 1300.dp
         compose.waitForIdle()
-        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(360.dp)
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
+        // A cold start reads it back from the preferences.
+        launch.value++
+        compose.waitForIdle()
+        compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
+        assertTrue(PaneLayoutStore(compose.activity).load().isNotEmpty())
+    }
+
+    // ---- Artifacts beside the chat -------------------------------------------------------
+
+    private val page = "<html><head><title>Quarterly report</title></head><body>v1</body></html>"
+
+    /** A chat whose answer names an HTML page the Mac serves. */
+    private fun artifactChat() {
+        repository.artifact = { _, path, _ -> ProjectArtifactResult.Loaded(path, "1".repeat(64), page, page.length) }
+        repository.state.value =
+            repository.state.value.copy(
+                capabilities = setOf(FILES_ARTIFACT_CAPABILITY),
+                capabilitiesKnown = true,
+                messages =
+                    listOf(
+                        buildJsonObject {
+                            put("id", "answer")
+                            put("role", "assistant")
+                            put("text", "[the report](out/report.html)")
+                        }
+                    ),
+            )
+    }
+
+    private fun openArtifact() {
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("Quarterly report").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(label(R.string.remote_artifact_open_action)).performClick()
+        compose.waitForIdle()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun anArtifactOpensInItsTabBesideTheChatAndPopsOut() {
+        artifactChat()
+        render()
+        openArtifact()
+        compose.onNodeWithTag("inspectorTab_artifact").assertIsSelected()
+        assertInInspector("artifactTab")
+        compose.onNodeWithTag("artifactViewer").assertDoesNotExist()
+        // The chat stays usable beside the page, with the list out of the way.
+        assertChatShown()
+        compose.onNodeWithTag("sessionListPane").assertDoesNotExist()
+        // Pop out opens the full-screen dialog; closing it brings the page back into the tab.
+        click("artifactPopOut")
+        compose.onNodeWithTag("artifactViewer").assertIsDisplayed()
+        compose.onNodeWithTag("artifactTab").assertDoesNotExist()
+        compose.onNodeWithTag("artifactViewerClose").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("artifactViewer").assertDoesNotExist()
+        assertInInspector("artifactTab")
+        // Closing the tab closes the pane and brings the list back.
+        click("inspectorTabClose_artifact")
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun aPhoneOpensTheArtifactInItsDialog() {
+        artifactChat()
+        render()
+        openArtifact()
+        compose.onNodeWithTag("artifactViewer").assertIsDisplayed()
+        compose.onNodeWithTag("inspectorPane").assertDoesNotExist()
+        compose.onNodeWithTag("artifactPopOut").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun theChatsEditOfAnOpenPageOffersItsNewVersion() {
+        artifactChat()
+        render()
+        openArtifact()
+        compose.onNodeWithTag("artifactChanged").assertDoesNotExist()
+        val newer = page.replace("v1", "v2")
+        repository.artifact = { _, path, _ -> ProjectArtifactResult.Loaded(path, "2".repeat(64), newer, newer.length) }
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(
+                    messages =
+                        repository.state.value.messages +
+                            buildJsonObject {
+                                put("id", "editing")
+                                put("role", "assistant")
+                                put("text", "")
+                                put(
+                                    "parts",
+                                    buildJsonArray {
+                                        addJsonObject {
+                                            put("type", "toolCall")
+                                            put("id", "call-edit")
+                                            put("name", "edit")
+                                            // Absolute, where the message named it relative to the project.
+                                            put("arguments", "{\"path\":\"/Users/robin/project/out/report.html\"}")
+                                        }
+                                    },
+                                )
+                            } +
+                            buildJsonObject {
+                                put("id", "edited")
+                                put("role", "tool")
+                                put("text", "Edited")
+                                put("state", "complete")
+                                put("toolName", "edit")
+                                put("toolCallId", "call-edit")
+                            }
+                )
+        }
+        compose.waitForIdle()
+        // Nothing reloads until the user says so.
+        compose.onNodeWithTag("artifactChanged").assertIsDisplayed()
+        assertFalse(repository.artifactReads.any { it.second })
+        click("artifactChangedReload")
+        compose.waitUntil(5_000) { repository.artifactReads.any { it == "out/report.html" to true } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("artifactChanged").assertDoesNotExist()
+        compose.onNodeWithTag("artifactTabCode").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText(newer).assertExists()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun aLongPressPeekShowsTheWholeOutputInTheToolTab() {
+        render()
+        compose.onNodeWithTag("toolCardHeader").performTouchInput { longClick() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("inspectorTab_tool").assertIsSelected()
+        assertInInspector("toolDetail")
+        // Pop out opens the dialog a phone peeks with.
+        click("toolDetailPopOut")
+        compose.onNodeWithText(label(R.string.remote_output_close)).assertIsDisplayed()
     }
 
     // ---- Hardware keyboard ---------------------------------------------------------------

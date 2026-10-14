@@ -574,8 +574,26 @@ internal fun RemoteScreen(
     val filesOpen = state.files?.takeIf { it.sessionId == state.selection.sessionId && chatModel != null }
     val jobsOpen =
         state.jobs?.let { (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId } == true
+    // The touched files and the session's artifacts: sheets on a phone, tabs beside the chat.
+    var touchedSheet by rememberSaveable(key) { mutableStateOf(false) }
+    var artifactsSheetRequested by remember(key) { mutableStateOf(false) }
+    // The artifact or image open in the ARTIFACT tab, and the newest versions a gallery listed.
+    val viewerScope = rememberCoroutineScope()
+    val viewerSlot = remember(key) { InspectorViewerSlot(viewerScope) }
+    var listedVersions by remember(key) { mutableStateOf(emptyMap<String, Int>()) }
+    /** The newest change [viewer] can show: the chat's last edit of its file, or its newest listed version. */
+    fun viewerChange(viewer: InspectorViewer?): String? =
+        when (val watch = (viewer as? InspectorViewer.Artifact)?.watch) {
+            is ArtifactWatch.File -> artifactChange(conversation, watch.path)
+            is ArtifactWatch.Listed -> maxOf(watch.version, listedVersions[watch.id] ?: 0).toString()
+            null -> null
+        }
+    val openViewer = viewerSlot.viewer
+    val openViewerChange = remember(openViewer, conversation, listedVersions) { viewerChange(openViewer) }
+    LaunchedEffect(viewerSlot, openViewerChange) { viewerSlot.changed(openViewerChange) }
     // The inspector's tabs beside this chat. What backs each tab decides which exist: the
-    // repository's changes, files and jobs, the open tool and the history (see the reconcile below).
+    // repository's changes, files and jobs, the open tool, the history, the open viewer, the
+    // gallery and the touched files (see the reconcile below).
     var inspectorTabs by rememberSaveable(key, stateSaver = InspectorTabs.Saver) { mutableStateOf(InspectorTabs()) }
     /** Shows [tab] in the inspector and makes room for it; the caller opens what backs it. */
     fun showTab(tab: InspectorTab) {
@@ -598,6 +616,8 @@ internal fun RemoteScreen(
             InspectorTab.FILES -> if (filesOpen == null) chat.openFiles(exclusive = !sideCapable)
             InspectorTab.JOBS -> if (!jobsOpen) chat.openJobs()
             InspectorTab.HISTORY -> historyOpen = true
+            InspectorTab.GALLERY -> artifactsSheetRequested = true
+            InspectorTab.TOUCHED -> touchedSheet = true
             InspectorTab.TOOL, InspectorTab.ARTIFACT -> Unit
         }
     }
@@ -610,7 +630,9 @@ internal fun RemoteScreen(
             InspectorTab.JOBS -> chatModel?.closeJobs()
             InspectorTab.TOOL -> closeTool()
             InspectorTab.HISTORY -> historyOpen = false
-            InspectorTab.ARTIFACT -> Unit
+            InspectorTab.ARTIFACT -> viewerSlot.close()
+            InspectorTab.GALLERY -> artifactsSheetRequested = false
+            InspectorTab.TOUCHED -> touchedSheet = false
         }
     }
     // The panes show beside the chat, or would if the user had not hidden them (Ctrl+\); set
@@ -632,7 +654,20 @@ internal fun RemoteScreen(
     fun toggleHistory() {
         toggleTab(InspectorTab.HISTORY, historyOpen, canOpen = true)
     }
-    var touchedSheet by rememberSaveable(key) { mutableStateOf(false) }
+    val showViewer by rememberUpdatedState<(InspectorViewer) -> Unit> { viewer ->
+        viewerSlot.show(viewer, viewerChange(viewer))
+        showTab(InspectorTab.ARTIFACT)
+    }
+    // Where the inspector can go beside the chat, artifacts and images open in its tab.
+    val inspectorViewers =
+        remember(key) {
+            InspectorViewers(
+                show = { showViewer(it) },
+                listed = { artifacts ->
+                    listedVersions = listedVersions + artifacts.associate { it.id to maxOf(it.version, listedVersions[it.id] ?: 0) }
+                },
+            )
+        }
     var childCandidates by remember(key) { mutableStateOf<List<SessionListItem>?>(null) }
     var abortChild by remember(key) { mutableStateOf<SubagentStripEntry?>(null) }
     val composerFocus = remember { FocusRequester() }
@@ -837,7 +872,6 @@ internal fun RemoteScreen(
     var modelPickerRequested by remember(key) { mutableStateOf(false) }
     var settingsSheetRequested by remember(key) { mutableStateOf(false) }
     var treeSheetRequested by remember(key) { mutableStateOf(false) }
-    var artifactsSheetRequested by remember(key) { mutableStateOf(false) }
     // A sheet closed by a lost connection or capability must not reappear by itself after a reconnect.
     val artifactsAvailable = canShowArtifacts(state)
     LaunchedEffect(artifactsAvailable) { if (!artifactsAvailable) artifactsSheetRequested = false }
@@ -1143,6 +1177,7 @@ internal fun RemoteScreen(
                     },
                     onClose = ::closeTool,
                     modifier = Modifier.fillMaxSize(),
+                    popOut = panesBesideNow.value,
                 )
             }
         }
@@ -1185,6 +1220,40 @@ internal fun RemoteScreen(
         if (historyOpen && key is RemoteNavKey.Chat && sideCapable) {
             { ChatHistoryPane(history, onOpen = ::jumpTo, onClose = { historyOpen = false }, initialIndex = historyStart) }
         } else null
+    // Artifacts, images, the gallery and the touched files: dialogs and sheets on a phone.
+    val artifactContent: (@Composable () -> Unit)? =
+        if (chatKey != null && sideCapable && viewerSlot.viewer != null) {
+            { InspectorViewerPane(viewerSlot, onClose = { closeTab(InspectorTab.ARTIFACT) }) }
+        } else null
+    val artifactsSessionId = state.selection.sessionId
+    val artifactsChat = chatModel
+    val listArtifacts: (suspend () -> SessionArtifactListResult)? =
+        if (artifactsSessionId != null && artifactsChat != null) ({ artifactsChat.listSessionArtifacts(artifactsSessionId) })
+        else null
+    val openArtifact: suspend (SessionArtifact, Boolean) -> SessionArtifactOpenResult = { artifact, listed ->
+        // The listed version is pinned to the listed digest; a reload takes the latest.
+        checkNotNull(artifactsChat).openSessionArtifact(
+            checkNotNull(artifactsSessionId), artifact.id,
+            if (listed) artifact.version else null,
+            artifact.type,
+            if (listed) artifact.sha256 else null,
+        )
+    }
+    val artifactsShown =
+        artifactsSheetRequested && chatKey != null && listArtifacts != null && artifactsSessionId != null && canShowArtifacts(state)
+    val galleryContent: (@Composable () -> Unit)? =
+        if (artifactsShown && sideCapable) {
+            {
+                SessionArtifactsPane(
+                    artifactsSessionId, listArtifacts, openArtifact,
+                    onClose = { closeTab(InspectorTab.GALLERY) },
+                )
+            }
+        } else null
+    val touchedContent: (@Composable () -> Unit)? =
+        if (touchedSheet && chatKey != null && sideCapable) {
+            { TouchedFilesPane(touched, onOpen = ::jumpTo, onClose = { closeTab(InspectorTab.TOUCHED) }) }
+        } else null
     fun tabContent(tab: InspectorTab): (@Composable () -> Unit)? =
         when (tab) {
             InspectorTab.CHANGES -> changesContent
@@ -1192,7 +1261,9 @@ internal fun RemoteScreen(
             InspectorTab.JOBS -> jobsContent
             InspectorTab.TOOL -> toolContent
             InspectorTab.HISTORY -> historyContent
-            InspectorTab.ARTIFACT -> null
+            InspectorTab.ARTIFACT -> artifactContent
+            InspectorTab.GALLERY -> galleryContent
+            InspectorTab.TOUCHED -> touchedContent
         }
     // A tab whose pane closed elsewhere (its own close button, a reconnect, another session)
     // goes, and one that opened elsewhere (a notification, the jobs chip) joins.
@@ -1203,6 +1274,9 @@ internal fun RemoteScreen(
             if (jobsContent != null) add(InspectorTab.JOBS)
             if (toolContent != null) add(InspectorTab.TOOL)
             if (historyOpen && sideCapable) add(InspectorTab.HISTORY)
+            if (galleryContent != null) add(InspectorTab.GALLERY)
+            if (artifactContent != null) add(InspectorTab.ARTIFACT)
+            if (touchedContent != null) add(InspectorTab.TOUCHED)
         }
     val tabs = remember(inspectorTabs, availableTabs) { inspectorTabs.reconcile(availableTabs) }
     val persistentInspector = paneLayout.inspector == InspectorMode.PERSISTENT
@@ -1426,6 +1500,7 @@ internal fun RemoteScreen(
     CompositionLocalProvider(
         LocalChatKeyTarget provides chatKeyTarget.takeIf { chatKey != null },
         LocalFocusRegionChildren provides regionChildren,
+        LocalInspectorViewers provides inspectorViewers.takeIf { chatKey != null && sideCapable },
     ) {
     InspectorRow(
         shown = inspectorShown,
@@ -2469,7 +2544,10 @@ internal fun RemoteScreen(
                             TouchedFilesSummary(touched, touchedLines) {
                                 when (touchedFilesTarget(canViewChanges(state) && state.connected, touched.changed.isNotEmpty())) {
                                     TouchedFilesTarget.CHANGES -> openInspector(InspectorTab.CHANGES)
-                                    TouchedFilesTarget.SHEET -> touchedSheet = true
+                                    TouchedFilesTarget.SHEET -> {
+                                        touchedSheet = true
+                                        if (sideCapable) showTab(InspectorTab.TOUCHED)
+                                    }
                                 }
                             }
                             ErrorFilterChip(errorCount, onlyErrorsShown) {
@@ -2522,20 +2600,12 @@ internal fun RemoteScreen(
                             onDismiss = { treeSheetRequested = false },
                             forkBlocked = navigator.mutating,
                         )
-                    if (artifactsSheetRequested && chatKey != null && treeSessionId != null && treeChat != null &&
-                        canShowArtifacts(state))
+                    // Beside the chat the gallery is a tab of the inspector.
+                    if (artifactsShown && !panesBeside)
                         SessionArtifactsSheet(
-                            sessionId = treeSessionId,
-                            list = { treeChat.listSessionArtifacts(treeSessionId) },
-                            open = { artifact, listed ->
-                                // The listed version is pinned to the listed digest; a reload takes the latest.
-                                treeChat.openSessionArtifact(
-                                    treeSessionId, artifact.id,
-                                    if (listed) artifact.version else null,
-                                    artifact.type,
-                                    if (listed) artifact.sha256 else null,
-                                )
-                            },
+                            sessionId = artifactsSessionId,
+                            list = listArtifacts,
+                            open = openArtifact,
                             onDismiss = { artifactsSheetRequested = false },
                         )
                     ChatComposerNotices(connectionStatusLine(state), state.uncertain)
@@ -2683,8 +2753,13 @@ internal fun RemoteScreen(
                 }
             },
         )
-    if (touchedSheet && key is RemoteNavKey.Chat)
+    if (touchedSheet && key is RemoteNavKey.Chat && !panesBeside)
         TouchedFilesSheet(touched, onDismiss = { touchedSheet = false }, onOpen = ::jumpTo)
+    // The open viewer popped out of its tab, or where its pane would cover the chat.
+    if (chatKey != null && viewerSlot.viewer != null && (viewerSlot.poppedOut || !panesBeside))
+        InspectorViewerDialog(viewerSlot) {
+            if (panesBeside) viewerSlot.poppedOut = false else closeTab(InspectorTab.ARTIFACT)
+        }
     if (historyOpen && key is RemoteNavKey.Chat && !panesBeside)
         ChatHistorySheet(history, onDismiss = { historyOpen = false }, onOpen = ::jumpTo, initialIndex = historyStart)
     childCandidates?.let { candidates ->

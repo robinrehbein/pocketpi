@@ -1,14 +1,24 @@
 package de.joinnoah.pi.remote
 
 import android.graphics.Color
+import android.view.View
+import android.view.ViewGroup
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
 import androidx.webkit.WebViewFeature
@@ -34,6 +44,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -500,6 +511,71 @@ class ArtifactSandboxEmulatorTest {
         Thread.sleep(1_000)
         val leaked = probe.counts().filterValues { it > 0 }
         assertTrue("The WebView reached a socket while the CDN path was in use: $leaked", leaked.isEmpty())
+    }
+
+    /** The WebViews on screen, found in the resumed activity's views. */
+    private fun webViews(): List<WebView> {
+        val found = mutableListOf<WebView>()
+        instrumentation.runOnMainSync {
+            fun walk(view: View) {
+                if (view is WebView) found += view
+                if (view is ViewGroup) for (index in 0 until view.childCount) walk(view.getChildAt(index))
+            }
+            ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).forEach { walk(it.window.decorView) }
+        }
+        return found
+    }
+
+    private fun title(view: WebView): String? {
+        var title: String? = null
+        instrumentation.runOnMainSync { title = view.title }
+        return title
+    }
+
+    private fun versionPage(version: String) = "<!doctype html><html><head><title>$version</title></head><body>$version</body></html>"
+
+    /**
+     * The inspector's artifact tab draws the page in its sandboxed view, keeps that view when a new
+     * version is reported, and loads the new version only once the user takes it.
+     */
+    @Test fun theArtifactTabReloadsANewVersionOnlyWhenAccepted() {
+        val reloads = AtomicInteger()
+        lateinit var slot: InspectorViewerSlot
+        compose.setContent {
+            val scope = rememberCoroutineScope()
+            slot =
+                remember {
+                    InspectorViewerSlot(scope).apply {
+                        show(
+                            InspectorViewer.Artifact(
+                                ArtifactKind.Html, "out/page.html", "Page", versionPage("v1"),
+                                reload = {
+                                    reloads.incrementAndGet()
+                                    versionPage("v2")
+                                },
+                                watch = ArtifactWatch.File("out/page.html"),
+                            ),
+                            null,
+                        )
+                    }
+                }
+            MaterialTheme { InspectorViewerPane(slot, onClose = {}) }
+        }
+        compose.waitUntil(30_000) { webViews().singleOrNull()?.let(::title) == "v1" }
+        val first = webViews().single()
+        compose.runOnIdle { slot.changed("edit-1") }
+        compose.onNodeWithTag("artifactChanged").assertIsDisplayed()
+        // Nothing reloads by itself: the same view still shows the first version.
+        Thread.sleep(1_000)
+        assertEquals(0, reloads.get())
+        assertSame(first, webViews().single())
+        assertEquals("v1", title(first))
+        compose.onNodeWithTag("artifactChangedReload").performClick()
+        compose.waitUntil(30_000) { webViews().singleOrNull()?.let(::title) == "v2" }
+        assertEquals(1, reloads.get())
+        compose.onNodeWithTag("artifactChanged").assertDoesNotExist()
+        // A fresh sandboxed view draws it; the old one is gone.
+        assertFalse(webViews().any { it === first })
     }
 
     @Test fun mermaidDrawsAValidDiagram() {

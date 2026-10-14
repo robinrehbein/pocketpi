@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,7 +16,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -193,6 +196,23 @@ internal fun SessionArtifactsSheet(
     }
 }
 
+/** The gallery as an inspector tab beside the chat; an artifact opens in the tab beside it. */
+@Composable
+internal fun SessionArtifactsPane(
+    sessionId: String,
+    list: suspend () -> SessionArtifactListResult,
+    open: suspend (artifact: SessionArtifact, listed: Boolean) -> SessionArtifactOpenResult,
+    onClose: () -> Unit,
+) {
+    PaneBackHandler(onBack = onClose)
+    Surface(Modifier.fillMaxSize().testTag("artifactsPane")) {
+        SessionArtifactsGallery(
+            sessionId, list, open,
+            modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
+        )
+    }
+}
+
 /** The sheet's content, apart from the sheet itself. */
 @Composable
 internal fun SessionArtifactsGallery(
@@ -206,9 +226,12 @@ internal fun SessionArtifactsGallery(
     var state by remember { mutableStateOf<ArtifactGalleryState>(ArtifactGalleryState.Loading) }
     var reload by remember { mutableIntStateOf(0) }
     val latestList by rememberUpdatedState(list)
+    val viewers = LocalInspectorViewers.current
     LaunchedEffect(reload) {
         state = ArtifactGalleryState.Loading
         state = latestList().toGalleryState()
+        // An artifact open beside the chat learns of its newer versions.
+        (state as? ArtifactGalleryState.Loaded)?.let { viewers?.listed(it.list.artifacts) }
     }
     Column(modifier.fillMaxWidth().testTag("artifactGallery")) {
         Row(
@@ -319,6 +342,32 @@ private fun ArtifactCard(
             content = loadArtifactCard(sessionId, artifact) { item, listed -> latestOpen(item, listed) }
         }
     }
+    // Beside the chat the artifact opens in the inspector's tab instead of a dialog.
+    val viewers = LocalInspectorViewers.current
+    fun view() {
+        val shown = content
+        if (viewers == null) viewing = true
+        else if (shown is ArtifactCardContent.Text)
+            viewers.show(
+                InspectorViewer.Artifact(
+                    if (shown.type == ArtifactType.MERMAID) ArtifactKind.Mermaid else ArtifactKind.Html,
+                    artifactFileName(artifact.title, shown.type),
+                    artifact.title,
+                    shown.loaded.html,
+                    reload = { (latestOpen(artifact, false) as? SessionArtifactOpenResult.Text)?.loaded?.html },
+                    watch = ArtifactWatch.Listed(artifact.id, artifact.version),
+                )
+            )
+        else if (shown is ArtifactCardContent.Picture)
+            viewers.show(
+                InspectorViewer.Image(
+                    artifactFileName(artifact.title, ArtifactType.SVG),
+                    shown.image.sha256,
+                    shown.image.mimeType,
+                    artifactImageSource(sessionId, artifact) { item, listed -> latestOpen(item, listed) },
+                )
+            )
+    }
     val label = stringResource(R.string.remote_artifacts_open, artifact.title)
     val ready = content.let { it is ArtifactCardContent.Text || it is ArtifactCardContent.Picture }
     val meta =
@@ -334,7 +383,7 @@ private fun ArtifactCard(
             .testTag("artifactCard-${artifact.id}")
             .then(
                 if (ready)
-                    Modifier.clickable(role = Role.Button, onClickLabel = label) { viewing = true }
+                    Modifier.clickable(role = Role.Button, onClickLabel = label, onClick = ::view)
                         .semantics(mergeDescendants = true) {}
                 else Modifier
             ),

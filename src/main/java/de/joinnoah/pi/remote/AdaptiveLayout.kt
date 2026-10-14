@@ -107,6 +107,7 @@ import androidx.navigation3.scene.Scene
 import androidx.navigation3.scene.SceneStrategy
 import androidx.navigation3.scene.SceneStrategyScope
 import kotlinx.serialization.json.JsonObject
+import kotlin.math.roundToInt
 
 /*
  * Tablet layout. The window size alone picks the layout, so portrait, landscape, split-screen
@@ -238,7 +239,8 @@ internal fun paneLayout(width: Dp, height: Dp): PaneLayout {
 
 /*
  * The dividers beside the session list and the inspector pane can be dragged. A width set that
- * way holds until the layout bucket changes; every clamp leaves the chat at least
+ * way belongs to its layout bucket, as a share of the window, and survives other buckets and
+ * restarts (TwoPaneState, PaneLayoutStore); every clamp leaves the chat at least
  * [CHAT_PANE_MIN_WIDTH] wide beside the project strip, counting the 1 dp divider lines.
  */
 
@@ -314,8 +316,12 @@ internal fun chatStripped(available: Dp): Boolean =
 internal fun expandedInspectorWidth(available: Dp): Dp =
     available - PANE_DIVIDER_WIDTH - if (chatStripped(available)) CHAT_STRIP_WIDTH else CHAT_PANE_MIN_WIDTH
 
-/** Identifies a layout bucket for [TwoPaneState]; a dragged width belongs to one bucket. */
-internal fun PaneLayout.sizeKey(): String = "${inspector.name}:${listWidth.value}:${inspectorWidth.value}"
+/**
+ * Identifies a layout bucket for [TwoPaneState]; a dragged width belongs to one bucket. Windows
+ * that differ by little more than the display zoom share one: a portrait tablet, a landscape one
+ * (1205 and 1280 dp on a Tab S11) and a DeX window from 960 dp, each with its inspector mode.
+ */
+internal fun PaneLayout.sizeKey(): String = "${inspector.name}:${projectsWidth.value}"
 
 /**
  * The invisible, [PANE_RESIZE_HANDLE_WIDTH] wide strip over a divider line. A drag calls
@@ -409,21 +415,24 @@ internal val LocalPaneLayout = staticCompositionLocalOf { PaneLayout.Phone }
 
 /**
  * Two-pane state that is not part of the back stack. The collapsed list, the expanded inspector
- * and the dragged pane widths survive recreation; the rest is rebuilt by the panes themselves.
+ * and the dragged pane widths survive recreation, and the widths and the list the user hid per
+ * bucket survive restarts too; the rest is rebuilt by the panes themselves.
  */
 @Stable
-internal class TwoPaneState(listCollapsed: Boolean = false) {
+internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, PaneMemo> = emptyMap()) {
     private var collapsed by mutableStateOf(listCollapsed)
 
     /**
      * The session list is hidden beside the chat. Setting it, as the user's toggle, Back and the
-     * shortcuts do, makes the state the user's own: closing the inspector then leaves it alone.
+     * shortcuts do, makes the state the user's own: closing the inspector then leaves it alone,
+     * and the bucket remembers it.
      */
     var listCollapsed: Boolean
         get() = collapsed
         set(value) {
             collapsed = value
             autoCollapsed = false
+            sizedFor?.let { key -> memos = memos + (key to (memos[key] ?: PaneMemo()).copy(listCollapsed = value)) }
         }
 
     /**
@@ -453,62 +462,86 @@ internal class TwoPaneState(listCollapsed: Boolean = false) {
         autoCollapsed = false
     }
 
-    /** Dragged widths, null for the layout's default; they belong to the bucket [sizedFor]. */
-    private var listOverride by mutableStateOf<Dp?>(null)
-    private var inspectorOverride by mutableStateOf<Dp?>(null)
+    /**
+     * What the user set per layout bucket: widths as shares of the window, so a width carries to
+     * the other windows of its bucket, and whether they hid the list. [PaneLayoutStore] keeps them
+     * across restarts.
+     */
+    var memos by mutableStateOf(memos)
+        private set
+
+    /** The window's width, which the stored shares are of; the layout sets it as it measures. */
+    var window by mutableStateOf(0.dp)
+
+    /** The bucket the state last adopted ([adopt]). */
     private var sizedFor by mutableStateOf<String?>(null)
 
+    /** [fraction] of the window, to a hundredth of a dp, or null before the window is known. */
+    private fun share(fraction: Float?): Dp? {
+        if (fraction == null || window <= 0.dp) return null
+        return ((window.value * fraction * 100f).roundToInt() / 100f).dp
+    }
+
+    private fun updateMemo(layout: PaneLayout, change: (PaneMemo) -> PaneMemo) {
+        val key = layout.sizeKey()
+        val memo = change(memos[key] ?: PaneMemo())
+        memos = if (memo.empty) memos - key else memos + (key to memo)
+    }
+
     /** The session list's requested width in [layout], before [listPaneWidth] clamps it. */
-    fun listWidth(layout: PaneLayout): Dp =
-        listOverride?.takeIf { sizedFor == layout.sizeKey() } ?: layout.listWidth
+    fun listWidth(layout: PaneLayout): Dp = share(memos[layout.sizeKey()]?.list) ?: layout.listWidth
 
     /** The inspector pane's requested width in [layout], before [inspectorPaneWidth] clamps it. */
-    fun inspectorWidth(layout: PaneLayout): Dp =
-        inspectorOverride?.takeIf { sizedFor == layout.sizeKey() } ?: layout.inspectorWidth
+    fun inspectorWidth(layout: PaneLayout): Dp = share(memos[layout.sizeKey()]?.inspector) ?: layout.inspectorWidth
 
     /** Sets the session list's width in [layout]; null goes back to its default. */
     fun resizeList(layout: PaneLayout, width: Dp?) {
         adopt(layout)
-        listOverride = width
+        if (width != null && window <= 0.dp) return
+        updateMemo(layout) { it.copy(list = width?.let { it / window }) }
     }
 
     /** Sets the inspector pane's width in [layout]; null goes back to its default. */
     fun resizeInspector(layout: PaneLayout, width: Dp?) {
         adopt(layout)
-        inspectorOverride = width
+        if (width != null && window <= 0.dp) return
+        updateMemo(layout) { it.copy(inspector = width?.let { it / window }) }
     }
 
     /**
-     * Drops the dragged widths once the layout bucket changes. The same bucket, also right after
-     * recreation, keeps them.
+     * Moves to [layout]'s bucket: a list the user hid or showed there before comes back that way,
+     * one that only made way for the inspector stays out of its way. The same bucket, also right
+     * after recreation, changes nothing.
      */
     fun adopt(layout: PaneLayout) {
         val key = layout.sizeKey()
         if (sizedFor == key) return
-        if (sizedFor != null) {
-            listOverride = null
-            inspectorOverride = null
-        }
         sizedFor = key
+        val hidden = memos[key]?.listCollapsed ?: return
+        if (hidden) {
+            collapsed = true
+            autoCollapsed = false
+        } else if (!autoCollapsed) collapsed = false
     }
 
     companion object {
+        /** Restores the bucket and the flags; the widths come from the store or the saved [memos]. */
         val Saver: Saver<TwoPaneState, Any> =
             listSaver(
                 save = {
                     listOf(
                         it.listCollapsed,
-                        it.listOverride?.value ?: -1f,
-                        it.inspectorOverride?.value ?: -1f,
+                        // Older versions kept one list and one inspector width here.
+                        -1f,
+                        -1f,
                         it.sizedFor ?: "",
                         it.autoCollapsed,
                         it.inspectorExpanded,
+                        encodePaneMemos(it.memos),
                     )
                 },
                 restore = {
-                    TwoPaneState(it[0] as Boolean).apply {
-                        listOverride = (it[1] as Float).takeIf { width -> width >= 0f }?.dp
-                        inspectorOverride = (it[2] as Float).takeIf { width -> width >= 0f }?.dp
+                    TwoPaneState(it[0] as Boolean, decodePaneMemos(it.getOrNull(6) as? String)).apply {
                         sizedFor = (it[3] as String).ifEmpty { null }
                         // State saved by an older version has neither.
                         autoCollapsed = it.getOrNull(4) as? Boolean ?: false

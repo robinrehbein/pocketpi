@@ -49,6 +49,8 @@ import androidx.navigation3.scene.SinglePaneSceneStrategy
 import androidx.navigation3.ui.NavDisplay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
@@ -842,9 +844,29 @@ internal fun RemoteNavigation(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // Recomputed on every size change: rotation, split-screen resizes and DeX windows.
         val layout = paneLayout(maxWidth, maxHeight)
-        val twoPane = rememberSaveable(saver = TwoPaneState.Saver) { TwoPaneState() }
-        // Keyed on the bucket, so resize ticks never get here; dragged widths reset per bucket.
+        val paneStore = remember(context) { PaneLayoutStore(context.applicationContext) }
+        // A cold start shows the list as the user left it in this bucket from the first frame on.
+        val twoPane =
+            rememberSaveable(saver = TwoPaneState.Saver) { TwoPaneState(memos = paneStore.load()).apply { adopt(layout) } }
+        // Set before the panes below read it: the stored widths are shares of the window.
+        twoPane.window = maxWidth
+        // Keyed on the bucket, so resize ticks never get here; each bucket keeps its own widths.
         LaunchedEffect(twoPane, layout) { twoPane.adopt(layout) }
+        // Written once a drag or a toggle has settled, not on every step of it.
+        LaunchedEffect(twoPane, paneStore) {
+            var saved = twoPane.memos
+            try {
+                snapshotFlow { twoPane.memos }.collectLatest { memos ->
+                    if (memos == saved) return@collectLatest
+                    delay(PANE_LAYOUT_SAVE_DELAY_MILLIS)
+                    paneStore.save(memos)
+                    saved = memos
+                }
+            } finally {
+                // Leaving before the pause ran out still keeps the last drag.
+                if (twoPane.memos != saved) paneStore.save(twoPane.memos)
+            }
+        }
         val hardwareKeyboard = hardwareKeyboardAttached()
         // At every window size: a split screen, a pop-up window or a phone with a Bluetooth
         // keyboard keeps the keys of the wide layout.

@@ -193,6 +193,17 @@ internal class NavigationFakeRepository : RemoteRepository {
         return result
     }
 
+    /** Answers [readProjectArtifact]; `fresh` is a reload from the viewer. */
+    var artifact: suspend (sessionId: String, path: String, fresh: Boolean) -> ProjectArtifactResult = { _, _, _ ->
+        ProjectArtifactResult.Unavailable
+    }
+    val artifactReads = mutableListOf<Pair<String, Boolean>>()
+
+    override suspend fun readProjectArtifact(sessionId: String, path: String, fresh: Boolean): ProjectArtifactResult {
+        artifactReads += path to fresh
+        return artifact(sessionId, path, fresh)
+    }
+
     var createdSessions = 0
     var create: suspend (String, String) -> RemoteSelection = { routeId, projectId ->
         RemoteSelection(routeId, projectId, "created")
