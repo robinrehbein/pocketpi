@@ -113,7 +113,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -257,8 +260,14 @@ internal fun RemoteScreen(
     val sessionSearchShown = key is RemoteNavKey.Sessions && (listPane != null || sessionSearchOpen)
     var collapsedSessionIds by rememberSaveable(key) { mutableStateOf(arrayListOf<String>()) }
     val collapsedIds = collapsedSessionIds.toSet()
+    // Pinned sessions list first and unread ones carry their dot; the open chat is never unread.
+    val sessionMarkStore = LocalSessionMarks.current
+    val sessionMarkMap by sessionMarksState()
+    val routeMarks = remember(sessionMarkMap, state.host?.routeId) { sessionMarksById(sessionMarkMap, state.host?.routeId) }
+    // The selection names the chat beside the list; the screen's state strips the chat's session.
+    val shownSessionId = state.selection.sessionId
     val visibleSessions =
-        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds) {
+        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds, routeMarks) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
@@ -266,6 +275,8 @@ internal fun RemoteScreen(
                 hidesOfflineSessions(hideOfflineSessions, state.connected, state.stale),
                 collapsedIds,
                 stale = state.stale,
+                marks = routeMarks,
+                openSessionId = shownSessionId,
             )
         }
     val listedSessions =
@@ -338,9 +349,10 @@ internal fun RemoteScreen(
     val sentImages =
         state.selection.sessionId?.takeIf { chatModel != null }?.let { sessionId ->
             val supported = ATTACHMENT_READ_CAPABILITY in state.capabilities
-            remember(chatModel, sessionId, state.connected, state.capabilitiesKnown, supported) {
+            val routeId = state.selection.routeId
+            remember(chatModel, routeId, sessionId, state.connected, state.capabilitiesKnown, supported) {
                 SentImageSource(
-                    sessionId, state.connected, state.capabilitiesKnown, supported,
+                    routeId.orEmpty(), sessionId, state.connected, state.capabilitiesKnown, supported,
                     checkNotNull(chatModel)::readAttachment,
                 )
             }
@@ -443,6 +455,9 @@ internal fun RemoteScreen(
         mutableStateOf(savedViewport?.following == false)
     }
     val listState = rememberLazyListState()
+    // The large page title leaves the list for the header's back pill once it scrolls under the header.
+    var headerSize by remember { mutableStateOf(IntSize.Zero) }
+    val titleInPill by remember(listState) { derivedStateOf { pageTitleScrolledAway(listState.layoutInfo, headerSize.height) } }
     val sessionSearchFocus = remember { FocusRequester() }
     if (key is RemoteNavKey.Sessions && shortcutTargets != null)
         LaunchedEffect(shortcutTargets.searchRequests) {
@@ -460,7 +475,6 @@ internal fun RemoteScreen(
         sessionQuery = ""
     }
     var composerSize by remember { mutableStateOf(IntSize.Zero) }
-    var headerSize by remember { mutableStateOf(IntSize.Zero) }
     val composerHeight = with(LocalDensity.current) { composerSize.height.toDp() }
     // The conversation list's after-padding: its last item can scroll to just above the composer.
     val conversationEndPadding = composerHeight + 24.dp
@@ -497,6 +511,26 @@ internal fun RemoteScreen(
     val headerLift by animateIntAsState(if (compact && headerHidden) -headerSize.height else 0, label = "headerLift")
     val listScope = rememberCoroutineScope()
     var autoFollow by rememberSaveable(key) { mutableStateOf(savedViewport?.following ?: true) }
+    // The chat counts as read once it shows its end; a newer update after that is unread again.
+    // The chat is only the selected one once the repository confirmed it; a chat opened from a
+    // list, a notification or a restore first shows cached content with an empty selection.
+    val chatSelected = chatKey != null && chatSelected(state, chatKey.sessionId)
+    // The list row moves ahead of the session snapshot taken at selection while the chat runs.
+    val chatUpdatedAt =
+        remember(chatKey, state.sessions, state.session) {
+            chatKey?.let { liveUpdatedAt(state, it.sessionId) }
+        }
+    LaunchedEffect(chatKey, autoFollow, chatUpdatedAt, chatSelected) {
+        val chat = chatKey ?: return@LaunchedEffect
+        if (autoFollow && chatSelected)
+            sessionMarkStore?.markSeen(chat.routeId, chat.sessionId, chatUpdatedAt, System.currentTimeMillis())
+    }
+    // The chat counts as open for the marks only while it is on screen and the app is resumed.
+    if (chatKey != null && sessionMarkStore != null)
+        LifecycleResumeEffect(chatKey, sessionMarkStore) {
+            sessionMarkStore.chatShown(chatKey.routeId, chatKey.sessionId)
+            onPauseOrDispose { sessionMarkStore.chatHidden(chatKey.routeId, chatKey.sessionId) }
+        }
     var tuiInfoOpen by remember { mutableStateOf(false) }
     var scrollingProgrammatically by remember { mutableStateOf(false) }
     var waitingForOutput by remember { mutableStateOf(false) }
@@ -1243,6 +1277,7 @@ internal fun RemoteScreen(
                     is RemoteNavKey.Chat -> R.string.remote_chat
                     is RemoteNavKey.FolderBrowser -> R.string.remote_folders_title
                     is RemoteNavKey.Providers -> R.string.providers_title
+                    is RemoteNavKey.Activity -> R.string.remote_activity_title
                     RemoteNavKey.Settings -> R.string.remote_settings
                 }
         )
@@ -1949,6 +1984,7 @@ internal fun RemoteScreen(
                             is RemoteNavKey.Chat -> Unit
                             is RemoteNavKey.FolderBrowser -> Unit
                             is RemoteNavKey.Providers -> Unit
+                            is RemoteNavKey.Activity -> Unit
                             is RemoteNavKey.Projects -> {
                                 if (canManageProviders(state))
                                     OutlinedButton(
@@ -1958,6 +1994,13 @@ internal fun RemoteScreen(
                                     ) {
                                         Text(stringResource(R.string.providers_open))
                                     }
+                                OutlinedButton(
+                                    onClick = { navigator.openActivity(key.routeId) },
+                                    enabled = state.host != null,
+                                    modifier = Modifier.fillMaxWidth().testTag("activityButton"),
+                                ) {
+                                    Text(stringResource(R.string.remote_activity_title))
+                                }
                                 OutlinedButton(
                                     onClick = { disconnecting = true },
                                     modifier = Modifier.fillMaxWidth(),
@@ -2035,7 +2078,7 @@ internal fun RemoteScreen(
                     headerHeight,
                 )
             if (key !is RemoteNavKey.Chat)
-                item(key = "page-title") {
+                item(key = PAGE_TITLE_KEY) {
                     Row(
                         Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -2454,6 +2497,8 @@ internal fun RemoteScreen(
                     RemoteNavKey.Settings -> Unit
                     is RemoteNavKey.FolderBrowser -> Unit
                     is RemoteNavKey.Providers -> Unit
+                    // The board is its own screen (ActivityBoardScreen), never a RemoteScreen page.
+                    is RemoteNavKey.Activity -> Unit
                     RemoteNavKey.Hosts -> {
                         // Until the pairings are read, no list is no news: the first-run text
                         // would flash before the Macs appear. A read that failed says so instead.
@@ -2555,6 +2600,7 @@ internal fun RemoteScreen(
                                         key = { "chat:${it.projectId}:${it.session.text("id")}" },
                                     ) { chat ->
                                         ProjectChatRow(
+                                            mark = chat.session.optionalText("id")?.let(routeMarks::get),
                                             chat = chat,
                                             connected = state.connected,
                                             enabled = !state.loading,
@@ -2605,6 +2651,16 @@ internal fun RemoteScreen(
                             SessionListRow(
                                 item = session,
                                 selected = session.id == listPane?.selectedSessionId,
+                                onTogglePin = {
+                                    sessionMarkStore?.setPinned(key.routeId, session.id, !session.pinned)
+                                },
+                                onMarkRead =
+                                    if (!session.unread) null
+                                    else {
+                                        {
+                                            sessionMarkStore?.markSeen(key.routeId, session.id, session.updatedAt, System.currentTimeMillis())
+                                        }
+                                    },
                                 enabled = !state.connected || !state.loading,
                                 closeAvailable =
                                     canCloseSession(
@@ -2734,70 +2790,54 @@ internal fun RemoteScreen(
             }
         }
         if (key !is RemoteNavKey.Chat) {
-            Box(
-                Modifier.align(Alignment.TopCenter).fillMaxWidth()
-                    .onSizeChanged { headerSize = it },
-            ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // Beside the projects column, its own Back pill leads back.
-                    if (key != RemoteNavKey.Hosts && listPane?.besideProjects != true)
-                        FloatingSurface(
-                            modifier = Modifier.testTag("navigationPill"),
-                            shape = CircleShape,
-                        ) {
-                            IconButton(onClick = navigator::back, modifier = Modifier.size(48.dp)) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowBack,
-                                    stringResource(R.string.remote_back),
-                                )
-                            }
-                        }
-                    Spacer(Modifier.weight(1f))
-                    // The full projects column beside the list already offers refresh and settings;
-                    // the strip beside a chat does not.
-                    if (!settings && !(listPane?.besideProjects == true && !listPane.projectsStrip))
-                        FloatingSurface(
-                            modifier = Modifier.testTag("headerActionsPill"),
-                            shape = CircleShape,
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (state.host != null) {
-                                    val rotation =
-                                        if (state.loading && ValueAnimator.areAnimatorsEnabled()) {
-                                            val transition = rememberInfiniteTransition(label = "refresh")
-                                            transition.animateFloat(
-                                                initialValue = 0f,
-                                                targetValue = 360f,
-                                                animationSpec = infiniteRepeatable(
-                                                    animation = tween(900, easing = LinearEasing),
-                                                    repeatMode = RepeatMode.Restart,
-                                                ),
-                                                label = "refresh-rotation",
-                                            ).value
-                                        } else 0f
-                                    val refreshing = stringResource(R.string.remote_refreshing)
-                                    IconButton(
-                                        onClick = model::refresh,
-                                        modifier = Modifier.size(48.dp).semantics {
-                                            if (state.loading) stateDescription = refreshing
-                                        },
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Refresh,
-                                            stringResource(R.string.remote_refresh),
-                                            modifier = Modifier.graphicsLayer { rotationZ = rotation },
-                                        )
-                                    }
-                                }
-                                IconButton(onClick = navigator::settings, modifier = Modifier.size(48.dp)) {
+            // The title of a Sessions page is its project's name, as in the list's large title.
+            val pageTitle = if (key is RemoteNavKey.Sessions) state.project?.optionalText("name")?.takeIf(String::isNotBlank) ?: title else title
+            // The beside-projects column of the wide layout keeps its own Back pill, and the strip
+            // beside a chat has no refresh and settings: the full projects column has them already.
+            val ownBack = key != RemoteNavKey.Hosts && listPane?.besideProjects != true
+            val actionsShown = !settings && !(listPane?.besideProjects == true && !listPane.projectsStrip)
+            PageHeader(
+                title = pageTitle,
+                titleInPill = titleInPill,
+                onBack = if (ownBack) navigator::back else null,
+                modifier = Modifier.align(Alignment.TopCenter).onSizeChanged { headerSize = it },
+                actions =
+                    if (actionsShown) {
+                        {
+                            if (state.host != null) {
+                                val rotation =
+                                    if (state.loading && ValueAnimator.areAnimatorsEnabled()) {
+                                        val transition = rememberInfiniteTransition(label = "refresh")
+                                        transition.animateFloat(
+                                            initialValue = 0f,
+                                            targetValue = 360f,
+                                            animationSpec = infiniteRepeatable(
+                                                animation = tween(900, easing = LinearEasing),
+                                                repeatMode = RepeatMode.Restart,
+                                            ),
+                                            label = "refresh-rotation",
+                                        ).value
+                                    } else 0f
+                                val refreshing = stringResource(R.string.remote_refreshing)
+                                IconButton(
+                                    onClick = model::refresh,
+                                    modifier = Modifier.size(48.dp).semantics {
+                                        if (state.loading) stateDescription = refreshing
+                                    },
+                                ) {
                                     Icon(
-                                        Icons.Default.Settings,
-                                        stringResource(R.string.remote_settings),
+                                        Icons.Default.Refresh,
+                                        stringResource(R.string.remote_refresh),
+                                        modifier = Modifier.graphicsLayer { rotationZ = rotation },
                                     )
                                 }
+                            }
+                            IconButton(onClick = navigator::settings, modifier = Modifier.size(48.dp)) {
+                                Icon(
+                                    Icons.Default.Settings,
+                                    stringResource(R.string.remote_settings),
+                                )
+                            }
                                 // The full projects column kept beside a chat shrinks back to the strip.
                                 if (projectsColumn?.canCollapse == true && twoPane != null)
                                     IconButton(
@@ -2809,10 +2849,9 @@ internal fun RemoteScreen(
                                             stringResource(R.string.remote_projects_collapse),
                                         )
                                     }
-                            }
                         }
-                }
-            }
+                    } else null,
+            )
         }
         if (key is RemoteNavKey.Chat && !composerCovered) {
             // Writing with the S Pen in the empty space between the conversation and the composer
@@ -3126,6 +3165,7 @@ internal fun RemoteScreen(
                                 onSettingsSheetRequestHandled = { settingsSheetRequested = false },
                                 slashSuggestions = !composer.suggestionsClosed,
                                 leadingChips = if (compact && insightsShown) insightChips else null,
+                                onManageProviders = state.selection.routeId?.let { route -> { navigator.openProviders(route) } },
                             )
                         },
                         onRemoveAttachment = model::removeAttachment,
@@ -3613,6 +3653,7 @@ private fun ProjectChatRow(
     chat: ProjectChatSummary,
     connected: Boolean,
     enabled: Boolean,
+    mark: SessionMark?,
     onClick: () -> Unit,
 ) {
     Column {
@@ -3622,7 +3663,10 @@ private fun ProjectChatRow(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         SessionListRow(
-            item = sessionListItem(chat.session, connected && chat.verified, loading = false),
+            item =
+                sessionListItem(chat.session, connected && chat.verified, loading = false).let {
+                    it.copy(pinned = mark?.pinned == true, unread = sessionUnread(mark, it.updatedAt, open = false))
+                },
             enabled = enabled,
             closeAvailable = false,
             onClick = onClick,

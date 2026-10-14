@@ -488,4 +488,53 @@ class SessionListPresentationTest {
             ).map { it.id to it.lastKnown },
         )
     }
+
+    @Test
+    fun pinnedSessionsListFirstAndUnreadFollowsTheMarks() {
+        val sessions =
+            listOf(
+                Wire.objectOf("id" to "waiting", "title" to "Waiting", "origin" to "rpc", "status" to "waiting", "updatedAt" to 300L),
+                Wire.objectOf("id" to "plain", "title" to "Plain", "origin" to "rpc", "status" to "idle", "updatedAt" to 200L),
+                Wire.objectOf("id" to "pinned", "title" to "Pinned", "origin" to "rpc", "status" to "idle", "updatedAt" to 100L),
+                Wire.objectOf("id" to "changed", "title" to "Changed", "origin" to "rpc", "status" to "idle", "updatedAt" to 400L),
+                Wire.objectOf("id" to "open", "title" to "Open", "origin" to "rpc", "status" to "idle", "updatedAt" to 500L),
+            )
+        val marks =
+            mapOf(
+                "pinned" to SessionMark(pinned = true, seenUpdatedAt = 100),
+                "changed" to SessionMark(seenUpdatedAt = 350),
+                "open" to SessionMark(seenUpdatedAt = 100),
+            )
+
+        val visible =
+            visibleSessionListItems(
+                sessions,
+                connected = true,
+                loading = false,
+                hideOffline = false,
+                marks = marks,
+                openSessionId = "open",
+            )
+
+        assertEquals(listOf("pinned", "waiting", "plain", "changed", "open"), visible.map(SessionListItem::id))
+        assertEquals(listOf("changed"), visible.filter { it.unread }.map(SessionListItem::id))
+        assertTrue(visible.single { it.id == "pinned" }.pinned)
+        assertFalse(visible.single { it.id == "waiting" }.pinned)
+    }
+
+    @Test
+    fun aFinishedRunIsUnreadUntilTheChatIsSeen() {
+        val sessions =
+            listOf(Wire.objectOf("id" to "done", "title" to "Done", "origin" to "rpc", "status" to "idle", "updatedAt" to 100L))
+
+        val finished =
+            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false,
+                marks = mapOf("done" to SessionMark(finishedAt = 90)))
+        val read =
+            visibleSessionListItems(sessions, connected = true, loading = false, hideOffline = false,
+                marks = mapOf("done" to SessionMark(seenAt = 95, seenUpdatedAt = 100)))
+
+        assertTrue(finished.single().unread)
+        assertFalse(read.single().unread)
+    }
 }

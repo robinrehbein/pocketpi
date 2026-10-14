@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -33,6 +34,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -60,6 +63,7 @@ internal class PaneAction(
     val checked: Boolean? = null,
     val shortcut: Shortcut? = null,
     val items: List<PaneMenuItem> = emptyList(),
+    val enabled: Boolean = true,
     val onClick: () -> Unit = {},
 )
 
@@ -82,11 +86,15 @@ internal fun PaneHeader(
     reloadLabel: String,
     onBack: () -> Unit,
     onClose: () -> Unit,
-    onReload: () -> Unit,
+    /** Null leaves the refresh button out, for a page that has nothing to reload. */
+    onReload: (() -> Unit)?,
     actions: List<PaneAction> = emptyList(),
+    /** Takes the title's focus, so TalkBack lands on it when the header opens. */
+    titleFocus: FocusRequester? = null,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-        val reserved = 56.dp + 28.dp + 60.dp + if (nested) 48.dp else 0.dp
+        val reloadWidth = if (onReload == null) 0.dp else 60.dp
+        val reserved = 56.dp + 28.dp + reloadWidth + if (nested) 48.dp else 0.dp
         // Every action as a button of its own, or all of them behind one "more" button.
         val inline = actions.isNotEmpty() && maxWidth - reserved - 48.dp * actions.size >= PANE_TITLE_MIN_ROOM
         val actionsWidth = if (actions.isEmpty()) 0.dp else 48.dp * (if (inline) actions.size else 1)
@@ -102,7 +110,12 @@ internal fun PaneHeader(
                     }
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.widthIn(max = textWidth)) {
-                        Text(title, Modifier.widthIn(min = minOf(48.dp, textWidth)).testTag("${tag}Title"), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            title,
+                            Modifier.widthIn(min = minOf(48.dp, textWidth))
+                                .then(if (titleFocus == null) Modifier else Modifier.focusRequester(titleFocus).focusable())
+                                .testTag("${tag}Title"),
+                            style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (subtitle != null)
                             Text(subtitle, Modifier.testTag("${tag}Subtitle"), style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = if (nested) FontFamily.Monospace else null,
@@ -116,15 +129,17 @@ internal fun PaneHeader(
                         }
                 }
             }
+            if (onReload != null || actions.isNotEmpty())
             FloatingSurface(Modifier.testTag("${tag}ReloadPill"), shape = CircleShape) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (inline) actions.forEach { InlineAction(it) }
                     else if (actions.isNotEmpty()) OverflowActions(actions, tag)
-                    ShortcutTooltip(reloadLabel) {
-                        IconButton(onClick = onReload, enabled = !busy, modifier = Modifier.size(48.dp).testTag("${tag}Reload")) {
-                            Icon(Icons.Default.Refresh, reloadLabel)
+                    if (onReload != null)
+                        ShortcutTooltip(reloadLabel) {
+                            IconButton(onClick = onReload, enabled = !busy, modifier = Modifier.size(48.dp).testTag("${tag}Reload")) {
+                                Icon(Icons.Default.Refresh, reloadLabel)
+                            }
                         }
-                    }
                 }
             }
         }
@@ -144,6 +159,7 @@ private fun InlineAction(action: PaneAction) {
             else
                 IconButton(
                     onClick = { if (action.items.isNotEmpty()) menu = true else action.onClick() },
+                    enabled = action.enabled,
                     modifier = Modifier.size(48.dp).testTag(action.tag),
                 ) {
                     Icon(action.icon, action.label)
@@ -202,6 +218,7 @@ private fun OverflowActions(actions: List<PaneAction>, tag: String) {
                         text = { Text(action.label) },
                         leadingIcon = { Icon(action.icon, null) },
                         trailingIcon = if (checked == true) { { Icon(Icons.Default.Check, null) } } else null,
+                        enabled = action.enabled,
                         onClick = {
                             if (action.items.isNotEmpty()) submenu = action
                             else {

@@ -115,7 +115,7 @@ class ComposerContentUiTest {
         show(batches)
         val sticker = Uri.parse("content://de.joinnoah.pi.test.fixtures/sticker.png")
         assertTrue(commitImageFromKeyboard(sticker, "image/png"))
-        assertEquals(listOf(Picked(sticker.toString(), photo = false)), batches.batches.single())
+        assertEquals(listOf(Picked(sticker.toString(), photo = true)), batches.batches.single())
         assertEquals("", shownText())
     }
 

@@ -92,9 +92,12 @@ internal fun SessionControls(
      * compact (see [compactChrome]); null keeps the insights in their own row.
      */
     leadingChips: (@Composable RowScope.() -> Unit)? = null,
+    /** Opens the host's providers from the model and advisor pickers; shown when the host manages them. */
+    onManageProviders: (() -> Unit)? = null,
 ) {
     var picker by remember { mutableStateOf<String?>(null) }
     val pickerSheet = rememberModalBottomSheetState()
+    val manageProviders = onManageProviders?.takeIf { canManageProviders(state) }
     val pickerScope = rememberCoroutineScope()
     val closePicker = {
         pickerScope.launch { pickerSheet.hide() }.invokeOnCompletion { picker = null }
@@ -498,6 +501,7 @@ internal fun SessionControls(
             )
         }
     if (showAdvisor) AdvisorPickerSheet(
+        onManageProviders = manageProviders?.let { manage -> { showAdvisor = false; manage() } },
         advisor = sessionAdvisor.takeIf { advisorUnavailableReason == null },
         unavailableReason = advisorUnavailableReason,
         onRetry = if (state.connected && ADVISOR_CAPABILITY in state.capabilities) refreshAdvisor else null,
@@ -607,6 +611,9 @@ internal fun SessionControls(
                         }
                     }
             }
+            // A model the host lacks is signed in to on the providers page; the thinking picker has none.
+            if (picker == "model")
+                manageProviders?.let { manage -> ManageProvidersRow { closePicker(); manage() } }
         }
 }
 

@@ -294,9 +294,12 @@ sealed interface ProjectImageResult {
     data object Failed : ProjectImageResult
 }
 
-/** Verified image bytes kept in memory only, evicting the least recently used. Never written to disk. */
+/**
+ * Verified image bytes kept in memory only, evicting the least recently used. Nothing here is written
+ * to disk; the encrypted copy kept between runs is [MediaDiskCache].
+ */
 internal class ProjectImageByteCache(private val capacity: Long = 32L * 1024 * 1024) {
-    data class Key(val sessionId: String, val path: String)
+    data class Key(val routeId: String, val sessionId: String, val path: String)
 
     private val entries = LinkedHashMap<Key, ProjectImageResult.Loaded>(16, 0.75f, true)
     private var size = 0L
@@ -312,6 +315,19 @@ internal class ProjectImageByteCache(private val capacity: Long = 32L * 1024 * 1
         while (size > capacity && iterator.hasNext()) {
             size -= iterator.next().value.bytes.size
             iterator.remove()
+        }
+    }
+
+    /** Forgets the entries of [routeId] only; the other Macs' entries stay. */
+    @Synchronized
+    fun clearRoute(routeId: String) {
+        val iterator = entries.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (entry.key.routeId == routeId) {
+                size -= entry.value.bytes.size
+                iterator.remove()
+            }
         }
     }
 
@@ -374,7 +390,7 @@ internal fun decodeArtifactHtml(bytes: ByteArray): String? {
 
 /** Verified artifact documents kept in memory only, evicting the least recently used. Never written to disk. */
 internal class ProjectArtifactCache(private val capacity: Long = 12L * 1024 * 1024) {
-    data class Key(val sessionId: String, val path: String)
+    data class Key(val routeId: String, val sessionId: String, val path: String)
 
     private val entries = LinkedHashMap<Key, ProjectArtifactResult.Loaded>(16, 0.75f, true)
     private var size = 0L
@@ -390,6 +406,19 @@ internal class ProjectArtifactCache(private val capacity: Long = 12L * 1024 * 10
         while (size > capacity && iterator.hasNext()) {
             size -= iterator.next().value.byteCount
             iterator.remove()
+        }
+    }
+
+    /** Forgets the entries of [routeId] only; the other Macs' entries stay. */
+    @Synchronized
+    fun clearRoute(routeId: String) {
+        val iterator = entries.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (entry.key.routeId == routeId) {
+                size -= entry.value.byteCount
+                iterator.remove()
+            }
         }
     }
 

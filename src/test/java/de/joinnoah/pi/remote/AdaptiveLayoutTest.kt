@@ -90,13 +90,22 @@ class AdaptiveLayoutTest {
     }
 
     @Test
-    fun otherDestinationsStayFullScreen() {
+    fun columnsNeedAnOpenHostAndPairableSessions() {
         assertNull(columnPanes(listOf(RemoteNavKey.Hosts)))
-        assertNull(
-            columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.FolderBrowser("host")))
+        assertNull(columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Settings)))
+        // Folders, providers and Settings over a host's projects take the detail column beside them.
+        assertEquals(
+            ColumnPanes(projects = 1, list = null, detail = 2),
+            columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.FolderBrowser("host"))),
         )
-        assertNull(columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.Providers("host"))))
-        assertNull(columnPanes(RemoteSelection("host", "project", "s1").keys() + RemoteNavKey.Settings))
+        assertEquals(
+            ColumnPanes(projects = 1, list = null, detail = 2),
+            columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.Providers("host"))),
+        )
+        assertEquals(
+            ColumnPanes(projects = 1, list = 2, detail = 4),
+            columnPanes(RemoteSelection("host", "project", "s1").keys() + RemoteNavKey.Settings),
+        )
         // A chat without its project's Sessions below it has nothing to pair with.
         assertNull(columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Chat("host", "project", "s1"))))
         assertNull(
@@ -640,6 +649,19 @@ class AdaptiveLayoutTest {
         assertFalse(restored.inspectorExpanded)
         // State saved by an older version has no review mode.
         assertFalse(TwoPaneState.Saver.restore(listOf(true, -1f, -1f, "", false, false, "{}"))!!.reviewing)
+    }
+
+    @Test
+    fun theActivityBoardTakesTheListColumnBesideAChatAndTheDetailColumnWithoutOne() {
+        val chat: List<Any?> = RemoteSelection("host", "project", "s1").keys()
+        assertEquals(ColumnPanes(1, 4, 3), columnPanes(chat + RemoteNavKey.Activity("host")))
+        assertEquals(ColumnPanes(1, null, 2), columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.Activity("host"))))
+        // A session list beneath the board gives up its column while the board is open.
+        assertEquals(
+            ColumnPanes(1, null, 3),
+            columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.Sessions("host", "project"), RemoteNavKey.Activity("host"))),
+        )
+        assertNull(columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Activity("host"))))
     }
 
     @Test

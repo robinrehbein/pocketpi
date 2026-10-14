@@ -231,6 +231,8 @@ class DefaultRemoteRepository(
     private val projectHint: suspend (routeId: String, sessionId: String) -> String? = { _, _ -> null },
     /** Uniform value in [0, 1) that spreads reconnect delays; injectable for tests. */
     private val jitter: () -> Double = { Random.nextDouble() },
+    /** Sent and project images kept on disk between runs; null keeps them in memory only. */
+    private val media: MediaDiskCache? = null,
 ) : RemoteRepository {
     private val routeCapabilities =
         setOf(
@@ -277,6 +279,10 @@ class DefaultRemoteRepository(
     private var configurationNeedsRefresh = false
     private var toolOutputJob: Job? = null
     private var toolOutputVersion = 0L
+    /** Completed tool outputs, so opening one again sends no request. */
+    private val toolOutputs = ToolOutputCache()
+    /** The download that stopped part way: its bytes are kept, and the next load resumes at them. */
+    private var toolOutputProgress: ToolOutputProgress? = null
     private var sessionRefreshJob: Job? = null
     private var lastSessionRefreshAt: Long? = null
     private var folderVersion = 0L
@@ -315,6 +321,12 @@ class DefaultRemoteRepository(
 
     private val commandDispatches = linkedMapOf<String, CommandDispatch>()
     private val earlyFollowUpReceipts = linkedMapOf<Triple<DraftKey, String, String>, String>()
+    /**
+     * The follow-ups still pending or accepted when their Mac was left on purpose, by chat. The
+     * next snapshot of that chat checks them: a receipt it holds settles its entry, and the rest
+     * become uncertain, as a lost connection would have left them.
+     */
+    private val followUpsToRecheck = mutableMapOf<DraftKey, Set<String>>()
     private var selectionEpoch = 0L
     private var generation = 0L
     private val requests = RequestLedger()
@@ -582,6 +594,10 @@ class DefaultRemoteRepository(
                 update {
                     it.copy(hosts = hosts.filterNot { host -> host.routeId in removedRoutes }, hostsLoaded = true)
                 }
+                // Images kept for a Mac no longer paired are left over from an unpair that did not
+                // finish: they go now, as they cannot be asked for again.
+                val paired = hosts.map { host -> host.routeId }
+                scope.launch(io) { media?.retainRoutes(paired) }
                 if (pairingsReset) reportError(R.string.remote_storage_pairings_reset)
             }
             try {
@@ -1556,9 +1572,37 @@ class DefaultRemoteRepository(
         return changed
     }
 
-    private suspend fun connect(host: PairedHost, epoch: Long) {
+    /** Notes the open follow-ups of [routeId]'s chats, which a clean switch leaves as they are. */
+    private fun rememberFollowUpsToRecheck(routeId: String?) {
+        if (routeId == null) return
+        drafts.forEach { (key, draft) ->
+            if (key.routeId != routeId) return@forEach
+            val open = draft.followUps.filter { it.status in setOf("pending", "accepted") }.map { it.requestId }
+            if (open.isNotEmpty()) followUpsToRecheck[key] = open.toSet()
+        }
+    }
+
+    /**
+     * Checks the follow-ups [rememberFollowUpsToRecheck] noted for [sessionId], after its snapshot
+     * applied the receipts it holds: those that are still open are uncertain, which can be dismissed.
+     */
+    private fun recheckFollowUps(sessionId: String) {
+        val key = DraftKey(activeHost?.routeId ?: return, sessionId)
+        val noted = followUpsToRecheck.remove(key) ?: return
+        val draft = drafts[key] ?: return
+        val entries = draft.followUps.map { entry ->
+            if (entry.requestId in noted && entry.status in setOf("pending", "accepted")) entry.copy(status = "uncertain")
+            else entry
+        }
+        if (entries == draft.followUps) return
+        drafts[key] = draft.copy(followUps = entries)
+        persist()
+        if (currentDraftKey() == key) update { it.copy(followUps = entries) }
+    }
+
+    private suspend fun connect(host: PairedHost, epoch: Long, closesCleanly: Boolean = false) {
         if (activeHost?.routeId != host.routeId || !state.value.connected) {
-            if (activeHost?.routeId != host.routeId || ready?.isActive != true) openConnection(host)
+            if (activeHost?.routeId != host.routeId || ready?.isActive != true) openConnection(host, closesCleanly = closesCleanly)
             if (withTimeoutOrNull(CONNECT_READY_WAIT_MILLIS) { checkNotNull(ready).await() } == null) {
                 Diagnostics.record(Diagnostics.Kind.FAILURE, "connect.wait", CONNECT_READY_WAIT_MILLIS, outcome = "timeout")
                 if (epoch == selectionEpoch) {
@@ -1584,24 +1628,24 @@ class DefaultRemoteRepository(
      * Starts a connection to [host] in place of the current one, without waiting for it; [connect]
      * waits for it to become ready. [early]: [connectEarly] opens it ahead of its activation.
      */
-    private suspend fun openConnection(host: PairedHost, early: Boolean = false) {
+    private suspend fun openConnection(host: PairedHost, early: Boolean = false, closesCleanly: Boolean = false) {
         earlyConnection = early
         val previousRoute = activeHost?.routeId ?: timedOutRoute
         timedOutRoute = null
-        if (previousRoute != host.routeId && markPendingFollowUpsUncertain(previousRoute)) {
-            persistNow()
+        // A switch from a connected Mac closes its connection on purpose: that Mac's open follow-ups
+        // stay as they are, and the next snapshot of their chat checks them ([recheckFollowUps]). A
+        // connection that was already lost or timed out does not close cleanly, so its follow-ups
+        // are marked uncertain as before.
+        if (previousRoute != host.routeId) {
+            if (closesCleanly) rememberFollowUpsToRecheck(previousRoute)
+            else if (markPendingFollowUpsUncertain(previousRoute)) persistNow()
         }
+        // Its byte and bitmap caches are keyed by route, so they stay for when it is selected again.
         if (previousRoute != host.routeId) {
             offlineSince = null
             cancelQuietReconnect()
             resetReconnect()
             clearNavigationCache()
-            attachmentBytes.clear()
-            SentImageThumbnails.clear()
-            projectImageBytes.clear()
-            projectArtifacts.clear()
-            ProjectImageBitmaps.clear()
-            ArtifactThumbnails.clear()
         }
         cachedProjectChats = cachedProjectChats?.takeIf { it.first == host.routeId }
             ?.let { it.first to it.second.map { chat -> chat.copy(verified = false) } }
@@ -2296,6 +2340,7 @@ class DefaultRemoteRepository(
             if (current !== timeline) return
             current.snapshot(data, older)
             current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
+            if (!older) recheckFollowUps(current.sessionId)
             publishTimeline(persist = !older)
             // A fresh snapshot is the host's word on what is still open, so an uncertain answer is
             // settled either way.
@@ -2659,6 +2704,8 @@ class DefaultRemoteRepository(
             val alreadyConnected = state.value.connected && activeHost?.routeId == host.routeId
             // A reconnect to the Mac on screen keeps its last-known state until it is read again.
             val reconnecting = !alreadyConnected && state.value.stale && showsRoute(host.routeId)
+            // Read before the connection is marked closed below: a switch away from a live Mac is clean.
+            val leavesLiveConnection = state.value.connected && activeHost != null
             if (!alreadyConnected) {
                 stopToolOutput()
                 if (!reconnecting) update(::lastKnownCleared)
@@ -2690,7 +2737,7 @@ class DefaultRemoteRepository(
             val shownSessions =
                 selection.projectId?.takeIf { shownBeforeConnect }?.let { sessionCache[host.routeId to it] }
             val shownChat = selection.sessionId?.takeIf { shownBeforeConnect }?.let { chatCache[selection] }
-            connect(host, epoch)
+            connect(host, epoch, closesCleanly = leavesLiveConnection)
             if (showCache && shownBeforeConnect) {
                 restoreNavigation(host.routeId)
                 if (cachedProjects?.first != host.routeId) shownProjects?.let { cachedProjects = it }
@@ -3370,12 +3417,16 @@ class DefaultRemoteRepository(
         if (activeHost?.routeId == routeId) reconnectEnabled = false
         if (activeHost?.routeId == routeId) disconnect()
         if (timedOutRoute == routeId) timedOutRoute = null
-        attachmentBytes.clear()
-        SentImageThumbnails.clear()
-        projectImageBytes.clear()
-        projectArtifacts.clear()
+        attachmentBytes.clearRoute(routeId)
+        SentImageThumbnails.clearRoute(routeId)
+        projectImageBytes.clearRoute(routeId)
+        projectArtifacts.clearRoute(routeId)
+        toolOutputs.clearRoute(routeId)
+        if (toolOutputProgress?.key?.routeId == routeId) toolOutputProgress = null
+        // The bitmaps are keyed by content, so they cannot tell the routes apart: they all go.
         ProjectImageBitmaps.clear()
         ArtifactThumbnails.clear()
+        followUpsToRecheck.keys.removeAll { it.routeId == routeId }
         removedRoutes += routeId
         parkedFiles.keys.removeAll { it.routeId == routeId }
         savedNavigation.remove(routeId)
@@ -3391,6 +3442,9 @@ class DefaultRemoteRepository(
                     drafts.keys.filter { it.routeId == routeId }.forEach { drafts.remove(it) }
                     persistNow()
                     cleanupAttachments()
+                    // The kept images go before the unpair is saved: a crash in between keeps the
+                    // pairing and costs a download, and never leaves images of an unpaired Mac.
+                    withContext(io) { media?.clearRoute(routeId) }
                     withContext(io) { pairings.save(remaining) }
                     try {
                         navigationWriteMutex.withLock {
@@ -4862,7 +4916,8 @@ class DefaultRemoteRepository(
             // The image bytes are kept under the server ID before the prompt can appear in the
             // conversation; draft cleanup may delete the local file as soon as sending succeeds.
             imageBytes?.let {
-                attachmentBytes[AttachmentByteCache.Key(key.sessionId, remote.id, remote.sha256)] = it
+                attachmentBytes[AttachmentByteCache.Key(key.routeId, key.sessionId, remote.id, remote.sha256)] = it
+                keepMedia(key.routeId) { cache -> cache.put(key.routeId, remote.sha256, it) }
             }
             remote
         }
@@ -5618,19 +5673,32 @@ class DefaultRemoteRepository(
     }
 
     override fun loadToolOutput(toolCallId: String) {
-        stopToolOutput()
         val current = state.value
         val sessionId = current.selection.sessionId
+        val routeId = current.selection.routeId
+        val key = if (sessionId != null && routeId != null) ToolOutputCache.Key(routeId, sessionId, toolCallId) else null
+        // The same output of the same chat is downloading already: it keeps going.
+        if (key != null && toolOutputJob?.isActive == true && toolOutputProgress?.key == key) return
+        // A completed output never changes, so it opens from memory, offline too, without a request.
+        val completed = key?.let { toolOutputs[it] }
+        if (completed != null) {
+            stopToolOutput()
+            update { it.copy(toolOutput = completed) }
+            return
+        }
+        stopToolOutput()
         fun failure(reason: ToolOutputFailure) = ToolOutputDownload(
             toolCallId, 0, null, null, truncated = false, isError = false, failure = reason,
         )
         // A quiet reconnect keeps the capabilities on screen: offline is no missing capability.
         if (sessionId != null && !current.connected) {
-            update { it.copy(toolOutput = failure(ToolOutputFailure.OFFLINE)) }
+            // A stopped download of this output keeps the text it has, as the bytes are kept for the resume.
+            val kept = toolOutputProgress?.takeIf { it.key == key }
+            update { it.copy(toolOutput = kept?.download(ToolOutputFailure.OFFLINE) ?: failure(ToolOutputFailure.OFFLINE)) }
             return
         }
         if (
-            sessionId == null ||
+            key == null || sessionId == null ||
                 TOOL_OUTPUT_CAPABILITY !in current.capabilities ||
                 TOOL_OUTPUT_CAPABILITY in current.unavailableCapabilities
         ) {
@@ -5647,13 +5715,12 @@ class DefaultRemoteRepository(
         fun active() =
             epoch == selectionEpoch && version == toolOutputVersion &&
                 state.value.selection.sessionId == sessionId
-        update {
-            it.copy(toolOutput = ToolOutputDownload(toolCallId, 0, null, null, false, false, null))
-        }
+        // A download stopped part way on this output resumes at the bytes it has; another output starts over.
+        val progress =
+            toolOutputProgress?.takeIf { it.key == key }
+                ?: ToolOutputProgress(key, toolCallId).also { toolOutputProgress = it }
+        update { it.copy(toolOutput = progress.download()) }
         toolOutputJob = scope.launch {
-            val buffer = java.io.ByteArrayOutputStream()
-            var offset = 0L
-            var total: Long? = null
             try {
                 while (true) {
                     val chunk = validatedToolOutputChunk(
@@ -5662,32 +5729,35 @@ class DefaultRemoteRepository(
                             epoch,
                             "sessionId" to sessionId,
                             "toolCallId" to toolCallId,
-                            "offset" to offset,
+                            "offset" to progress.offset,
                         ),
                         sessionId,
                         toolCallId,
-                        offset,
-                        total,
+                        progress.offset,
+                        progress.total,
                     )
                     if (!active()) return@launch
-                    total = chunk.totalBytes
-                    buffer.write(chunk.bytes)
-                    offset += chunk.bytes.size
-                    val complete = offset == chunk.totalBytes
-                    update {
-                        it.copy(
-                            toolOutput = ToolOutputDownload(
-                                toolCallId,
-                                offset,
-                                chunk.totalBytes,
-                                if (complete) String(buffer.toByteArray(), Charsets.UTF_8) else null,
-                                chunk.truncated,
-                                chunk.isError,
-                                null,
-                            )
+                    progress.total = chunk.totalBytes
+                    progress.text.append(chunk.bytes)
+                    progress.offset += chunk.bytes.size
+                    progress.truncated = chunk.truncated
+                    progress.isError = chunk.isError
+                    if (progress.offset == chunk.totalBytes) {
+                        val done = ToolOutputDownload(
+                            toolCallId,
+                            progress.offset,
+                            chunk.totalBytes,
+                            progress.text.finish(),
+                            chunk.truncated,
+                            chunk.isError,
+                            null,
                         )
+                        toolOutputs[key] = done
+                        toolOutputProgress = null
+                        update { it.copy(toolOutput = done) }
+                        return@launch
                     }
-                    if (complete) return@launch
+                    update { it.copy(toolOutput = progress.download()) }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -5700,6 +5770,8 @@ class DefaultRemoteRepository(
                     e.hostCode == "offline" -> ToolOutputFailure.OFFLINE
                     else -> ToolOutputFailure.FAILED
                 }
+                // A lost connection keeps the bytes, so the next load resumes; any other failure starts over.
+                if (reason != ToolOutputFailure.OFFLINE) toolOutputProgress = null
                 update {
                     it.copy(
                         unavailableCapabilities =
@@ -5707,7 +5779,9 @@ class DefaultRemoteRepository(
                                 it.unavailableCapabilities + TOOL_OUTPUT_CAPABILITY
                             else it.unavailableCapabilities,
                         toolOutput = ToolOutputDownload(
-                            toolCallId, offset, total, null, false, false, reason,
+                            toolCallId, progress.offset, progress.total, null, false, false, reason,
+                            // A lost connection keeps the text on screen, as the bytes are kept for the resume.
+                            preview = if (reason == ToolOutputFailure.OFFLINE) progress.text.preview() else null,
                         ),
                     )
                 }
@@ -6757,22 +6831,31 @@ class DefaultRemoteRepository(
         sessionId: String,
         attachment: RemoteAttachment,
     ): AttachmentReadResult {
+        val routeId = state.value.selection.routeId
         if (
             attachment.kind != "image" ||
                 attachment.size !in 0..MAX_ATTACHMENT_IMAGE_BYTES ||
                 !canonicalAttachmentId(attachment.id) ||
                 !opaqueId(sessionId) ||
+                routeId == null ||
                 sessionId != state.value.selection.sessionId
         ) return AttachmentReadResult.Unavailable
-        val key = AttachmentByteCache.Key(sessionId, attachment.id, attachment.sha256)
+        val key = AttachmentByteCache.Key(routeId, sessionId, attachment.id, attachment.sha256)
         attachmentBytes[key]?.let { return AttachmentReadResult.Loaded(it) }
+        // Captured before the disk read suspends: a switch made meanwhile must not reach this read.
+        val epoch = selectionEpoch
+        // A picture kept on disk is the same bytes: it opens without the Mac, offline too.
+        withContext(io) { media?.get(routeId, attachment.sha256) }?.let {
+            attachmentBytes[key] = it
+            return AttachmentReadResult.Loaded(it)
+        }
+        if (!stillSelected(epoch, routeId, sessionId)) return AttachmentReadResult.Failed
         val current = state.value
         if (!current.connected) return AttachmentReadResult.Failed
         if (ATTACHMENT_READ_CAPABILITY !in current.capabilities)
             // Until projects.list has been answered the host's capabilities are not known yet.
             return if (current.capabilitiesKnown) AttachmentReadResult.Unsupported
             else AttachmentReadResult.Failed
-        val epoch = selectionEpoch
         // Concurrent callers for one image share a single read; it stops when the last one leaves.
         val read =
             synchronized(attachmentReads) {
@@ -6854,7 +6937,10 @@ class DefaultRemoteRepository(
             Diagnostics.caught("repo.fetchAttachment.3", e)
             return AttachmentReadResult.Failed
         }
-        return AttachmentReadResult.Loaded(reassembler.bytes().also { attachmentBytes[key] = it })
+        val bytes = reassembler.bytes()
+        attachmentBytes[key] = bytes
+        keepMedia(key.routeId) { it.put(key.routeId, attachment.sha256, bytes) }
+        return AttachmentReadResult.Loaded(bytes)
     }
 
     // ---- Agent images (session.files.media.v1) --------------------------------------------
@@ -6877,16 +6963,24 @@ class DefaultRemoteRepository(
     private var lastProjectImageRead: Long? = null
 
     override suspend fun readProjectImage(sessionId: String, path: String, fresh: Boolean): ProjectImageResult {
-        if (!opaqueId(sessionId) || !validMediaPath(path) || sessionId != state.value.selection.sessionId)
+        val routeId = state.value.selection.routeId
+        if (!opaqueId(sessionId) || !validMediaPath(path) || routeId == null || sessionId != state.value.selection.sessionId)
             return ProjectImageResult.Unavailable
-        val cacheKey = ProjectImageByteCache.Key(sessionId, path)
+        val cacheKey = ProjectImageByteCache.Key(routeId, sessionId, path)
         if (!fresh) projectImageBytes[cacheKey]?.let { return it }
+        // Captured before the disk read suspends: a switch made meanwhile must not reach this read.
+        val epoch = selectionEpoch
+        // A kept copy is the same bytes the host sent before; a fresh read asks the Mac again.
+        if (!fresh) diskImage(routeId, sessionId, path)?.let {
+            projectImageBytes[cacheKey] = it
+            return it
+        }
+        if (!stillSelected(epoch, routeId, sessionId)) return ProjectImageResult.Failed
         val current = state.value
         if (!current.connected) return ProjectImageResult.Failed
         if (FILES_MEDIA_CAPABILITY !in current.capabilities || FILES_MEDIA_CAPABILITY in current.unavailableCapabilities)
             // Until projects.list has been answered the host's capabilities are not known yet.
             return if (current.capabilitiesKnown) ProjectImageResult.Unsupported else ProjectImageResult.Failed
-        val epoch = selectionEpoch
         val key = Triple(sessionId, path, fresh)
         // Concurrent callers for one image share a single read; it stops when the last one leaves.
         val read =
@@ -6920,6 +7014,36 @@ class DefaultRemoteRepository(
                     read.job.cancel()
                     projectImageReads.remove(key, read)
                 }
+            }
+        }
+    }
+
+    /** The image [path] of [sessionId] as the disk cache holds it, or null. */
+    private suspend fun diskImage(routeId: String, sessionId: String, path: String): ProjectImageResult.Loaded? =
+        withContext(io) {
+            val cache = media ?: return@withContext null
+            val pointer = cache.pointer(routeId, sessionId, path) ?: return@withContext null
+            val bytes = cache.get(routeId, pointer.sha256) ?: return@withContext null
+            ProjectImageResult.Loaded(pointer.path, pointer.mimeType, pointer.sha256, bytes)
+        }
+
+    /** Whether the selection is still the one a read started on, by [epoch], [routeId] and [sessionId]. */
+    private fun stillSelected(epoch: Long, routeId: String, sessionId: String): Boolean =
+        epoch == selectionEpoch && state.value.selection.routeId == routeId && state.value.selection.sessionId == sessionId
+
+    /**
+     * Keeps a copy of media on disk for [routeId] while the caller carries on: the image on screen,
+     * or the send, does not wait for the encrypted write. A copy not written before a restart is only
+     * a download again. A Mac unpaired meanwhile keeps nothing; its folder goes with the unpair.
+     */
+    private fun keepMedia(routeId: String, write: (MediaDiskCache) -> Unit) {
+        val cache = media ?: return
+        if (routeId in removedRoutes) return
+        scope.launch(io) {
+            try {
+                write(cache)
+            } catch (e: Exception) {
+                Diagnostics.caught("repo.keepMedia", e)
             }
         }
     }
@@ -6974,6 +7098,13 @@ class DefaultRemoteRepository(
                         // A fresh read replaces the copy, so Share, Save and the next view agree.
                         projectImageBytes[cacheKey] = it
                         if (fresh) ProjectImageBitmaps.dropStale(sessionId, path, it.sha256)
+                        keepMedia(cacheKey.routeId) { cache ->
+                            cache.put(cacheKey.routeId, it.sha256, it.bytes)
+                            cache.putPointer(
+                                cacheKey.routeId, sessionId, path,
+                                MediaPointer(it.path, it.mimeType, it.sha256),
+                            )
+                        }
                     }
             }
         } catch (e: CancellationException) {
@@ -7002,9 +7133,10 @@ class DefaultRemoteRepository(
     private val projectArtifactReads = mutableMapOf<Triple<String, String, Boolean>, ProjectArtifactRead>()
 
     override suspend fun readProjectArtifact(sessionId: String, path: String, fresh: Boolean): ProjectArtifactResult {
-        if (!opaqueId(sessionId) || !validMediaPath(path) || sessionId != state.value.selection.sessionId)
+        val routeId = state.value.selection.routeId
+        if (!opaqueId(sessionId) || !validMediaPath(path) || routeId == null || sessionId != state.value.selection.sessionId)
             return ProjectArtifactResult.Unavailable
-        val cacheKey = ProjectArtifactCache.Key(sessionId, path)
+        val cacheKey = ProjectArtifactCache.Key(routeId, sessionId, path)
         if (!fresh) projectArtifacts[cacheKey]?.let { return it }
         val current = state.value
         if (!current.connected) return ProjectArtifactResult.ConnectionFailure
@@ -7163,35 +7295,38 @@ class DefaultRemoteRepository(
         }
         // A version is an immutable snapshot, so its copy is safe to keep; the latest is read again.
         // A kept copy whose digest differs from the listed one is stale and never wins.
+        // artifactAccess() guarantees that the selection is this session, so its route is known.
+        val routeId = state.value.selection.routeId ?: return SessionArtifactOpenResult.Unavailable
         if (version != null) {
             val logical = "artifacts/$artifactId/$version"
             for (kind in listOf(ArtifactType.HTML, ArtifactType.MERMAID))
                 if (type == null || type == kind)
-                    projectArtifacts[artifactCacheKey(sessionId, "$logical.${kind.mime.extension}")]
+                    projectArtifacts[artifactCacheKey(routeId, sessionId, "$logical.${kind.mime.extension}")]
                         ?.takeIf { sha256 == null || it.sha256 == sha256 }
                         ?.let { return SessionArtifactOpenResult.Text(kind, it) }
             if (type == null || type == ArtifactType.SVG)
-                projectImageBytes[artifactImageCacheKey(sessionId, "$logical.svg")]
+                projectImageBytes[artifactImageCacheKey(routeId, sessionId, "$logical.svg")]
                     ?.takeIf { sha256 == null || it.sha256 == sha256 }
                     ?.let { return SessionArtifactOpenResult.Svg(it) }
         }
         val epoch = selectionEpoch
         return try {
-            projectArtifactDownloads.withPermit { fetchSessionArtifact(epoch, sessionId, artifactId, version, type) }
+            projectArtifactDownloads.withPermit { fetchSessionArtifact(epoch, routeId, sessionId, artifactId, version, type) }
         } catch (e: CancellationException) {
             currentCoroutineContext().ensureActive()
             SessionArtifactOpenResult.ConnectionFailure
         }
     }
 
-    private fun artifactCacheKey(sessionId: String, logicalPath: String) =
-        ProjectArtifactCache.Key(sessionId, artifactCachePath(logicalPath))
+    private fun artifactCacheKey(routeId: String, sessionId: String, logicalPath: String) =
+        ProjectArtifactCache.Key(routeId, sessionId, artifactCachePath(logicalPath))
 
-    private fun artifactImageCacheKey(sessionId: String, logicalPath: String) =
-        ProjectImageByteCache.Key(sessionId, artifactCachePath(logicalPath))
+    private fun artifactImageCacheKey(routeId: String, sessionId: String, logicalPath: String) =
+        ProjectImageByteCache.Key(routeId, sessionId, artifactCachePath(logicalPath))
 
     private suspend fun fetchSessionArtifact(
         epoch: Long,
+        routeId: String,
         sessionId: String,
         artifactId: String,
         version: Int?,
@@ -7226,7 +7361,7 @@ class DefaultRemoteRepository(
                     else if (meta.mime.isSvg) {
                         SessionArtifactOpenResult.Svg(
                             ProjectImageResult.Loaded(meta.path, meta.mime.wire, meta.sha256, download.bytes)
-                                .also { if (version != null) projectImageBytes[artifactImageCacheKey(sessionId, meta.path)] = it }
+                                .also { if (version != null) projectImageBytes[artifactImageCacheKey(routeId, sessionId, meta.path)] = it }
                         )
                     } else {
                         // The host's sniff is not trusted: the bytes must be text on this side as well.
@@ -7234,7 +7369,7 @@ class DefaultRemoteRepository(
                         if (text == null) SessionArtifactOpenResult.NotAnArtifact
                         else {
                             val loaded = ProjectArtifactResult.Loaded(meta.path, meta.sha256, text, download.bytes.size)
-                            if (version != null) projectArtifacts[artifactCacheKey(sessionId, meta.path)] = loaded
+                            if (version != null) projectArtifacts[artifactCacheKey(routeId, sessionId, meta.path)] = loaded
                             SessionArtifactOpenResult.Text(
                                 if (meta.mime.isMermaid) ArtifactType.MERMAID else ArtifactType.HTML,
                                 loaded,

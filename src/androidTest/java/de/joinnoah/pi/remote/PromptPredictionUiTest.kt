@@ -6,11 +6,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -50,6 +52,9 @@ class PromptPredictionUiTest {
     @Test
     fun tabStillAcceptsTheSuggestion() {
         val harness = show()
+        // Key events go to the focused node only; a user presses Tab while typing in the field.
+        compose.onNodeWithTag("composerField").performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.waitForIdle()
         compose.onNodeWithTag("composerField").performKeyInput { pressKey(Key.Tab) }
         compose.waitForIdle()
         compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
