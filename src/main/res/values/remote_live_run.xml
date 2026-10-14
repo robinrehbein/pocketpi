@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The notification channel of the ongoing notification while a run is kept live in the background. -->
+    <string name="remote_live_run_channel">Running sessions</string>
+    <string name="remote_live_run_channel_help">Shows what pi is doing while PocketPi is in the background</string>
+    <!-- Title of the ongoing notification for a session without a title, and on the lock screen. -->
+    <string name="remote_live_run_working_title">pi is working</string>
+    <string name="remote_live_run_working">Working…</string>
+    <string name="remote_live_run_waiting">Waiting for your answer</string>
+    <!-- The tool pi runs right now, with what it works on: "Run command: ./gradlew test". -->
+    <string name="remote_live_run_tool_detail">%1$s: %2$s</string>
+    <!-- A tool without a readable name of its own; %1$s is its raw name, for example "grep". -->
+    <string name="remote_live_run_tool">Tool: %1$s</string>
+    <!-- Notification action: stops keeping the chat live, not pi's run on the Mac. -->
+    <string name="remote_live_run_stop">Stop updates</string>
+    <string name="remote_live_run_setting">Keep runs live in the background</string>
+    <!-- %1$d is the most minutes a run stays live, for example 30. -->
+    <plurals name="remote_live_run_setting_help">
+        <item quantity="one">While pi works, an ongoing notification shows its progress and keeps the chat connected for up to %1$d minute after you leave PocketPi.</item>
+        <item quantity="other">While pi works, an ongoing notification shows its progress and keeps the chat connected for up to %1$d minutes after you leave PocketPi.</item>
+    </plurals>
+</resources>

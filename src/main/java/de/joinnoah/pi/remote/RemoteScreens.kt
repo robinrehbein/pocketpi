@@ -2103,6 +2103,7 @@ internal fun RemoteScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                        LiveRunSettingRow()
                     }
                 }
                 item {

@@ -108,10 +108,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // In front again: a run kept live in the background no longer needs the service.
+        LiveRun.onResume()
         if (app.appLock.locked.value && !autoPrompted) {
             autoPrompted = true
             unlock()
         }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Here, not in onStop: the app still counts as in front, and Android 12+ can refuse a
+        // foreground service started later. A resume before onStop stops it again. The lock's own
+        // prompt and a configuration change pause the activity without leaving the app.
+        if (!authenticating && !isChangingConfigurations) LiveRun.onPause(this)
     }
 
     override fun onDestroy() {
