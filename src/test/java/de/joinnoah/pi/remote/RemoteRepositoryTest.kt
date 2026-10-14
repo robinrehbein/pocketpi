@@ -4204,6 +4204,71 @@ class RemoteRepositoryTest {
         assertEquals(sends, transport.sent.count { it.text("type") == "session.prompt" })
     }
 
+    /** A follow-up queued on the first Mac, which then gets left on purpose for the second. */
+    private suspend fun TestScope.followUpLeftOnPurpose(transport: Transport, drafts: Drafts): DefaultRemoteRepository {
+        val other = host.copy(routeId = "other")
+        transport.capabilities = setOf(FOLLOW_UP_CAPABILITY)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.prompt")
+                Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else normal(request)
+        }
+        val repository = DefaultRemoteRepository(
+            Pairings(listOf(host, other)), drafts, transport, backgroundScope,
+            StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
+        )
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        repository.draft("queued")
+        repository.followUp()
+        runCurrent()
+        assertEquals("accepted", repository.state.value.followUps.single().status)
+        repository.activate(RemoteSelection("other", "project", "session"))
+        repository.flush()
+        return repository
+    }
+
+    @Test
+    fun aFollowUpLeftOnACleanSwitchIsUncertainAfterTheNextSnapshotThatHoldsNoReceipt() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        val repository = followUpLeftOnPurpose(transport, drafts)
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        assertTrue(transport.sent.count { it.text("type") == "session.snapshot" } > snapshots)
+        // Nothing the snapshot holds settles the follow-up, so it is uncertain and can be dismissed.
+        assertEquals("uncertain", repository.state.value.followUps.single().status)
+        assertEquals("uncertain", drafts.values.getValue(DraftKey("host", "session")).followUps.single().status)
+    }
+
+    @Test
+    fun aFollowUpLeftOnACleanSwitchIsDeliveredWhenTheNextSnapshotHoldsItsReceipt() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        val repository = followUpLeftOnPurpose(transport, drafts)
+        // The state shows the other Mac's chat now; the follow-up is in the stored drafts.
+        val requestId = drafts.values.getValue(DraftKey("host", "session")).followUps.single().requestId
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "idle",
+                "pendingQuestions" to JsonArray(emptyList()), "messages" to JsonArray(listOf(
+                    Wire.objectOf("id" to "delivered", "role" to "user", "text" to "queued",
+                        "remoteDelivery" to Wire.objectOf("requestId" to requestId, "delivery" to "follow_up")))))
+            else normal(request)
+        }
+
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        // The receipt wins over the recheck: the entry is delivered, not uncertain.
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+        assertEquals("delivered", drafts.values.getValue(DraftKey("host", "session")).followUps.single().status)
+    }
+
     @Test
     fun fullFollowUpJournalRetainsPendingEntriesAndDismissesOnlyResolvedEntries() = runTest {
         val drafts = Drafts()
@@ -5217,6 +5282,65 @@ class RemoteRepositoryTest {
         repository.loadToolOutput("call")
         runCurrent()
         assertEquals("a", repository.state.value.toolOutput?.preview)
+    }
+
+    @Test
+    fun aLostChunkKeepsTheTextOfTheStoppedOutputAndTheNextLoadResumesIt() = runTest {
+        val bytes = "0123456789abcdefghijklmn".encodeToByteArray()
+        var answerRest = false
+        val (transport, repository) = toolOutputRepository { request ->
+            val offset = request.long("offset").toInt()
+            when {
+                answerRest -> toolOutputData(offset.toLong(), bytes.size.toLong(), bytes.copyOfRange(offset, bytes.size))
+                offset == 0 -> toolOutputData(0, bytes.size.toLong(), bytes.copyOfRange(0, 12))
+                else -> null
+            }
+        }
+        transport.failure = { request ->
+            if (request.text("type") == "session.tool_output.get" && request.long("offset") == 12L && !answerRest) "offline"
+            else null
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.loadToolOutput("call")
+        runCurrent()
+        val lost = checkNotNull(repository.state.value.toolOutput)
+        assertEquals(ToolOutputFailure.OFFLINE, lost.failure)
+        assertEquals(12L, lost.loadedBytes)
+        assertEquals("0123456789ab", lost.preview)
+
+        answerRest = true
+        repository.loadToolOutput("call")
+        runCurrent()
+        assertEquals(listOf(0L, 12L, 12L), transport.sent.filter { it.text("type") == "session.tool_output.get" }.map { it.long("offset") })
+        assertEquals("0123456789abcdefghijklmn", repository.state.value.toolOutput?.text)
+    }
+
+    @Test
+    fun aFailedOutputDropsItsBytesAndTheNextLoadStartsOver() = runTest {
+        val bytes = "0123456789abcdefghijklmn".encodeToByteArray()
+        var answerRest = false
+        val (transport, repository) = toolOutputRepository { request ->
+            val offset = request.long("offset").toInt()
+            when {
+                answerRest -> toolOutputData(offset.toLong(), bytes.size.toLong(), bytes.copyOfRange(offset, bytes.size))
+                offset == 0 -> toolOutputData(0, bytes.size.toLong(), bytes.copyOfRange(0, 12))
+                else -> null
+            }
+        }
+        transport.failure = { request ->
+            if (request.text("type") == "session.tool_output.get" && request.long("offset") == 12L && !answerRest) "unavailable"
+            else null
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.loadToolOutput("call")
+        runCurrent()
+        assertEquals(ToolOutputFailure.FAILED, repository.state.value.toolOutput?.failure)
+
+        answerRest = true
+        repository.loadToolOutput("call")
+        runCurrent()
+        assertEquals(listOf(0L, 12L, 0L), transport.sent.filter { it.text("type") == "session.tool_output.get" }.map { it.long("offset") })
+        assertEquals("0123456789abcdefghijklmn", repository.state.value.toolOutput?.text)
     }
 
     private fun child(id: String, parentId: String, status: String) =

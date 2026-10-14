@@ -163,4 +163,35 @@ class MediaDiskCacheTest {
         assertNull(cache.get("route-a", digest(a)))
         assertTrue(files().isEmpty())
     }
+
+    @Test
+    fun retainRoutesDropsTheFoldersOfRoutesNoLongerPaired() {
+        val cache = cache()
+        val a = image(1)
+        val b = image(2)
+        cache.put("route-a", digest(a), a)
+        cache.put("route-b", digest(b), b)
+        cache.retainRoutes(listOf("route-b"))
+        assertNull(cache.get("route-a", digest(a)))
+        assertArrayEquals(b, cache.get("route-b", digest(b)))
+    }
+
+    @Test
+    fun theTotalIsKeptAcrossWritesSoAWriteUnderTheCapEvictsNothing() {
+        // Each 200-byte image takes 291 bytes on disk: two fit under 600, and the third evicts the first.
+        val cache = cache(capacity = 600)
+        val a = image(1)
+        val b = image(2)
+        val c = image(3)
+        clock = 1
+        cache.put("route", digest(a), a)
+        clock = 2
+        cache.put("route", digest(b), b)
+        assertEquals(2, files().size)
+        clock = 3
+        cache.put("route", digest(c), c)
+        assertNull(cache.get("route", digest(a)))
+        assertArrayEquals(b, cache.get("route", digest(b)))
+        assertArrayEquals(c, cache.get("route", digest(c)))
+    }
 }

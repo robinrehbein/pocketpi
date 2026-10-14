@@ -64,9 +64,12 @@ internal class ToolOutputProgress(val key: ToolOutputCache.Key, private val tool
     var truncated = false
     var isError = false
 
-    /** What the output shows while it loads: the progress so far, and the text that arrived. */
-    fun download() =
-        ToolOutputDownload(toolCallId, offset, total, null, truncated, isError, null, text.preview())
+    /**
+     * What the output shows while it loads: the progress so far, and the text that arrived. A stopped
+     * download shows the same with its [failure], so the text stays on screen.
+     */
+    fun download(failure: ToolOutputFailure? = null) =
+        ToolOutputDownload(toolCallId, offset, total, null, truncated, isError, failure, text.preview())
 }
 
 /**

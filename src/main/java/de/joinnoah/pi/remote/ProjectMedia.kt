@@ -294,7 +294,10 @@ sealed interface ProjectImageResult {
     data object Failed : ProjectImageResult
 }
 
-/** Verified image bytes kept in memory only, evicting the least recently used. Never written to disk. */
+/**
+ * Verified image bytes kept in memory only, evicting the least recently used. Nothing here is written
+ * to disk; the encrypted copy kept between runs is [MediaDiskCache].
+ */
 internal class ProjectImageByteCache(private val capacity: Long = 32L * 1024 * 1024) {
     data class Key(val routeId: String, val sessionId: String, val path: String)
 

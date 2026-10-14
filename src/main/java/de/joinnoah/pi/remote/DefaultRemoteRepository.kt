@@ -321,6 +321,12 @@ class DefaultRemoteRepository(
 
     private val commandDispatches = linkedMapOf<String, CommandDispatch>()
     private val earlyFollowUpReceipts = linkedMapOf<Triple<DraftKey, String, String>, String>()
+    /**
+     * The follow-ups still pending or accepted when their Mac was left on purpose, by chat. The
+     * next snapshot of that chat checks them: a receipt it holds settles its entry, and the rest
+     * become uncertain, as a lost connection would have left them.
+     */
+    private val followUpsToRecheck = mutableMapOf<DraftKey, Set<String>>()
     private var selectionEpoch = 0L
     private var generation = 0L
     private val requests = RequestLedger()
@@ -588,6 +594,10 @@ class DefaultRemoteRepository(
                 update {
                     it.copy(hosts = hosts.filterNot { host -> host.routeId in removedRoutes }, hostsLoaded = true)
                 }
+                // Images kept for a Mac no longer paired are left over from an unpair that did not
+                // finish: they go now, as they cannot be asked for again.
+                val paired = hosts.map { host -> host.routeId }
+                scope.launch(io) { media?.retainRoutes(paired) }
                 if (pairingsReset) reportError(R.string.remote_storage_pairings_reset)
             }
             try {
@@ -1561,6 +1571,34 @@ class DefaultRemoteRepository(
         return changed
     }
 
+    /** Notes the open follow-ups of [routeId]'s chats, which a clean switch leaves as they are. */
+    private fun rememberFollowUpsToRecheck(routeId: String?) {
+        if (routeId == null) return
+        drafts.forEach { (key, draft) ->
+            if (key.routeId != routeId) return@forEach
+            val open = draft.followUps.filter { it.status in setOf("pending", "accepted") }.map { it.requestId }
+            if (open.isNotEmpty()) followUpsToRecheck[key] = open.toSet()
+        }
+    }
+
+    /**
+     * Checks the follow-ups [rememberFollowUpsToRecheck] noted for [sessionId], after its snapshot
+     * applied the receipts it holds: those that are still open are uncertain, which can be dismissed.
+     */
+    private fun recheckFollowUps(sessionId: String) {
+        val key = DraftKey(activeHost?.routeId ?: return, sessionId)
+        val noted = followUpsToRecheck.remove(key) ?: return
+        val draft = drafts[key] ?: return
+        val entries = draft.followUps.map { entry ->
+            if (entry.requestId in noted && entry.status in setOf("pending", "accepted")) entry.copy(status = "uncertain")
+            else entry
+        }
+        if (entries == draft.followUps) return
+        drafts[key] = draft.copy(followUps = entries)
+        persist()
+        if (currentDraftKey() == key) update { it.copy(followUps = entries) }
+    }
+
     private suspend fun connect(host: PairedHost, epoch: Long, closesCleanly: Boolean = false) {
         if (activeHost?.routeId != host.routeId || !state.value.connected) {
             if (activeHost?.routeId != host.routeId || ready?.isActive != true) openConnection(host, closesCleanly = closesCleanly)
@@ -1593,11 +1631,13 @@ class DefaultRemoteRepository(
         earlyConnection = early
         val previousRoute = activeHost?.routeId ?: timedOutRoute
         timedOutRoute = null
-        // A switch from a connected Mac closes its connection on purpose: that Mac's follow-ups stay
-        // as they are, and its next snapshot checks them again. A connection that was already lost
-        // or timed out does not close cleanly, so its follow-ups are marked uncertain as before.
-        if (previousRoute != host.routeId && !closesCleanly && markPendingFollowUpsUncertain(previousRoute)) {
-            persistNow()
+        // A switch from a connected Mac closes its connection on purpose: that Mac's open follow-ups
+        // stay as they are, and the next snapshot of their chat checks them ([recheckFollowUps]). A
+        // connection that was already lost or timed out does not close cleanly, so its follow-ups
+        // are marked uncertain as before.
+        if (previousRoute != host.routeId) {
+            if (closesCleanly) rememberFollowUpsToRecheck(previousRoute)
+            else if (markPendingFollowUpsUncertain(previousRoute)) persistNow()
         }
         // Its byte and bitmap caches are keyed by route, so they stay for when it is selected again.
         if (previousRoute != host.routeId) {
@@ -2290,6 +2330,7 @@ class DefaultRemoteRepository(
             if (current !== timeline) return
             current.snapshot(data, older)
             current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
+            if (!older) recheckFollowUps(current.sessionId)
             publishTimeline(persist = !older)
             // The chat on screen is read again, also when the activation after a reconnect failed
             // to read it and a later refresh did.
@@ -3365,7 +3406,7 @@ class DefaultRemoteRepository(
         // The bitmaps are keyed by content, so they cannot tell the routes apart: they all go.
         ProjectImageBitmaps.clear()
         ArtifactThumbnails.clear()
-        scope.launch(io) { media?.clearRoute(routeId) }
+        followUpsToRecheck.keys.removeAll { it.routeId == routeId }
         removedRoutes += routeId
         parkedFiles.keys.removeAll { it.routeId == routeId }
         savedNavigation.remove(routeId)
@@ -3381,6 +3422,9 @@ class DefaultRemoteRepository(
                     drafts.keys.filter { it.routeId == routeId }.forEach { drafts.remove(it) }
                     persistNow()
                     cleanupAttachments()
+                    // The kept images go before the unpair is saved: a crash in between keeps the
+                    // pairing and costs a download, and never leaves images of an unpaired Mac.
+                    withContext(io) { media?.clearRoute(routeId) }
                     withContext(io) { pairings.save(remaining) }
                     try {
                         navigationWriteMutex.withLock {
@@ -4852,7 +4896,7 @@ class DefaultRemoteRepository(
             // conversation; draft cleanup may delete the local file as soon as sending succeeds.
             imageBytes?.let {
                 attachmentBytes[AttachmentByteCache.Key(key.routeId, key.sessionId, remote.id, remote.sha256)] = it
-                withContext(io) { media?.put(key.routeId, remote.sha256, it) }
+                keepMedia(key.routeId) { cache -> cache.put(key.routeId, remote.sha256, it) }
             }
             remote
         }
@@ -5627,7 +5671,9 @@ class DefaultRemoteRepository(
         )
         // A quiet reconnect keeps the capabilities on screen: offline is no missing capability.
         if (sessionId != null && !current.connected) {
-            update { it.copy(toolOutput = failure(ToolOutputFailure.OFFLINE)) }
+            // A stopped download of this output keeps the text it has, as the bytes are kept for the resume.
+            val kept = toolOutputProgress?.takeIf { it.key == key }
+            update { it.copy(toolOutput = kept?.download(ToolOutputFailure.OFFLINE) ?: failure(ToolOutputFailure.OFFLINE)) }
             return
         }
         if (
@@ -5713,6 +5759,8 @@ class DefaultRemoteRepository(
                             else it.unavailableCapabilities,
                         toolOutput = ToolOutputDownload(
                             toolCallId, progress.offset, progress.total, null, false, false, reason,
+                            // A lost connection keeps the text on screen, as the bytes are kept for the resume.
+                            preview = if (reason == ToolOutputFailure.OFFLINE) progress.text.preview() else null,
                         ),
                     )
                 }
@@ -6738,18 +6786,20 @@ class DefaultRemoteRepository(
         ) return AttachmentReadResult.Unavailable
         val key = AttachmentByteCache.Key(routeId, sessionId, attachment.id, attachment.sha256)
         attachmentBytes[key]?.let { return AttachmentReadResult.Loaded(it) }
+        // Captured before the disk read suspends: a switch made meanwhile must not reach this read.
+        val epoch = selectionEpoch
         // A picture kept on disk is the same bytes: it opens without the Mac, offline too.
         withContext(io) { media?.get(routeId, attachment.sha256) }?.let {
             attachmentBytes[key] = it
             return AttachmentReadResult.Loaded(it)
         }
+        if (!stillSelected(epoch, routeId, sessionId)) return AttachmentReadResult.Failed
         val current = state.value
         if (!current.connected) return AttachmentReadResult.Failed
         if (ATTACHMENT_READ_CAPABILITY !in current.capabilities)
             // Until projects.list has been answered the host's capabilities are not known yet.
             return if (current.capabilitiesKnown) AttachmentReadResult.Unsupported
             else AttachmentReadResult.Failed
-        val epoch = selectionEpoch
         // Concurrent callers for one image share a single read; it stops when the last one leaves.
         val read =
             synchronized(attachmentReads) {
@@ -6833,7 +6883,7 @@ class DefaultRemoteRepository(
         }
         val bytes = reassembler.bytes()
         attachmentBytes[key] = bytes
-        withContext(io) { media?.put(key.routeId, attachment.sha256, bytes) }
+        keepMedia(key.routeId) { it.put(key.routeId, attachment.sha256, bytes) }
         return AttachmentReadResult.Loaded(bytes)
     }
 
@@ -6862,17 +6912,19 @@ class DefaultRemoteRepository(
             return ProjectImageResult.Unavailable
         val cacheKey = ProjectImageByteCache.Key(routeId, sessionId, path)
         if (!fresh) projectImageBytes[cacheKey]?.let { return it }
+        // Captured before the disk read suspends: a switch made meanwhile must not reach this read.
+        val epoch = selectionEpoch
         // A kept copy is the same bytes the host sent before; a fresh read asks the Mac again.
         if (!fresh) diskImage(routeId, sessionId, path)?.let {
             projectImageBytes[cacheKey] = it
             return it
         }
+        if (!stillSelected(epoch, routeId, sessionId)) return ProjectImageResult.Failed
         val current = state.value
         if (!current.connected) return ProjectImageResult.Failed
         if (FILES_MEDIA_CAPABILITY !in current.capabilities || FILES_MEDIA_CAPABILITY in current.unavailableCapabilities)
             // Until projects.list has been answered the host's capabilities are not known yet.
             return if (current.capabilitiesKnown) ProjectImageResult.Unsupported else ProjectImageResult.Failed
-        val epoch = selectionEpoch
         val key = Triple(sessionId, path, fresh)
         // Concurrent callers for one image share a single read; it stops when the last one leaves.
         val read =
@@ -6918,6 +6970,27 @@ class DefaultRemoteRepository(
             val bytes = cache.get(routeId, pointer.sha256) ?: return@withContext null
             ProjectImageResult.Loaded(pointer.path, pointer.mimeType, pointer.sha256, bytes)
         }
+
+    /** Whether the selection is still the one a read started on, by [epoch], [routeId] and [sessionId]. */
+    private fun stillSelected(epoch: Long, routeId: String, sessionId: String): Boolean =
+        epoch == selectionEpoch && state.value.selection.routeId == routeId && state.value.selection.sessionId == sessionId
+
+    /**
+     * Keeps a copy of media on disk for [routeId] while the caller carries on: the image on screen,
+     * or the send, does not wait for the encrypted write. A copy not written before a restart is only
+     * a download again. A Mac unpaired meanwhile keeps nothing; its folder goes with the unpair.
+     */
+    private fun keepMedia(routeId: String, write: (MediaDiskCache) -> Unit) {
+        val cache = media ?: return
+        if (routeId in removedRoutes) return
+        scope.launch(io) {
+            try {
+                write(cache)
+            } catch (e: Exception) {
+                Diagnostics.caught("repo.keepMedia", e)
+            }
+        }
+    }
 
     /** One request at a time, each start at least 200 ms after the last, retries included. */
     private suspend fun spacedMediaRequest(epoch: Long, type: String, vararg fields: Pair<String, Any?>): JsonObject =
@@ -6969,14 +7042,12 @@ class DefaultRemoteRepository(
                         // A fresh read replaces the copy, so Share, Save and the next view agree.
                         projectImageBytes[cacheKey] = it
                         if (fresh) ProjectImageBitmaps.dropStale(sessionId, path, it.sha256)
-                        withContext(io) {
-                            media?.let { cache ->
-                                cache.put(cacheKey.routeId, it.sha256, it.bytes)
-                                cache.putPointer(
-                                    cacheKey.routeId, sessionId, path,
-                                    MediaPointer(it.path, it.mimeType, it.sha256),
-                                )
-                            }
+                        keepMedia(cacheKey.routeId) { cache ->
+                            cache.put(cacheKey.routeId, it.sha256, it.bytes)
+                            cache.putPointer(
+                                cacheKey.routeId, sessionId, path,
+                                MediaPointer(it.path, it.mimeType, it.sha256),
+                            )
                         }
                     }
             }

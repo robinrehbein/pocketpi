@@ -109,10 +109,13 @@ class ProjectArtifactRepositoryTest {
         fun media() = sent.filter { it.text("type").startsWith("session.files.media") }
     }
 
-    private suspend fun TestScope.connected(transport: Transport): DefaultRemoteRepository {
+    private suspend fun TestScope.connected(
+        transport: Transport,
+        hosts: List<PairedHost> = listOf(host),
+    ): DefaultRemoteRepository {
         val repository =
             DefaultRemoteRepository(
-                Pairings(listOf(host)), Drafts(), transport, backgroundScope,
+                Pairings(hosts), Drafts(), transport, backgroundScope,
                 StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
             )
         repository.activate(selection)
@@ -141,6 +144,23 @@ class ProjectArtifactRepositoryTest {
         val repository = connected(transport)
         assertEquals(ProjectArtifactResult.UnsupportedHost, read(repository))
         assertTrue(transport.media().isEmpty())
+    }
+
+    @Test
+    fun aMacSwitchKeepsEachMacsArtifactsWithoutAnotherRead() = runTest {
+        val other = host.copy(routeId = "other")
+        val transport = transport()
+        val repository = connected(transport, hosts = listOf(host, other))
+        val loaded = read(repository)
+        assertTrue(loaded is ProjectArtifactResult.Loaded)
+        val reads = transport.media().size
+
+        repository.activate(RemoteSelection("other", "project", "session"))
+        runCurrent()
+        repository.activate(selection)
+        runCurrent()
+        assertSame(loaded, repository.readProjectArtifact("session", "out/report.html"))
+        assertEquals(reads, transport.media().size)
     }
 
     @Test

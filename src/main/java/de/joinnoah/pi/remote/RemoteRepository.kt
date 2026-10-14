@@ -466,16 +466,19 @@ interface RemoteRepository {
     ): FileWritten = throw RemoteRequestException.unsupported()
 
     /**
-     * The bytes of an image this device sent in [sessionId]'s chat, from memory or read from the
-     * host in chunks (`session.attachments.get`, only with [ATTACHMENT_READ_CAPABILITY]).
+     * The bytes of an image this device sent in [sessionId]'s chat, from memory, from the encrypted
+     * disk copy ([MediaDiskCache]), or read from the host in chunks (`session.attachments.get`, only
+     * with [ATTACHMENT_READ_CAPABILITY]). A downloaded copy is kept on disk for its route.
      */
     suspend fun readAttachment(sessionId: String, attachment: RemoteAttachment): AttachmentReadResult =
         AttachmentReadResult.Unsupported
 
     /**
      * An image the agent mentioned, by [path] (relative to the session folder or POSIX absolute),
-     * read from the host in chunks (`session.files.media`, only with [FILES_MEDIA_CAPABILITY]). The
-     * first-loaded bytes stay in memory; [fresh] reads the file again and replaces them, so a share or save and the next view agree.
+     * read from memory, from the encrypted disk copy ([MediaDiskCache]), or from the host in chunks
+     * (`session.files.media`, only with [FILES_MEDIA_CAPABILITY]). A downloaded copy is kept in memory
+     * and on disk for its route. [fresh] skips both copies and reads the file again, replacing them, so
+     * a share or save and the next view agree.
      */
     suspend fun readProjectImage(sessionId: String, path: String, fresh: Boolean = false): ProjectImageResult =
         ProjectImageResult.Unsupported

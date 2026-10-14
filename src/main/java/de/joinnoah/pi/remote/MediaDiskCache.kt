@@ -22,6 +22,9 @@ data class MediaPointer(val path: String, val mimeType: String, val sha256: Stri
  * Every read is checked against its digest. A file that cannot be decrypted is deleted; a lost key
  * clears the whole cache. A failure is a miss: nothing here throws to its caller. Callers run it off
  * the main thread.
+ *
+ * The cache keeps a running total of its bytes, so a write walks the folders only when the total
+ * may exceed the cap. A walk recounts the total, which corrects it after a file goes unseen.
  */
 class MediaDiskCache(
     private val root: File,
@@ -31,6 +34,9 @@ class MediaDiskCache(
     private val wrap: (ByteArray) -> ByteArray = { EncryptedFileStore.wrapKey(alias, it) },
     private val unwrap: (ByteArray) -> ByteArray = { EncryptedFileStore.unwrapKey(alias, it) },
 ) {
+    /** The bytes on disk as the last walk or write counted them; null until the next walk. */
+    private var counted: Long? = null
+
     /** The bytes stored under [sha256] for [routeId], verified against the digest, or null. */
     @Synchronized
     fun get(routeId: String, sha256: String): ByteArray? {
@@ -71,15 +77,27 @@ class MediaDiskCache(
     @Synchronized
     fun clearRoute(routeId: String) {
         folder(routeId).deleteRecursively()
+        counted = null
+    }
+
+    /** Deletes the folders of every route not in [routeIds]: their Macs are no longer paired. */
+    @Synchronized
+    fun retainRoutes(routeIds: Collection<String>) {
+        val keep = routeIds.map(::folderName).toSet()
+        root.listFiles()?.filter { it.isDirectory && it.name !in keep }?.forEach { it.deleteRecursively() }
+        counted = null
     }
 
     /** Deletes the whole cache, as when its key or the pairings were lost. */
     @Synchronized
     fun clear() {
         root.deleteRecursively()
+        counted = 0
     }
 
-    private fun folder(routeId: String): File = File(root, AttachmentImportRules.sha256(routeId.toByteArray()))
+    private fun folderName(routeId: String): String = AttachmentImportRules.sha256(routeId.toByteArray())
+
+    private fun folder(routeId: String): File = File(root, folderName(routeId))
 
     private fun file(routeId: String, name: String): File = File(folder(routeId), name)
 
@@ -114,6 +132,7 @@ class MediaDiskCache(
     private fun write(target: File, bytes: ByteArray) {
         target.parentFile?.mkdirs()
         val temporary = File(target.path + ".new")
+        val replaced = if (target.isFile) target.length() else 0L
         try {
             FileOutputStream(temporary).use { output ->
                 StreamingCipher.writeTo(ByteArrayInputStream(bytes), output, bytes.size.toLong(), wrap)
@@ -129,21 +148,36 @@ class MediaDiskCache(
             return
         }
         target.setLastModified(now())
-        evict(keep = target)
+        settle(keep = target, replaced = replaced)
+    }
+
+    /**
+     * Counts the file just stored, which replaced [replaced] bytes. A walk happens only when the new
+     * total may exceed the cap, or no total is known yet.
+     */
+    private fun settle(keep: File, replaced: Long) {
+        val known = counted
+        val total = known?.let { it - replaced + keep.length() }
+        if (total != null && total <= capacityBytes) counted = total else evict(keep)
     }
 
     /** Deletes the least recently used files, never [keep], until the cache fits its cap. */
     private fun evict(keep: File) {
-        if (!root.isDirectory) return
+        if (!root.isDirectory) {
+            counted = 0
+            return
+        }
         val files = root.walkTopDown().filter { it.isFile }.toList()
         var total = files.sumOf { it.length() }
-        if (total <= capacityBytes) return
-        for (candidate in files.sortedBy { it.lastModified() }) {
-            if (total <= capacityBytes) break
-            if (candidate == keep) continue
-            total -= candidate.length()
-            candidate.delete()
+        if (total > capacityBytes) {
+            for (candidate in files.sortedBy { it.lastModified() }) {
+                if (total <= capacityBytes) break
+                if (candidate == keep) continue
+                val size = candidate.length()
+                if (candidate.delete()) total -= size
+            }
         }
+        counted = total
     }
 
     companion object {
