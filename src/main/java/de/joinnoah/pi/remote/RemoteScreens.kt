@@ -2778,6 +2778,13 @@ internal fun RemoteScreen(
                                         modifier = Modifier.graphicsLayer { rotationZ = rotation },
                                     )
                                 }
+                            }
+                            IconButton(onClick = navigator::settings, modifier = Modifier.size(48.dp)) {
+                                Icon(
+                                    Icons.Default.Settings,
+                                    stringResource(R.string.remote_settings),
+                                )
+                            }
                                 // The full projects column kept beside a chat shrinks back to the strip.
                                 if (projectsColumn?.canCollapse == true && twoPane != null)
                                     IconButton(
@@ -2789,13 +2796,6 @@ internal fun RemoteScreen(
                                             stringResource(R.string.remote_projects_collapse),
                                         )
                                     }
-                            }
-                            IconButton(onClick = navigator::settings, modifier = Modifier.size(48.dp)) {
-                                Icon(
-                                    Icons.Default.Settings,
-                                    stringResource(R.string.remote_settings),
-                                )
-                            }
                         }
                     } else null,
             )
