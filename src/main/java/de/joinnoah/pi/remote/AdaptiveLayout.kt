@@ -313,8 +313,8 @@ internal fun chatStripped(available: Dp): Boolean =
  * [INSPECTOR_PANE_MAX_WIDTH], or all but the chat strip where that would stay under
  * [EXPANDED_INSPECTOR_MIN_WIDTH].
  */
-internal fun expandedInspectorWidth(available: Dp): Dp =
-    available - PANE_DIVIDER_WIDTH - if (chatStripped(available)) CHAT_STRIP_WIDTH else CHAT_PANE_MIN_WIDTH
+internal fun expandedInspectorWidth(available: Dp, stripped: Boolean = chatStripped(available)): Dp =
+    available - PANE_DIVIDER_WIDTH - if (stripped) CHAT_STRIP_WIDTH else CHAT_PANE_MIN_WIDTH
 
 /**
  * Identifies a layout bucket for [TwoPaneState]; a dragged width belongs to one bucket. Windows
@@ -460,6 +460,36 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
      */
     var inspectorExpanded by mutableStateOf(false)
 
+    /**
+     * Review mode: the changes take the window. The project strip and the session list make way,
+     * the inspector widens and the chat shrinks to its strip ([InspectorRow]). What it changed
+     * comes back as it was when it ends ([leaveReview]); the dragged widths stay untouched.
+     */
+    var reviewing by mutableStateOf(false)
+        private set
+
+    /** The list's and the inspector's state from before review mode: collapsed, auto, expanded. */
+    private var beforeReview: BooleanArray? = null
+
+    fun enterReview() {
+        if (reviewing) return
+        beforeReview = booleanArrayOf(collapsed, autoCollapsed, inspectorExpanded)
+        collapsed = true
+        autoCollapsed = false
+        inspectorExpanded = true
+        reviewing = true
+    }
+
+    fun leaveReview() {
+        if (!reviewing) return
+        reviewing = false
+        val before = beforeReview ?: return
+        beforeReview = null
+        collapsed = before[0]
+        autoCollapsed = before[1]
+        inspectorExpanded = before[2]
+    }
+
     /** The inspector opened where the list, the chat and it do not fit side by side. */
     fun autoCollapseList() {
         if (collapsed) return
@@ -467,8 +497,12 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
         autoCollapsed = true
     }
 
-    /** The inspector closed: a list that collapsed for it comes back, one the user hid stays hidden. */
+    /**
+     * The inspector closed: review mode, which lived in it, ends first. Then a list that collapsed
+     * for it comes back, one the user hid stays hidden.
+     */
     fun restoreList() {
+        leaveReview()
         if (!autoCollapsed) return
         collapsed = false
         autoCollapsed = false
@@ -528,6 +562,8 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
     fun adopt(layout: PaneLayout) {
         val key = layout.sizeKey()
         if (sizedFor == key) return
+        // Another bucket lays the panes out anew; review mode was for the old one.
+        leaveReview()
         sizedFor = key
         val hidden = memos[key]?.listCollapsed ?: return
         if (hidden) {
@@ -550,6 +586,8 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
                         it.autoCollapsed,
                         it.inspectorExpanded,
                         encodePaneMemos(it.memos),
+                        it.reviewing,
+                        it.beforeReview?.copyOf() ?: BooleanArray(0),
                     )
                 },
                 restore = {
@@ -558,6 +596,12 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
                         // State saved by an older version has neither.
                         autoCollapsed = it.getOrNull(4) as? Boolean ?: false
                         inspectorExpanded = it.getOrNull(5) as? Boolean ?: false
+                        // Older versions had no review mode.
+                        val before = it.getOrNull(8) as? BooleanArray
+                        if (it.getOrNull(7) == true && before?.size == 3) {
+                            reviewing = true
+                            beforeReview = before
+                        }
                     }
                 },
             )
@@ -707,7 +751,9 @@ private data class ProjectColumnsScene(
         // first; without a predictive preview (see previousEntries).
         BackHandler(enabled = collapsed) { state.listCollapsed = false }
         val strip = detail != null
-        val projectsTarget = if (strip) PROJECT_STRIP_WIDTH else layout.projectsWidth
+        // Review mode gives the chat's changes the strip's room too.
+        val stripHidden = strip && state.reviewing
+        val projectsTarget = if (stripHidden) 0.dp else if (strip) PROJECT_STRIP_WIDTH else layout.projectsWidth
         val projectsWidth = rememberProjectsWidth(projectsTarget)
         // Back from the sessions or a chat stays in this scene, so Navigation 3 has no other scene
         // to preview; the scene previews it itself. Registered before the chat's own handlers too.
@@ -769,8 +815,19 @@ private data class ProjectColumnsScene(
                                     }
                                 }
                         ) {
-                            // At the target width too, so the content never reflows either.
-                            Box(Modifier.width(projectsTarget).fillMaxHeight()) {
+                            // At the target width too, so the content never reflows either. A hidden
+                            // strip keeps its width behind the clip, out of TalkBack's and Tab's reach.
+                            Box(
+                                Modifier.width(if (stripHidden) PROJECT_STRIP_WIDTH else projectsTarget)
+                                    .fillMaxHeight()
+                                    .then(
+                                        if (stripHidden)
+                                            Modifier.clearAndSetSemantics {}
+                                                .focusProperties { onEnter = { cancelFocusChange() } }
+                                                .focusGroup()
+                                        else Modifier
+                                    )
+                            ) {
                                 CompositionLocalProvider(
                                     LocalProjectsColumn provides ProjectsColumn(selectedProjectId, strip)
                                 ) {
@@ -788,7 +845,7 @@ private data class ProjectColumnsScene(
                             if (projects != null) translationX = (projectsShown() - projectsTarget).toPx() * direction
                         }
                 ) {
-                    if (projects != null) VerticalDivider()
+                    if (projects != null && !stripHidden) VerticalDivider()
                     // Only a shown chat can take the list's room; without one the list is all there is.
                     if (list != null && !collapsed) {
                         Box(
@@ -1119,8 +1176,9 @@ internal fun filterSessions(items: List<SessionListItem>, query: String): List<S
  *
  * [width] is the requested pane width, read again on every drag event, and [minWidth] the
  * narrowest it gets; with [onResize] the divider can be dragged, and null resets the width.
- * [expanded] gives the pane all but the chat's minimum; where that stays narrow, the chat makes
- * way for [chatStrip] instead, and [onChatStripped] hears when that starts and ends.
+ * [expanded] gives the pane all but the chat's minimum; where that stays narrow, or in [review]
+ * mode, the chat makes way for [chatStrip] instead, and [onChatStripped] hears when that starts
+ * and ends.
  */
 @Composable
 internal fun InspectorRow(
@@ -1132,6 +1190,7 @@ internal fun InspectorRow(
     expanded: Boolean = false,
     chatStrip: (@Composable () -> Unit)? = null,
     onChatStripped: (Boolean) -> Unit = {},
+    review: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     // F6 reaches the pane's content, and comes back to the row it left there; the pane keeps its
@@ -1141,10 +1200,12 @@ internal fun InspectorRow(
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val available by rememberUpdatedState(maxWidth)
         val widened = shown && expanded
-        val stripped = widened && chatStrip != null && chatStripped(maxWidth)
+        val stripped = widened && chatStrip != null && (review || chatStripped(maxWidth))
         val currentStripped by rememberUpdatedState(onChatStripped)
         LaunchedEffect(stripped) { currentStripped(stripped) }
-        val paneWidth = if (widened) expandedInspectorWidth(maxWidth) else inspectorPaneWidth(width(), maxWidth, minWidth)
+        val paneWidth =
+            if (widened) expandedInspectorWidth(maxWidth, stripped || chatStripped(maxWidth))
+            else inspectorPaneWidth(width(), maxWidth, minWidth)
         Row(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
                 // A stripped chat keeps its usual width behind the strip, so nothing in it rewraps,

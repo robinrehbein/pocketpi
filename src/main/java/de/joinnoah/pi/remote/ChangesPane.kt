@@ -2,6 +2,34 @@ package de.joinnoah.pi.remote
 
 import android.content.Context
 import android.text.format.DateUtils
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.WrapText
+import androidx.compose.material.icons.filled.RateReview
+import androidx.compose.material.icons.filled.RocketLaunch
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -93,6 +121,11 @@ internal fun ChangesPane(
     offline: Boolean = false,
 ) {
     PaneBackHandler { if (state.file != null) actions.onOpenFile(null) else actions.onClose() }
+    // Review mode belongs to the two-pane layout, which gives the pane the window.
+    val twoPane = LocalTwoPane.current
+    val reviewing = twoPane?.reviewing == true
+    // Back leaves review mode before anything else, as Esc does; registered after the pane's own.
+    BackHandler(enabled = reviewing) { twoPane?.leaveReview() }
     // One state object for the remembered actions below; a failed prefill belongs to the file
     // and base it happened on, so it resets when either changes.
     var prefillFailed by remember { mutableStateOf(false) }
@@ -114,6 +147,40 @@ internal fun ChangesPane(
         }
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
+    val context = LocalContext.current
+    val codeWrap = rememberCodeWrap()
+    val diffKeys = remember { DiffKeys() }
+    // Review mode starts on the first file, beside the list.
+    val firstPath = state.status?.files?.firstOrNull()?.path
+    LaunchedEffect(reviewing, firstPath) {
+        if (reviewing && state.file == null && firstPath != null) actions.onOpenFile(firstPath)
+    }
+    val reviewKeys by rememberUpdatedState { key: ReviewKey ->
+        when (key) {
+            ReviewKey.NEXT_FILE,
+            ReviewKey.PREVIOUS_FILE -> {
+                val current = state.file.takeIf { state.fileSession == null }
+                val step = if (key == ReviewKey.NEXT_FILE) 1 else -1
+                adjacentId(state.status?.files.orEmpty().map { it.path }, current, step)
+                    ?.takeIf { it != current }
+                    ?.let { actions.onOpenFile(it) } != null
+            }
+            ReviewKey.NEXT_HUNK -> diffKeys.step(1)
+            ReviewKey.PREVIOUS_HUNK -> diffKeys.step(-1)
+            ReviewKey.COMMENT -> diffKeys.comment()
+            ReviewKey.USE_REVIEW ->
+                state.comments.isNotEmpty() && checked.onUseReview(reviewPrompt(context, state.comments, state.devBase))
+        }
+    }
+    val keyTarget = LocalChatKeyTarget.current
+    if (keyTarget != null)
+        DisposableEffect(keyTarget) {
+            val handler: (ReviewKey) -> Boolean = { reviewKeys(it) }
+            keyTarget.addReviewHandler(handler)
+            onDispose { keyTarget.removeReviewHandler(handler) }
+        }
+    val headerActions =
+        changesHeaderActions(state, codeWrap, twoPane, reviewing) { prompt -> checked.onPrefill(prompt) }
     var headerHeight by remember { mutableStateOf(64.dp) }
     Surface(modifier.fillMaxSize().testTag("changesPane")) {
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
@@ -127,18 +194,39 @@ internal fun ChangesPane(
                     )
                 // Backspace, or Left at the edge, goes from a diff back to the file list.
                 val parent = { actions.onOpenFile(null) }.takeIf { state.file != null }
-                Box(Modifier.weight(1f).fillMaxWidth().parentOnLeft(focusManager, parent)) {
+                BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().parentOnLeft(focusManager, parent)) {
                     val inset = if (prefillFailed) 0.dp else headerHeight
                     val file = state.file
-                    if (file == null) ChangesOverview(state, checked, inset, offline)
-                    else key(file) { ChangesFileDiff(state, file, checked, inset) }
+                    val wrap = codeWrap.wrap
+                    val width = maxWidth
+                    when {
+                        file == null -> ChangesOverview(state, checked, inset, offline)
+                        // A wide pane keeps the file list beside the diff.
+                        width >= FILE_LIST_BESIDE_MIN_WIDTH ->
+                            Row(Modifier.fillMaxSize()) {
+                                ChangesFileList(state, checked, inset, Modifier.width(FILE_LIST_WIDTH).fillMaxHeight())
+                                VerticalDivider()
+                                Box(Modifier.weight(1f).fillMaxHeight()) {
+                                    val split = reviewing && width - FILE_LIST_WIDTH - PANE_DIVIDER_WIDTH >= SPLIT_DIFF_MIN_WIDTH
+                                    key(file) { ChangesFileDiff(state, file, checked, inset, split, wrap, diffKeys) }
+                                }
+                            }
+                        // Too narrow for the list, far too narrow for a split.
+                        else -> key(file) { ChangesFileDiff(state, file, checked, inset, wrap = wrap, keys = diffKeys) }
+                    }
                 }
                 if (state.comments.isNotEmpty()) ReviewBar(state.comments, state.devBase, checked)
             }
             Box(Modifier.align(Alignment.TopCenter).onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
+                // The overview names the project and its branch; a diff names its file.
+                val branch = state.status?.branch?.let { stringResource(R.string.remote_changes_branch, it) }
+                val project = projectName?.takeIf(String::isNotBlank)
                 PaneHeader(
                     title = stringResource(R.string.remote_changes_title),
-                    subtitle = state.file ?: projectName?.takeIf(String::isNotBlank),
+                    subtitle =
+                        state.file
+                            ?: if (project != null && branch != null) stringResource(R.string.remote_review_subtitle, project, branch)
+                            else project ?: branch,
                     nested = state.file != null,
                     busy = state.loading || state.diffLoading,
                     tag = "changes",
@@ -148,7 +236,167 @@ internal fun ChangesPane(
                     onBack = { actions.onOpenFile(null) },
                     onClose = actions.onClose,
                     onReload = actions.onReload,
+                    actions = headerActions,
                 )
+            }
+        }
+    }
+}
+
+/** From this pane width the file list stays beside an open diff or file. */
+internal val FILE_LIST_BESIDE_MIN_WIDTH = 720.dp
+
+/** The file list's width beside a diff or a file. */
+internal val FILE_LIST_WIDTH = 280.dp
+
+/** From this diff width review mode shows the old and the new side by side ([SplitDiffRow]). */
+internal val SPLIT_DIFF_MIN_WIDTH = 900.dp
+
+/** The open diff's side of the review keys: hunk steps and a comment on the focused line. */
+private class DiffKeys {
+    var step: (Int) -> Boolean = { false }
+    var comment: () -> Boolean = { false }
+}
+
+/** The git prompts of the Ship menu; each one goes into the composer and is never sent by itself. */
+internal enum class ShipAction {
+    COMMIT,
+    COMMIT_PUSH,
+    BRANCH,
+    PULL_REQUEST,
+    REBASE,
+}
+
+/**
+ * The Ship actions for a repository whose dev base is [devBase]: a pull request and a rebase need
+ * one. Deterministic git operations are the host's to add; these are prompts for pi.
+ */
+internal fun shipActions(devBase: GitDevBase?): List<ShipAction> =
+    ShipAction.entries.filter { (it != ShipAction.PULL_REQUEST && it != ShipAction.REBASE) || devBase?.ref != null }
+
+/** What [action] is called in the Ship menu. */
+internal fun shipLabel(context: Context, action: ShipAction, devBase: GitDevBase?): String =
+    when (action) {
+        ShipAction.COMMIT -> context.getString(R.string.remote_ship_commit)
+        ShipAction.COMMIT_PUSH -> context.getString(R.string.remote_ship_commit_push)
+        ShipAction.BRANCH -> context.getString(R.string.remote_ship_branch)
+        ShipAction.PULL_REQUEST -> context.getString(R.string.remote_ship_pull_request, devBaseName(devBase))
+        ShipAction.REBASE -> context.getString(R.string.remote_ship_rebase, devBaseName(devBase))
+    }
+
+/**
+ * The composer text for [action]. A commit message and a branch name are the user's to finish,
+ * so their prompts end where the name goes. A pull request names the branch, a rebase the full
+ * ref, so pi rebases on `origin/main` and not a lagging local `main`.
+ */
+internal fun shipPrompt(context: Context, action: ShipAction, devBase: GitDevBase?): String =
+    when (action) {
+        ShipAction.COMMIT -> context.getString(R.string.remote_ship_prompt_commit)
+        ShipAction.COMMIT_PUSH -> context.getString(R.string.remote_ship_prompt_commit_push)
+        ShipAction.BRANCH -> context.getString(R.string.remote_ship_prompt_branch)
+        ShipAction.PULL_REQUEST -> context.getString(R.string.remote_ship_prompt_pull_request, devBaseName(devBase))
+        ShipAction.REBASE -> context.getString(R.string.remote_ship_prompt_rebase, devBaseRef(devBase))
+    }
+
+/**
+ * The Changes header's actions: "Wrap lines" over a diff, Review in the two-pane layout, and the
+ * Ship menu once the repository is known. [onPrefill] puts a Ship prompt into the composer.
+ */
+@Composable
+private fun changesHeaderActions(
+    state: ChangesState,
+    codeWrap: CodeWrapState,
+    twoPane: TwoPaneState?,
+    reviewing: Boolean,
+    onPrefill: (String) -> Unit,
+): List<PaneAction> {
+    val context = LocalContext.current
+    val wrapLabel = stringResource(R.string.remote_review_wrap_lines)
+    val reviewLabel = stringResource(if (reviewing) R.string.remote_review_leave else R.string.remote_review_enter)
+    val shipLabel = stringResource(R.string.remote_ship_menu)
+    // Older hosts name the dev base only with the dev comparison.
+    val devBase = state.devBase?.takeIf { it.ref != null } ?: state.status?.devRef?.let(::GitDevBase)
+    val repository = state.status?.available == true
+    return buildList {
+        if (state.file != null)
+            add(PaneAction(wrapLabel, Icons.AutoMirrored.Filled.WrapText, "changesWrap", checked = codeWrap.wrap, onClick = codeWrap::toggle))
+        if (twoPane != null)
+            add(
+                PaneAction(reviewLabel, Icons.Default.RateReview, "changesReview", checked = reviewing, shortcut = Shortcut.REVIEW) {
+                    if (twoPane.reviewing) twoPane.leaveReview() else twoPane.enterReview()
+                }
+            )
+        if (repository)
+            add(
+                PaneAction(
+                    shipLabel,
+                    Icons.Default.RocketLaunch,
+                    "changesShip",
+                    items =
+                        shipActions(devBase).map { action ->
+                            PaneMenuItem(shipLabel(context, action, devBase), "changesShip_${action.name.lowercase()}") {
+                                onPrefill(shipPrompt(context, action, devBase))
+                            }
+                        },
+                )
+            )
+    }
+}
+
+/**
+ * Up and Down on a row of a file list beside a diff or a file open the row above or below as
+ * focus moves there; null where there is none. Focus itself moves as usual.
+ */
+internal fun Modifier.openAdjacentOnUpDown(previous: (() -> Unit)?, next: (() -> Unit)?): Modifier =
+    onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown && !event.isCtrlPressed && !event.isAltPressed && !event.isMetaPressed && !event.isShiftPressed)
+            when (event.key) {
+                Key.DirectionUp -> previous?.invoke()
+                Key.DirectionDown -> next?.invoke()
+                else -> Unit
+            }
+        false
+    }
+
+/** The changed files beside a diff, as rows; Up and Down open the file above or below. */
+@Composable
+private fun ChangesFileList(state: ChangesState, actions: ChangesActions, headerHeight: Dp, modifier: Modifier) {
+    val files = state.status?.files.orEmpty()
+    // A subagent's file is not in the list; none shows as open then.
+    val open = state.file.takeIf { state.fileSession == null }
+    val label = stringResource(R.string.remote_review_file_list)
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    LazyColumn(
+        modifier.semantics { contentDescription = label }.testTag("changesFileList"),
+        contentPadding = PaddingValues(top = headerHeight + 8.dp, bottom = 8.dp),
+    ) {
+        itemsIndexed(files, key = { _, file -> file.path }) { index, file ->
+            val selected = file.path == open
+            Row(
+                Modifier.fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Unspecified)
+                    .openAdjacentOnUpDown(
+                        files.getOrNull(index - 1)?.let { { actions.onOpenFile(it.path) } },
+                        files.getOrNull(index + 1)?.let { { actions.onOpenFile(it.path) } },
+                    )
+                    .focusRing()
+                    .selectable(selected) { actions.onOpenFile(file.path) }
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .testTag("changesFileListItem"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(file.path.substringAfterLast('/'), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if ('/' in file.path)
+                        Text(file.path.substringBeforeLast('/'), style = MaterialTheme.typography.labelSmall,
+                            color = muted, maxLines = 1, overflow = TextOverflow.StartEllipsis)
+                }
+                if (file.additions != null && file.deletions != null) {
+                    Text("+${file.additions}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                    Text("−${file.deletions}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
+                }
             }
         }
     }
@@ -298,9 +546,6 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
             }
             status?.takeIf { it.base == GitBase.DEV }?.let { it.devBase?.ref ?: it.devRef }?.let { ref ->
                 item(key = "devRef", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_dev_ref, ref)) }
-            }
-            status?.branch?.let { branch ->
-                item(key = "branch", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_branch, branch)) }
             }
             state.fetchedAt?.takeIf { (offline || state.stale) && status != null && state.failure == null }?.let { at ->
                 item(key = "updated", span = { GridItemSpan(maxLineSpan) }) {
@@ -492,13 +737,28 @@ private fun ChangesFileTile(
     )
 }
 
+/**
+ * One file's diff with line comments. [split] shows the old and the new side by side where the
+ * patch allows it ([splitDiff]); [wrap] breaks long lines. The review keys reach it through [keys].
+ */
 @Composable
-private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesActions, headerHeight: Dp) {
+private fun ChangesFileDiff(
+    state: ChangesState,
+    path: String,
+    actions: ChangesActions,
+    headerHeight: Dp,
+    split: Boolean = false,
+    wrap: Boolean = false,
+    keys: DiffKeys = remember { DiffKeys() },
+) {
     val context = LocalContext.current
     val diff = state.diff?.takeIf { it.path == path }
     val lines = remember(diff?.patch) { diff?.patch?.let(::patchDiff).orEmpty() }
+    val splitRows = remember(diff?.patch, lines, split) { if (split) diff?.patch?.let { splitDiff(it, lines) } else null }
     val rowStyle = rememberDiffRowStyle(lines)
     val scroll = rememberScrollState()
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     val base = state.status?.base ?: state.base
     // Line numbers belong to one base: a comment shows only on the diff it was written on.
     val comments =
@@ -515,7 +775,76 @@ private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesA
     // A subagent's file: its changes are not the session's to comment on or act on from here.
     val subagent = state.fileSession?.let { id -> state.subagents.firstOrNull { it.sessionId == id } }
     val readOnly = state.fileSession != null
-    LazyColumn(Modifier.fillMaxSize().testTag("changesDiff"), contentPadding = PaddingValues(top = headerHeight)) {
+    // The keyboard's line for "c"; without one, the first changed line of the hunk in view.
+    var focusedLine by remember { mutableStateOf<DiffLine?>(null) }
+    // The rows as the list shows them, and where each hunk starts among them.
+    val rowCount = splitRows?.size ?: lines.size
+    val hunkRows =
+        remember(lines, splitRows) {
+            if (splitRows != null) splitRows.indices.filter { splitRows[it].old?.let(lines::get)?.kind == DiffKind.HUNK }
+            else lines.indices.filter { lines[it].kind == DiffKind.HUNK }
+        }
+    // One item comes before the rows: the actions, or a subagent's notice.
+    val leading = 1
+    val showsRows = state.diffFailure == null && !state.diffLoading && diff != null && diff.omitted == null && !diff.binary && lines.isNotEmpty()
+    SideEffect {
+        keys.step = { direction ->
+            val first = listState.firstVisibleItemIndex - leading
+            val target =
+                if (!showsRows) null
+                else if (direction > 0) hunkRows.firstOrNull { it > first }
+                else hunkRows.lastOrNull { it < first }
+            target?.let { scope.launch { listState.scrollToItem(it + leading) } } != null
+        }
+        keys.comment = comment@{
+            if (readOnly || !showsRows) return@comment false
+            val first = (listState.firstVisibleItemIndex - leading).coerceIn(0, maxOf(rowCount - 1, 0))
+            // The first changed line from the hunk in view on, else the first line that takes one.
+            val start = splitRows?.getOrNull(first)?.let { it.old ?: it.new } ?: first
+            val target =
+                focusedLine
+                    ?: (start until lines.size).asSequence().map(lines::get).firstOrNull { it.kind == DiffKind.ADDED || it.kind == DiffKind.REMOVED }
+                    ?: lines.firstOrNull { it.kind != DiffKind.HUNK }
+            target?.let { editing = it } != null
+        }
+    }
+    DisposableEffect(keys) {
+        onDispose {
+            keys.step = { false }
+            keys.comment = { false }
+        }
+    }
+    fun Modifier.commentable(line: DiffLine): Modifier =
+        onFocusChanged { if (it.isFocused) focusedLine = line else if (focusedLine == line) focusedLine = null }
+            .clickable(onClickLabel = addLabel) { editing = line }
+            .testTag("changesDiffLine")
+    fun lineMenu(line: DiffLine, index: Int, commentable: Boolean): Modifier =
+        Modifier.contextMenu { _ ->
+            diffLineMenuActions(commentable).map { action ->
+                MenuItem(action.label, "diff_${action.name.lowercase()}") {
+                    when (action) {
+                        DiffLineMenuAction.COMMENT -> editing = line
+                        DiffLineMenuAction.COPY_LINE -> copyLine(line.text)
+                        DiffLineMenuAction.COPY_HUNK -> copyHunk(diffHunkText(lines, index))
+                    }
+                }
+            }
+        }
+    @Composable
+    fun LineComment(line: DiffLine) {
+        comments[line.oldLine.takeIf { line.newLine == null } to line.newLine]?.let { comment ->
+            Text(
+                comment.text,
+                Modifier.fillMaxWidth()
+                    .clickable(onClickLabel = editLabel) { editing = line }
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .testTag("changesComment"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+            )
+        }
+    }
+    LazyColumn(Modifier.fillMaxSize().testTag("changesDiff"), state = listState, contentPadding = PaddingValues(top = headerHeight)) {
         if (readOnly)
             item(key = "subagent") {
                 Notice(
@@ -563,6 +892,28 @@ private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesA
                 item(key = "baseGone") { Notice(stringResource(R.string.remote_changes_diff_base_content_gone)) }
             diff.binary -> item(key = "binary") { Notice(stringResource(R.string.remote_changes_diff_binary)) }
             lines.isEmpty() -> item(key = "empty") { Notice(stringResource(R.string.remote_changes_diff_empty)) }
+            splitRows != null -> {
+                // A hunk header spans both sides; every other row pairs an old and a new line.
+                itemsIndexed(splitRows, contentType = { _, row -> if (row.old != null && row.old == row.new) lines[row.old].kind else "pair" }) { _, row ->
+                    val old = row.old?.let(lines::get)
+                    val new = row.new?.let(lines::get)
+                    Column(Modifier.testTag("changesSplitRow")) {
+                        if (old != null && old.kind == DiffKind.HUNK)
+                            DiffRow(old, rowStyle, scroll, lineMenu(old, checkNotNull(row.old), commentable = false), wrap)
+                        else {
+                            SplitDiffRow(old, new, rowStyle, scroll, wrap) { line ->
+                                val index = if (line === old) row.old else row.new
+                                if (line == null || index == null) Modifier
+                                else lineMenu(line, index, !readOnly).then(if (readOnly) Modifier else Modifier.commentable(line))
+                            }
+                            old?.let { LineComment(it) }
+                            new?.takeIf { it !== old }?.let { LineComment(it) }
+                        }
+                    }
+                }
+                if (diff.truncated)
+                    item(key = "truncated") { Notice(stringResource(R.string.remote_changes_diff_truncated)) }
+            }
             else -> {
                 // Rows stay one text line high, below the 48dp touch target, to keep code readable;
                 // an accepted trade-off, as in the tool detail diff.
@@ -573,33 +924,10 @@ private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesA
                             line,
                             rowStyle,
                             scroll,
-                            Modifier.contextMenu { _ ->
-                                diffLineMenuActions(commentable).map { action ->
-                                    MenuItem(action.label, "diff_${action.name.lowercase()}") {
-                                        when (action) {
-                                            DiffLineMenuAction.COMMENT -> editing = line
-                                            DiffLineMenuAction.COPY_LINE -> copyLine(line.text)
-                                            DiffLineMenuAction.COPY_HUNK -> copyHunk(diffHunkText(lines, index))
-                                        }
-                                    }
-                                }
-                            }.then(
-                                if (commentable)
-                                    Modifier.clickable(onClickLabel = addLabel) { editing = line }.testTag("changesDiffLine")
-                                else Modifier
-                            ),
+                            lineMenu(line, index, commentable).then(if (commentable) Modifier.commentable(line) else Modifier),
+                            wrap,
                         )
-                        comments[line.oldLine.takeIf { line.newLine == null } to line.newLine]?.let { comment ->
-                            Text(
-                                comment.text,
-                                Modifier.fillMaxWidth()
-                                    .clickable(onClickLabel = editLabel) { editing = line }
-                                    .padding(horizontal = 16.dp, vertical = 6.dp)
-                                    .testTag("changesComment"),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.tertiary,
-                            )
-                        }
+                        LineComment(line)
                     }
                 }
                 if (diff.truncated)

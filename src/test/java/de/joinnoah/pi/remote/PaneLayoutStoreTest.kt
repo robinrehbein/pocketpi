@@ -25,4 +25,21 @@ class PaneLayoutStoreTest {
         assertFalse(context.getSharedPreferences("pane_layout", Context.MODE_PRIVATE).contains("memos"))
         assertEquals(emptyMap<String, PaneMemo>(), PaneLayoutStore(context).load())
     }
+
+    @Test
+    fun wrapLinesSurvivesBesideTheMemos() {
+        val store = PaneLayoutStore(context)
+        assertFalse(store.loadWrapLines())
+        store.saveWrapLines(true)
+        assertEquals(true, PaneLayoutStore(context).loadWrapLines())
+        // The widths and the toggle keep out of each other's way.
+        store.save(emptyMap())
+        assertEquals(true, PaneLayoutStore(context).loadWrapLines())
+        store.saveWrapLines(false)
+        assertFalse(context.getSharedPreferences("pane_layout", Context.MODE_PRIVATE).contains("wrap_lines"))
+        val wrap = CodeWrapState(store)
+        wrap.toggle()
+        assertEquals(true, wrap.wrap)
+        assertEquals(true, CodeWrapState(PaneLayoutStore(context)).wrap)
+    }
 }

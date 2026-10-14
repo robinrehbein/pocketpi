@@ -5,6 +5,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -409,5 +412,227 @@ class ChangesPaneTest {
         // Another file starts without the old error.
         compose.runOnIdle { state = state.copy(file = "big.kt", diff = null) }
         compose.onNodeWithTag("changesPrefillFailed").assertDoesNotExist()
+    }
+
+    // ---- Review mode, the file list beside the diff and the Ship menu ------------------------
+
+    private val reviewStatus =
+        GitStatus(
+            GitBase.SESSION,
+            snapshot,
+            listOf(GitFile("src/a.kt", GitChange.MODIFIED, 1, 1), GitFile("src/b.kt", GitChange.MODIFIED, 1, 1)),
+            branch = "feature/review",
+            devBase = GitDevBase("origin/main"),
+        )
+
+    private val reviewPatch = "@@ -1,2 +1,2 @@\n keep\n-old\n+new\n@@ -9 +9 @@\n-x\n+y\n"
+
+    private fun reviewState(file: String? = "src/a.kt") =
+        ChangesState(
+            "s",
+            loading = false,
+            status = reviewStatus,
+            log = GitLog(),
+            devBase = reviewStatus.devBase,
+            file = file,
+            diff = file?.let { GitDiff(it, snapshot, reviewPatch, binary = false, truncated = false) },
+        )
+
+    /** The pane inside a two-pane layout ([twoPane]) and a chat's keys ([keys]), as in the app. */
+    private fun renderInLayout(
+        initial: ChangesState,
+        recorder: Recorder,
+        twoPane: TwoPaneState? = null,
+        keys: ChatKeyTarget? = null,
+        projectName: String? = null,
+    ) {
+        var state by mutableStateOf(initial)
+        compose.setContent {
+            MaterialTheme {
+                androidx.compose.runtime.CompositionLocalProvider(LocalTwoPane provides twoPane, LocalChatKeyTarget provides keys) {
+                    ChangesPane(
+                        state,
+                        ChangesActions(
+                            onClose = {},
+                            onSelectBase = {},
+                            onReload = {},
+                            onOpenFile = { path ->
+                                recorder.opened += path
+                                state = state.copy(file = path, diff = path?.let { GitDiff(it, snapshot, reviewPatch, false, false) })
+                            },
+                            onSetComment = { true },
+                            onRemoveComment = {},
+                            onUseReview = { recorder.reviews += it; recorder.prefillResult },
+                            onPrefill = { recorder.prefills += it; recorder.prefillResult },
+                        ),
+                        projectName = projectName,
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1000dp")
+    fun shipPromptsPrefillTheComposerAndNeverSend() {
+        val recorder = Recorder()
+        renderInLayout(reviewState(file = null), recorder)
+        compose.onNodeWithTag("changesShip").performClick()
+        val labels =
+            listOf(
+                "changesShip_commit" to context.getString(R.string.remote_ship_commit),
+                "changesShip_commit_push" to context.getString(R.string.remote_ship_commit_push),
+                "changesShip_branch" to context.getString(R.string.remote_ship_branch),
+                "changesShip_pull_request" to context.getString(R.string.remote_ship_pull_request, "main"),
+                "changesShip_rebase" to context.getString(R.string.remote_ship_rebase, "main"),
+            )
+        for ((tag, label) in labels) compose.onNodeWithTag(tag).assertTextEquals(label)
+        compose.onNodeWithTag("changesShip_pull_request").performClick()
+        // Only the composer gets the prompt: nothing is sent and no review is used.
+        assertEquals(listOf(context.getString(R.string.remote_ship_prompt_pull_request, "main")), recorder.prefills)
+        assertTrue(recorder.reviews.isEmpty())
+        compose.onNodeWithTag("changesShip").performClick()
+        compose.onNodeWithTag("changesShip_rebase").performClick()
+        // A rebase names the full ref, so pi does not rebase on a lagging local branch.
+        assertEquals(context.getString(R.string.remote_ship_prompt_rebase, "origin/main"), recorder.prefills.last())
+    }
+
+    @Test
+    fun shipPromptsNeedADevBaseOnlyForAPullRequestAndARebase() {
+        assertEquals(ShipAction.entries, shipActions(GitDevBase("origin/main")))
+        assertEquals(listOf(ShipAction.COMMIT, ShipAction.COMMIT_PUSH, ShipAction.BRANCH), shipActions(GitDevBase(null)))
+        assertEquals(listOf(ShipAction.COMMIT, ShipAction.COMMIT_PUSH, ShipAction.BRANCH), shipActions(null))
+        // The commit message and the branch name are the user's to type at the end.
+        assertTrue(shipPrompt(context, ShipAction.COMMIT, null).endsWith(": "))
+        assertTrue(shipPrompt(context, ShipAction.BRANCH, null).endsWith(": "))
+    }
+
+    @Test
+    fun aNarrowHeaderKeepsTheShipMenuBehindMore() {
+        val recorder = Recorder()
+        renderInLayout(reviewState(file = null).copy(devBase = GitDevBase(null), status = reviewStatus.copy(devBase = GitDevBase(null))), recorder)
+        compose.onNodeWithTag("changesShip").assertDoesNotExist()
+        compose.onNodeWithTag("changesMoreActions").performClick()
+        compose.onNodeWithTag("changesShip").performClick()
+        // Without a branch to compare against there is nothing to open a PR against.
+        compose.onNodeWithTag("changesShip_pull_request").assertDoesNotExist()
+        compose.onNodeWithTag("changesShip_commit_push").performClick()
+        assertEquals(listOf(context.getString(R.string.remote_ship_prompt_commit_push)), recorder.prefills)
+    }
+
+    @Test
+    fun theBranchShowsInTheHeaderInsteadOfTheOverview() {
+        renderInLayout(reviewState(file = null), Recorder(), projectName = "noah-monorepo")
+        val branch = context.getString(R.string.remote_changes_branch, "feature/review")
+        compose.onNodeWithTag("changesSubtitle")
+            .assertTextEquals(context.getString(R.string.remote_review_subtitle, "noah-monorepo", branch))
+        compose.onNodeWithText(branch).assertDoesNotExist()
+    }
+
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    @Test
+    @Config(qualifiers = "w900dp-h1000dp")
+    fun aWidePaneKeepsTheFileListBesideTheDiff() {
+        val recorder = Recorder()
+        renderInLayout(reviewState(), recorder)
+        compose.onNodeWithTag("changesFileList").assertExists()
+        compose.onNodeWithTag("changesDiff").assertExists()
+        compose.onAllNodesWithTag("changesFileListItem").assertCountEquals(2)
+        // Down on the open file's row opens the next one as focus moves there.
+        compose.onAllNodesWithTag("changesFileListItem").onFirst()
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+        compose.onAllNodesWithTag("changesFileListItem").onFirst()
+            .performKeyInput { pressKey(androidx.compose.ui.input.key.Key.DirectionDown) }
+        assertEquals(listOf<String?>("src/b.kt"), recorder.opened)
+        compose.onAllNodesWithTag("changesFileListItem")[0].performClick()
+        assertEquals("src/a.kt", recorder.opened.last())
+        // Outside review mode the diff stays unified, however wide.
+        compose.onAllNodesWithTag("changesSplitRow").assertCountEquals(0)
+    }
+
+    @Test
+    fun aNarrowPaneShowsTheDiffAlone() {
+        renderInLayout(reviewState(), Recorder())
+        compose.onNodeWithTag("changesDiff").assertExists()
+        compose.onNodeWithTag("changesFileList").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w1400dp-h900dp")
+    fun reviewModeSplitsAWideDiff() {
+        val twoPane = TwoPaneState().apply { enterReview() }
+        renderInLayout(reviewState(), Recorder(), twoPane)
+        // Two hunks, a context line and two pairs.
+        compose.onAllNodesWithTag("changesSplitRow").assertCountEquals(5)
+        compose.onNodeWithTag("changesReview").assertIsOn()
+        compose.onNodeWithTag("changesReview").performClick()
+        assertTrue(!twoPane.reviewing)
+        compose.onAllNodesWithTag("changesSplitRow").assertCountEquals(0)
+        compose.onNodeWithTag("changesReview").performClick()
+        assertTrue(twoPane.reviewing)
+        compose.onAllNodesWithTag("changesSplitRow").assertCountEquals(5)
+    }
+
+    @Test
+    @Config(qualifiers = "w1000dp-h900dp")
+    fun reviewModeKeepsANarrowerDiffUnified() {
+        renderInLayout(reviewState(), Recorder(), TwoPaneState().apply { enterReview() })
+        // 1000dp less the file list leave the diff under the split's width.
+        compose.onNodeWithTag("changesFileList").assertExists()
+        compose.onAllNodesWithTag("changesSplitRow").assertCountEquals(0)
+        compose.onAllNodesWithTag("changesDiffLine").onFirst().assertExists()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1000dp")
+    fun reviewKeysStepThroughFilesCommentAndUseTheReview() {
+        val recorder = Recorder()
+        val twoPane = TwoPaneState().apply { enterReview() }
+        val keys = ChatKeyTarget().apply { reviewing = { twoPane.reviewing } }
+        renderInLayout(reviewState(file = null), recorder, twoPane, keys)
+        // Review mode starts on the first file.
+        compose.waitForIdle()
+        assertEquals(listOf<String?>("src/a.kt"), recorder.opened)
+        compose.runOnIdle { assertTrue(keys.reviewKey(ReviewKey.NEXT_FILE)) }
+        assertEquals("src/b.kt", recorder.opened.last())
+        // At the last file "n" is used up but goes nowhere.
+        compose.runOnIdle { assertTrue(keys.reviewKey(ReviewKey.NEXT_FILE)) }
+        assertEquals(2, recorder.opened.size)
+        compose.runOnIdle { keys.reviewKey(ReviewKey.PREVIOUS_FILE) }
+        assertEquals("src/a.kt", recorder.opened.last())
+        compose.runOnIdle { keys.reviewKey(ReviewKey.NEXT_HUNK) }
+        compose.runOnIdle { keys.reviewKey(ReviewKey.COMMENT) }
+        compose.onNodeWithTag("changesCommentField").assertExists()
+    }
+
+    @Test
+    fun reviewKeysWaitForReviewModeAndAFreeKeyboard() {
+        val twoPane = TwoPaneState()
+        val keys = ChatKeyTarget().apply { reviewing = { twoPane.reviewing } }
+        var handled = 0
+        keys.addReviewHandler { handled++; true }
+        // Outside review mode a letter is the composer's.
+        assertTrue(!keys.reviewKey(ReviewKey.NEXT_FILE))
+        twoPane.enterReview()
+        assertTrue(keys.reviewKey(ReviewKey.NEXT_FILE))
+        assertEquals(1, handled)
+        // A text field with focus takes its letters itself.
+        keys.composerFocused = true
+        assertTrue(!keys.reviewKey(ReviewKey.NEXT_FILE))
+        keys.composerFocused = false
+        keys.questionFieldFocus(Any(), focused = true, blank = true)
+        assertTrue(!keys.reviewKey(ReviewKey.COMMENT))
+        assertEquals(1, handled)
+    }
+
+    @Test
+    fun useReviewKeyNeedsComments() {
+        val recorder = Recorder()
+        val twoPane = TwoPaneState().apply { enterReview() }
+        val keys = ChatKeyTarget().apply { reviewing = { twoPane.reviewing } }
+        val comment = ReviewComment("src/a.kt", null, 1, "new", "Rename this", GitBase.SESSION)
+        renderInLayout(reviewState().copy(comments = listOf(comment)), recorder, twoPane, keys)
+        compose.runOnIdle { keys.reviewKey(ReviewKey.USE_REVIEW) }
+        assertEquals(listOf(reviewPrompt(context, listOf(comment), reviewStatus.devBase)), recorder.reviews)
     }
 }

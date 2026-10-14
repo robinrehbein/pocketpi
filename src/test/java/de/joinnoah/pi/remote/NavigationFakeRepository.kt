@@ -111,13 +111,30 @@ internal class NavigationFakeRepository : RemoteRepository {
         state.value = state.value.copy(changes = null, files = filesOnOpen(checkNotNull(state.value.selection.sessionId)))
     }
 
+    /** The files [openChanges] lists. */
+    var changedFiles: List<GitFile> = emptyList()
+
     override fun openChanges() {
         val sessionId = checkNotNull(state.value.selection.sessionId)
         state.value =
             state.value.copy(
                 files = null,
-                changes = ChangesState(sessionId, loading = false, status = GitStatus(GitBase.SESSION, "Q2hhbmdlc1NuYXBzaG90MQ"), log = GitLog()),
+                changes =
+                    ChangesState(
+                        sessionId,
+                        loading = false,
+                        status = GitStatus(GitBase.SESSION, "Q2hhbmdlc1NuYXBzaG90MQ", changedFiles),
+                        log = GitLog(),
+                    ),
             )
+    }
+
+    val openedChangesFiles = mutableListOf<String?>()
+
+    override fun openChangesFile(path: String?) {
+        openedChangesFiles += path
+        val changes = state.value.changes ?: return
+        state.value = state.value.copy(changes = changes.copy(file = path))
     }
 
     // Beside the chat both stay open, each in its own inspector tab.

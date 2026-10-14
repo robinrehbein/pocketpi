@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -29,7 +31,9 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.WrapText
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
@@ -41,6 +45,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -134,6 +139,7 @@ internal fun FilesPane(
     val send: (String) -> Unit = { prompt -> prefillFailed = !actions.onSend(prompt) }
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
+    val codeWrap = rememberCodeWrap()
     var headerHeight by remember { mutableStateOf(64.dp) }
     Surface(modifier.fillMaxSize().testTag("filesPane")) {
         val editor = state.editor
@@ -154,23 +160,36 @@ internal fun FilesPane(
                     )
                 // Backspace, or Left at the edge, goes up a folder or back from a file.
                 val parent = back.takeIf { state.peek == null && (state.file != null || state.path.isNotEmpty()) }
-                Box(Modifier.weight(1f).fillMaxWidth().parentOnLeft(focusManager, parent)) {
+                BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().parentOnLeft(focusManager, parent)) {
                     val inset = if (prefillFailed) 0.dp else headerHeight
                     val file = state.file
-                    if (file == null) key(state.path) { FolderList(state, actions, inset, send) }
-                    else key(file.path) { FileView(file, actions, send, inset, onEdit = actions.onStartEditing.takeIf { canEdit }) }
+                    val onEdit = actions.onStartEditing.takeIf { canEdit }
+                    when {
+                        file == null -> key(state.path) { FolderList(state, actions, inset, send) }
+                        // A wide pane keeps the folder's entries beside the open file.
+                        maxWidth >= FILE_LIST_BESIDE_MIN_WIDTH ->
+                            Row(Modifier.fillMaxSize()) {
+                                FolderSideList(state, actions, inset, Modifier.width(FILE_LIST_WIDTH).fillMaxHeight())
+                                VerticalDivider()
+                                Box(Modifier.weight(1f).fillMaxHeight()) {
+                                    key(file.path) { FileView(file, actions, send, inset, onEdit, codeWrap.wrap) }
+                                }
+                            }
+                        else -> key(file.path) { FileView(file, actions, send, inset, onEdit, codeWrap.wrap) }
+                    }
                 }
             }
             Box(Modifier.align(Alignment.TopCenter).onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
-                FilesTopBar(state, actions, back, projectName)
+                FilesTopBar(state, actions, back, projectName, codeWrap)
             }
         }
     }
 }
 
 @Composable
-private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Unit, projectName: String?) {
+private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Unit, projectName: String?, codeWrap: CodeWrapState) {
     val nested = state.file != null || state.path.isNotEmpty()
+    val wrapLabel = stringResource(R.string.remote_review_wrap_lines)
     PaneHeader(
         title = stringResource(R.string.remote_files_title),
         subtitle = (state.file?.path ?: state.path).takeIf(String::isNotEmpty) ?: projectName?.takeIf(String::isNotBlank),
@@ -183,7 +202,59 @@ private fun FilesTopBar(state: FilesState, actions: FilesActions, back: () -> Un
         onBack = back,
         onClose = actions.onClose,
         onReload = actions.onReload,
+        actions =
+            if (state.file == null) emptyList()
+            else listOf(PaneAction(wrapLabel, Icons.AutoMirrored.Filled.WrapText, "filesWrap", checked = codeWrap.wrap, onClick = codeWrap::toggle)),
     )
+}
+
+/**
+ * The shown folder's entries beside an open file, as rows: a folder opens itself, a file opens
+ * in place of the one shown. Up and Down open the file above or below.
+ */
+@Composable
+private fun FolderSideList(state: FilesState, actions: FilesActions, headerHeight: Dp, modifier: Modifier) {
+    val entries = state.listing?.entries.orEmpty()
+    val label = stringResource(R.string.remote_files_title)
+    LazyColumn(
+        modifier.semantics { contentDescription = label }.testTag("filesSideList"),
+        contentPadding = PaddingValues(top = headerHeight + 8.dp, bottom = 8.dp),
+    ) {
+        itemsIndexed(entries, key = { _, entry -> entry.name }) { index, entry ->
+            val path = childPath(state.path, entry.name)
+            val folder = entry.type == FileEntryType.DIR
+            val selected = !folder && path == state.file?.path
+            fun openFileAt(at: Int): (() -> Unit)? =
+                entries.getOrNull(at)?.takeIf { it.type == FileEntryType.FILE }?.let { other ->
+                    { actions.onOpenFile(childPath(state.path, other.name)) }
+                }
+            Row(
+                Modifier.fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Unspecified)
+                    .openAdjacentOnUpDown(openFileAt(index - 1), openFileAt(index + 1))
+                    .focusRing()
+                    .selectable(selected) {
+                        when (entry.type) {
+                            FileEntryType.DIR -> actions.onOpenDir(path)
+                            FileEntryType.FILE -> actions.onOpenFile(path)
+                            else -> Unit
+                        }
+                    }
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .testTag("filesSideEntry:${entry.name}"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (folder) entry.name + "/" else entry.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
 }
 
 private fun failureText(failure: FilesFailure): Int =
@@ -403,6 +474,7 @@ private fun FileView(
     send: (String) -> Unit,
     headerHeight: Dp,
     onEdit: (() -> Unit)? = null,
+    wrap: Boolean = false,
 ) {
     val context = LocalContext.current
     val lines = remember(file.content) { fileLines(file.content) }
@@ -466,6 +538,7 @@ private fun FileView(
                             scroll,
                             lineTapLabel(context, file.selection.tapAction(number), number),
                             selectionState,
+                            wrap,
                         ) { actions.onSelectLines(file.selection.tap(number)) }
                     }
                     if (file.nextOffset != null) loadMore(file.moreLoading, file.moreFailure, actions.onLoadMore)
@@ -502,6 +575,7 @@ private fun FileLineRow(
     scroll: ScrollState,
     tapLabel: String,
     selectionState: String?,
+    wrap: Boolean,
     onTapNumber: () -> Unit,
 ) {
     val background = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Unspecified
@@ -522,13 +596,14 @@ private fun FileLineRow(
             softWrap = false,
             maxLines = 1,
         )
-        Box(Modifier.weight(1f).horizontalScroll(scroll)) {
+        // Wrapped, a long line breaks within the pane instead of scrolling sideways.
+        Box(Modifier.weight(1f).then(if (wrap) Modifier else Modifier.horizontalScroll(scroll))) {
             Text(
                 text,
-                Modifier.width(rowStyle.contentWidth).padding(start = 4.dp),
+                (if (wrap) Modifier else Modifier.width(rowStyle.contentWidth)).padding(start = 4.dp),
                 style = rowStyle.text,
-                softWrap = false,
-                maxLines = 1,
+                softWrap = wrap,
+                maxLines = if (wrap) Int.MAX_VALUE else 1,
                 overflow = TextOverflow.Clip,
             )
         }

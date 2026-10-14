@@ -566,4 +566,64 @@ class AdaptiveLayoutTest {
             }
         )
     }
+
+    @Test
+    fun reviewModeTakesTheWindowAndGivesBackWhatItChanged() {
+        val state = TwoPaneState()
+        state.adopt(paneLayout(1280.dp, TALL))
+        state.window = 1280.dp
+        state.resizeInspector(paneLayout(1280.dp, TALL), 500.dp)
+        val memos = state.memos
+        state.enterReview()
+        assertTrue(state.reviewing)
+        assertTrue(state.listCollapsed)
+        assertTrue(state.inspectorExpanded)
+        // A second request changes nothing, so leaving still knows the state from before.
+        state.enterReview()
+        state.leaveReview()
+        assertFalse(state.reviewing)
+        assertFalse(state.listCollapsed)
+        assertFalse(state.inspectorExpanded)
+        // The dragged widths were never touched.
+        assertEquals(memos, state.memos)
+        // A list that had made way for the inspector keeps making way, and comes back with it.
+        state.autoCollapseList()
+        state.enterReview()
+        state.leaveReview()
+        assertTrue(state.listCollapsed)
+        assertTrue(state.autoCollapsed)
+        state.restoreList()
+        assertFalse(state.listCollapsed)
+    }
+
+    @Test
+    fun closingTheInspectorOrAnotherBucketEndsReviewMode() {
+        val state = TwoPaneState()
+        state.adopt(paneLayout(800.dp, 1280.dp))
+        state.autoCollapseList()
+        state.enterReview()
+        // The inspector closed: review mode ends first, then the list comes back.
+        state.restoreList()
+        assertFalse(state.reviewing)
+        assertFalse(state.listCollapsed)
+        state.enterReview()
+        state.adopt(paneLayout(1280.dp, 800.dp))
+        assertFalse(state.reviewing)
+        assertFalse(state.inspectorExpanded)
+    }
+
+    @Test
+    fun reviewModeSurvivesRecreation() {
+        val state = TwoPaneState()
+        state.enterReview()
+        val scope = androidx.compose.runtime.saveable.SaverScope { true }
+        val restored = TwoPaneState.Saver.restore(with(TwoPaneState.Saver) { scope.save(state) }!!)!!
+        assertTrue(restored.reviewing)
+        assertTrue(restored.inspectorExpanded)
+        restored.leaveReview()
+        assertFalse(restored.listCollapsed)
+        assertFalse(restored.inspectorExpanded)
+        // State saved by an older version has no review mode.
+        assertFalse(TwoPaneState.Saver.restore(listOf(true, -1f, -1f, "", false, false, "{}"))!!.reviewing)
+    }
 }
