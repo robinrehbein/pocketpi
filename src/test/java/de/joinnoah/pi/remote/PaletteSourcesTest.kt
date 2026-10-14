@@ -12,7 +12,7 @@ class PaletteSourcesTest {
             command = { command -> command.toString() },
             status = { status -> "status:$status" },
             project = "Project",
-            host = "Host",
+            current = "Current",
         )
 
     private fun host(id: String, name: String) = PairedHost(id, "relay", "device", "secret", name)
@@ -25,7 +25,8 @@ class PaletteSourcesTest {
         home: HomeSnapshot = HomeSnapshot(),
         chat: Boolean = false,
         usage: Map<ChatAction, ActionUsage> = emptyMap(),
-    ) = PaletteInput(state, home, chat, usage, now = NOW)
+        mutating: Boolean = false,
+    ) = PaletteInput(state, home, chat, usage, now = NOW, mutating = mutating)
 
     private fun items(input: PaletteInput, query: String) = paletteItems(input, labels, query)
 
@@ -221,6 +222,85 @@ class PaletteSourcesTest {
     fun theSelectedSessionIsMarkedCurrent() {
         val listed = sessions(input(paired), "#")
         assertEquals("s1", listed.single { it.current }.sessionId)
+    }
+
+    @Test
+    fun sessionModeRanksTheOpenProjectAfterTheLiveRows() {
+        // p2's session is the most recently opened, but the chat is in p1.
+        val home =
+            HomeSnapshot(
+                sessions =
+                    listOf(
+                        HomeSession("mac-a", "p2", "Beta", "s4", "Beta notes", "idle", openedAt = NOW - 1_000L),
+                        HomeSession("mac-a", "p1", "Alpha", "s1", "Fix the login", "idle", openedAt = NOW - DAY_MILLIS * 20),
+                    ),
+            )
+        val listed = sessions(input(paired, home, chat = true), "#")
+        // Waiting and running first, then the open project's, then the other projects'.
+        assertEquals(listOf("s2", "s3"), listed.take(2).map { it.sessionId }.sorted())
+        assertEquals(listOf("s1", "s4"), listed.drop(2).map { it.sessionId })
+        assertTrue(listed.drop(2).first().sameProject)
+        assertFalse(listed.last().sameProject)
+    }
+
+    @Test
+    fun theOpenProjectDoesNotLeadTheAllMode() {
+        val home =
+            HomeSnapshot(
+                sessions = listOf(HomeSession("mac-a", "p2", "Beta", "s4", "Beta notes", "idle", openedAt = NOW - 1_000L)),
+            )
+        val first = sessions(input(paired, home), "").filter { !it.live }.first()
+        assertEquals("s4", first.sessionId)
+    }
+
+    @Test
+    fun theCurrentSessionAndHostSaySoInTheirDetail() {
+        val all = items(input(paired), "")
+        assertTrue(all.filterIsInstance<SessionItem>().single { it.current }.detail!!.startsWith("Current"))
+        val hosts = all.filterIsInstance<HostItem>()
+        assertEquals("Current", hosts.single { it.current }.detail)
+        assertNull(hosts.single { !it.current }.detail)
+    }
+
+    @Test
+    fun aHomeRowThatTheVerifiedListLacksIsGone() {
+        val home =
+            HomeSnapshot(
+                sessions = listOf(HomeSession("mac-a", "p1", "Alpha", "gone", "Deleted one", "running")),
+            )
+        assertTrue(sessions(input(paired, home), "#").none { it.sessionId == "gone" })
+        val unverified =
+            paired.copy(projectSessions = paired.projectSessions + ("p1" to projectSessions("p1", "Alpha", listOf(row("s1", "Fix the login")), verified = false)))
+        assertTrue(sessions(input(unverified, home), "#").any { it.sessionId == "gone" })
+    }
+
+    @Test
+    fun newSessionWaitsWhileAnotherChangeRuns() {
+        val idle = items(input(paired, chat = true), ">").map { (it as CommandItem).command }
+        assertTrue(ChatCommand.Action(ChatAction.NEW_SESSION) in idle)
+        val busy = items(input(paired, chat = true, mutating = true), ">").map { (it as CommandItem).command }
+        assertFalse(ChatCommand.Action(ChatAction.NEW_SESSION) in busy)
+    }
+
+    @Test
+    fun filesOfAnotherSessionOrWithAnOpenEditorAreNotOffered() {
+        val listing = FileListing(path = "", entries = listOf(FileEntry("Main.kt", FileEntryType.FILE)))
+        val shown = FilesState("s1", loading = false, listing = listing)
+        assertEquals(listOf("Main.kt"), items(input(paired.copy(files = shown), chat = true), "@").map { it.title })
+        val other = paired.copy(files = shown.copy(sessionId = "s9"))
+        assertTrue(items(input(other, chat = true), "@").isEmpty())
+        // Opening a file would drop the editor's text, so no file row is offered while it is open.
+        val editing = paired.copy(files = shown.copy(editor = FileEditor("Main.kt", "v1", "a", text = "b")))
+        assertTrue(items(input(editing, chat = true), "@").isEmpty())
+    }
+
+    @Test
+    fun aHostCommandKeepsTheDraftBehindIt() {
+        assertEquals("/review fix the bug", paletteCommandDraft("fix the bug", "review"))
+        assertEquals("/review hello", paletteCommandDraft("hello", "review"))
+        assertEquals("/review ", paletteCommandDraft("", "review"))
+        assertEquals("/review the diff", paletteCommandDraft("/re the diff", "review"))
+        assertEquals("/review", paletteCommandDraft("/re", "review"))
     }
 
     private companion object {

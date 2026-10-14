@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- What each hardware keyboard shortcut does (Keymap.kt), for the shortcut lists. -->
+    <string name="remote_keymap_palette">Command palette</string>
     <string name="remote_keymap_search">Search sessions</string>
     <string name="remote_keymap_previous_session">Previous session</string>
     <string name="remote_keymap_next_session">Next session</string>

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
@@ -23,7 +24,6 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -39,7 +39,10 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
@@ -58,8 +61,8 @@ import kotlinx.coroutines.flow.StateFlow
 internal fun rememberPaletteLabels(): PaletteLabels {
     val resources = LocalResources.current
     val project = stringResource(R.string.remote_palette_project)
-    val host = stringResource(R.string.remote_palette_host)
-    return remember(resources, project, host) {
+    val current = stringResource(R.string.remote_palette_current)
+    return remember(resources, project, current) {
         PaletteLabels(
             command = { command ->
                 when (command) {
@@ -72,7 +75,7 @@ internal fun rememberPaletteLabels(): PaletteLabels {
             },
             status = { status -> resources.getString(statusRes(status)) },
             project = project,
-            host = host,
+            current = current,
         )
     }
 }
@@ -81,9 +84,9 @@ internal fun rememberPaletteLabels(): PaletteLabels {
 private fun SessionControl.labelRes(): Int =
     when (this) {
         SessionControl.MODEL -> R.string.remote_palette_model
-        SessionControl.THINKING -> R.string.remote_palette_thinking
+        SessionControl.THINKING -> R.string.remote_choose_thinking
         SessionControl.ADVISOR -> R.string.remote_advisor_title
-        SessionControl.COMPACT -> R.string.remote_palette_compact
+        SessionControl.COMPACT -> R.string.remote_context_compact
     }
 
 @StringRes
@@ -115,12 +118,14 @@ internal fun CommandPalette(
     }
     val query = field.text
     val items = remember(input, labels, query) { paletteItems(input, labels, query) }
-    var selected by remember(query) { mutableIntStateOf(0) }
-    val index = selected.coerceIn(0, (items.size - 1).coerceAtLeast(0))
+    // The highlight follows the row, not its position: the live status and recency reorder the list.
+    var selectedKey by remember(query) { mutableStateOf<String?>(null) }
+    val index = items.indexOfFirst { it.key == selectedKey }.coerceAtLeast(0)
     val listState = rememberLazyListState()
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
-    LaunchedEffect(index) { if (items.isNotEmpty()) listState.animateScrollToItem(index) }
+    LaunchedEffect(query) { listState.scrollToItem(0) }
+    LaunchedEffect(index, items.getOrNull(index)?.key) { if (items.isNotEmpty()) listState.scrollIntoView(index) }
     val content: @Composable () -> Unit = {
         Column(
             Modifier.fillMaxWidth().padding(16.dp).testTag("commandPalette"),
@@ -136,11 +141,11 @@ internal fun CommandPalette(
                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                         when (event.key) {
                             Key.DirectionDown -> {
-                                selected = (index + 1).coerceAtMost(items.lastIndex.coerceAtLeast(0))
+                                selectedKey = items.getOrNull((index + 1).coerceAtMost(items.lastIndex))?.key
                                 true
                             }
                             Key.DirectionUp -> {
-                                selected = (index - 1).coerceAtLeast(0)
+                                selectedKey = items.getOrNull((index - 1).coerceAtLeast(0))?.key
                                 true
                             }
                             Key.Enter, Key.NumPadEnter -> {
@@ -160,7 +165,7 @@ internal fun CommandPalette(
             if (items.isEmpty())
                 Text(
                     stringResource(R.string.remote_palette_empty),
-                    Modifier.padding(horizontal = 4.dp).testTag("paletteEmpty"),
+                    Modifier.padding(horizontal = 4.dp).semantics { liveRegion = LiveRegionMode.Polite }.testTag("paletteEmpty"),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -169,7 +174,12 @@ internal fun CommandPalette(
                 state = listState,
             ) {
                 itemsIndexed(items, key = { _, item -> item.key }) { position, item ->
-                    PaletteRow(item, selected = position == index, onClick = { onChoose(item) })
+                    PaletteRow(
+                        item,
+                        selected = position == index,
+                        current = labels.current.takeIf { item.isCurrent() },
+                        onClick = { onChoose(item) },
+                    )
                 }
             }
         }
@@ -190,7 +200,7 @@ internal fun CommandPalette(
 }
 
 @Composable
-private fun PaletteRow(item: PaletteItem, selected: Boolean, onClick: () -> Unit) {
+private fun PaletteRow(item: PaletteItem, selected: Boolean, current: String?, onClick: () -> Unit) {
     Column(
         Modifier.fillMaxWidth()
             .background(
@@ -198,7 +208,10 @@ private fun PaletteRow(item: PaletteItem, selected: Boolean, onClick: () -> Unit
                 MaterialTheme.shapes.medium,
             )
             .clickable(role = Role.Button, onClick = onClick)
-            .semantics { this.selected = selected }
+            .semantics {
+                this.selected = selected
+                if (current != null) stateDescription = current
+            }
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .testTag("paletteRow"),
     ) {
@@ -212,6 +225,28 @@ private fun PaletteRow(item: PaletteItem, selected: Boolean, onClick: () -> Unit
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+private fun PaletteItem.isCurrent(): Boolean =
+    when (this) {
+        is SessionItem -> current
+        is HostItem -> current
+        else -> false
+    }
+
+/** Scrolls only as far as it takes to show row [index] whole, so the rows the user reads stay put. */
+private suspend fun LazyListState.scrollIntoView(index: Int) {
+    val info = layoutInfo
+    val visible = info.visibleItemsInfo
+    if (visible.isEmpty()) return animateScrollToItem(index)
+    val row = visible.firstOrNull { it.index == index }
+    val start = info.viewportStartOffset
+    val end = info.viewportEndOffset
+    when {
+        row != null && row.offset >= start && row.offset + row.size <= end -> Unit
+        index < visible.first().index || (row != null && row.offset < start) -> animateScrollToItem(index)
+        else -> animateScrollToItem(index, -(end - start - (row?.size ?: visible.last().size)).coerceAtLeast(0))
     }
 }
 
@@ -233,15 +268,17 @@ internal fun CommandPaletteHost(
     val state by repository.state.collectAsStateWithLifecycle()
     val snapshot by home.collectAsStateWithLifecycle()
     val chat = navigator.topChat
+    val mutating = navigator.mutating
     val labels = rememberPaletteLabels()
     val input =
-        remember(state, snapshot, chat != null) {
+        remember(state, snapshot, chat != null, mutating) {
             PaletteInput(
                 state = state,
                 home = snapshot,
                 chat = chat != null,
                 usage = settings.chatActionUsage(),
                 now = System.currentTimeMillis(),
+                mutating = mutating,
             )
         }
     CommandPalette(

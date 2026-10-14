@@ -75,6 +75,9 @@ internal sealed interface PaletteItem {
 
     /** How recently the row was opened or used, decayed to now; higher ranks first. */
     val recency: Double get() = 0.0
+
+    /** In the open chat's project: the session mode ranks such rows right after the live ones. */
+    val preferred: Boolean get() = false
 }
 
 internal data class SessionItem(
@@ -85,11 +88,15 @@ internal data class SessionItem(
     override val detail: String?,
     val status: String,
     override val recency: Double,
+    /** The session the chat on screen shows; its row says so rather than leaving it out. */
     val current: Boolean,
+    /** The session belongs to the project of the selection. */
+    val sameProject: Boolean,
 ) : PaletteItem {
     override val key get() = "session:$routeId:$sessionId"
     override val category get() = PaletteCategory.SESSION
     override val live get() = status == "waiting" || status == "running"
+    override val preferred get() = sameProject
 }
 
 internal data class ProjectItem(
@@ -127,7 +134,8 @@ internal class PaletteLabels(
     val command: (ChatCommand) -> String,
     val status: (String) -> String,
     val project: String,
-    val host: String,
+    /** Marks the session or host the app shows now. */
+    val current: String,
 )
 
 /** Everything the palette lists, as the app knows it when the palette opens. */
@@ -138,26 +146,35 @@ internal class PaletteInput(
     val chat: Boolean,
     val usage: Map<ChatAction, ActionUsage>,
     val now: Long,
+    /** A create or other change is in flight, so the header's New session waits too. */
+    val mutating: Boolean = false,
 )
 
 /**
  * The rows [query] matches, best first. Without text they list the live sessions, then the rest by
- * recency; with text the match score leads, then live rows, then recency.
+ * recency; with text the match score leads, then live rows, then recency. In the session mode the
+ * open chat's project ranks right after the live rows, so the switcher offers its siblings first.
  */
 internal fun paletteItems(input: PaletteInput, labels: PaletteLabels, query: String): List<PaletteItem> {
     val parsed = paletteQuery(query)
     // A key listed twice would crash the list, so a repeated row (say, a duplicated project) keeps its first.
     val candidates =
-        (sessionItems(input, labels) + chatItems(input, labels) + projectItems(input, labels) + hostItems(input))
+        (sessionItems(input, labels) + chatItems(input, labels) + projectItems(input, labels) + hostItems(input, labels))
             .distinctBy { it.key }
             .filter { parsed.mode in it.category.modes }
+    fun PaletteItem.preferredNow() = parsed.mode == PaletteMode.SESSIONS && preferred
     if (parsed.text.isEmpty())
-        return candidates.sortedWith(compareByDescending<PaletteItem> { it.live }.thenByDescending { it.recency })
+        return candidates.sortedWith(
+            compareByDescending<PaletteItem> { it.live }
+                .thenByDescending { it.preferredNow() }
+                .thenByDescending { it.recency },
+        )
     return candidates
         .mapNotNull { item -> matchScore(parsed.text, item)?.let { item to it } }
         .sortedWith(
             compareByDescending<Pair<PaletteItem, Int>> { it.second }
                 .thenByDescending { it.first.live }
+                .thenByDescending { it.first.preferredNow() }
                 .thenByDescending { it.first.recency },
         )
         .map { it.first }
@@ -244,6 +261,7 @@ private fun sessionItems(input: PaletteInput, labels: PaletteLabels): List<Sessi
         val key = row.routeId to row.sessionId
         if (key in rows) return
         val opened = openedAt[key]
+        val current = row.routeId == state.selection.routeId && row.sessionId == state.selection.sessionId
         rows[key] =
             SessionItem(
                 routeId = row.routeId,
@@ -252,13 +270,17 @@ private fun sessionItems(input: PaletteInput, labels: PaletteLabels): List<Sessi
                 title = row.title ?: row.sessionId,
                 detail =
                     listOfNotNull(
+                        labels.current.takeIf { current },
                         labels.status(row.status),
                         row.projectName.takeIf(String::isNotBlank),
                         hostNames[row.routeId],
                     ).joinToString(" · "),
                 status = row.status,
                 recency = recencyOf(opened, row.updatedAt, input.now),
-                current = row.routeId == state.selection.routeId && row.sessionId == state.selection.sessionId,
+                current = current,
+                sameProject =
+                    state.selection.projectId != null && row.projectId == state.selection.projectId &&
+                        row.routeId == (state.selection.routeId ?: state.host?.routeId),
             )
     }
     val currentRoute = state.host?.routeId ?: state.selection.routeId
@@ -271,6 +293,10 @@ private fun sessionItems(input: PaletteInput, labels: PaletteLabels): List<Sessi
             state.sessions.forEach { add(sessionRow(it, currentRoute, projectId, state.project?.optionalText("name").orEmpty())) }
     }
     input.home.sessions.forEach { home ->
+        // A list the Mac answered in full is the truth for its project: a session it lacks is gone.
+        val verified = if (home.routeId == currentRoute) state.projectSessions[home.projectId] else null
+        if (verified != null && verified.verified && !verified.truncated && verified.sessions.none { it.optionalText("id") == home.sessionId })
+            return@forEach
         add(
             SessionRow(
                 home.routeId,
@@ -314,22 +340,26 @@ private fun projectItems(input: PaletteInput, labels: PaletteLabels): List<Proje
     }
 }
 
-private fun hostItems(input: PaletteInput): List<HostItem> {
+private fun hostItems(input: PaletteInput, labels: PaletteLabels): List<HostItem> {
     val state = input.state
     if (!state.hostsLoaded) return emptyList()
     return state.hosts.map { host ->
-        HostItem(host.routeId, host.name, detail = null, current = host.routeId == state.host?.routeId)
+        val current = host.routeId == state.host?.routeId
+        HostItem(host.routeId, host.name, detail = labels.current.takeIf { current }, current = current)
     }
 }
 
-/** Whether the chat's header action [action] is offered now, as the chat header decides it. */
-internal fun chatActionAvailable(action: ChatAction, state: RemoteState): Boolean =
+/**
+ * Whether the chat's header action [action] is offered now, as the chat header decides it. Close is
+ * never offered: the header confirms it in a dialog of its own, which a palette row would skip.
+ */
+internal fun chatActionAvailable(action: ChatAction, state: RemoteState, mutating: Boolean = false): Boolean =
     when (action) {
         ChatAction.CHANGES -> canViewChanges(state) && state.connected
         ChatAction.FILES -> canBrowseFiles(state) && state.connected
         ChatAction.JOBS -> visibleJobs(state) != null
         ChatAction.RENAME -> canRenameSession(state)
-        ChatAction.NEW_SESSION -> state.connected && !state.loading
+        ChatAction.NEW_SESSION -> state.connected && !state.loading && !mutating
         ChatAction.SESSION_SETTINGS -> state.connected && !state.loading && sessionSettingsAvailable(state)
         ChatAction.REFRESH, ChatAction.SETTINGS, ChatAction.HISTORY -> true
         ChatAction.CLOSE -> false
@@ -339,7 +369,7 @@ private fun chatItems(input: PaletteInput, labels: PaletteLabels): List<PaletteI
     if (!input.chat) return emptyList()
     val state = input.state
     val actions =
-        DEFAULT_CHAT_ACTIONS.filter { chatActionAvailable(it, state) }.map { action ->
+        DEFAULT_CHAT_ACTIONS.filter { chatActionAvailable(it, state, input.mutating) }.map { action ->
             val command = ChatCommand.Action(action)
             CommandItem(command, labels.command(command), null, PaletteCategory.ACTION, input.usage[action]?.decayed(input.now) ?: 0.0)
         }
@@ -369,11 +399,13 @@ private fun chatItems(input: PaletteInput, labels: PaletteLabels): List<PaletteI
             val chat = ChatCommand.Host(command)
             CommandItem(chat, "/${command.name}", command.description?.takeIf(String::isNotBlank), PaletteCategory.COMMAND)
         }
+    // An open editor keeps the pane, and opening a file would drop its text; its own prompt guards that.
+    val shown = state.files?.takeIf { it.sessionId == state.selection.sessionId && it.editor == null }
     val files =
-        state.files?.listing?.entries.orEmpty()
+        shown?.listing?.entries.orEmpty()
             .filter { it.type == FileEntryType.FILE }
             .map { entry ->
-                val folder = state.files?.listing?.path.orEmpty()
+                val folder = shown?.listing?.path.orEmpty()
                 val path = if (folder.isEmpty()) entry.name else "$folder/${entry.name}"
                 val command = ChatCommand.File(path)
                 CommandItem(command, path, null, PaletteCategory.FILE)

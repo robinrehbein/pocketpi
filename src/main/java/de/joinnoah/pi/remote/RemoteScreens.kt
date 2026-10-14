@@ -1115,13 +1115,12 @@ internal fun RemoteScreen(
             is ChatCommand.Local -> runLocal(command.command, "")
             is ChatCommand.Host ->
                 composerDraft?.let { draft ->
-                    draft.replace(selectCommandName(draft.text, command.command.name))
+                    draft.replace(paletteCommandDraft(draft.text, command.command.name))
                     composerFocusRequest++
                 }
-            is ChatCommand.File -> {
-                openInspector(InspectorTab.FILES)
-                chatModel?.openFilesFile(command.path)
-            }
+            // The same path as a file the chat names: it refuses while an editor keeps the pane, and
+            // then copies the path, so no unsaved edit is dropped.
+            is ChatCommand.File -> openFileNow(FileTarget(command.path))
         }
     }
     var abortTarget by remember { mutableStateOf<AbortRunTarget?>(null) }
@@ -1287,17 +1286,21 @@ internal fun RemoteScreen(
                                 )
                                 val switchSession = stringResource(R.string.remote_palette_switch_session)
                                 Row(
-                                    Modifier.padding(end = 8.dp)
-                                        .clickable(role = Role.Button, onClickLabel = switchSession) {
-                                            shortcutTargets?.openPalette(PaletteMode.SESSIONS)
-                                        }
-                                        .testTag("chatTitle"),
+                                    Modifier.padding(end = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
+                                    // Only the title opens the switcher, so the TUI info button stays a target of its own.
                                     Text(
                                         state.session?.optionalText("title")?.takeIf(String::isNotBlank)
                                             ?: title,
-                                        modifier = Modifier.widthIn(max = maxTitleWidth),
+                                        modifier =
+                                            Modifier.widthIn(max = maxTitleWidth)
+                                                .heightIn(min = 48.dp)
+                                                .clickable(role = Role.Button, onClickLabel = switchSession) {
+                                                    shortcutTargets?.openPalette(PaletteMode.SESSIONS)
+                                                }
+                                                .wrapContentHeight(Alignment.CenterVertically)
+                                                .testTag("chatTitle"),
                                         style = MaterialTheme.typography.titleMedium,
                                         maxLines = 1,
                                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
