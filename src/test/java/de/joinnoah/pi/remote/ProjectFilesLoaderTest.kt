@@ -267,6 +267,93 @@ class ProjectFilesLoaderTest {
     }
 
     @Test
+    fun aFolderOpenedAgainShowsItsLastListingAtOnceAndListsItAgain() = runTest {
+        var src = arrayOf("app/", "build.gradle.kts")
+        val held = mutableListOf<JsonObject>()
+        var hold = false
+        val transport = Transport(capabilities) { request ->
+            when {
+                hold -> null.also { held += request }
+                request.text("path") == "" -> listing(request, "src/", "README.md")
+                else -> listing(request, *src)
+            }
+        }
+        val repository = opened(transport)
+        repository.openFilesDir("src")
+        runCurrent()
+        repository.openFilesDir("")
+        assertEquals(2, transport.files().size)
+
+        // The folder shows what it listed last, and the fresh listing replaces it in place.
+        src = arrayOf("app/", "build.gradle.kts", "settings.gradle.kts")
+        hold = true
+        repository.openFilesDir("src")
+        repository.state.value.files.let { files ->
+            assertEquals(false, files?.loading)
+            assertEquals(listOf("app", "build.gradle.kts"), files?.listing?.entries?.map { it.name })
+        }
+        runCurrent()
+        assertEquals(3, transport.files().size)
+        assertEquals(listOf("app", "build.gradle.kts"), repository.state.value.files?.listing?.entries?.map { it.name })
+        hold = false
+        transport.result(held.single(), listing(held.single(), *src))
+        runCurrent()
+        assertEquals(
+            listOf("app", "build.gradle.kts", "settings.gradle.kts"),
+            repository.state.value.files?.listing?.entries?.map { it.name },
+        )
+
+        // Closed and opened again, the browser starts on the session folder's last listing.
+        repository.closeFiles()
+        hold = true
+        repository.openFiles()
+        repository.state.value.files.let { files ->
+            assertEquals(false, files?.loading)
+            assertEquals(listOf("src", "README.md"), files?.listing?.entries?.map { it.name })
+        }
+
+        // Reload by hand shows its read, and its failure, instead.
+        hold = false
+        runCurrent()
+        transport.failure = { "busy" }
+        repository.reloadFiles()
+        runCurrent()
+        repository.state.value.files.let { files ->
+            assertEquals(FilesFailure.BUSY, files?.failure)
+            assertNull(files?.listing)
+        }
+    }
+
+    @Test
+    fun aRememberedFolderThatCannotBeListedAgainShowsTheFailure() = runTest {
+        val transport = Transport(capabilities) { request ->
+            if (request.text("path") == "") listing(request, "src/", "README.md") else listing(request, "app/")
+        }
+        val repository = opened(transport)
+        repository.openFilesDir("src")
+        runCurrent()
+        repository.openFilesDir("")
+        runCurrent()
+
+        // Deleted on the Mac since: the remembered entries give way to the failure.
+        transport.failure = { if (it.text("path") == "src") "not_found" else null }
+        repository.openFilesDir("src")
+        assertEquals(listOf("app"), repository.state.value.files?.listing?.entries?.map { it.name })
+        runCurrent()
+        repository.state.value.files.let { files ->
+            assertEquals(FilesFailure.NOT_FOUND, files?.failure)
+            assertEquals(false, files?.loading)
+        }
+
+        // Opened again, it is listed from scratch.
+        transport.failure = { null }
+        repository.openFilesDir("")
+        repository.openFilesDir("src")
+        assertEquals(true, repository.state.value.files?.loading)
+        assertNull(repository.state.value.files?.listing)
+    }
+
+    @Test
     fun loadMoreDropsNamesARepeatedPageSendsAgain() = runTest {
         val transport = Transport(capabilities) { request ->
             // The `after` entry vanished, so the host starts the next page earlier.

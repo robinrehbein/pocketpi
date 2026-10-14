@@ -161,3 +161,38 @@ private fun parseInline(text: String, color: Color, depth: Int, links: Boolean):
         index++
     }
 }
+
+/** The URL of a link that covers the character at [offset] of [text], if any. */
+internal fun linkAt(text: AnnotatedString, offset: Int): String? =
+    if (offset !in text.indices) null
+    else text.getLinkAnnotations(offset, offset + 1).firstNotNullOfOrNull { (it.item as? LinkAnnotation.Url)?.url }
+
+private val plainBulletRegex = Regex("^[-*] ")
+
+/**
+ * [text] as the chat shows it, for "Copy": inline marks dropped, links as their labels, headings
+ * without their #, bullets as •, fenced code as the code alone, table rows as tab-separated
+ * cells, images as their description and rules (---) left out.
+ */
+internal fun markdownPlainText(text: String): String =
+    markdownSegments(text).joinToString("\n") { segment ->
+        if (segment.code) segment.text
+        else
+            markdownBlocks(segment.text).mapNotNull { block ->
+                when (block) {
+                    is MarkdownBlock.Table ->
+                        (listOf(block.header) + block.rows).joinToString("\n") { row ->
+                            row.joinToString("\t") { parseInline(it, Color.Unspecified, 0, true).text }
+                        }
+                    is MarkdownBlock.Image -> markdownImageAltText(block)
+                    is MarkdownBlock.Artifact -> plainLine(block.line)
+                    is MarkdownBlock.Line -> if (block.text.trim() == "---") null else plainLine(block.text)
+                }
+            }.joinToString("\n")
+    }
+
+private fun plainLine(line: String): String {
+    val level = line.takeWhile { it == '#' }.length.takeIf { it in 1..6 && line.getOrNull(it) == ' ' }
+    val content = if (level != null) line.drop(level + 1) else line.replace(plainBulletRegex, "• ")
+    return parseInline(content, Color.Unspecified, 0, true).text
+}

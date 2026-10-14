@@ -100,6 +100,8 @@ internal open class DestinationViewModel(
 
     fun refresh() = active(repository::refresh)
 
+    fun revalidateLists() = active(repository::revalidateLists)
+
     fun renameSession(sessionId: String, title: String) = active {
         repository.renameSession(sessionId, title)
     }
@@ -358,6 +360,9 @@ internal class ChatViewModel(
         repository.quote(messageId)
         if (repository.state.value.draft.isBlank()) repository.draft(prompt)
     }
+
+    /** Closes this chat's session on the Mac, as a session row's Close does. */
+    fun closeSession(sessionId: String) = active { repository.closeSession(sessionId) }
 
     /** [exclusive] false keeps the files open beside the changes ([RemoteRepository.openChanges]). */
     fun openChanges(exclusive: Boolean = true) = active { repository.openChanges(exclusive) }

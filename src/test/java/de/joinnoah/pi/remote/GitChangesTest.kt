@@ -732,6 +732,177 @@ class GitChangesTest {
         assertNull(repository.state.value.changes)
     }
 
+    private fun Transport.statuses() = git().count { it.text("type") == "session.git.status" }
+
+    /** The selected session's events follow its snapshot's revision 0 without a gap. */
+    private var revision = 0L
+
+    private fun Transport.event(kind: String, vararg fields: Pair<String, Any?>) =
+        listener.message(Wire.objectOf("type" to "event", "sessionId" to sessionId, "revision" to ++revision, "kind" to kind, *fields))
+
+    private fun Transport.tool(id: String, name: String, state: String) =
+        event(
+            "message.upsert",
+            "message" to Wire.objectOf("id" to id, "role" to "tool", "text" to "", "state" to state, "toolName" to name),
+        )
+
+    @Test
+    fun finishedEditsReloadTheOpenChangesInPlaceOnceTheAgentPauses() = runTest {
+        var hold = false
+        val held = mutableListOf<JsonObject>()
+        val (transport, repository) = opened({ request ->
+            if (hold && request.text("type") == "session.git.status") {
+                held += request
+                null
+            } else sessionFixtures(request)
+        })
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        repository.openChanges()
+        runCurrent()
+        val status = checkNotNull(repository.state.value.changes?.status)
+        val statuses = transport.statuses()
+
+        // A read, a running edit and a failed edit change nothing.
+        transport.tool("read", "read", "complete")
+        transport.tool("running", "edit", "streaming")
+        transport.tool("failed", "edit", "error")
+        advanceTimeBy(CHANGES_LIVE_RELOAD_MILLIS + 1)
+        assertEquals(statuses, transport.statuses())
+
+        // Edits in quick succession read once, two seconds after the last one.
+        hold = true
+        transport.tool("one", "edit", "complete")
+        advanceTimeBy(1_000)
+        transport.tool("two", "write", "complete")
+        advanceTimeBy(CHANGES_LIVE_RELOAD_MILLIS - 1)
+        assertEquals(statuses, transport.statuses())
+        advanceTimeBy(2)
+        assertEquals(statuses + 1, transport.statuses())
+        // The status stays on screen while it is read again, with no spinner.
+        repository.state.value.changes.let { changes ->
+            assertEquals(status, changes?.status)
+            assertEquals(false, changes?.loading)
+            assertNull(changes?.failure)
+        }
+
+        // A hint while that read runs waits for it, then reads once more.
+        transport.tool("three", "bash", "error")
+        advanceTimeBy(CHANGES_LIVE_RELOAD_MILLIS + 1)
+        assertEquals(statuses + 1, transport.statuses())
+        hold = false
+        transport.result(held.single(), sessionFixtures(held.single()))
+        runCurrent()
+        assertEquals(statuses + 2, transport.statuses())
+        assertEquals(false, repository.state.value.changes?.loading)
+        assertNotNull(repository.state.value.changes?.status)
+    }
+
+    @Test
+    fun aRunThatEndsReloadsTheOpenChangesButAnotherSessionsEventsDoNot() = runTest {
+        val (transport, repository) = opened(::sessionFixtures, others = listOf("other"))
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        repository.openChanges()
+        runCurrent()
+        val statuses = transport.statuses()
+
+        // Another session's edit is not this view's change.
+        transport.listener.message(
+            Wire.objectOf(
+                "type" to "event", "sessionId" to "other", "revision" to 1, "kind" to "message.upsert",
+                "message" to Wire.objectOf("id" to "t", "role" to "tool", "state" to "complete", "toolName" to "edit"),
+            )
+        )
+        advanceTimeBy(CHANGES_LIVE_RELOAD_MILLIS + 1)
+        assertEquals(statuses, transport.statuses())
+
+        transport.event("session.status", "status" to "running")
+        advanceTimeBy(CHANGES_LIVE_RELOAD_MILLIS + 1)
+        assertEquals(statuses, transport.statuses())
+        transport.event("session.status", "status" to "idle")
+        advanceTimeBy(CHANGES_LIVE_RELOAD_MILLIS + 1)
+        assertEquals(statuses + 1, transport.statuses())
+
+        // A closed view reads nothing.
+        repository.closeChanges()
+        transport.tool("after", "edit", "complete")
+        advanceTimeBy(CHANGES_LIVE_RELOAD_MILLIS + 1)
+        assertEquals(statuses + 1, transport.statuses())
+    }
+
+    @Test
+    fun reopeningChangesShowsTheLastStatusAtOnceAndReadsItAgain() = runTest {
+        val (transport, repository) = opened(::sessionFixtures)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        repository.openChanges()
+        runCurrent()
+        val shown = checkNotNull(repository.state.value.changes)
+        val status = checkNotNull(shown.status)
+        assertEquals(testScheduler.currentTime, shown.fetchedAt)
+        repository.closeChanges()
+        val statuses = transport.statuses()
+
+        advanceTimeBy(60_000)
+        repository.openChanges()
+        repository.state.value.changes.let { changes ->
+            assertEquals(status, changes?.status)
+            assertEquals(shown.log, changes?.log)
+            assertEquals(false, changes?.loading)
+            assertEquals(shown.fetchedAt, changes?.fetchedAt)
+        }
+        runCurrent()
+        assertEquals(statuses + 1, transport.statuses())
+        assertEquals(testScheduler.currentTime, repository.state.value.changes?.fetchedAt)
+
+        // Offline, the last status shows with when it was read, and nothing is asked.
+        val fetchedAt = repository.state.value.changes?.fetchedAt
+        repository.closeChanges()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        val requests = transport.git().size
+        repository.openChanges()
+        repository.state.value.changes.let { changes ->
+            assertEquals(status, changes?.status)
+            assertNull(changes?.failure)
+            assertEquals(fetchedAt, changes?.fetchedAt)
+        }
+        // Reload by hand still says why it cannot read.
+        repository.reloadChanges()
+        assertEquals(ChangesFailure.OFFLINE, repository.state.value.changes?.failure)
+        assertEquals(requests, transport.git().size)
+    }
+
+    @Test
+    fun aRememberedStatusThatCannotBeReadAgainSaysSo() = runTest {
+        val (transport, repository) = opened(::sessionFixtures)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        repository.openChanges()
+        runCurrent()
+        val status = checkNotNull(repository.state.value.changes?.status)
+        repository.closeChanges()
+
+        // The remembered status stays, but no longer passes for current.
+        transport.failure = { if (it.text("type") == "session.git.status") "forbidden" else null }
+        repository.openChanges()
+        assertEquals(false, repository.state.value.changes?.stale)
+        runCurrent()
+        repository.state.value.changes.let { changes ->
+            assertEquals(status, changes?.status)
+            assertEquals(false, changes?.loading)
+            assertNull(changes?.failure)
+            assertEquals(true, changes?.stale)
+        }
+
+        // A read that succeeds makes it current again.
+        transport.failure = { null }
+        repository.reloadChanges()
+        runCurrent()
+        repository.state.value.changes.let { changes ->
+            assertEquals(false, changes?.stale)
+            assertNull(changes?.failure)
+            assertEquals(testScheduler.currentTime, changes?.fetchedAt)
+        }
+    }
+
     @Test
     fun reloadKeepsLoadedPreviewsOfUnchangedFiles() = runTest {
         val (_, repository) = opened(::sessionFixtures)
