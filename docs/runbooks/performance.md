@@ -73,6 +73,23 @@
   `version` 1: each host is encoded once, and above 4 MB only the trimmed host is encoded again,
   with as many messages dropped at once as their sizes say. One file per host, or loading the
   active host first, would need a format change.
+- Present the conversation per message. `Timeline` keeps an ID→index map, so a `message.upsert`
+  finds its message without a scan, and replaces only that message's instance. The chat screen's
+  `ConversationPresenter` keeps each message's items while the message is the same instance and
+  what it reads from the others (its calls' outputs, whether a call shows it, the pending reply,
+  being last) is unchanged; a streamed delta rebuilds the items of the message it changed. The
+  touched files, error count, rewind targets and subagent cards are summed from each message's
+  share, the subagent strip is rebuilt only when its cards or the session list change, and the
+  scrollbar markers are classified again only from the first changed item on. Unchanged values
+  keep their instance, so the chat's composables skip. `ConversationPresenterTest` checks random
+  event sequences against a full `conversationItems` recompute; if `Timeline` ever copied
+  unchanged messages, the presenter would stay correct but rebuild everything again, so keep
+  instances there. The `PocketPi.conversationItems` trace section covers the presenter's pass.
+- Count the touched files' lines per chat: `TouchedLineCache` keeps each edit's added and removed
+  lines by item ID and diffs only edits that are new or changed, however many the chat holds. The
+  count runs on `Dispatchers.Default`, checks for cancellation before each item and yields after
+  each diff, and while pi streams it follows the conversation at most once a second. The edit
+  cards keep their own small diff cache.
 - One OkHttp client per process (`baseHttpClient`): the foreground and background relay sockets
   and the artifact CDN derive theirs with `newBuilder()`, sharing its dispatcher, connection pool
   and threads, each with its own ping interval, timeouts and cache.
@@ -120,7 +137,7 @@ speedup has been established by the unit tests.
   exclude live transport, production repository/cache operations and navigation transitions.
 - Baseline profiles and broader workload coverage (questions, subagents and attachments).
 - Byte-weighted transcript caching if heap measurements show the entry limit is insufficient.
-- Incremental timeline presentation/Markdown parsing if streaming still dominates CPU time.
+- Incremental Markdown parsing of the streaming message if it still dominates CPU time.
 - Validate [per-session scroll restoration](chat-scroll-restoration.md) on real devices,
   including rotation, reconnect and changing paginated item indexes.
 - Request coalescing and selective prefetch after identifying duplicated calls in traces.

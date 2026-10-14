@@ -103,6 +103,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.first
 
 private data class AbortRunTarget(val sessionId: String, val questionIds: Set<String>)
@@ -122,6 +123,7 @@ private const val PENDING_QUESTION_MARKER = "__pending_question__"
 private val HISTORY_BUTTON_MIN_HEADER = 600.dp
 private const val CHILD_REFRESH_ATTEMPTS = 12
 private const val CHILD_REFRESH_INTERVAL_MILLIS = 5_000L
+private const val TOUCHED_LINES_STREAMING_MILLIS = 1_000L
 private const val JUMP_HIGHLIGHT_MILLIS = 2_000L
 private const val COMPACTION_TICK_MILLIS = 30_000L
 private const val PRIVACY_POLICY_URL = "https://robinrehbein.de/privacy"
@@ -274,8 +276,12 @@ internal fun RemoteScreen(
         }
     val sessionActive =
         state.connected && !state.loading && state.status in setOf("running", "waiting")
-    val conversation =
-        remember(state.messages, sessionActive) { conversationItems(state.messages, sessionActive) }
+    // Built per message: a streamed delta rebuilds the items of the message it changed, and what
+    // is derived below reuses the rest (docs/runbooks/performance.md).
+    val presenter = remember(key) { ConversationPresenter() }
+    val presentation =
+        remember(presenter, state.messages, sessionActive) { presenter.present(state.messages, sessionActive) }
+    val conversation = presentation.items
     val thinkingDisplay = chatPreferences?.thinkingDisplay ?: "status"
     val thinkingActive = state.connected && !state.loading && state.status == "running"
     val visibleConversation =
@@ -329,29 +335,40 @@ internal fun RemoteScreen(
                 )
             }
         }
-    val touched = remember(conversation) { touchedFiles(conversation) }
-    // Diffing every edit can take a moment in a long chat; keep it off the main thread.
+    val touched = presentation.touchedFiles
+    // Off the main thread, diffing only edits that are new or changed. While pi streams, the
+    // counts follow at most every TOUCHED_LINES_STREAMING_MILLIS, from the latest conversation.
+    val touchedLineCache = remember(key) { TouchedLineCache() }
+    val latestConversation by rememberUpdatedState(conversation)
+    val streamingNow by rememberUpdatedState(sessionActive)
     val touchedLines by
-        produceState<TouchedLineCounts?>(null, conversation) {
-            value = withContext(Dispatchers.Default) { touchedLineCounts(conversation) }
+        produceState<TouchedLineCounts?>(null, touchedLineCache) {
+            snapshotFlow { latestConversation }.conflate().collect { items ->
+                value = withContext(Dispatchers.Default) { touchedLineCache.counts(items) }
+                if (streamingNow) delay(TOUCHED_LINES_STREAMING_MILLIS)
+            }
         }
-    val errorCount = remember(conversation) { conversation.count(::isErrorItem) }
+    val errorCount = presentation.errorCount
     val children =
         remember(chatKey, state.sessions, state.connected, state.loading, state.stale) {
             if (chatKey == null) emptyList()
             else sessionListItems(state.sessions, state.connected, state.loading, state.stale)
         }
     val strip =
-        remember(chatKey, conversation, children) {
+        remember(chatKey, presentation, children) {
             if (chatKey == null) SubagentStrip(emptyList(), 0, emptySet(), 0)
-            else subagentStrip(conversation, children, chatKey.sessionId)
+            else presenter.subagentStrip(presentation, children, chatKey.sessionId)
         }
     var onlyErrorsShown by rememberSaveable(key) { mutableStateOf(false) }
     val shownItems =
         remember(visibleConversation, onlyErrorsShown) {
             if (onlyErrorsShown) onlyErrors(visibleConversation) else visibleConversation
         }
-    val forkableIds = remember(shownItems) { forkableBubbleIds(shownItems) }
+    // Bubbles are always visible, so only the error filter narrows the conversation's set.
+    val forkableIds =
+        remember(presentation, shownItems, onlyErrorsShown) {
+            if (onlyErrorsShown) forkableBubbleIds(shownItems) else presentation.forkableBubbleIds
+        }
     val forkReady = state.connected && !state.loading && !navigator.mutating && forkStopped(state)
     val forkStopFirst = forkRunning(state)
     // The same instance while nothing it holds changes, so the bubbles that get it can skip.
@@ -368,7 +385,7 @@ internal fun RemoteScreen(
     val questionPending = state.questions.isNotEmpty()
     val markers =
         remember(shownItems, questionPending) {
-            timelineMarkers(shownItems) +
+            presenter.timelineMarkers(shownItems) +
                 if (questionPending)
                     listOf(TimelineMarker(PENDING_QUESTION_MARKER, TimelineMarkerKind.QUESTION, shownItems.size))
                 else emptyList()

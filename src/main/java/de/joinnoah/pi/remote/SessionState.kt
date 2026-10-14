@@ -70,6 +70,12 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     var messages = listOf<JsonObject>()
         private set
 
+    /**
+     * Where each message ID sits in [messages], so a streamed upsert finds its message without a
+     * scan. [showMessages] rebuilds it; an upsert keeps it current itself.
+     */
+    private var indexById = HashMap<String, Int>()
+
     var questions = listOf<JsonObject>()
         private set
 
@@ -109,7 +115,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         snapshotRevision = -1L
         hasSnapshot = false
         if (messages.isNotEmpty()) retain(messages, nextCursor)
-        messages = emptyList()
+        showMessages(emptyList())
         questions = emptyList()
         nextCursor = null
         pendingEvents.clear()
@@ -132,8 +138,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         val incomingRevision = data.long("revision")
         if (older) {
             if (incomingRevision != snapshotRevision || snapshotRevision < 0) return
-            messages =
-                (data.array("messages") + messages).associateBy { it.text("id") }.values.toList()
+            showMessages((data.array("messages") + messages).associateBy { it.text("id") }.values.toList())
             nextCursor = data.optionalText("nextCursor")
             return
         }
@@ -151,10 +156,10 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         val oldest = page.firstOrNull()?.optionalText("id")
         val overlap = if (oldest == null) -1 else shown.indexOfFirst { it.optionalText("id") == oldest }
         if (overlap > 0) {
-            messages = (shown.subList(0, overlap) + page).associateBy { it.text("id") }.values.toList()
+            showMessages((shown.subList(0, overlap) + page).associateBy { it.text("id") }.values.toList())
             nextCursor = shownCursor
         } else {
-            messages = page
+            showMessages(page)
             nextCursor = data.optionalText("nextCursor")
         }
         retained = emptyList()
@@ -177,6 +182,19 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         }
     }
 
+    /** The index of the message with [id] in [messages], or -1. */
+    internal fun messageIndex(id: String): Int = indexById[id] ?: -1
+
+    private fun showMessages(value: List<JsonObject>) {
+        messages = value
+        indexById = HashMap<String, Int>(value.size * 2).apply {
+            // The first message with an ID wins, as a scan from the start would find it.
+            value.forEachIndexed { index, message ->
+                (message["id"] as? JsonPrimitive)?.takeIf { it.isString }?.let { putIfAbsent(it.content, index) }
+            }
+        }
+    }
+
     /**
      * Applies [event] and returns whether a snapshot is needed now: a revision gap or the host's
      * `snapshot.required`. An unknown kind only advances the revision and sets [unknownKindSeen]. A
@@ -193,10 +211,15 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         when (event.text("kind")) {
             "message.upsert" -> {
                 val message = event.obj("message")
-                val index = messages.indexOfFirst { it.text("id") == message.text("id") }
-                messages =
-                    if (index < 0) messages + message
-                    else messages.toMutableList().apply { set(index, message) }
+                val id = message.text("id")
+                val index = messageIndex(id)
+                if (index < 0) {
+                    // Appending moves no other message, so only the new ID is added.
+                    messages = messages + message
+                    indexById[id] = messages.lastIndex
+                } else {
+                    messages = messages.toMutableList().apply { set(index, message) }
+                }
             }
             "command.status" -> Unit
             "session.title" -> Unit
