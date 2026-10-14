@@ -59,9 +59,9 @@ class EncryptedFileStore(
             }
             require(bytes.size <= MAX_FILE_BYTES)
             try {
-                withKey { decrypt(bytes) }
+                withKey { unseal(alias, bytes) }
             } catch (e: Exception) {
-                val unreadable = unreadable(e) ?: throw e.also { forgetKeyOn(it) }
+                val unreadable = unreadable(e) ?: throw e.also { forgetKeyOn(alias, it) }
                 Diagnostics.caught("store.quarantine", e)
                 quarantine(dropKey = unreadable == Unreadable.KEY)
                 null
@@ -73,13 +73,13 @@ class EncryptedFileStore(
         synchronized(lock) {
             val bytes =
                 try {
-                    withKey { encrypt(value) }
+                    withKey { seal(alias, value) }
                 } catch (e: Exception) {
-                    if (unreadable(e) != Unreadable.KEY) throw e.also { forgetKeyOn(it) }
+                    if (unreadable(e) != Unreadable.KEY) throw e.also { forgetKeyOn(alias, it) }
                     // The file is replaced anyway, so a new key lets the write go through.
                     Diagnostics.caught("store.write.key", e)
                     dropKey(alias)
-                    encrypt(value)
+                    seal(alias, value)
                 }
             val stream = file.startWrite()
             try {
@@ -91,20 +91,6 @@ class EncryptedFileStore(
                 throw e
             }
         }
-    }
-
-    private fun encrypt(value: ByteArray): ByteArray {
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, key(alias))
-        cipher.updateAAD(alias.toByteArray())
-        return cipher.iv + cipher.doFinal(value)
-    }
-
-    private fun decrypt(bytes: ByteArray): ByteArray {
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.DECRYPT_MODE, key(alias), GCMParameterSpec(TAG_BYTES * 8, bytes, 0, IV_BYTES))
-        cipher.updateAAD(alias.toByteArray())
-        return cipher.doFinal(bytes, IV_BYTES, bytes.size - IV_BYTES)
     }
 
     /**
@@ -133,12 +119,7 @@ class EncryptedFileStore(
         file.delete()
     }
 
-    /** A key the Keystore rejected for another reason is loaded again next time, never deleted. */
-    private fun forgetKeyOn(error: Exception) {
-        if (error is InvalidKeyException) synchronized(keyLock) { keys.remove(alias) }
-    }
-
-    private enum class Unreadable {
+    internal enum class Unreadable {
         /** The key cannot be used any more, so no file under its alias can be read. */
         KEY,
 
@@ -174,13 +155,64 @@ class EncryptedFileStore(
         private fun key(alias: String): SecretKey =
             synchronized(keyLock) { keys.getOrPut(alias) { loadKey(alias) } }
 
+        private fun seal(alias: String, value: ByteArray): ByteArray {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.ENCRYPT_MODE, key(alias))
+            cipher.updateAAD(alias.toByteArray())
+            return cipher.iv + cipher.doFinal(value)
+        }
+
+        private fun unseal(alias: String, bytes: ByteArray): ByteArray {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                key(alias),
+                GCMParameterSpec(TAG_BYTES * 8, bytes, 0, IV_BYTES),
+            )
+            cipher.updateAAD(alias.toByteArray())
+            return cipher.doFinal(bytes, IV_BYTES, bytes.size - IV_BYTES)
+        }
+
+        /**
+         * Seals the data key of a streamed file under [alias]; the result goes in that file's
+         * header (see [StreamingCipher]). Like [write], a key that cannot be used is replaced.
+         */
+        internal fun wrapKey(alias: String, value: ByteArray): ByteArray =
+            try {
+                withAliasKey(alias) { seal(alias, value) }
+            } catch (e: Exception) {
+                if (unreadable(e) != Unreadable.KEY) throw e.also { forgetKeyOn(alias, it) }
+                Diagnostics.caught("store.write.key", e)
+                dropKey(alias)
+                seal(alias, value)
+            }
+
+        /** Opens a data key sealed by [wrapKey]. The caller decides what [unreadable] means for it. */
+        internal fun unwrapKey(alias: String, sealed: ByteArray): ByteArray =
+            withAliasKey(alias) { unseal(alias, sealed) }
+
+        /** Runs [block] with the key of [alias], asking for that key again once when it is refused. */
+        private fun <T> withAliasKey(alias: String, block: () -> T): T =
+            try {
+                block()
+            } catch (e: Exception) {
+                if (unreadable(e) != Unreadable.KEY) throw e.also { forgetKeyOn(alias, it) }
+                forgetCachedKey(alias)
+                block()
+            }
+
+        /** A key the Keystore rejected for another reason is loaded again next time, never deleted. */
+        private fun forgetKeyOn(alias: String, error: Exception) {
+            if (error is InvalidKeyException) synchronized(keyLock) { keys.remove(alias) }
+        }
+
         /** Forgets the cached key of [alias] only; the next use loads it from the Keystore again. */
         private fun forgetCachedKey(alias: String) {
             synchronized(keyLock) { keys.remove(alias) }
         }
 
         /** Forgets the key of [alias] here and in the Keystore; the next use creates a new one. */
-        private fun dropKey(alias: String) {
+        internal fun dropKey(alias: String) {
             synchronized(keyLock) {
                 keys.remove(alias)
                 try {
@@ -191,7 +223,8 @@ class EncryptedFileStore(
             }
         }
 
-        private fun unreadable(error: Throwable): Unreadable? {
+        /** Which failure [error] is, when it means the file or its key can never be read again. */
+        internal fun unreadable(error: Throwable): Unreadable? {
             var cause: Throwable? = error
             while (cause != null) {
                 when (cause) {

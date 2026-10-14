@@ -194,7 +194,7 @@ class EncryptedStoresTest {
             StoreCase("prompts", "prompt-history.enc", raw("prompt-history.enc"), rawReads("prompt-history.enc")),
             StoreCase(
                 "attachments",
-                "attachment-${attachment.id}.enc",
+                "attachment-${attachment.id}.v2",
                 { context, alias -> AttachmentStore(context, alias).write(attachment, attachmentBytes) },
                 { context, alias -> runCatching { AttachmentStore(context, alias).read(attachment) }.isSuccess },
             ),
@@ -296,9 +296,9 @@ class EncryptedStoresTest {
             )
         store.write(attachment, attachmentBytes)
         store.write(other, otherBytes)
-        val file = File(context.noBackupFilesDir, "attachment-${attachment.id}.enc")
+        val file = File(context.noBackupFilesDir, "attachment-${attachment.id}.v2")
         val bytes = file.readBytes()
-        bytes[20] = (bytes[20].toInt() xor 1).toByte()
+        bytes[bytes.size - 1] = (bytes[bytes.size - 1].toInt() xor 1).toByte()
         file.writeBytes(bytes)
         assertThrows(IllegalArgumentException::class.java) { store.read(attachment) }
         assertFalse(file.exists())

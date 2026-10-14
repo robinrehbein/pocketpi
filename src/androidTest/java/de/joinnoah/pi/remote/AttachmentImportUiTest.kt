@@ -105,7 +105,7 @@ class AttachmentImportUiTest {
             store.write(first, "secret".toByteArray())
             assertArrayEquals("secret".toByteArray(), store.read(first))
             assertFalse(
-                File(context.noBackupFilesDir, "attachment-${first.id}.enc")
+                File(context.noBackupFilesDir, "attachment-${first.id}.v2")
                     .readBytes()
                     .toString(Charsets.ISO_8859_1)
                     .contains("secret")
@@ -124,7 +124,7 @@ class AttachmentImportUiTest {
             store.cleanup(setOf(first.id))
             assertThrows(IllegalArgumentException::class.java) { store.read(empty) }
             assertEquals("unrelated", unrelated.readText())
-            val encrypted = File(context.noBackupFilesDir, "attachment-${first.id}.enc")
+            val encrypted = File(context.noBackupFilesDir, "attachment-${first.id}.v2")
             val damaged =
                 encrypted.readBytes().also { it[it.lastIndex] = (it.last().toInt() xor 1).toByte() }
             encrypted.writeBytes(damaged)
