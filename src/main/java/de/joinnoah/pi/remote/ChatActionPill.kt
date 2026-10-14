@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
@@ -48,6 +49,7 @@ private fun ChatAction.icon(): ImageVector =
         ChatAction.NEW_SESSION -> Icons.Default.Add
         ChatAction.SESSION_SETTINGS -> Icons.Outlined.Tune
         ChatAction.HISTORY -> Icons.AutoMirrored.Filled.List
+        ChatAction.CLOSE -> Icons.Default.DeleteOutline
     }
 
 /** The key that runs the same action, for its tooltip. */
@@ -62,6 +64,7 @@ private fun ChatAction.shortcut(): Shortcut? =
         ChatAction.NEW_SESSION -> Shortcut.NEW_SESSION
         ChatAction.SESSION_SETTINGS -> null
         ChatAction.HISTORY -> Shortcut.HISTORY
+        ChatAction.CLOSE -> null
     }
 
 private fun ChatAction.label(): Int =
@@ -75,6 +78,7 @@ private fun ChatAction.label(): Int =
         ChatAction.NEW_SESSION -> R.string.remote_new_session
         ChatAction.SESSION_SETTINGS -> R.string.remote_session_settings_title
         ChatAction.HISTORY -> R.string.remote_chat_history
+        ChatAction.CLOSE -> R.string.remote_session_close
     }
 
 /** The chat header pill: the most used actions as buttons, the rest behind a chevron. */

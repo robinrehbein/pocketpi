@@ -301,6 +301,13 @@ interface RemoteRepository {
 
     fun refreshSessions() {}
 
+    /**
+     * Reads the lists on screen again behind what they show, for a pull to refresh: the projects,
+     * and the selected project's sessions or every project's featured chats. Without a connection
+     * it asks for one, as [refresh] does.
+     */
+    fun revalidateLists() {}
+
     fun loadToolOutput(toolCallId: String) {}
 
     fun cancelToolOutput() {}
