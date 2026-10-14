@@ -2,6 +2,14 @@ package de.joinnoah.pi.remote
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.edit
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -41,7 +49,8 @@ internal fun decodePaneMemos(text: String?): Map<String, PaneMemo> {
 
 /**
  * Keeps the dragged pane widths and the hidden list per layout bucket across restarts, in a
- * preferences file of its own: only widths and a flag, nothing that identifies a Mac or a chat.
+ * preferences file of its own: only widths and flags, nothing that identifies a Mac or a chat.
+ * The "Wrap lines" choice of diffs and files lives here too.
  */
 internal class PaneLayoutStore(private val preferences: SharedPreferences) {
     constructor(context: Context) : this(context.getSharedPreferences("pane_layout", Context.MODE_PRIVATE))
@@ -54,7 +63,41 @@ internal class PaneLayoutStore(private val preferences: SharedPreferences) {
         }
     }
 
+    /** Diffs and files break long lines instead of scrolling them sideways; off by default. */
+    fun loadWrapLines(): Boolean = preferences.getBoolean(KEY_WRAP_LINES, false)
+
+    fun saveWrapLines(wrap: Boolean) {
+        preferences.edit { if (wrap) putBoolean(KEY_WRAP_LINES, true) else remove(KEY_WRAP_LINES) }
+    }
+
     private companion object {
         const val KEY_MEMOS = "memos"
+        const val KEY_WRAP_LINES = "wrap_lines"
     }
+}
+
+/**
+ * The "Wrap lines" toggle that Changes and Files share ([PaneHeader]); a change is written to
+ * [store] at once, so it holds across panes and restarts.
+ */
+@Stable
+internal class CodeWrapState(private val store: PaneLayoutStore) {
+    var wrap by mutableStateOf(store.loadWrapLines())
+        private set
+
+    fun toggle() {
+        wrap = !wrap
+        store.saveWrapLines(wrap)
+    }
+}
+
+/** The app's [CodeWrapState]; [RemoteNavigation] provides it. */
+internal val LocalCodeWrap = staticCompositionLocalOf<CodeWrapState?> { null }
+
+/** [LocalCodeWrap], or one of its own on the same preferences where nothing provides it. */
+@Composable
+internal fun rememberCodeWrap(): CodeWrapState {
+    val provided = LocalCodeWrap.current
+    val context = LocalContext.current
+    return provided ?: remember(context) { CodeWrapState(PaneLayoutStore(context.applicationContext)) }
 }

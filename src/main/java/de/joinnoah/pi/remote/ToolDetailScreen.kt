@@ -533,10 +533,13 @@ private fun Notice(text: String, color: Color = MaterialTheme.colorScheme.onSurf
 }
 
 @Composable
-private fun LabeledMono(label: String, value: String) {
+private fun LabeledMono(label: String, value: String, trailing: (@Composable () -> Unit)? = null) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(label, style = MaterialTheme.typography.labelMedium)
-        SelectionContainer { Text(value, style = monoTextStyle()) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SelectionContainer(Modifier.weight(1f)) { Text(value, style = monoTextStyle()) }
+            trailing?.invoke()
+        }
     }
 }
 
@@ -682,7 +685,11 @@ private fun ArgumentsSection(item: ConversationItem.Activity, modifier: Modifier
     Column(modifier.fillMaxWidth().testTag("toolDetailArguments"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionLabel(stringResource(R.string.remote_tool_arguments))
         if (model.missing) Notice(stringResource(R.string.remote_tool_detail_no_arguments))
-        model.path?.let { LabeledMono(stringResource(R.string.remote_tool_detail_path), it) }
+        model.path?.let { path ->
+            // The file opens in Files at the lines the call read or changed.
+            val lines = remember(item.arguments, item.details, item.name) { toolFileTarget(item)?.lines }
+            LabeledMono(stringResource(R.string.remote_tool_detail_path), path) { OpenInFilesButton(path, lines) }
+        }
         model.offset?.let { Notice(stringResource(R.string.remote_tool_detail_offset, it.toString())) }
         model.limit?.let { Notice(stringResource(R.string.remote_tool_detail_limit, it.toString())) }
         model.label?.let { Text(stringResource(it), style = MaterialTheme.typography.labelMedium) }

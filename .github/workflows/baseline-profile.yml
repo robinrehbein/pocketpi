@@ -1,0 +1,148 @@
+name: Baseline profile
+
+# Regenerates the baseline profile on an emulator and measures what it buys. It publishes the
+# generated src/main/baseline-prof.txt as an artifact (and in the log) to commit by hand; it never
+# pushes. Kept out of ci.yml, so the release gate does not wait for it. Steps and caveats:
+# docs/runbooks/macrobenchmarks.md.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - benchmarks/**
+      - src/benchmark/**
+      - src/main/baseline-prof.txt
+      - src/main/baselineProfiles/**
+      - proguard-rules.pro
+      - benchmark-rules.pro
+      - scripts/summarize-benchmarks.py
+      - .github/workflows/baseline-profile.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: baseline-profile-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  profile:
+    name: Generate and measure the baseline profile
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      # ci.yml's phone device; this job only restores its cached image and snapshot.
+      GMD_DEVICE: pixel2Api36
+      RUNNER_ARGS: -Pandroid.testInstrumentationRunnerArguments
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - name: Set up Android command-line tools 23.0
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+        with:
+          cmdline-tools-version: "16111833"
+          packages: ""
+      - name: Install SDK platform 37 and the emulator
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/16111833/bin/sdkmanager"
+          "$sdkmanager" --install "platforms;android-37.0" "build-tools;37.0.0" emulator
+          test -d "$ANDROID_HOME/platforms/android-37.0" || { echo "FATAL - platforms;android-37.0 did not install"; exit 1; }
+          test -f "$ANDROID_HOME/emulator/source.properties" || { echo "FATAL - emulator did not install"; exit 1; }
+      - name: Enable emulator acceleration
+        run: |
+          test -e /dev/kvm
+          sudo chmod 666 /dev/kvm
+      - id: avd
+        name: Locate the managed device cache
+        run: |
+          agp="$(sed -n 's/^agp = "\(.*\)"$/\1/p' gradle/libs.versions.toml)"
+          emulator="$(sed -n 's/^Pkg\.Revision=//p' "$ANDROID_HOME/emulator/source.properties" | tr -d '[:space:]')"
+          test -n "$agp" && test -n "$emulator" || { echo "FATAL - agp or emulator version missing"; exit 1; }
+          echo "agp=$agp" >> "$GITHUB_OUTPUT"
+          echo "emulator=$emulator" >> "$GITHUB_OUTPUT"
+          echo "images=$ANDROID_HOME/system-images/android-36" >> "$GITHUB_OUTPUT"
+      - name: Restore the managed device system image
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.avd.outputs.images }}
+          key: gmd-image-android-36-aosp-${{ runner.os }}-agp-${{ steps.avd.outputs.agp }}
+      - name: Restore the managed device AVD and snapshot
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.android/gradle/avd
+          key: gmd-${{ env.GMD_DEVICE }}-aosp-${{ runner.os }}-agp-${{ steps.avd.outputs.agp }}-emulator-${{ steps.avd.outputs.emulator }}
+      - name: Build the benchmark apps and tests
+        run: >-
+          ./gradlew :assembleBenchmark :assembleBenchmarkProfile
+          :benchmarks:assembleBenchmark :benchmarks:assembleBenchmarkProfile
+      # Emulator timings are no production claim; they compare the two compilation modes on one
+      # image. EMULATOR is suppressed only here, never for phone runs.
+      - name: Startup with the committed profile
+        run: |
+          ./gradlew :benchmarks:pixel2Api36BenchmarkAndroidTest \
+            "$RUNNER_ARGS.class=de.robinrehbein.pocketpi.benchmarks.BaselineProfileBenchmarks" \
+            "$RUNNER_ARGS.androidx.benchmark.suppressErrors=EMULATOR"
+          mkdir -p out/committed
+          mv benchmarks/build/outputs/managed_device_android_test_additional_output out/committed/
+          cp build/outputs/apk/benchmark/pocketpi-benchmark.apk out/
+          cp build/outputs/apk/benchmarkProfile/pocketpi-benchmarkProfile.apk out/
+      - name: Generate the profile on the non-minified build
+        run: |
+          ./gradlew :benchmarks:pixel2Api36BenchmarkProfileAndroidTest \
+            "$RUNNER_ARGS.class=de.robinrehbein.pocketpi.benchmarks.BaselineProfileGenerator" \
+            "$RUNNER_ARGS.androidx.benchmark.enabledRules=BaselineProfile"
+          generated="$(find benchmarks/build/outputs/managed_device_android_test_additional_output \
+            -name 'BaselineProfileGenerator_generate-baseline-prof.txt' | head -1)"
+          test -s "$generated" || { echo "FATAL - the generator wrote no profile"; exit 1; }
+          cp "$generated" out/baseline-prof.txt
+          cp "$generated" src/main/baseline-prof.txt
+          mkdir -p out/generator
+          mv benchmarks/build/outputs/managed_device_android_test_additional_output out/generator/
+      - name: Startup with the generated profile
+        run: |
+          ./gradlew :benchmarks:pixel2Api36BenchmarkAndroidTest \
+            "$RUNNER_ARGS.class=de.robinrehbein.pocketpi.benchmarks.BaselineProfileBenchmarks" \
+            "$RUNNER_ARGS.androidx.benchmark.suppressErrors=EMULATOR"
+          mkdir -p out/generated
+          mv benchmarks/build/outputs/managed_device_android_test_additional_output out/generated/
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Baseline profile"
+            echo
+            python3 scripts/summarize-benchmarks.py \
+              --apk "benchmark (R8)=out/pocketpi-benchmark.apk" \
+              --apk "benchmarkProfile (no R8)=out/pocketpi-benchmarkProfile.apk" \
+              committed=out/committed generated=out/generated
+            if test -s out/baseline-prof.txt; then
+              echo
+              echo "Generated profile: $(grep -c '' out/baseline-prof.txt) lines, $(grep -c '^Lde/joinnoah' out/baseline-prof.txt) app classes."
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          # The profile also goes into the log, in case the artifact is out of reach.
+          if test -s out/baseline-prof.txt; then
+            echo "BEGIN baseline-prof.txt.gz.b64"
+            gzip -9c out/baseline-prof.txt | base64
+            echo "END baseline-prof.txt.gz.b64"
+          fi
+      - name: Upload the profile and results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: baseline-profile
+          path: |
+            out/baseline-prof.txt
+            out/committed/
+            out/generator/
+            out/generated/
+            benchmarks/build/reports/
+            benchmarks/build/outputs/androidTest-results/
+          if-no-files-found: ignore

@@ -315,14 +315,26 @@ internal fun fileMenuActions(openable: Boolean, canSend: Boolean, contentsLoaded
 internal enum class DiffLineMenuAction(@StringRes val label: Int) {
     COMMENT(R.string.remote_changes_comment_add),
     COPY_LINE(R.string.remote_menu_copy_line),
+    COPY_WITH_PREFIX(R.string.remote_code_copy_with_prefix),
     COPY_HUNK(R.string.remote_menu_copy_hunk),
+    OPEN_FILE(R.string.remote_open_files_open_line),
 }
 
-internal fun diffLineMenuActions(commentable: Boolean): List<DiffLineMenuAction> =
+/**
+ * [openable]: the line has a place in the file as it is now, and Files can show it. [copyWithPrefix]:
+ * the lines copy with their +, - or space prefixes, for a patch; a pane that cannot give them leaves it out.
+ */
+internal fun diffLineMenuActions(
+    commentable: Boolean,
+    openable: Boolean = false,
+    copyWithPrefix: Boolean = false,
+): List<DiffLineMenuAction> =
     buildList {
         if (commentable) add(DiffLineMenuAction.COMMENT)
         add(DiffLineMenuAction.COPY_LINE)
+        if (copyWithPrefix) add(DiffLineMenuAction.COPY_WITH_PREFIX)
         add(DiffLineMenuAction.COPY_HUNK)
+        if (openable) add(DiffLineMenuAction.OPEN_FILE)
     }
 
 /**

@@ -30,8 +30,12 @@ class ShortcutHelpTest {
         val groups = groups()
         assertEquals(listOf("Navigation", "Chat", "Message", "Panes"), groups.map { it.label.toString() })
         val navigation = groups[0].items
+        // Ctrl+K opens the command palette and Ctrl+F searches the session list.
+        val palette = navigation.filter { it.label == "Command palette" }
+        assertEquals(listOf(KeyEvent.KEYCODE_K), palette.map { it.keycode })
+        assertTrue(palette.all { it.modifiers == KeyEvent.META_CTRL_ON })
         val search = navigation.filter { it.label == "Search sessions" }
-        assertEquals(listOf(KeyEvent.KEYCODE_K, KeyEvent.KEYCODE_F), search.map { it.keycode })
+        assertEquals(listOf(KeyEvent.KEYCODE_F), search.map { it.keycode })
         assertTrue(search.all { it.modifiers == KeyEvent.META_CTRL_ON })
         // Ctrl+N and Ctrl+B, which the old Settings list left out.
         assertTrue(navigation.any { it.label == "New session" && it.keycode == KeyEvent.KEYCODE_N })
@@ -111,9 +115,12 @@ class ShortcutHelpTest {
         assertTrue(chat.any { it.labelRes == R.string.remote_shortcut_complete })
         // One line per action, with all its keys.
         assertEquals(1, chat.count { it.labelRes == R.string.remote_keymap_search })
-        assertEquals(2, chat.single { it.labelRes == R.string.remote_keymap_search }.chords.size)
-        // Settings shows everything.
-        assertEquals(shortcutEntries(null).size, chat.size)
+        assertEquals(1, chat.single { it.labelRes == R.string.remote_keymap_search }.chords.size)
+        assertEquals(1, chat.single { it.labelRes == R.string.remote_keymap_palette }.chords.size)
+        // Settings shows everything except a code pane's own keys, which only a focused code pane takes.
+        val codeKeys = shortcutEntries(null).count { it.context == KeyContext.CODE }
+        assertEquals(4, codeKeys)
+        assertEquals(shortcutEntries(null).size - codeKeys, chat.size)
     }
 
     @Test

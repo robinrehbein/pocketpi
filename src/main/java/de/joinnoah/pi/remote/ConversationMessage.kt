@@ -111,13 +111,14 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
         var dragOffset by remember { mutableFloatStateOf(0f) }
         var dragging by remember { mutableStateOf(false) }
         val haptics = LocalHapticFeedback.current
+        val latestOnQuote by rememberUpdatedState(onQuote)
         val offsetX by
             animateFloatAsState(
                 targetValue = dragOffset,
                 animationSpec = if (dragging) snap() else spring(),
                 label = "quote-swipe-offset",
             )
-        this.graphicsLayer { translationX = offsetX }.pointerInput(onQuote) {
+        this.graphicsLayer { translationX = offsetX }.pointerInput(Unit) {
             val threshold = 64.dp.toPx()
             val verticalTolerance = 24.dp.toPx()
             awaitEachGesture {
@@ -125,7 +126,6 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
                 var quote = false
                 var armed = false
                 try {
-                    dragging = true
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Final)
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
@@ -139,7 +139,11 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
                             break
                         val delta = change.position - down.position
                         if (abs(delta.y) > verticalTolerance) break
-                        dragOffset = delta.x.coerceIn(-threshold, 0f)
+                        // A tap must not recompose the parent and restart child click detectors.
+                        // Start the visual swipe only after horizontal touch slop is crossed.
+                        if (!dragging && delta.x < -viewConfiguration.touchSlop && abs(delta.x) > abs(delta.y))
+                            dragging = true
+                        if (dragging) dragOffset = delta.x.coerceIn(-threshold, 0f)
                         val pastThreshold = delta.x <= -threshold && abs(delta.x) > abs(delta.y) * 3
                         if (pastThreshold && !armed) {
                             armed = true
@@ -153,7 +157,7 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
                 } finally {
                     dragging = false
                     dragOffset = 0f
-                    if (quote) onQuote()
+                    if (quote) latestOnQuote()
                 }
             }
         }
@@ -453,6 +457,7 @@ private fun ConversationMessageContent(
                                             CompositionLocalProvider(
                                                 LocalProjectImageSource provides projectImages.takeIf { !outgoing },
                                                 LocalLinkTargets provides linkTargets,
+                                                LocalFileOpener provides LocalFileOpener.current.takeIf { !outgoing },
                                             ) {
                                                 SelectionContainer(selection) {
                                                     MarkdownText(item.text)
@@ -606,6 +611,8 @@ private fun ConversationMessageContent(
             // Beside the chat the tool's own tab shows all of its output instead of the peek dialog.
             val peekInTab = openTool?.takeIf { LocalInspectorViewers.current != null }?.let { open -> { open(item) } }
             val diff = remember(item.arguments, item.details) { toolDiff(item) }
+            // A read, edit or write opens its file in Files at the lines it worked on.
+            val fileTarget = remember(item.name, item.arguments, item.details) { toolFileTarget(item) }
             val summary = item.summary
             val command = remember(item.name, item.arguments) { toolCommand(item.name, item.arguments) }
             val toolMenu: (androidx.compose.ui.geometry.Offset?) -> List<MenuItem> = {
@@ -708,6 +715,7 @@ private fun ConversationMessageContent(
                                     diff?.let { DiffCounts(it) }
                                 }
                         }
+                        fileTarget?.let { OpenInFilesButton(it.path, it.lines) }
                         when (state) {
                             R.string.remote_tool_error ->
                                 Icon(

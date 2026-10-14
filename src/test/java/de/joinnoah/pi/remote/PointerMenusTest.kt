@@ -140,6 +140,10 @@ class PointerMenusTest {
             diffLineMenuActions(commentable = true),
         )
         assertEquals(listOf(DiffLineMenuAction.COPY_LINE, DiffLineMenuAction.COPY_HUNK), diffLineMenuActions(commentable = false))
+        assertEquals(
+            listOf(DiffLineMenuAction.COMMENT, DiffLineMenuAction.COPY_LINE, DiffLineMenuAction.COPY_HUNK, DiffLineMenuAction.OPEN_FILE),
+            diffLineMenuActions(commentable = true, openable = true),
+        )
     }
 
     @Test

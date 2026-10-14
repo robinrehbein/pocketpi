@@ -13,6 +13,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.filters.SdkSuppress
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
 import java.security.KeyStore
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -247,6 +248,12 @@ class AttachmentImportUiTest {
                 object : AttachmentStorage by store {
                     override fun write(attachment: LocalAttachment, bytes: ByteArray) {
                         store.write(attachment, bytes)
+                        job.cancel()
+                    }
+
+                    // Files are streamed into the store; `by store` would skip the override above.
+                    override fun write(attachment: LocalAttachment, input: InputStream) {
+                        store.write(attachment, input)
                         job.cancel()
                     }
                 }

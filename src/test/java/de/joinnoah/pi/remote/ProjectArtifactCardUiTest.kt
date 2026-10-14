@@ -114,6 +114,57 @@ class ProjectArtifactCardUiTest {
         compose.onNodeWithText("Mermaid · flowchart · 2 lines").assertIsDisplayed()
     }
 
+    @Test fun touchingOpenInsideAQuotableBubbleOpensTheDiagramWithoutQuoting() {
+        val item = ConversationItem.Bubble(
+            id = "diagram", sourceId = "message", role = "assistant", author = null,
+            text = "```mermaid\nflowchart TD\nA-->B\n```", quote = null,
+            truncated = false, timestamp = 1_000L, streaming = false, error = false,
+        )
+        var quotes = 0
+        val opened = mutableListOf<InspectorViewer>()
+        compose.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalProjectImageSource provides source { _, _, _ -> ProjectArtifactResult.Unavailable },
+                    LocalInspectorViewers provides InspectorViewers(show = { opened += it }),
+                ) {
+                    ConversationMessage(item, "hidden", thinkingActive = false, onQuote = { quotes++ },
+                        projectImages = source { _, _, _ -> ProjectArtifactResult.Unavailable })
+                }
+            }
+        }
+        // Keep the finger down across frames: semantic performClick bypasses gesture detectors.
+        compose.onNodeWithText("Open", useUnmergedTree = true).performTouchInput {
+            down(center)
+            advanceEventTime(100)
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("Open", useUnmergedTree = true).performTouchInput { up() }
+        compose.runOnIdle {
+            assertEquals(1, opened.size)
+            assertEquals(ArtifactKind.Mermaid, (opened.single() as InspectorViewer.Artifact).kind)
+            assertEquals(0, quotes)
+        }
+    }
+
+    @Test fun touchingOpenInAPhoneBubbleShowsTheFullScreenViewer() {
+        val item = ConversationItem.Bubble(
+            id = "diagram", sourceId = "message", role = "assistant", author = null,
+            text = "```mermaid\nflowchart TD\nA-->B\n```", quote = null,
+            truncated = false, timestamp = 1_000L, streaming = false, error = false,
+        )
+        compose.setContent {
+            MaterialTheme {
+                ConversationMessage(item, "hidden", thinkingActive = false, onQuote = {},
+                    projectImages = source { _, _, _ -> ProjectArtifactResult.Unavailable })
+            }
+        }
+        compose.onNodeWithText("Open", useUnmergedTree = true).performTouchInput { click() }
+        compose.onNodeWithTag("artifactViewer", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("artifactTabCode", useUnmergedTree = true).performClick()
+        compose.onNodeWithText("A-->B", substring = true, useUnmergedTree = true).assertExists()
+    }
+
     @Test fun otherSurfacesKeepTheMermaidCode() {
         show("```mermaid\nflowchart TD\n  A-->B\n```", null)
         compose.onNodeWithTag("mermaidCard").assertDoesNotExist()

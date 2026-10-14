@@ -25,7 +25,6 @@ class KeymapTest {
 
     @Test
     fun theExistingShortcutsKeepTheirKeys() {
-        assertEquals(Shortcut.SEARCH, ctrl(Key.K, context = KeyContext.GLOBAL))
         assertEquals(Shortcut.SEARCH, ctrl(Key.F, context = KeyContext.GLOBAL))
         assertEquals(Shortcut.NEW_SESSION, ctrl(Key.N, context = KeyContext.GLOBAL))
         assertEquals(Shortcut.TOGGLE_LIST, ctrl(Key.B, context = KeyContext.GLOBAL))
@@ -35,6 +34,14 @@ class KeymapTest {
         assertEquals(Shortcut.PREVIOUS_SESSION, alt(Key.DirectionUp))
         assertEquals(Shortcut.PREVIOUS_PROJECT, alt(Key.PageUp))
         assertEquals(Shortcut.NEXT_PROJECT, alt(Key.PageDown))
+    }
+
+    @Test
+    fun ctrlKOpensThePaletteAndCtrlFStaysSessionSearch() {
+        // Ctrl+K moved from the session search to the command palette, which also finds sessions.
+        assertEquals(Shortcut.PALETTE, ctrl(Key.K, context = KeyContext.GLOBAL))
+        assertEquals(Shortcut.PALETTE, ctrl(Key.K, context = KeyContext.COMPOSER))
+        assertEquals(Shortcut.SEARCH, ctrl(Key.F, context = KeyContext.COMPOSER))
     }
 
     @Test
@@ -95,7 +102,7 @@ class KeymapTest {
             0, 0, android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_K, 0,
             android.view.KeyEvent.META_META_ON or android.view.KeyEvent.META_META_LEFT_ON,
         )
-        assertEquals(Shortcut.SEARCH, resolveShortcut(androidx.compose.ui.input.key.KeyEvent(down), KeyContext.GLOBAL))
+        assertEquals(Shortcut.PALETTE, resolveShortcut(androidx.compose.ui.input.key.KeyEvent(down), KeyContext.GLOBAL))
     }
 
     @Test
@@ -123,7 +130,7 @@ class KeymapTest {
         // Chat keys need a chat; global ones work everywhere.
         assertNull(ctrl(Key.L, context = KeyContext.GLOBAL))
         assertNull(plain(Key.Escape, KeyContext.GLOBAL))
-        assertEquals(Shortcut.SEARCH, ctrl(Key.K, context = KeyContext.COMPOSER))
+        assertEquals(Shortcut.PALETTE, ctrl(Key.K, context = KeyContext.COMPOSER))
         assertEquals(Shortcut.STOP, ctrl(Key.Period, context = KeyContext.COMPOSER))
         // Alt+Enter only means something inside the composer.
         assertNull(alt(Key.Enter, context = KeyContext.CHAT))
@@ -182,6 +189,20 @@ class KeymapTest {
     }
 
     @Test
+    fun codePanesSelectCopyAndZoomTheirLinesOnlyWhenFocused() {
+        assertEquals(Shortcut.SELECT_ALL_LINES, ctrl(Key.A, context = KeyContext.CODE))
+        assertEquals(Shortcut.COPY_LINES, ctrl(Key.C, context = KeyContext.CODE))
+        assertEquals(Shortcut.ZOOM_IN, ctrl(Key.Equals, context = KeyContext.CODE))
+        assertEquals(Shortcut.ZOOM_IN, ctrl(Key.Plus, context = KeyContext.CODE))
+        assertEquals(Shortcut.ZOOM_IN, ctrl(Key.Plus, shift = true, context = KeyContext.CODE))
+        assertEquals(Shortcut.ZOOM_OUT, ctrl(Key.Minus, context = KeyContext.CODE))
+        // The chat and the composer keep Ctrl+A and Ctrl+C for their own text.
+        assertNull(ctrl(Key.A, context = KeyContext.CHAT))
+        assertNull(ctrl(Key.C, context = KeyContext.COMPOSER))
+        assertEquals(null, ctrl(Key.Equals, context = KeyContext.GLOBAL))
+    }
+
+    @Test
     fun aListThatLeftTheScreenNoLongerHoldsItsRows() {
         val targets = ShortcutTargets()
         val sessions = RemoteNavKey.Sessions("host", "project")
@@ -221,5 +242,26 @@ class KeymapTest {
         assertEquals(second, targets.chat(chat))
         targets.unregister(chat, second)
         assertNull(targets.chat(chat))
+    }
+
+    @Test
+    fun reviewModeHasItsShortcutAndItsLetters() {
+        assertEquals(Shortcut.REVIEW, ctrl(Key.D, shift = true))
+        assertNull(ctrl(Key.D, shift = true, context = KeyContext.GLOBAL))
+        assertEquals(ReviewKey.NEXT_FILE, reviewKey(Key.N, ctrl = false, alt = false, shift = false))
+        assertEquals(ReviewKey.PREVIOUS_FILE, reviewKey(Key.P, ctrl = false, alt = false, shift = false))
+        assertEquals(ReviewKey.NEXT_HUNK, reviewKey(Key.J, ctrl = false, alt = false, shift = false))
+        assertEquals(ReviewKey.PREVIOUS_HUNK, reviewKey(Key.K, ctrl = false, alt = false, shift = false))
+        assertEquals(ReviewKey.COMMENT, reviewKey(Key.C, ctrl = false, alt = false, shift = false))
+        assertEquals(ReviewKey.USE_REVIEW, reviewKey(Key.Enter, ctrl = false, alt = false, shift = false))
+        assertEquals(ReviewKey.USE_REVIEW, reviewKey(Key.NumPadEnter, ctrl = false, alt = false, shift = false))
+        // With any modifier the letters stay what they were: Ctrl+N a new session, Shift+N a capital.
+        assertNull(reviewKey(Key.N, ctrl = true, alt = false, shift = false))
+        assertNull(reviewKey(Key.N, ctrl = false, alt = false, shift = true))
+        assertNull(reviewKey(Key.J, ctrl = false, alt = true, shift = false))
+        assertNull(reviewKey(Key.K, ctrl = false, alt = false, shift = false, meta = true))
+        assertNull(reviewKey(Key.X, ctrl = false, alt = false, shift = false))
+        // None of them is a plain key of the keymap, which would act outside review mode.
+        for (key in listOf(Key.N, Key.P, Key.J, Key.K, Key.C)) assertNull(plain(key, KeyContext.COMPOSER))
     }
 }

@@ -173,6 +173,8 @@ data class RemoteState(
      */
     val childControlUnsupported: Set<String> = emptySet(),
     val answering: Set<String> = emptySet(),
+    /** Questions the user cannot answer from here right now, by question ID. */
+    val questionBlocks: Map<String, QuestionBlock> = emptyMap(),
     val capabilities: Set<String> = emptySet(),
     /** True once the connection's `projects.list` reply has added its route capabilities. */
     val capabilitiesKnown: Boolean = false,
@@ -555,6 +557,20 @@ interface RemoteRepository {
 
     /** Shows the file [path], or the folder again for null. */
     fun openFilesFile(path: String?) {}
+
+    /**
+     * Opens Files at the folder of [path] (relative to the session folder) with the file open and
+     * [lines] picked and in view; [exclusive] as for [openFiles]. False, with nothing opened, for a
+     * path outside the session folder or while an open editor keeps the pane.
+     */
+    fun openFileAt(path: String, lines: LineSelection?, exclusive: Boolean = true): Boolean {
+        if (!isSessionPath(path)) return false
+        openFiles(exclusive)
+        openFilesDir(parentPath(path))
+        openFilesFile(path)
+        selectFileLines(lines)
+        return true
+    }
 
     /** The next page of the open file, or of the shown folder. */
     fun loadMoreFiles() {}
