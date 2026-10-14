@@ -6,6 +6,8 @@ import kotlin.math.pow
 enum class ChatAction {
     CHANGES,
     FILES,
+    /** The session's background jobs; offered while it has any. */
+    JOBS,
     RENAME,
     REFRESH,
     SETTINGS,
@@ -14,6 +16,8 @@ enum class ChatAction {
     SESSION_SETTINGS,
     /** The chat history; a header wide enough shows it as its own button instead, see [withHistory]. */
     HISTORY,
+    /** Closes the session on the Mac after a confirmation; only ever in the menu, see [withClose]. */
+    CLOSE,
 }
 
 /** How often an action was used, decayed to [at]. */
@@ -23,12 +27,13 @@ data class ActionUsage(val score: Double, val at: Long)
 internal const val ACTION_USAGE_HALF_LIFE_MILLIS = 14L * 24 * 60 * 60 * 1000
 
 /**
- * The ranking without any use, and the tie-break: Changes and Refresh come first. Usage is stored
- * per action name, so an action added later, like Files or New session, simply starts without uses.
+ * The ranking without any use, and the tie-break: Changes and Refresh come first. [ChatAction.CLOSE]
+ * is never ranked: a destructive action must not move into the pill. Usage is stored
+ * per action name, so an action added later, like Files, New session or Jobs, simply starts without uses.
  */
 internal val DEFAULT_CHAT_ACTIONS =
     listOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.RENAME, ChatAction.NEW_SESSION,
-        ChatAction.SESSION_SETTINGS, ChatAction.SETTINGS, ChatAction.HISTORY)
+        ChatAction.SESSION_SETTINGS, ChatAction.SETTINGS, ChatAction.JOBS, ChatAction.HISTORY)
 
 internal fun ActionUsage.decayed(now: Long): Double =
     score * 0.5.pow((now - at).coerceAtLeast(0L) / ACTION_USAGE_HALF_LIFE_MILLIS.toDouble())
@@ -62,3 +67,13 @@ internal fun chatActionLayout(ranked: List<ChatAction>, available: Set<ChatActio
 internal fun ChatActionLayout.withHistory(): ChatActionLayout =
     if (menu.isEmpty()) copy(shown = (shown + ChatAction.HISTORY).sortedBy { it.ordinal })
     else copy(menu = (menu + ChatAction.HISTORY).sortedBy { it.ordinal })
+
+/**
+ * [this] with Close at the end of the menu: the same session actions as a session row's menu,
+ * without a swipe. When Close opens the menu, the chevron takes the third button's place, so the
+ * pill stays as wide as [chatActionLayout] makes it; History's own button stays.
+ */
+internal fun ChatActionLayout.withClose(): ChatActionLayout {
+    val moved = if (menu.isEmpty()) shown.filter { it != ChatAction.HISTORY }.drop(2) else emptyList()
+    return ChatActionLayout(shown - moved.toSet(), (menu + moved + ChatAction.CLOSE).sortedBy { it.ordinal })
+}

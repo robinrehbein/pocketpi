@@ -1,0 +1,21 @@
+<!-- The watch app compiles these resources too but uses its own theme. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="UnusedResources">
+    <!--
+        The window theme before Compose draws. Its background is the app's own, light here and dark
+        in values-night, so a cold start in dark mode shows no white window first.
+    -->
+    <style name="Theme.PocketPi" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/pocketpi_window_background</item>
+    </style>
+    <!--
+        The share picker (ShareActivity) draws its own scrim and card over the sending app, in
+        light and dark alike, so its window is transparent.
+    -->
+    <style name="Theme.PocketPi.Share" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowAnimationStyle">@android:style/Animation.Dialog</item>
+    </style>
+    <!-- remoteColorScheme's light background. -->
+    <color name="pocketpi_window_background">#FFF4F5F9</color>
+</resources>

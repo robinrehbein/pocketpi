@@ -22,5 +22,15 @@ internal class NavigationMemoryCache<K, V>(private val capacity: Int) {
         entries.replaceAll { _, value -> transform(value) }
     }
 
+    /** Replaces the value of a cached [key] without changing access order; adds nothing. */
+    fun replace(key: K, value: V) {
+        if (key in entries) entries[key] = value
+    }
+
+    fun remove(key: K): V? = entries.remove(key)
+
+    /** The cached entries, least recently used first, without changing access order. */
+    fun entries(): List<Pair<K, V>> = entries.map { (key, value) -> key to value }
+
     fun clear() = entries.clear()
 }

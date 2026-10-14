@@ -2,7 +2,6 @@ package de.joinnoah.pi.remote
 
 import android.content.Context
 import android.text.format.DateUtils
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -50,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -84,8 +84,15 @@ internal class ChangesActions(
  * later tablet inspector can share it.
  */
 @Composable
-internal fun ChangesPane(state: ChangesState, actions: ChangesActions, modifier: Modifier = Modifier, projectName: String? = null) {
-    BackHandler { if (state.file != null) actions.onOpenFile(null) else actions.onClose() }
+internal fun ChangesPane(
+    state: ChangesState,
+    actions: ChangesActions,
+    modifier: Modifier = Modifier,
+    projectName: String? = null,
+    /** No connection: a status shown says when it was read. */
+    offline: Boolean = false,
+) {
+    PaneBackHandler { if (state.file != null) actions.onOpenFile(null) else actions.onClose() }
     // One state object for the remembered actions below; a failed prefill belongs to the file
     // and base it happened on, so it resets when either changes.
     var prefillFailed by remember { mutableStateOf(false) }
@@ -106,6 +113,7 @@ internal fun ChangesPane(state: ChangesState, actions: ChangesActions, modifier:
             )
         }
     val density = LocalDensity.current
+    val focusManager = LocalFocusManager.current
     var headerHeight by remember { mutableStateOf(64.dp) }
     Surface(modifier.fillMaxSize().testTag("changesPane")) {
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
@@ -117,10 +125,12 @@ internal fun ChangesPane(state: ChangesState, actions: ChangesActions, modifier:
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
-                Box(Modifier.weight(1f).fillMaxWidth()) {
+                // Backspace, or Left at the edge, goes from a diff back to the file list.
+                val parent = { actions.onOpenFile(null) }.takeIf { state.file != null }
+                Box(Modifier.weight(1f).fillMaxWidth().parentOnLeft(focusManager, parent)) {
                     val inset = if (prefillFailed) 0.dp else headerHeight
                     val file = state.file
-                    if (file == null) ChangesOverview(state, checked, inset)
+                    if (file == null) ChangesOverview(state, checked, inset, offline)
                     else key(file) { ChangesFileDiff(state, file, checked, inset) }
                 }
                 if (state.comments.isNotEmpty()) ReviewBar(state.comments, state.devBase, checked)
@@ -150,6 +160,10 @@ private fun formatTime(context: Context, at: Long): String =
         at,
         DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_ABBREV_MONTH,
     )
+
+/** The time of day [at], with its date when that is not today. */
+internal fun updatedTime(context: Context, at: Long): String =
+    if (DateUtils.isToday(at)) DateUtils.formatDateTime(context, at, DateUtils.FORMAT_SHOW_TIME) else formatTime(context, at)
 
 private fun failureText(failure: ChangesFailure): Int =
     when (failure) {
@@ -208,6 +222,15 @@ private fun FailureNotice(failure: ChangesFailure, onRetry: () -> Unit) {
     }
 }
 
+/** The changes shown could not be read again; [onRetry] tries once more. */
+@Composable
+private fun StaleNotice(text: String, onRetry: () -> Unit) {
+    Column(Modifier.fillMaxWidth().testTag("changesStale")) {
+        Notice(text, Modifier.testTag("changesUpdated"))
+        TextButton(onClick = onRetry, Modifier.padding(horizontal = 8.dp)) { Text(stringResource(R.string.remote_changes_retry)) }
+    }
+}
+
 @Composable
 private fun Loading() {
     val label = stringResource(R.string.remote_changes_loading)
@@ -217,7 +240,7 @@ private fun Loading() {
 }
 
 @Composable
-private fun ChangesOverview(state: ChangesState, actions: ChangesActions, headerHeight: Dp) {
+private fun ChangesOverview(state: ChangesState, actions: ChangesActions, headerHeight: Dp, offline: Boolean = false) {
     val context = LocalContext.current
     val status = state.status
     val shownBase = status?.base ?: state.base
@@ -278,6 +301,13 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
             }
             status?.branch?.let { branch ->
                 item(key = "branch", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_branch, branch)) }
+            }
+            state.fetchedAt?.takeIf { (offline || state.stale) && status != null && state.failure == null }?.let { at ->
+                item(key = "updated", span = { GridItemSpan(maxLineSpan) }) {
+                    val time = updatedTime(context, at)
+                    if (offline) Notice(stringResource(R.string.remote_changes_updated_at, time), Modifier.testTag("changesUpdated"))
+                    else StaleNotice(stringResource(R.string.remote_changes_stale_at, time), actions.onReload)
+                }
             }
             val failure = state.failure
             when {
@@ -419,6 +449,7 @@ private fun ChangesFileTile(
         onRequestPreview = onRequestPreview,
         onPeek = onPeek,
         tag = "changesFile",
+        path = file.path,
         detail = {
             Column {
                 if ('/' in file.path)
@@ -477,6 +508,8 @@ private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesA
         }
     val atLimit = state.comments.size >= MAX_REVIEW_COMMENTS
     var editing by remember { mutableStateOf<DiffLine?>(null) }
+    val copyLine = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_line))
+    val copyHunk = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_hunk))
     val addLabel = stringResource(R.string.remote_changes_comment_add)
     val editLabel = stringResource(R.string.remote_changes_comment_edit)
     // A subagent's file: its changes are not the session's to comment on or act on from here.
@@ -533,16 +566,28 @@ private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesA
             else -> {
                 // Rows stay one text line high, below the 48dp touch target, to keep code readable;
                 // an accepted trade-off, as in the tool detail diff.
-                itemsIndexed(lines, contentType = { _, line -> line.kind }) { _, line ->
+                itemsIndexed(lines, contentType = { _, line -> line.kind }) { index, line ->
                     val commentable = line.kind != DiffKind.HUNK && !readOnly
                     Column {
                         DiffRow(
                             line,
                             rowStyle,
                             scroll,
-                            if (commentable)
-                                Modifier.clickable(onClickLabel = addLabel) { editing = line }.testTag("changesDiffLine")
-                            else Modifier,
+                            Modifier.contextMenu { _ ->
+                                diffLineMenuActions(commentable).map { action ->
+                                    MenuItem(action.label, "diff_${action.name.lowercase()}") {
+                                        when (action) {
+                                            DiffLineMenuAction.COMMENT -> editing = line
+                                            DiffLineMenuAction.COPY_LINE -> copyLine(line.text)
+                                            DiffLineMenuAction.COPY_HUNK -> copyHunk(diffHunkText(lines, index))
+                                        }
+                                    }
+                                }
+                            }.then(
+                                if (commentable)
+                                    Modifier.clickable(onClickLabel = addLabel) { editing = line }.testTag("changesDiffLine")
+                                else Modifier
+                            ),
                         )
                         comments[line.oldLine.takeIf { line.newLine == null } to line.newLine]?.let { comment ->
                             Text(

@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.view.ContextThemeWrapper
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
@@ -37,7 +38,8 @@ import java.util.WeakHashMap
  * stack. A Content-Security-Policy header and blockNetworkLoads back that up.
  *
  * The single exception is a GET for a library on the CDN allowlist (ArtifactCdn.kt). The WebView still
- * does not connect: the app fetches it with a fresh request and hands the bytes back.
+ * does not connect: the app fetches it with a fresh request and hands the bytes back. A thumbnail has
+ * no such exception, so scrolling past artifact cards never reaches a CDN.
  *
  * WebRTC and network hints (preconnect, dns-prefetch) bypass all of that. ArtifactNetworkLock.kt adds
  * the two layers for them: a process-wide proxy override to a dead proxy, which every TCP connection
@@ -269,12 +271,15 @@ internal class ArtifactChromeClient(private val callbacks: ArtifactCallbacks) : 
     }
 }
 
-/** Blocks every navigation, serves [page] from memory and denies everything else. */
+/**
+ * Blocks every navigation, serves [page] from memory and denies everything else. [cdn] answers
+ * allowlisted library requests; with null (a thumbnail) they are denied like everything else.
+ */
 internal class ArtifactWebViewClient(
     private val context: Context,
     private val page: ArtifactPage,
     private val callbacks: ArtifactCallbacks,
-    private val cdn: Lazy<ArtifactCdnFetcher> = lazy { ArtifactCdn.fetcher(context) },
+    private val cdn: Lazy<ArtifactCdnFetcher>? = lazy { ArtifactCdn.fetcher(context) },
     private val userAgent: String = "",
 ) : WebViewClient() {
     private var finished = false
@@ -294,9 +299,10 @@ internal class ArtifactWebViewClient(
         val local = artifactResponse(context, page, url, target.method)
         if (local.statusCode != 403) return local
         // Only a sub-resource GET, never the page itself, and only the allowlist. Request headers are not read.
+        val fetcher = cdn ?: return local
         if (target.method != "GET" || target.isForMainFrame || page.kind != ArtifactKind.Html || !artifactCdnAllowed(url))
             return local
-        return cdnResponse(cdn.value.fetch(url, userAgent, cdnBudget))
+        return cdnResponse(fetcher.value.fetch(url, userAgent, cdnBudget))
     }
 
     @Deprecated("Deprecated in Java")
@@ -330,6 +336,8 @@ internal class ArtifactWebViewClient(
  * HTML artifact shows without its scripts, and a Mermaid diagram is not loaded and fails.
  *
  * [cdn] answers requests for allowlisted hosts; null uses the app's own client, created on first use.
+ * A [thumbnail] has no CDN at all, whatever [cdn] is: a card drawn while a list scrolls must not make
+ * a request the user did not ask for.
  */
 internal fun createArtifactWebView(
     context: Context,
@@ -339,13 +347,21 @@ internal fun createArtifactWebView(
     networkLock: ArtifactNetworkLock = ArtifactNetworkLock.process,
     webRtcBlock: (WebView) -> Boolean = ::installArtifactWebRtcBlock,
     cdn: ArtifactCdnFetcher? = null,
+    thumbnail: Boolean = false,
 ): WebView =
-    WebView(context).also { view ->
+    // A light theme: from API 33 WebView derives prefers-color-scheme from the theme's isLightTheme,
+    // and the activity is dark in dark mode. HTML artifacts stay light on their white background as
+    // before; Mermaid gets dark mode explicitly through ArtifactPage.dark.
+    WebView(ContextThemeWrapper(context, android.R.style.Theme_Material_Light_NoActionBar)).also { view ->
         configureArtifactWebView(view)
         view.setBackgroundColor(background)
+        val userAgent = view.settings.userAgentString.orEmpty()
         view.webViewClient =
-            if (cdn == null) ArtifactWebViewClient(context, page, callbacks, userAgent = view.settings.userAgentString.orEmpty())
-            else ArtifactWebViewClient(context, page, callbacks, lazyOf(cdn), view.settings.userAgentString.orEmpty())
+            when {
+                thumbnail -> ArtifactWebViewClient(context, page, callbacks, cdn = null, userAgent = userAgent)
+                cdn == null -> ArtifactWebViewClient(context, page, callbacks, userAgent = userAgent)
+                else -> ArtifactWebViewClient(context, page, callbacks, lazyOf(cdn), userAgent)
+            }
         view.webChromeClient = ArtifactChromeClient(callbacks)
         if (Build.VERSION.SDK_INT >= 29) view.webViewRenderProcessClient = ArtifactRenderProcessClient()
         // Posted: this may run inside the factory that is still creating the view.

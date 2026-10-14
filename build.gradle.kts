@@ -174,10 +174,16 @@ android {
         }
     }
     bundle { language { enableSplit = false } }
+    lint {
+        // lint-baseline.xml records the known findings, so lint reports only new ones. Regenerate
+        // it with ./gradlew updateLintBaseline only after reviewing what the new baseline hides.
+        baseline = file("lint-baseline.xml")
+        checkDependencies = true
+    }
     defaultConfig {
         minSdk = 26
         targetSdk = 36
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "de.joinnoah.pi.remote.PocketPiTestRunner"
         applicationId = "de.robinrehbein.pocketpi"
         versionCode = releaseVersionCode ?: 1
         versionName = requestedVersionName ?: "0.3.19"
@@ -191,10 +197,19 @@ android {
     }
     testOptions {
         unitTests.isIncludeAndroidResources = true
+        // All Robolectric test classes share one forked JVM. Gradle's default 512 MB heap ran out
+        // once the suite grew past about 125 classes.
+        unitTests.all { it.maxHeapSize = "2g" }
         managedDevices {
             localDevices {
                 create("pixel2Api36") {
                     device = "Pixel 2"
+                    apiLevel = 36
+                    systemImageSource = "aosp"
+                }
+                // CI runs only the tests annotated with @LargeScreen on it.
+                create("pixelTabletApi36") {
+                    device = "Pixel Tablet"
                     apiLevel = 36
                     systemImageSource = "aosp"
                 }

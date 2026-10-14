@@ -1,11 +1,14 @@
 package de.joinnoah.pi.remote
 
+import android.widget.Toast
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.handwriting.handwritingDetector
+import androidx.compose.foundation.text.handwriting.handwritingHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -17,7 +20,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
@@ -27,6 +32,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -39,6 +45,169 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.offset
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+
+/** How long typing pauses before the composer gives its text to the repository. */
+internal const val COMPOSER_DRAFT_DEBOUNCE_MILLIS = 300L
+
+/** The largest draft the repository keeps, in UTF-8 bytes; longer edits are refused as before. */
+private const val MAX_DRAFT_BYTES = 128 * 1024
+
+/**
+ * The composer's text while the user types. A keystroke changes only this state, so it recomposes
+ * the composer and not the whole chat; the text reaches the repository through [push] after a
+ * pause ([pushPending]) or at once on [flush]: before a send, on stop and when the chat changes.
+ * Draft changes made elsewhere (a quote prompt, a prefill, a restored uncertain draft, the clear
+ * after a send) come back through [sync] and replace the text, unless the user typed something
+ * the repository has not seen yet: that typing wins, and the next push carries it. Until the chat
+ * is selected the text is not [editable], so typing never lands on top of a draft not shown yet.
+ */
+@Stable
+internal class ComposerDraft(
+    /** The chat the text belongs to; every push names it, so a late one never reaches another. */
+    val selection: RemoteSelection,
+    initial: String,
+    private val push: (RemoteSelection, String) -> Unit,
+) {
+    private var current by mutableStateOf(TextFieldValue(initial, TextRange(initial.length)))
+
+    var value: TextFieldValue
+        get() = current
+        private set(next) {
+            // A changed text brings back the suggestions Esc closed.
+            if (next.text != current.text) suggestionsClosedFor = null
+            current = next
+        }
+
+    val text: String get() = value.text
+
+    /** False until the chat is selected: edits are refused, so typing never lands on a draft not shown yet. */
+    var editable = true
+
+    /** The repository's draft as [sync] last saw it. */
+    private var observed = initial
+
+    /** The text the repository holds as far as this composer knows: its last push or a synced change. */
+    private var known = initial
+
+    /** Pushed texts whose echo has not come back through [sync] yet, oldest first. */
+    private val echoes = ArrayDeque<String>()
+
+    /**
+     * A keyboard edit; false when it is refused: while the chat is not [editable], or for a text
+     * over the draft limit, as the repository would refuse it. A selection-only change always applies.
+     */
+    fun edit(next: TextFieldValue): Boolean {
+        if (next.text != value.text && (!editable || tooLong(next.text))) return false
+        value = next
+        return true
+    }
+
+    /** Replaces the text with the cursor at its end: an accepted prediction or a voice result. */
+    fun setText(text: String): Boolean =
+        text == value.text || edit(TextFieldValue(text, TextRange(text.length)))
+
+    /** Replaces the text and pushes it at once, for a change the chat makes (a picked command). */
+    fun replace(text: String) {
+        setText(text)
+        flush()
+    }
+
+    /** Pushes typing the repository has not seen; the debounce calls this after a pause. */
+    fun pushPending() {
+        if (text != known) send(text)
+    }
+
+    /**
+     * Pushes the text unless the repository already holds it. [force] pushes it anyway, so a send
+     * that follows reads exactly the text on screen.
+     */
+    fun flush(force: Boolean = false) {
+        if (force) echoes.clear()
+        if (force || text != known || text != observed) send(text)
+    }
+
+    private fun send(text: String) {
+        known = text
+        echoes.addLast(text)
+        while (echoes.size > MAX_ECHOES) echoes.removeFirst()
+        push(selection, text)
+    }
+
+    /** The repository's draft is now [draft]. */
+    fun sync(draft: String) {
+        if (draft == observed) return
+        observed = draft
+        // The repository's state arrives a frame late and conflated; an echo of an earlier push
+        // must not undo what the user typed since.
+        val echo = echoes.lastIndexOf(draft)
+        if (echo >= 0) {
+            repeat(echo + 1) { echoes.removeFirst() }
+            return
+        }
+        echoes.clear()
+        val typing = text != known
+        known = draft
+        if (!typing && draft != text) value = TextFieldValue(draft, TextRange(draft.length))
+    }
+
+    /** The text whose slash suggestions Esc closed, until the text changes. */
+    private var suggestionsClosedFor by mutableStateOf<String?>(null)
+
+    val suggestionsClosed: Boolean get() = suggestionsClosedFor == text
+
+    fun closeSuggestions() {
+        suggestionsClosedFor = text
+    }
+
+    /** Types [typed] over the selection, as a key press in the field would. */
+    fun insert(typed: String): Boolean {
+        val start = value.selection.min
+        val next = text.substring(0, start) + typed + text.substring(value.selection.max)
+        return edit(TextFieldValue(next, TextRange(start + typed.length)))
+    }
+
+    private fun tooLong(text: String) =
+        text.length * 3 > MAX_DRAFT_BYTES && text.encodeToByteArray().size > MAX_DRAFT_BYTES
+
+    private companion object {
+        const val MAX_ECHOES = 16
+    }
+}
+
+/**
+ * The composer text of [selection], starting from the repository's [draft]. It follows later
+ * changes of [draft], pushes typing through [push] after [COMPOSER_DRAFT_DEBOUNCE_MILLIS], and
+ * flushes on stop, when [selection] changes or the composer leaves the screen, and when it becomes
+ * [editable] once the chat is selected. [push] must file a late write under the selection it
+ * names, also once that chat is no longer shown (see [RemoteRepository.draft]).
+ */
+@Composable
+internal fun rememberComposerDraft(
+    selection: RemoteSelection,
+    draft: String,
+    editable: Boolean,
+    push: (RemoteSelection, String) -> Unit,
+): ComposerDraft {
+    val latestPush by rememberUpdatedState(push)
+    val composer = remember(selection) { ComposerDraft(selection, draft) { target, text -> latestPush(target, text) } }
+    SideEffect { composer.editable = editable }
+    LaunchedEffect(composer, draft) { composer.sync(draft) }
+    // Text the repository does not hold yet (a push it could not take) goes again once it can.
+    LaunchedEffect(composer, editable) { if (editable) composer.flush() }
+    LaunchedEffect(composer) {
+        snapshotFlow { composer.text }.collectLatest {
+            delay(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
+            composer.pushPending()
+        }
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { composer.flush() }
+    DisposableEffect(composer) { onDispose { composer.flush() } }
+    return composer
+}
 
 @Composable
 internal fun QuotePreview(
@@ -83,7 +252,8 @@ internal fun QuotePreview(
 @Composable
 internal fun ChatComposer(
     state: RemoteState,
-    onDraft: (String) -> Unit,
+    /** Where typed text goes when the caller does not hoist [draft]. */
+    onDraft: (String) -> Unit = {},
     onSend: () -> Unit,
     onStop: () -> Unit,
     onRemoveQuote: () -> Unit,
@@ -100,6 +270,13 @@ internal fun ChatComposer(
     onCancelAttachments: () -> Unit = {},
     onPickPhotos: () -> Unit = {},
     onPickFiles: () -> Unit = {},
+    /**
+     * Takes the images and files a paste brings (Ctrl+V, or "Paste image or file" in the + menu) as one
+     * batch; null leaves every paste to the field.
+     */
+    onPasteAttachments: ((List<Picked>) -> Unit)? = null,
+    /** Takes a photo for the draft; null where there is no camera. */
+    onTakePhoto: (() -> Unit)? = null,
     voiceEngine: VoiceRecognitionEngine? = null,
     voicePermissionGrantedOverride: Boolean? = null,
     focusRequester: FocusRequester? = null,
@@ -107,12 +284,36 @@ internal fun ChatComposer(
     hardwareKeyboard: Boolean = false,
     /** The "Enter sends" setting; off, a hardware Enter inserts a newline as on screen. */
     enterSends: Boolean = false,
+    /** Where typed text goes, naming the chat it was typed in; see [RemoteRepository.draft]. */
+    onDraftFor: (RemoteSelection, String) -> Unit = { _, text -> onDraft(text) },
+    /** The text being typed; the chat hoists it so its own draft changes can flush it first. */
+    draft: ComposerDraft = rememberComposerDraft(state.selection, state.draft, !state.loading, onDraftFor),
 ) {
+    // Everything below reads the text on screen, which runs ahead of the repository's draft
+    // while the user types.
+    val repositoryState = state
+    @Suppress("NAME_SHADOWING")
+    val state = remember(repositoryState, draft.text) { repositoryState.copy(draft = draft.text) }
+    // A send reads the repository's draft, so it first gets exactly the text on screen.
+    val flushed: (() -> Unit) -> () -> Unit = { action -> { draft.flush(force = true); action() } }
+    @Suppress("NAME_SHADOWING") val onSend = flushed(onSend)
+    @Suppress("NAME_SHADOWING") val onFollowUp = flushed(onFollowUp)
+    @Suppress("NAME_SHADOWING") val onSteer = flushed(onSteer)
+    @Suppress("NAME_SHADOWING") val onResumeChild = flushed(onResumeChild)
     val predictions = LocalPromptPredictions.current
     val childControls = childControlsAvailable(state)
     val control = childControl(state)
     val childBusy = control?.phase in setOf(ChildControlPhase.STOPPING, ChildControlPhase.RESUMING)
     var confirmChildStop by remember(state.selection.sessionId) { mutableStateOf(false) }
+    // The layout's keys (Esc, Ctrl+., typing with nothing focused) reach the composer through this.
+    val keyTarget = LocalChatKeyTarget.current
+    if (keyTarget != null)
+        LaunchedEffect(keyTarget.stopHint) {
+            // The hint lasts as long as the second Esc may come.
+            if (!keyTarget.stopHint) return@LaunchedEffect
+            delay(ESCAPE_STOP_WINDOW_MILLIS)
+            keyTarget.stopHint = false
+        }
     // In a child the host can stop, Stop goes through the parent's subagent manager after a
     // confirmation, also while the composer offers a resume or asks a question; elsewhere it
     // aborts the run as before.
@@ -138,7 +339,19 @@ internal fun ChatComposer(
         )
     if (state.questions.isNotEmpty()) {
         val abort: () -> Unit = if (childControls) ({ confirmChildStop = true }) else onAbort
-        QuestionComposer(state, abort, abortBlocked = childControls && childBusy) { questionId, answer ->
+        val abortEnabled = !(childControls && childBusy) && questionAbortEnabled(state)
+        if (keyTarget != null)
+            SideEffect {
+                keyTarget.running = abortEnabled
+                keyTarget.stop = abort
+                keyTarget.composerFocused = false
+                keyTarget.composerBlank = true
+                keyTarget.transientOpen = { false }
+                keyTarget.type = {}
+            }
+        QuestionComposer(
+            state, abort, abortBlocked = childControls && childBusy, stopHint = keyTarget?.stopHint == true,
+        ) { questionId, answer ->
             val route = state.selection.routeId
             val session = state.selection.sessionId
             if (route != null && session != null && isPlanApproval(answer))
@@ -154,6 +367,8 @@ internal fun ChatComposer(
         if (route != null && project != null) predictions?.record(route, project, state.draft)
     }
     var addMenu by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val clipboardEmpty = stringResource(R.string.remote_drop_clipboard_empty)
     var preferredBusyAction by remember(state.selection.sessionId) {
         mutableStateOf(BusyComposerAction.Steer)
     }
@@ -179,23 +394,20 @@ internal fun ChatComposer(
     val stop: () -> Unit = if (childControls) ({ confirmChildStop = true }) else onStop
     val send: () -> Unit = if (childResume) onResumeChild else onSend
     val showBusyAction = busyAction != null && hasDraft
-    val voiceInput = rememberVoiceInputBinding(state.draft, onDraft, voiceEngine)
-    // The draft text stays the source of truth; only the selection is local, so an accepted
-    // suggestion can put the cursor at its end.
-    var field by remember(state.selection.sessionId) {
-        mutableStateOf(TextFieldValue(state.draft, TextRange(state.draft.length)))
-    }
-    val shown = field.copy(text = state.draft)
+    val voiceInput = rememberVoiceInputBinding(state.draft, { draft.setText(it) }, voiceEngine)
+    val shown = draft.value
+    // Esc closes the prediction until something is typed.
+    var predictionClosed by remember(state.selection) { mutableStateOf(false) }
+    val draftEmpty = state.draft.isEmpty()
+    LaunchedEffect(draftEmpty) { if (!draftEmpty) predictionClosed = false }
     val prediction =
         rememberPromptPrediction(state).takeIf {
             state.draft.isEmpty() && state.attachments.isEmpty() && state.quote == null &&
-                voiceInput.state !is VoiceInputState.Listening
+                voiceInput.state !is VoiceInputState.Listening && !predictionClosed
         }
     val acceptPrediction: () -> Unit = {
         if (prediction != null && state.draft.isEmpty()) {
-            field = TextFieldValue(prediction, TextRange(prediction.length))
-            voiceInput.userEdited(prediction)
-            onDraft(prediction)
+            if (draft.setText(prediction)) voiceInput.userEdited(prediction)
         }
     }
     val latestAccept = rememberUpdatedState(acceptPrediction)
@@ -214,6 +426,46 @@ internal fun ChatComposer(
         }
     }
     val latestKeyboardSend = rememberUpdatedState(keyboardSend)
+    // Alt+Enter sends with the choice the chip does not show, when both are offered; otherwise
+    // the key stays the field's.
+    val otherBusyActionOffered = showBusyAction && canQueue && canSteerNow && canFollowUpNow
+    val otherBusyAction: () -> Unit = {
+        if (otherBusyActionOffered) {
+            recordPrompt()
+            if (busyAction == BusyComposerAction.Steer) onFollowUp() else onSteer()
+        }
+    }
+    val latestOtherBusyAction = rememberUpdatedState(otherBusyAction)
+    // Up in an empty composer brings back this session's own earlier messages.
+    val recall = remember(state.selection) { MessageRecall() }
+    val recallable by rememberUpdatedState(repositoryState.messages)
+    val recallStep: (Int) -> Boolean = { step ->
+        val recalling = recall.recalling(draft.text)
+        val text = recall.step(recallableMessages(recallable), draft.text, step)
+        if (text != null && draft.setText(text)) voiceInput.userEdited(text)
+        text != null || recalling
+    }
+    // Enter sends with the setting on, Ctrl+Enter always.
+    val enterChord = KeyChord(Key.Enter, ctrl = !enterSends)
+    if (keyTarget != null) {
+        val running = state.status == "running" && state.connected && !state.loading
+        SideEffect {
+            keyTarget.running = running
+            keyTarget.stop = stop
+            keyTarget.composerBlank = !hasDraft
+            // The suggestions count only while they show (SessionControls reports it).
+            keyTarget.transientOpen = { (keyTarget.slashShown && !draft.suggestionsClosed) || prediction != null }
+            keyTarget.closeTransient = {
+                if (keyTarget.slashShown && !draft.suggestionsClosed) draft.closeSuggestions() else predictionClosed = true
+            }
+            keyTarget.type = { typed ->
+                if (draft.insert(typed)) voiceInput.userEdited(draft.text)
+                focusRequester?.let { runCatching { it.requestFocus() } }
+            }
+            keyTarget.draftEdited = { voiceInput.userEdited(draft.text) }
+        }
+        LaunchedEffect(keyTarget, running) { if (!running) keyTarget.stopHint = false }
+    }
     FloatingSurface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             state.quote?.let { QuotePreview(it, Modifier.fillMaxWidth(), onRemoveQuote) }
@@ -268,6 +520,7 @@ internal fun ChatComposer(
                 content = suggestions,
             )
             VoiceInputStatus(voiceInput, state)
+            if (keyTarget?.stopHint == true) EscapeStopHint()
             if (childControls && (childResume || childStatus != null))
                 ChildControlRow(
                     status = childStatus,
@@ -335,31 +588,37 @@ internal fun ChatComposer(
                         },
                         modifier = Modifier.testTag("busyDeliveryMode"),
                     )
-                    IconButton(
-                        onClick = stop,
-                        enabled = state.connected && !state.loading,
-                        modifier = Modifier.testTag("stopRun"),
-                    ) {
-                        Icon(Icons.Default.Stop, stringResource(R.string.remote_stop))
+                    ShortcutTooltip(stringResource(R.string.remote_stop), Shortcut.STOP) {
+                        IconButton(
+                            onClick = stop,
+                            enabled = state.connected && !state.loading,
+                            modifier = Modifier.testTag("stopRun"),
+                        ) {
+                            Icon(Icons.Default.Stop, stringResource(R.string.remote_stop))
+                        }
                     }
                 }
             }
             Row(
+                // Writing with the S Pen anywhere on the row, beside the field too, writes into it.
+                Modifier.handwritingDetector { focusRequester?.let { runCatching { it.requestFocus() } } },
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 leading()
                 if (ATTACHMENTS_CAPABILITY in state.capabilities)
                     Box {
-                        IconButton(
-                            onClick = { addMenu = true },
-                            enabled =
-                                !state.loading &&
-                                    !state.sending &&
-                                    !state.importingAttachments &&
-                                    state.attachments.size < 5,
-                        ) {
-                            Icon(Icons.Default.Add, stringResource(R.string.remote_add_attachment))
+                        ShortcutTooltip(stringResource(R.string.remote_add_attachment)) {
+                            IconButton(
+                                onClick = { addMenu = true },
+                                enabled =
+                                    !state.loading &&
+                                        !state.sending &&
+                                        !state.importingAttachments &&
+                                        state.attachments.size < 5,
+                            ) {
+                                Icon(Icons.Default.Add, stringResource(R.string.remote_add_attachment))
+                            }
                         }
                         DropdownMenu(addMenu, onDismissRequest = { addMenu = false }) {
                             DropdownMenuItem(
@@ -376,16 +635,33 @@ internal fun ChatComposer(
                                     onPickFiles()
                                 },
                             )
+                            if (onTakePhoto != null)
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.remote_take_photo)) },
+                                    onClick = {
+                                        addMenu = false
+                                        onTakePhoto()
+                                    },
+                                    modifier = Modifier.testTag("takePhoto"),
+                                )
+                            if (onPasteAttachments != null)
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.remote_drop_paste_image)) },
+                                    onClick = {
+                                        addMenu = false
+                                        val pasted = clipboardIntake(context)
+                                        if (pasted != null) onPasteAttachments(pasted.attachments)
+                                        else Toast.makeText(context, clipboardEmpty, Toast.LENGTH_SHORT).show()
+                                    },
+                                    modifier = Modifier.testTag("pasteAttachment"),
+                                )
                         }
                     }
                 TextField(
                     value = shown,
                     onValueChange = {
-                        field = it
-                        if (it.text != state.draft) {
-                            voiceInput.userEdited(it.text)
-                            onDraft(it.text)
-                        }
+                        val typed = it.text != draft.text
+                        if (draft.edit(it) && typed) voiceInput.userEdited(it.text)
                     },
                     placeholder = {
                         Text(
@@ -407,6 +683,7 @@ internal fun ChatComposer(
                     modifier =
                         Modifier.weight(1f)
                             .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
+                            .handwritingHandler()
                             .promptPrediction(
                                 prediction,
                                 stringResource(R.string.remote_prediction_use),
@@ -414,7 +691,76 @@ internal fun ChatComposer(
                                     stringResource(R.string.remote_prediction_announce, it)
                                 }.orEmpty(),
                             ) { latestAccept.value() }
+                            .onFocusChanged { keyTarget?.composerFocused = it.isFocused }
                             .onPreviewKeyEvent { event ->
+                                // A paste of images or files attaches them; any other paste,
+                                // text above all, stays the field's.
+                                if (
+                                    onPasteAttachments != null &&
+                                        isPasteKey(
+                                            event.key,
+                                            event.type == KeyEventType.KeyDown,
+                                            ctrl = event.isCtrlPressed || event.isMetaPressed,
+                                            alt = event.isAltPressed,
+                                            shift = event.isShiftPressed,
+                                        )
+                                ) {
+                                    val pasted = clipboardIntake(context)
+                                    if (pasted != null) {
+                                        onPasteAttachments(pasted.attachments)
+                                        if (pasted.text.isNotEmpty() && draft.insert(pasted.text))
+                                            voiceInput.userEdited(draft.text)
+                                        return@onPreviewKeyEvent true
+                                    }
+                                }
+                                if (
+                                    hardwareKeyboard && otherBusyActionOffered &&
+                                        event.type == KeyEventType.KeyDown &&
+                                        resolveShortcut(event, KeyContext.COMPOSER) == Shortcut.OTHER_BUSY_ACTION
+                                ) {
+                                    latestOtherBusyAction.value()
+                                    return@onPreviewKeyEvent true
+                                }
+                                val target = keyTarget
+                                val names = target?.slashNames.orEmpty()
+                                val highlight = target?.slashHighlight ?: 0
+                                val recalling = recall.recalling(draft.text)
+                                val completion =
+                                    composerKey(
+                                        event.key,
+                                        event.type == KeyEventType.KeyDown,
+                                        ctrl = event.isCtrlPressed || event.isMetaPressed,
+                                        alt = event.isAltPressed,
+                                        shift = event.isShiftPressed,
+                                        hardwareKeyboard = hardwareKeyboard,
+                                        // A recalled "/…" message keeps Up and Down for the history.
+                                        suggestionsOpen =
+                                            target != null && target.slashShown && !draft.suggestionsClosed &&
+                                                names.isNotEmpty() && !recalling,
+                                        highlightTyped =
+                                            commandName(draft.text)?.equals(names.getOrNull(highlight), ignoreCase = true) == true,
+                                        predictionShown = prediction != null,
+                                        draftEmpty = draft.text.isEmpty(),
+                                        recalling = recalling,
+                                    )
+                                when (completion) {
+                                    ComposerKey.DEFAULT -> Unit
+                                    ComposerKey.SUGGESTION_UP, ComposerKey.SUGGESTION_DOWN -> {
+                                        val step = if (completion == ComposerKey.SUGGESTION_UP) -1 else 1
+                                        target?.slashHighlight = moveHighlight(highlight, names.size, step)
+                                        return@onPreviewKeyEvent true
+                                    }
+                                    ComposerKey.SUGGESTION_RUN -> {
+                                        target?.runSlash?.invoke(highlight)
+                                        return@onPreviewKeyEvent true
+                                    }
+                                    ComposerKey.ACCEPT_PREDICTION -> {
+                                        latestAccept.value()
+                                        return@onPreviewKeyEvent true
+                                    }
+                                    ComposerKey.PREVIOUS_MESSAGE, ComposerKey.NEXT_MESSAGE ->
+                                        return@onPreviewKeyEvent recallStep(if (completion == ComposerKey.PREVIOUS_MESSAGE) 1 else -1)
+                                }
                                 when (
                                     composerEnter(
                                         event.key,
@@ -435,9 +781,8 @@ internal fun ChatComposer(
                                         val text = shown.text
                                         val start = shown.selection.min
                                         val next = text.substring(0, start) + "\n" + text.substring(shown.selection.max)
-                                        field = TextFieldValue(next, TextRange(start + 1))
-                                        voiceInput.userEdited(next)
-                                        onDraft(next)
+                                        if (draft.edit(TextFieldValue(next, TextRange(start + 1))))
+                                            voiceInput.userEdited(next)
                                         true
                                     }
                                 }
@@ -448,35 +793,51 @@ internal fun ChatComposer(
                         KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     shape = RoundedCornerShape(24.dp),
                 )
-                VoiceInput(
-                    state = state,
-                    binding = voiceInput,
-                    onSend = {
-                        recordPrompt()
-                        send()
-                    },
-                    onStop = stop,
-                    busyAction = if (showBusyAction) busyAction else null,
-                    busyActionEnabled = canQueue,
-                    onBusyAction = {
-                        recordPrompt()
-                        if (busyAction == BusyComposerAction.Steer) onSteer() else onFollowUp()
-                    },
-                    onBusyActionSwipe = { swipeLeft ->
-                        if (canSteerNow && canFollowUpNow)
-                            preferredBusyAction = if (swipeLeft) BusyComposerAction.FollowUp
-                            else BusyComposerAction.Steer
-                    },
-                    modifier = Modifier.padding(bottom = 6.dp).size(48.dp)
-                        .testTag(
-                            when (if (showBusyAction) busyAction else null) {
-                                BusyComposerAction.Steer -> "steer"
-                                BusyComposerAction.FollowUp -> "followUp"
-                                null -> "primaryComposerAction"
-                            }
-                        ),
-                    permissionGrantedOverride = voicePermissionGrantedOverride,
-                )
+                // Names what the primary button does now, and its key.
+                val busy = state.status in setOf("running", "waiting")
+                val primaryTip: Pair<String, KeyChord?> =
+                    when {
+                        busy && showBusyAction ->
+                            stringResource(
+                                if (busyAction == BusyComposerAction.Steer) R.string.remote_steer else R.string.remote_follow_up
+                            ) to enterChord
+                        busy -> stringResource(R.string.remote_stop) to tooltipChord(Shortcut.STOP)
+                        voiceInput.state is VoiceInputState.Listening -> stringResource(R.string.remote_voice_finish) to null
+                        voiceInput.state is VoiceInputState.Finishing -> stringResource(R.string.remote_voice_cancel) to null
+                        hasDraft -> stringResource(R.string.remote_send) to enterChord
+                        else -> stringResource(R.string.remote_voice_start) to null
+                    }
+                ShortcutTooltip(primaryTip.first, chord = primaryTip.second) {
+                    VoiceInput(
+                        state = state,
+                        binding = voiceInput,
+                        onSend = {
+                            recordPrompt()
+                            send()
+                        },
+                        onStop = stop,
+                        busyAction = if (showBusyAction) busyAction else null,
+                        busyActionEnabled = canQueue,
+                        onBusyAction = {
+                            recordPrompt()
+                            if (busyAction == BusyComposerAction.Steer) onSteer() else onFollowUp()
+                        },
+                        onBusyActionSwipe = { swipeLeft ->
+                            if (canSteerNow && canFollowUpNow)
+                                preferredBusyAction = if (swipeLeft) BusyComposerAction.FollowUp
+                                else BusyComposerAction.Steer
+                        },
+                        modifier = Modifier.padding(bottom = 6.dp).size(48.dp)
+                            .testTag(
+                                when (if (showBusyAction) busyAction else null) {
+                                    BusyComposerAction.Steer -> "steer"
+                                    BusyComposerAction.FollowUp -> "followUp"
+                                    null -> "primaryComposerAction"
+                                }
+                            ),
+                        permissionGrantedOverride = voicePermissionGrantedOverride,
+                    )
+                }
             }
         }
     }
@@ -545,9 +906,27 @@ private fun ChildControlRow(
     }
 }
 
+/** "Press Esc again to stop pi", after the first Esc while pi runs. */
+@Composable
+private fun EscapeStopHint() {
+    Text(
+        stringResource(R.string.remote_escape_stop_hint),
+        modifier =
+            Modifier.padding(horizontal = 8.dp)
+                .semantics { liveRegion = LiveRegionMode.Polite }
+                .testTag("escapeStopHint"),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.error,
+    )
+}
+
 internal enum class BusyComposerAction { Steer, FollowUp;
     fun other() = if (this == Steer) FollowUp else Steer
 }
+
+/** The question composer's abort can run, apart from a child stop or resume in flight. */
+private fun questionAbortEnabled(state: RemoteState): Boolean =
+    state.connected && !state.loading && state.answering.isEmpty() && state.selection.sessionId != null
 
 @Composable
 private fun QuestionComposer(
@@ -555,14 +934,11 @@ private fun QuestionComposer(
     onAbort: () -> Unit,
     /** A child stop or resume is in flight; like the strip's Stop, the abort waits for it. */
     abortBlocked: Boolean = false,
+    /** The first Esc asked for a second one to abort ([ChatKeyTarget.stopHint]). */
+    stopHint: Boolean = false,
     onAnswer: (String, kotlinx.serialization.json.JsonObject) -> Unit,
 ) {
-    val abortEnabled =
-        !abortBlocked &&
-            state.connected &&
-            !state.loading &&
-            state.answering.isEmpty() &&
-            state.selection.sessionId != null
+    val abortEnabled = !abortBlocked && questionAbortEnabled(state)
     FloatingSurface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
         Column(
             Modifier.padding(8.dp),
@@ -583,6 +959,7 @@ private fun QuestionComposer(
                     )
                 }
             }
+            if (stopHint) EscapeStopHint()
             OutlinedButton(
                 onClick = onAbort,
                 enabled = abortEnabled,
@@ -592,4 +969,17 @@ private fun QuestionComposer(
             }
         }
     }
+}
+
+/**
+ * The height in pixels between the end of a list's last item and the start of its after-padding,
+ * which is where the last item stops when the list is scrolled to its end; 0 while items reach
+ * that far, so above 0 the list cannot scroll. A list without items is empty from where its
+ * content starts.
+ */
+internal fun emptySpaceBelowList(info: androidx.compose.foundation.lazy.LazyListLayoutInfo): Int {
+    val contentEnd = info.viewportEndOffset - info.afterContentPadding
+    val last = info.visibleItemsInfo.lastOrNull() ?: return contentEnd.coerceAtLeast(0)
+    if (last.index != info.totalItemsCount - 1) return 0
+    return (contentEnd - (last.offset + last.size)).coerceAtLeast(0)
 }

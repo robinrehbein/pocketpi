@@ -100,20 +100,22 @@ internal class PromptPredictions(
         val stored =
             try {
                 file.read()?.let { promptHistory(Wire.parse(Wire.utf8(it), 1024 * 1024)) }
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("predictions.ensureLoaded", swallowed)
                 null
             } ?: PromptHistory()
         val routes =
             try {
                 pairings?.load()?.map { it.routeId }?.toSet()
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("predictions.ensureLoaded.2", swallowed)
                 null
             }
         val kept = routes?.let { stored.onlyRoutes(it) } ?: stored
         if (kept != stored) {
             try {
                 file.write(kept.json().toString().toByteArray())
-            } catch (_: Exception) {}
+            } catch (swallowed: Exception) { Diagnostics.caught("predictions.ensureLoaded.3", swallowed) }
         }
         mutableHistory.value = kept
         loaded = true
@@ -128,7 +130,8 @@ internal class PromptPredictions(
                 mutableHistory.value = next
                 try {
                     file.write(next.json().toString().toByteArray())
-                } catch (_: Exception) {
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("predictions.change", swallowed)
                     // Predictions are a convenience; the in-memory history still works.
                 }
             }

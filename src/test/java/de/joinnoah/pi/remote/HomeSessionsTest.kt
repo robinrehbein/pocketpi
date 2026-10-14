@@ -1,5 +1,7 @@
 package de.joinnoah.pi.remote
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -133,7 +135,8 @@ class HomeSessionsTest {
 
     @Test
     fun widgetRowsFollowTheHeightAndWideWidgetsUseTwoColumns() {
-        assertEquals(40f, widgetRowDp(1f))
+        // A row is a 48 dp tap target at the default font size.
+        assertEquals(48f, widgetRowDp(1f))
         assertEquals(WidgetLayout(1, 1), widgetLayout(180f, 80f))
         assertEquals(WidgetLayout(1, 1), widgetLayout(180f, 120f))
         assertEquals(WidgetLayout(1, 2), widgetLayout(180f, 130f))
@@ -142,6 +145,18 @@ class HomeSessionsTest {
         assertEquals(WidgetLayout(2, 3), widgetLayout(520f, 600f))
         assertEquals(WidgetLayout(1, 1), widgetLayout(100f, 10f))
     }
+
+    @Test
+    fun theLargeTabletSizeUsesThreeColumnsOfUpToSixRows() {
+        assertEquals(WidgetLayout(3, 6), widgetLayout(600f, 400f))
+        assertEquals(WidgetLayout(3, 4), widgetLayout(600f, 240f))
+        assertEquals(WidgetLayout(3, 6), widgetLayout(800f, 900f))
+        assertEquals(WidgetLayout(2, 3), widgetLayout(599f, 400f))
+        assertEquals(18, widgetSessions(manyRunning(20), 3 * 6).size)
+    }
+
+    private fun manyRunning(count: Int) =
+        HomeSnapshot(true, (1..count).map { home("s$it", status = "running", updatedAt = it.toLong()) })
 
     @Test
     fun largerFontsFitFewerRows() {
@@ -232,6 +247,88 @@ class HomeSessionsTest {
     fun snapshotRoundTripsThroughJson() {
         val snapshot = HomeSnapshot(true, listOf(home("a", "waiting", 5, 7), home("b")))
         assertEquals(snapshot, homeSnapshot(Wire.parse(snapshot.json().toString())))
+        val refreshed = snapshot.copy(refreshedAt = 123_000)
+        assertEquals(refreshed, homeSnapshot(Wire.parse(refreshed.json().toString())))
+    }
+
+    @Test
+    fun aSnapshotStoredWithoutRefreshTimeStillLoads() {
+        // Written by a version before the freshness line.
+        val stored =
+            """{"version":1,"paired":true,"sessions":[{"routeId":"r","projectId":"p",
+            |"projectName":"Project","sessionId":"a","title":"Title a","status":"idle",
+            |"updatedAt":null,"openedAt":null}]}""".trimMargin().replace("\n", "")
+        val snapshot = homeSnapshot(Wire.parse(stored))
+        assertEquals(listOf(home("a")), snapshot.sessions)
+        assertNull(snapshot.refreshedAt)
+    }
+
+    @Test
+    fun aTrustedStateMarksTheRowsRefreshedAtAMinutesResolution() {
+        val previous = HomeSnapshot(true, listOf(home("a")))
+        val state = connected(sessions = listOf(session("a", "idle")), projectId = "p")
+        val first = mergeHomeSnapshot(previous, state, true, setOf("r"), now = 100_000)
+        assertEquals(100_000L, first.refreshedAt)
+        // Unchanged rows within the minute: the snapshot stays as it is and is not rewritten.
+        assertEquals(first, mergeHomeSnapshot(first, state, true, setOf("r"), now = 130_000))
+        assertEquals(160_000L, mergeHomeSnapshot(first, state, true, setOf("r"), now = 160_000).refreshedAt)
+        // Changed rows are new now, whatever the minute.
+        val running = connected(sessions = listOf(session("a", "running")), projectId = "p")
+        assertEquals(110_000L, mergeHomeSnapshot(first, running, true, setOf("r"), now = 110_000).refreshedAt)
+        // An offline app confirms nothing.
+        val offline = state.copy(connected = false)
+        assertEquals(100_000L, mergeHomeSnapshot(first, offline, true, setOf("r"), now = 500_000).refreshedAt)
+    }
+
+    @Test
+    fun aRefreshTimeFromAClockSetBackIsReplaced() {
+        // Stored while the clock was a day ahead: it would otherwise stay until the rows change.
+        val ahead = HomeSnapshot(true, listOf(home("a")), refreshedAt = 100_000 + 86_400_000)
+        val state = connected(sessions = listOf(session("a", "idle")), projectId = "p")
+        assertEquals(100_000L, mergeHomeSnapshot(ahead, state, true, setOf("r"), now = 100_000).refreshedAt)
+    }
+
+    @Test
+    fun homeInputsReuseTheListsOfTheLastStateWhenTheyAreTheSame() {
+        val state = connected(sessions = listOf(session("a", "running")), projectId = "p")
+        val first = homeInputs(state)
+        val delta = state.copy(draft = "d", status = "running")
+        val next = homeInputs(delta, state to first)
+        assertEquals(homeInputs(delta), next)
+        assertTrue(next.sessions === first.sessions)
+        assertTrue(next.project === first.project)
+        // A new list is stripped again.
+        val waiting = delta.copy(sessions = listOf(session("a", "waiting")))
+        assertEquals(homeInputs(waiting), homeInputs(waiting, delta to next))
+    }
+
+    @Test
+    fun aPushAboutAKnownSessionRefreshesTheRows() {
+        val snapshot = HomeSnapshot(true, listOf(home("a")), refreshedAt = 1L)
+        val next = snapshot.withPush("r", "a", "waiting", now = 9L)
+        assertEquals("waiting", next.sessions.single().status)
+        assertEquals(9L, next.refreshedAt)
+        assertEquals(snapshot, snapshot.withPush("r", "unknown", "waiting", now = 9L))
+    }
+
+    @Test
+    fun homeInputsKeepOnlyWhatTheMergeReads() {
+        val streaming =
+            connected(sessions = listOf(session("a", "running")), projectId = "p")
+                .copy(messages = listOf(Wire.objectOf("id" to "m", "text" to "Hel")), draft = "draft")
+        val later =
+            streaming.copy(
+                messages = listOf(Wire.objectOf("id" to "m", "text" to "Hello")),
+                sessions = listOf(JsonObject(session("a", "running") + ("preview" to JsonPrimitive("Hello")))),
+                status = "running",
+            )
+        assertEquals(homeInputs(streaming), homeInputs(later))
+        val waiting = later.copy(sessions = listOf(session("a", "waiting")))
+        assertFalse(homeInputs(later) == homeInputs(waiting))
+        assertEquals(
+            mergeHomeSnapshot(HomeSnapshot(), waiting, true, setOf("r"), 0),
+            mergeHomeSnapshot(HomeSnapshot(), homeInputs(waiting), true, setOf("r"), 0),
+        )
     }
 
     private fun session(id: String, status: String, origin: String = "rpc") =
@@ -273,5 +370,115 @@ class HomeSessionsTest {
         val withFieldSeparator = shortcutSignatureEntry("r", "s", "a|b", "c|d")
         assertEquals("session:r:s|a b|c d", withFieldSeparator)
         assertEquals(2, withFieldSeparator.count { it == '|' })
+    }
+
+    private val day = 24 * 60 * 60_000L
+
+    @Test
+    fun notifiedSessionsFollowTheRankedShortcutsNewestFirstWithinTheLimit() {
+        val now = 10 * day
+        val snapshot =
+            HomeSnapshot(
+                true,
+                listOf(home("a", openedAt = 5), home("b", openedAt = 4), home("c", openedAt = 3), home("d", openedAt = 2), home("e", openedAt = 1)),
+                notified =
+                    listOf(
+                        NotifiedSession("r", "a", at = now - 1),
+                        NotifiedSession("r", "n1", "Named", "Project", at = now - 2),
+                        NotifiedSession("r", "e", at = now - 3),
+                        NotifiedSession("r", "n2", at = now - 4),
+                        NotifiedSession("r", "old", at = now - 4 * day),
+                    ),
+            )
+        val chosen = shortcutChoice(snapshot, limit = 7, now = now)
+        // The four ranked sessions first, which the launcher shows; then the notified ones by ID,
+        // an already ranked one only once, a known one with its known title, none older than 3 days.
+        assertEquals(listOf("a", "b", "c", "d", "e", "n1", "n2"), chosen.map { it.sessionId })
+        assertEquals("Title e", chosen[4].title)
+        assertEquals("Named", chosen[5].title)
+        assertEquals("Project", chosen[5].projectName)
+        // With room for fewer, the newest win.
+        assertEquals(listOf("a", "b", "c", "d", "n1"), shortcutChoice(snapshot, limit = 5, now = now).map { it.sessionId })
+        assertEquals(listOf("a", "b", "c", "d", "e", "n1"), shortcutChoice(snapshot, limit = 6, now = now).map { it.sessionId })
+        assertEquals(listOf("a", "b"), shortcutChoice(snapshot, limit = 2, now = now).map { it.sessionId })
+        // A closed session keeps no conversation shortcut.
+        assertEquals(
+            listOf("a", "b", "c", "d", "e", "n2"),
+            shortcutChoice(snapshot, limit = 7, now = now, closed = setOf(shortcutId("r", "n1"))).map { it.sessionId },
+        )
+    }
+
+    @Test
+    fun anotherPushForASessionAlreadyInTheSetPublishesNothingNewAndNeitherDoesItsName() {
+        val now = 10 * day
+        var snapshot =
+            HomeSnapshot(true, listOf(home("a")))
+                .withNotified("r", "n1", now = now - 3)
+                .withNotified("r", "n2", now = now - 2)
+                .withNotified("r", "a", now = now - 1)
+        fun signature(at: Long) = shortcutSignature(shortcutChoice(snapshot, limit = 8, now = at), snapshot)
+        val before = signature(now)
+        // A completion for the oldest notified session moves it to the front of the record only.
+        snapshot = snapshot.withNotified("r", "n1", now = now)
+        assertEquals(before, signature(now))
+        // Its name, read later in the background, waits for the next publish.
+        snapshot = snapshot.withNotifiedName("r", "n1", "Fix the bug", "pocketpi")
+        assertEquals(before, signature(now))
+        assertEquals("Fix the bug", shortcutChoice(snapshot, limit = 8, now = now).single { it.sessionId == "n1" }.title)
+        // A session joining the set does publish, and so does a title change of a known session.
+        snapshot = snapshot.withNotified("r", "n3", now = now)
+        assertTrue(before != signature(now))
+        val renamed = snapshot.copy(sessions = listOf(home("a").copy(title = "Renamed")))
+        assertTrue(
+            shortcutSignature(shortcutChoice(snapshot, 8, now), snapshot) !=
+                shortcutSignature(shortcutChoice(renamed, 8, now), renamed)
+        )
+    }
+
+    @Test
+    fun aClosedSessionsNotificationIsForgotten() {
+        val snapshot =
+            HomeSnapshot(true, notified = listOf(NotifiedSession("r", "a", at = 1), NotifiedSession("r", "b", at = 1)))
+        assertEquals(listOf("b"), snapshot.withoutNotified(setOf(shortcutId("r", "a"))).notified.map { it.sessionId })
+        assertEquals(snapshot, snapshot.withoutNotified(emptySet()))
+    }
+
+    @Test
+    fun aNotificationIsRecordedNewestFirstAndKeepsTheNameReadForIt() {
+        var snapshot = HomeSnapshot(true).withNotified("r", "a", now = 100)
+        snapshot = snapshot.withNotifiedName("r", "a", "Fix the bug", "pocketpi")
+        snapshot = snapshot.withNotified("r", "b", now = 200).withNotified("r", "a", now = 300)
+        assertEquals(listOf("a", "b"), snapshot.notified.map { it.sessionId })
+        assertEquals(NotifiedSession("r", "a", "Fix the bug", "pocketpi", 300), snapshot.notified.first())
+        // A lookup that found nothing keeps what is known.
+        assertEquals(snapshot, snapshot.withNotifiedName("r", "a", null, " "))
+        val many = (1..20).fold(snapshot) { next, i -> next.withNotified("r", "s$i", now = 300L + i) }
+        assertEquals(MAX_NOTIFIED_SESSIONS, many.notified.size)
+        assertEquals("s20", many.notified.first().sessionId)
+        // Entries older than the shortcut keeps them go with the next notification.
+        assertEquals(listOf("c"), snapshot.withNotified("r", "c", now = 300 + 4 * day).notified.map { it.sessionId })
+    }
+
+    @Test
+    fun theMergeKeepsNotifiedSessionsOfPairedHostsOnly() {
+        val previous =
+            HomeSnapshot(true, listOf(home("a")), notified = listOf(NotifiedSession("r", "x", at = 1), NotifiedSession("gone", "y", at = 1)))
+        val next = mergeHomeSnapshot(previous, RemoteState(), true, setOf("r"), 0)
+        assertEquals(listOf("x"), next.notified.map { it.sessionId })
+    }
+
+    @Test
+    fun notifiedSessionsRoundTripThroughJsonAndOlderSnapshotsLoadWithoutThem() {
+        val snapshot =
+            HomeSnapshot(true, listOf(home("a")), notified = listOf(NotifiedSession("r", "x", "Title", "Project", 42)))
+        assertEquals(snapshot, homeSnapshot(Wire.parse(snapshot.json().toString())))
+        val stored = """{"version":1,"paired":true,"sessions":[]}"""
+        assertEquals(emptyList<NotifiedSession>(), homeSnapshot(Wire.parse(stored)).notified)
+        // A malformed entry is dropped; the rest of the snapshot stays.
+        val damaged =
+            """{"version":1,"paired":true,"sessions":[],"notified":[{"routeId":"r:x","sessionId":"s",
+            |"title":"","projectName":"","at":1},{"routeId":"r","sessionId":"s","title":"",
+            |"projectName":"","at":2}]}""".trimMargin().replace("\n", "")
+        assertEquals(listOf(NotifiedSession("r", "s", at = 2)), homeSnapshot(Wire.parse(damaged)).notified)
     }
 }

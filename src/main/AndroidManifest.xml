@@ -4,6 +4,13 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The optional app lock asks through BiometricPrompt; a normal permission, granted at install. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- LiveRunService keeps a running session live in the background (specialUse). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Lets Android 16 promote its notification to a Live Update. -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <queries>
@@ -16,8 +23,18 @@
         android:label="@string/remote_app_name" android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:localeConfig="@xml/locales_config" android:supportsRtl="true" android:usesCleartextTraffic="false"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
-        <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize" android:configChanges="keyboard|keyboardHidden">
+        android:theme="@style/Theme.PocketPi">
+        <!--
+            Rotation, a resized or moved window (split screen, DeX, an external monitor) and a dark
+            mode switch reach Compose as a configuration change instead of a new activity, so the
+            artifact preview, dictation and open pickers stay. A language change (locale) still
+            recreates the activity.
+        -->
+        <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|navigation">
+            <!-- A new free-form window opens wide enough for the inspector beside the chat. -->
+            <layout android:defaultWidth="1280dp" android:defaultHeight="800dp"
+                android:minWidth="360dp" android:minHeight="320dp" />
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -25,8 +42,45 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="pocketpi" android:host="session" />
             </intent-filter>
+            <!-- The share-target for Direct Share; the launcher activity holds the shortcuts file. -->
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
-        <activity android:name=".WatchPairingActivity" android:exported="true">
+        <!--
+            The share sheet's target. Exported, so it trusts nothing it receives: ShareIntake checks
+            every URI and reads only EXTRA_TEXT, EXTRA_STREAM and the ClipData, never an extra that
+            names a session. Narrow types, not */*, so PocketPi stays out of unrelated share sheets.
+            No task affinity: a share sent with FLAG_ACTIVITY_NEW_TASK must neither join PocketPi's
+            task (the app would show behind the scrim) nor start the task MainActivity then joins.
+        -->
+        <activity android:name=".ShareActivity" android:exported="true"
+            android:theme="@style/Theme.PocketPi.Share" android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|navigation">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/pdf" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/pdf" />
+            </intent-filter>
+        </activity>
+        <!--
+            The app's own launches (notifications, the widget, launcher shortcuts) go through this
+            alias. It is not exported, so other apps cannot start it, and MainActivity reads a
+            session from intent extras only when it was started through it (LaunchIntents).
+        -->
+        <activity-alias android:name=".InternalLaunch" android:targetActivity=".MainActivity"
+            android:exported="false" />
+        <!-- Its Compose content is always light, so its window stays light too. -->
+        <activity android:name=".WatchPairingActivity" android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -34,6 +88,16 @@
                 <data android:scheme="pocketpi" android:host="pair-watch" />
             </intent-filter>
         </activity>
+        <!--
+            Started from MainActivity.onPause while the selected session runs; stops when the run
+            does, after 30 minutes, from its notification or when the app is back in front.
+            specialUse needs a declaration in the Play Console.
+        -->
+        <service android:name=".LiveRunService" android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the connection to the user's own Mac open while an AI coding session the user started is running, and shows its progress, until the run ends, 30 minutes pass, the user stops it or returns to the app." />
+        </service>
         <service android:name=".RemoteMessagingService" android:exported="false">
             <intent-filter><action android:name="com.google.firebase.MESSAGING_EVENT" /></intent-filter>
         </service>
@@ -43,6 +107,10 @@
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/export_file_paths" />
         </provider>
         <receiver android:name=".NotificationActionReceiver" android:exported="false" />
+        <!-- Moves shortcuts and the widget to the new version's launch intents right after an update. -->
+        <receiver android:name=".PackageReplacedReceiver" android:exported="false">
+            <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
+        </receiver>
         <receiver android:name=".PocketPiWidgetReceiver" android:exported="true"
             android:label="@string/remote_widget_name">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>

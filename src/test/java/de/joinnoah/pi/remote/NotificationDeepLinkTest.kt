@@ -48,6 +48,20 @@ class NotificationDeepLinkTest {
     }
 
     @Test
+    fun aSessionOfAHostThatIsNotPairedOpensTheHostsList() = runTest {
+        // openNotification resolves only paired hosts; any other route comes back as null.
+        val repository = NavigationFakeRepository()
+        repository.notification = null
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        var consumed = 0
+        RemoteNavigator(repository, stack, backgroundScope).notification("unpaired", "target") { consumed++ }
+        runCurrent()
+        assertEquals(listOf<NavKey>(RemoteNavKey.Hosts), stack)
+        assertEquals(listOf("unpaired" to "target"), repository.notificationRequests)
+        assertEquals(1, consumed)
+    }
+
+    @Test
     fun jobNotificationOpensThatJobOfItsSession() = runTest {
         val repository = NavigationFakeRepository()
         val target = RemoteSelection("host", "project", "owner")

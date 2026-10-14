@@ -2,7 +2,6 @@ package de.joinnoah.pi.remote
 
 import android.content.ClipData
 import android.text.format.Formatter
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -31,6 +30,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Warning
@@ -285,11 +285,13 @@ internal fun ToolDetailScreen(
     onQuote: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Beside the chat: a button opens the output in the dialog a phone's peek uses. */
+    popOut: Boolean = false,
 ) {
-    BackHandler(onBack = onClose)
+    PaneBackHandler(onBack = onClose)
     // Everything below belongs to one tool call: another item starts with fresh search and scroll state.
     key(item.id) {
-        ToolDetailContent(item, download, canAskToFix, canLoadFullOutput, onLoadFullOutput, onCancelFullOutput, onAskToFix, onQuote, onClose, modifier)
+        ToolDetailContent(item, download, canAskToFix, canLoadFullOutput, onLoadFullOutput, onCancelFullOutput, onAskToFix, onQuote, onClose, modifier, popOut)
     }
 }
 
@@ -305,6 +307,7 @@ private fun ToolDetailContent(
     onQuote: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier,
+    popOut: Boolean,
 ) {
     val ownDownload = download?.takeIf { item.toolCallId != null && it.toolCallId == item.toolCallId }
     val complete = ownDownload?.takeIf { it.text != null }
@@ -342,6 +345,9 @@ private fun ToolDetailContent(
     var searchBarHeight by remember { mutableIntStateOf(0) }
     val cards = remember(output) { resultCards(output.orEmpty()) }
     var showRaw by rememberSaveable { mutableStateOf(false) }
+    // Not saved: a rotation must not reopen the dialog by itself.
+    var poppedOut by remember { mutableStateOf(false) }
+    if (poppedOut && output != null) ToolOutputPeek(output, item.name, item.arguments) { poppedOut = false }
     val useCards = item.name == "bash" && rows.isNotEmpty()
     val rawVisible = !useCards || showRaw || query.isNotEmpty()
     val firstRowIndex = if (useCards) 4 else 3 // includes the raw-output disclosure
@@ -364,7 +370,7 @@ private fun ToolDetailContent(
 
     Surface(modifier.fillMaxSize().testTag("toolDetail")) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-            ToolDetailTopBar(item, onClose)
+            ToolDetailTopBar(item, onClose, onPopOut = if (popOut && output != null) ({ poppedOut = true }) else null)
             HorizontalDivider()
             LazyColumn(
                 Modifier.weight(1f).fillMaxWidth().testTag("toolDetailContent"),
@@ -448,7 +454,7 @@ private fun ToolDetailContent(
 }
 
 @Composable
-private fun ToolDetailTopBar(item: ConversationItem.Activity, onClose: () -> Unit) {
+private fun ToolDetailTopBar(item: ConversationItem.Activity, onClose: () -> Unit, onPopOut: (() -> Unit)?) {
     val titleFocus = remember { FocusRequester() }
     // Moves TalkBack focus to the overlay's own title as it opens, instead of leaving it wherever
     // it was on the screen behind.
@@ -484,6 +490,10 @@ private fun ToolDetailTopBar(item: ConversationItem.Activity, onClose: () -> Uni
             }
             StateChip(item.state)
         }
+        if (onPopOut != null)
+            IconButton(onClick = onPopOut, Modifier.testTag("toolDetailPopOut")) {
+                Icon(Icons.Default.Fullscreen, stringResource(R.string.remote_inspector_pop_out))
+            }
     }
 }
 

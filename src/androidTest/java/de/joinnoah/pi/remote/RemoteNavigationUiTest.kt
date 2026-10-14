@@ -61,17 +61,38 @@ class RemoteNavigationUiTest {
                             activity.flush = { fresh.flush() }
                             val settings = UiSettingsRepository().also { uiSettings = it }
                             val content: @Composable () -> Unit = {
-                                RemoteApp(
-                                    fresh,
-                                    settings,
-                                    false,
-                                    {},
-                                    activity.notification,
-                                    {
-                                        if (activity.notification == it)
-                                            activity.notification = null
-                                    },
-                                )
+                                val base = androidx.compose.ui.platform.LocalConfiguration.current
+                                // A Book Cover Keyboard for the tests that ask for one and none for the
+                                // others, whatever the emulator has. The managed emulators report a
+                                // QWERTY keyboard, and with one a chat opens with the composer focused,
+                                // which there also brings up the on-screen keyboard: the touch tests
+                                // would then run with the IME open and Back closing it first.
+                                val keyboard = hardwareKeyboard.value
+                                val configuration =
+                                    remember(base, keyboard) {
+                                        android.content.res.Configuration(base).apply {
+                                            if (keyboard) {
+                                                this.keyboard = android.content.res.Configuration.KEYBOARD_QWERTY
+                                                hardKeyboardHidden = android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
+                                            } else {
+                                                this.keyboard = android.content.res.Configuration.KEYBOARD_NOKEYS
+                                                hardKeyboardHidden = android.content.res.Configuration.HARDKEYBOARDHIDDEN_YES
+                                            }
+                                        }
+                                    }
+                                CompositionLocalProvider(androidx.compose.ui.platform.LocalConfiguration provides configuration) {
+                                    RemoteApp(
+                                        fresh,
+                                        settings,
+                                        false,
+                                        {},
+                                        activity.notification,
+                                        {
+                                            if (activity.notification == it)
+                                                activity.notification = null
+                                        },
+                                    )
+                                }
                             }
                             content
                         }
@@ -89,7 +110,23 @@ class RemoteNavigationUiTest {
             )
             .around(compose)
 
+    private val hardwareKeyboard = mutableStateOf(false)
+
     private fun label(id: Int) = compose.activity.getString(id)
+
+    /** Presses [code] through the system's input pipeline, as a hardware keyboard does. */
+    private fun key(code: Int, meta: Int = 0) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val now = android.os.SystemClock.uptimeMillis()
+        instrumentation.sendKeySync(android.view.KeyEvent(now, now, android.view.KeyEvent.ACTION_DOWN, code, 0, meta))
+        instrumentation.sendKeySync(android.view.KeyEvent(now, now, android.view.KeyEvent.ACTION_UP, code, 0, meta))
+        compose.waitForIdle()
+    }
+
+    private fun attachHardwareKeyboard() {
+        compose.runOnUiThread { hardwareKeyboard.value = true }
+        compose.waitForIdle()
+    }
 
     private fun click(id: Int) {
         compose.onNodeWithText(label(id)).performClick()
@@ -111,6 +148,85 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    fun aDoubleEscStopsARunningSessionAndNeverLeavesTheChat() {
+        attachHardwareKeyboard()
+        openChat()
+        compose.runOnUiThread { repository.state.value = repository.state.value.copy(status = "running") }
+        compose.waitForIdle()
+        key(android.view.KeyEvent.KEYCODE_ESCAPE)
+        compose.onNodeWithTag("escapeStopHint").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(0, repository.aborts) }
+        key(android.view.KeyEvent.KEYCODE_ESCAPE)
+        compose.runOnIdle { assertEquals(1, repository.aborts) }
+        compose.onNodeWithTag("escapeStopHint").assertDoesNotExist()
+        // Esc never became Back: the chat is still open.
+        compose.onNodeWithTag("composerField").assertIsDisplayed()
+        compose.onNodeWithText("Message for live").assertIsDisplayed()
+    }
+
+    @Test
+    fun typingAfterCtrlDownLandsInTheNextSessionsComposer() {
+        attachHardwareKeyboard()
+        openChat()
+        key(android.view.KeyEvent.KEYCODE_DPAD_DOWN, android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_CTRL_LEFT_ON)
+        compose.runOnIdle { assertEquals("history", repository.activations.last().first.sessionId) }
+        key(android.view.KeyEvent.KEYCODE_H)
+        key(android.view.KeyEvent.KEYCODE_I)
+        compose.onNodeWithTag("composerField").assertIsFocused().assert(hasText("hi"))
+    }
+
+    private fun longChat() {
+        repository.messagesForSession = { id ->
+            (1..80).map { Wire.objectOf("id" to "message-$id-$it", "role" to "assistant", "text" to "Line $it of $id") }
+        }
+    }
+
+    private fun scrollToLatestShown() =
+        compose.onAllNodesWithContentDescription(label(R.string.remote_scroll_to_bottom)).fetchSemanticsNodes().isNotEmpty()
+
+    @Test
+    fun pageDownScrollsTheChatWhileTheComposerKeepsFocus() {
+        attachHardwareKeyboard()
+        longChat()
+        openChat()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        compose.onNodeWithText("Line 80 of live").assertIsDisplayed()
+        key(android.view.KeyEvent.KEYCODE_PAGE_UP)
+        key(android.view.KeyEvent.KEYCODE_PAGE_UP)
+        compose.onNodeWithText("Line 80 of live").assertIsNotDisplayed()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        assertTrue(scrollToLatestShown())
+        repeat(3) { key(android.view.KeyEvent.KEYCODE_PAGE_DOWN) }
+        compose.onNodeWithText("Line 80 of live").assertIsDisplayed()
+        compose.onNodeWithTag("composerField").assertIsFocused()
+        assertFalse(scrollToLatestShown())
+    }
+
+    @Test
+    fun ctrlEndGoesToTheLatestMessageAndFollowsAgain() {
+        attachHardwareKeyboard()
+        longChat()
+        openChat()
+        val ctrl = android.view.KeyEvent.META_CTRL_ON or android.view.KeyEvent.META_CTRL_LEFT_ON
+        key(android.view.KeyEvent.KEYCODE_MOVE_HOME, ctrl)
+        compose.onNodeWithText("Line 1 of live").assertIsDisplayed()
+        assertTrue(scrollToLatestShown())
+        key(android.view.KeyEvent.KEYCODE_MOVE_END, ctrl)
+        compose.onNodeWithText("Line 80 of live").assertIsDisplayed()
+        assertFalse(scrollToLatestShown())
+        compose.onNodeWithTag("composerField").assertIsFocused()
+    }
+
+    @Test
+    fun aTypedSlashOpensTheSlashSuggestions() {
+        attachHardwareKeyboard()
+        openChat()
+        key(android.view.KeyEvent.KEYCODE_SLASH)
+        compose.onNodeWithTag("composerField").assert(hasText("/"))
+        compose.onNodeWithText("/new").assertIsDisplayed()
+    }
+
+    @Test
     fun encryptedDraftStoreRestoresOrderedFollowUps() {
         val store = isolatedDrafts(compose.activity)
         val key = DraftKey("host", "live")
@@ -123,6 +239,7 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    @LargeScreen
     fun followUpWarningsCanBeDismissedButPendingCannot() {
         openChat()
         val pending = PendingFollowUp(Wire.random(), "still queued")
@@ -350,6 +467,7 @@ class RemoteNavigationUiTest {
 
     @Test
     @Suppress("DEPRECATION")
+    @LargeScreen
     fun systemBarIconsFollowDeviceAppearanceForBothDesigns() {
         for (theme in listOf("system", "synthwave", "system")) {
             compose.runOnIdle { uiSettings.setTheme(theme) }
@@ -963,6 +1081,62 @@ class RemoteNavigationUiTest {
                     "settings put secure show_ime_with_hard_keyboard $previousIme"
                 )
         }
+    }
+
+    @Test
+    fun reconnectingAndUncertainNoticesStayAboveTheComposerWhileScrolledUp() {
+        repositoryFactory = { activity ->
+            UiRemoteRepository(isolatedDrafts(activity)).apply {
+                messagesForSession = { longConversation() }
+            }
+        }
+        compose.runOnIdle { repository.messagesForSession = { longConversation() } }
+        openChat()
+        enterReadingPosition()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(
+                    connected = false,
+                    stale = true,
+                    connection = R.string.remote_reconnecting,
+                    uncertain = true,
+                )
+        }
+        compose.waitForIdle()
+        // The chat stays where the reader left it; the notices sit right above the field.
+        compose.onNodeWithText("Scroll message 06").assertIsDisplayed()
+        val field = compose.onNode(hasSetTextAction()).fetchSemanticsNode().boundsInRoot
+        for (text in listOf(label(R.string.remote_reconnecting), label(R.string.remote_draft_uncertain))) {
+            val notice =
+                compose.onNode(hasText(text) and hasAnyAncestor(hasTestTag("floatingComposer")))
+                    .assertIsDisplayed()
+                    .fetchSemanticsNode()
+                    .boundsInRoot
+            assertTrue("'$text' ends at ${notice.bottom}, below the field at ${field.top}", notice.bottom <= field.top)
+        }
+    }
+
+    @Test
+    fun listPagesLeadWithTheKeyedConnectionChip() {
+        compose.onNodeWithText("Test computer").performClick()
+        compose.waitForIdle()
+        fun assertChipLeads() {
+            val indexForKey =
+                compose.onAllNodes(hasScrollToKeyAction()).fetchSemanticsNodes()
+                    .map { it.config[SemanticsProperties.IndexForKey] }
+                    .single { it("page-title") >= 0 }
+            assertEquals(0, indexForKey(CONNECTION_STATUS_KEY))
+            assertEquals(1, indexForKey("page-title"))
+        }
+        assertChipLeads()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(connected = false, stale = true, connection = R.string.remote_reconnecting)
+        }
+        compose.waitForIdle()
+        compose.onNode(hasTestTag("connectionStatusChip") and hasText(label(R.string.remote_reconnecting)))
+            .assertIsDisplayed()
+        assertChipLeads()
     }
 
     @Test
@@ -1673,6 +1847,7 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    @LargeScreen
     fun savedActivityStateAndFreshViewModelsRestoreIdsAndEncryptedDraftWithoutPromptReplay() {
         openChat()
         compose

@@ -1,7 +1,6 @@
 package de.joinnoah.pi.remote
 
 import android.content.Context
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -29,7 +29,11 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -50,7 +54,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -83,12 +89,27 @@ internal class FilesActions(
     val onSelectLines: (LineSelection?) -> Unit,
     /** Puts a quote into the composer. Nothing is sent. False when it did not fit. */
     val onSend: (String) -> Boolean,
+    val onStartEditing: () -> Unit = {},
+    val onEditorText: (String) -> Unit = {},
+    val onSaveEditor: () -> Unit = {},
+    val onDiscardEditor: () -> Unit = {},
+    val onReloadAfterConflict: () -> Unit = {},
+    /**
+     * The edit as a diff prompt, given an intro; send its text with [onSend]. Null when unchanged.
+     * Called off the main thread.
+     */
+    val onEditorPrompt: (intro: String?) -> EditorPrompt? = { null },
+    /** Discards the edit and runs what waited for it ([FileEditor.leaveRequest]). */
+    val onConfirmLeave: () -> Unit = {},
+    val onCancelLeave: () -> Unit = {},
 )
 
 /**
  * The session folder, read-only: a folder listing, or one file with line numbers. Like
  * [ChangesPane] it fills whatever container it is given, the phone overlay or the tablet
- * inspector. Back closes the file, then climbs one folder, then closes the pane.
+ * inspector. Back closes the file, then climbs one folder, then closes the pane. With [canEdit]
+ * ([canEditFile]) the open file offers Edit; an open [FilesState.editor] shows [CodeEditor] in
+ * place of the file and handles Back itself.
  */
 @Composable
 internal fun FilesPane(
@@ -96,6 +117,7 @@ internal fun FilesPane(
     actions: FilesActions,
     modifier: Modifier = Modifier,
     projectName: String? = null,
+    canEdit: Boolean = false,
 ) {
     val back = {
         when {
@@ -105,14 +127,22 @@ internal fun FilesPane(
             else -> actions.onClose()
         }
     }
-    BackHandler(onBack = back)
+    PaneBackHandler(onBack = back)
     // A failed prefill belongs to the file or folder it happened in.
     var prefillFailed by remember { mutableStateOf(false) }
     LaunchedEffect(state.file?.path, state.path) { prefillFailed = false }
     val send: (String) -> Unit = { prompt -> prefillFailed = !actions.onSend(prompt) }
     val density = LocalDensity.current
+    val focusManager = LocalFocusManager.current
     var headerHeight by remember { mutableStateOf(64.dp) }
     Surface(modifier.fillMaxSize().testTag("filesPane")) {
+        val editor = state.editor
+        if (editor != null) {
+            Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                key(editor.path) { CodeEditor(editor, actions) }
+            }
+            return@Surface
+        }
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             Column(Modifier.fillMaxSize()) {
                 if (prefillFailed)
@@ -122,11 +152,13 @@ internal fun FilesPane(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
-                Box(Modifier.weight(1f).fillMaxWidth()) {
+                // Backspace, or Left at the edge, goes up a folder or back from a file.
+                val parent = back.takeIf { state.peek == null && (state.file != null || state.path.isNotEmpty()) }
+                Box(Modifier.weight(1f).fillMaxWidth().parentOnLeft(focusManager, parent)) {
                     val inset = if (prefillFailed) 0.dp else headerHeight
                     val file = state.file
-                    if (file == null) key(state.path) { FolderList(state, actions, inset) }
-                    else key(file.path) { FileView(file, actions, send, inset) }
+                    if (file == null) key(state.path) { FolderList(state, actions, inset, send) }
+                    else key(file.path) { FileView(file, actions, send, inset, onEdit = actions.onStartEditing.takeIf { canEdit }) }
                 }
             }
             Box(Modifier.align(Alignment.TopCenter).onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
@@ -162,6 +194,8 @@ private fun failureText(failure: FilesFailure): Int =
         FilesFailure.INVALID_PATH -> R.string.remote_files_failure_invalid_path
         FilesFailure.FORBIDDEN -> R.string.remote_files_failure_forbidden
         FilesFailure.BUSY -> R.string.remote_files_failure_busy
+        FilesFailure.CONFLICT -> R.string.remote_files_failure_conflict
+        FilesFailure.TOO_LARGE -> R.string.remote_files_save_failed_too_large
         FilesFailure.FAILED -> R.string.remote_files_failure_failed
     }
 
@@ -211,7 +245,8 @@ private fun LazyListScope.loadMore(loading: Boolean, failure: FilesFailure?, onL
 }
 
 @Composable
-private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: Dp) {
+private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: Dp, send: (String) -> Unit) {
+    val resources = LocalResources.current
     val gridState = rememberLazyGridState()
     var peekAnchor by remember { mutableStateOf<IntRect?>(null) }
     LaunchedEffect(state.path, state.listing, state.file) {
@@ -269,7 +304,7 @@ private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: D
                         FileEntryTile(entry, null, { actions.onOpenDir(path) }, {}, { anchor ->
                             peekAnchor = anchor
                             actions.onShowPeek(path, entry.type)
-                        }, tag = "filesEntry:${entry.name}")
+                        }, tag = "filesEntry:${entry.name}", path = path)
                     }
                     if (files.isNotEmpty())
                         item(key = "filesHeading", span = { GridItemSpan(maxLineSpan) }) {
@@ -288,6 +323,11 @@ private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: D
                                 actions.onShowPeek(path, entry.type)
                             },
                             tag = "filesEntry:${entry.name}",
+                            path = path,
+                            onSend =
+                                if (entry.type == FileEntryType.FILE) {
+                                    { send(resources.getString(R.string.remote_files_reference_file, path)) }
+                                } else null,
                         )
                     }
                     if (listing.nextAfter != null)
@@ -342,7 +382,7 @@ private fun Breadcrumbs(path: String, onOpenDir: (String) -> Unit) {
 }
 
 @Composable
-private fun syntaxColors(): SyntaxColors {
+internal fun syntaxColors(): SyntaxColors {
     val scheme = MaterialTheme.colorScheme
     return remember(scheme) {
         SyntaxColors(
@@ -357,7 +397,13 @@ private fun syntaxColors(): SyntaxColors {
 }
 
 @Composable
-private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Unit, headerHeight: Dp) {
+private fun FileView(
+    file: OpenFile,
+    actions: FilesActions,
+    send: (String) -> Unit,
+    headerHeight: Dp,
+    onEdit: (() -> Unit)? = null,
+) {
     val context = LocalContext.current
     val lines = remember(file.content) { fileLines(file.content) }
     val language = remember(file.path) { languageFor(file.path) }
@@ -433,6 +479,7 @@ private fun FileView(file: OpenFile, actions: FilesActions, send: (String) -> Un
                 onClearSelection = { actions.onSelectLines(null) },
                 onSendFile = { send(filePrompt(context, file, lines, null, language)) },
                 onSendLines = { selection?.let { send(filePrompt(context, file, lines, it, language)) } },
+                onEdit = onEdit,
             )
     }
 }
@@ -495,6 +542,7 @@ private fun FileActionBar(
     onClearSelection: () -> Unit,
     onSendFile: () -> Unit,
     onSendLines: () -> Unit,
+    onEdit: (() -> Unit)? = null,
 ) {
     HorizontalDivider()
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -512,6 +560,12 @@ private fun FileActionBar(
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (onEdit != null)
+                FilledTonalButton(onClick = onEdit, Modifier.testTag("filesEdit")) {
+                    Icon(Icons.Default.Edit, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.remote_files_edit))
+                }
             OutlinedButton(onClick = onSendFile, Modifier.weight(1f).testTag("filesSendFile")) {
                 Text(stringResource(R.string.remote_files_send_file), textAlign = TextAlign.Center)
             }

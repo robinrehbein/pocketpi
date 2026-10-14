@@ -85,10 +85,12 @@ internal class QuestionUpgrader(
                     fetch(host, payload.sessionId)
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: RemoteCommandException) {
+                } catch (swallowed: RemoteCommandException) {
+                    Diagnostics.caught("question.run", swallowed)
                     // The host answered, so it is reachable; the session is gone or offline.
                     emptyList()
-                } catch (_: Exception) {
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("question.run.2", swallowed)
                     failed = true
                     null
                 }
@@ -113,7 +115,8 @@ internal class PreferenceUpgradeState(
     private val pairedRoutes: () -> Set<String> = {
         try {
             PairingStore(context).load().map { it.routeId }.toSet()
-        } catch (_: Exception) {
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("question.pairedRoutes", swallowed)
             emptySet()
         }
     },
@@ -245,11 +248,13 @@ class QuestionUpgradeWorker(context: Context, parameters: WorkerParameters) :
         val paired = {
             try {
                 PairingStore(context).load().find { it.routeId == payload.routeId }
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("question.doWork", swallowed)
                 null
             }
         }
         val host = paired() ?: return Result.success()
+        RemoteNotifications.rememberHost(host)
         val tag = RemoteNotifications.tag(payload.routeId, payload.sessionId)
         val upgrader =
             QuestionUpgrader(
@@ -272,7 +277,8 @@ class QuestionUpgradeWorker(context: Context, parameters: WorkerParameters) :
                 upgrader.run(host, payload, wanted)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("question.doWork.2", swallowed)
                 UpgradeResult.Unreachable
             }
         // Checked again right before posting, so a notification dismissed or replaced while the

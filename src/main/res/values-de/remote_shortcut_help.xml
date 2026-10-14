@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="remote_shortcut_group_navigation">Navigation</string>
+    <string name="remote_shortcut_group_chat">Chat</string>
+    <string name="remote_shortcut_group_composer">Nachricht</string>
+    <string name="remote_shortcut_group_panes">Bereiche</string>
+    <string name="remote_keymap_next_region">Nächster Bereich</string>
+    <string name="remote_keymap_previous_region">Vorheriger Bereich</string>
+    <string name="remote_keymap_page_up">Im Chat nach oben blättern</string>
+    <string name="remote_keymap_page_down">Im Chat nach unten blättern</string>
+    <string name="remote_keymap_chat_start">Zum Anfang des Chats und ältere Nachrichten laden</string>
+    <string name="remote_keymap_chat_end">Zur neuesten Nachricht und neuen Nachrichten folgen</string>
+    <string name="remote_shortcut_enter_sends">Senden, außer „Enter sendet“ ist in den Einstellungen aus</string>
+    <string name="remote_shortcut_send">Senden</string>
+    <string name="remote_shortcut_new_line">Zeile einfügen</string>
+    <string name="remote_shortcut_suggestions">Durch die Slash-Befehle blättern, im leeren Feld durch deine früheren Nachrichten</string>
+    <string name="remote_shortcut_complete">Markierten Befehl wählen oder den Vorschlag übernehmen</string>
+    <string name="remote_shortcut_take_prediction">Vorschlag übernehmen</string>
+    <string name="remote_shortcut_open_file">Datei, Ordner oder Diff öffnen</string>
+    <string name="remote_shortcut_parent">Zurück zum Ordner oder zur Dateiliste</string>
+    <string name="remote_key_ctrl">Strg</string>
+    <string name="remote_key_alt">Alt</string>
+    <string name="remote_key_shift">Umschalt</string>
+    <string name="remote_key_enter">Enter</string>
+    <string name="remote_key_escape">Esc</string>
+    <string name="remote_key_tab">Tab</string>
+    <string name="remote_key_backspace">Rücktaste</string>
+    <string name="remote_key_page_up">Bild auf</string>
+    <string name="remote_key_page_down">Bild ab</string>
+    <!-- The key cap's name on German keyboards. -->
+    <string name="remote_key_home" tools:ignore="Typos">Pos1</string>
+    <string name="remote_key_end">Ende</string>
+    <string name="remote_shortcut_tooltip">%1$s · %2$s</string>
+    <string name="remote_shortcut_help_title">Tastenkürzel</string>
+    <string name="remote_shortcut_help_close">Schließen</string>
+</resources>

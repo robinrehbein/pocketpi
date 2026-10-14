@@ -98,4 +98,139 @@ class AttachmentImporterTest {
             AttachmentImportRules.sampleSize(Int.MAX_VALUE, Int.MAX_VALUE)
         }
     }
+
+    @Test
+    fun dropAttachesEveryContentUriAndKeepsPlainTextForTheDraft() {
+        val intake =
+            clipIntake(
+                listOf(
+                    ClipPart("content://media/shot.png", "image/png", null),
+                    ClipPart("content://docs/spec.pdf", "application/pdf", null),
+                    ClipPart("content://docs/build.log", "text/plain", null),
+                    ClipPart("content://docs/icon.svg", "image/svg+xml", null),
+                    ClipPart("content://docs/unknown", null, null),
+                    ClipPart(null, null, "first line"),
+                    ClipPart(null, null, "  "),
+                    ClipPart("https://example.com/page", "text/html", null),
+                    ClipPart("file:///sdcard/secret", null, null),
+                    ClipPart(null, null, "second line"),
+                ),
+                textFiles = true,
+            )
+        assertEquals(
+            listOf(
+                Picked("content://media/shot.png", photo = true),
+                Picked("content://docs/spec.pdf", photo = false),
+                Picked("content://docs/build.log", photo = false),
+                Picked("content://docs/icon.svg", photo = false),
+                Picked("content://docs/unknown", photo = false),
+            ),
+            intake.attachments,
+        )
+        // Only content URIs are read; a web link goes into the draft, a file URI nowhere.
+        assertEquals("first line\nhttps://example.com/page\nsecond line", intake.text)
+    }
+
+    @Test
+    fun pasteLeavesTextAndTextUrisToTheField() {
+        assertTrue(clipIntake(listOf(ClipPart(null, null, "hello")), textFiles = false).attachments.isEmpty())
+        assertTrue(
+            clipIntake(listOf(ClipPart("content://notes/note", "text/plain", "note")), textFiles = false)
+                .attachments.isEmpty()
+        )
+        assertEquals(
+            listOf(Picked("content://clip/shot", photo = true)),
+            clipIntake(listOf(ClipPart("content://clip/shot", "IMAGE/PNG", null)), textFiles = false).attachments,
+        )
+        assertFalse(mayHoldAttachments(listOf("text/plain")))
+        assertFalse(mayHoldAttachments(listOf("text/plain", "text/html")))
+        assertTrue(mayHoldAttachments(listOf("text/uri-list")))
+        assertTrue(mayHoldAttachments(listOf("image/png")))
+        assertTrue(mayHoldAttachments(listOf("text/plain", "application/pdf")))
+    }
+
+    @Test
+    fun onlyPlainPasteChordsAreTaken() {
+        val v = androidx.compose.ui.input.key.Key.V
+        val insert = androidx.compose.ui.input.key.Key.Insert
+        assertTrue(isPasteKey(v, down = true, ctrl = true, alt = false, shift = false))
+        assertTrue(isPasteKey(insert, down = true, ctrl = false, alt = false, shift = true))
+        assertFalse(isPasteKey(v, down = false, ctrl = true, alt = false, shift = false))
+        // Ctrl+Shift+V pastes plain text; it stays the field's.
+        assertFalse(isPasteKey(v, down = true, ctrl = true, alt = false, shift = true))
+        assertFalse(isPasteKey(v, down = true, ctrl = true, alt = true, shift = false))
+        assertFalse(isPasteKey(v, down = true, ctrl = false, alt = false, shift = false))
+        assertTrue(acceptsDrop(null, setOf("image/png")))
+        assertTrue(acceptsDrop(null, setOf("text/plain")))
+        assertTrue(acceptsDrop(null, setOf("application/pdf")))
+        assertFalse(acceptsDrop(null, setOf("video/mp4")))
+        // A drag that starts in PocketPi is meant for another app.
+        assertFalse(acceptsDrop(OwnDrag, setOf("image/png")))
+    }
+
+    @Test
+    fun dropReleasesItsGrantsOnlyAfterTheImportIsDone() {
+        var released = 0
+        var batch: Pair<List<Picked>, () -> Unit>? = null
+        val inserted = mutableListOf<String>()
+        val taken =
+            acceptChatDrop(
+                listOf(
+                    ClipPart("content://media/shot.png", "image/png", null),
+                    ClipPart("content://docs/spec.pdf", "application/pdf", null),
+                ),
+                attach = { items, onDone -> batch = items to onDone },
+                insertText = { inserted += it; true },
+                release = { released++ },
+            )
+        assertTrue(taken)
+        assertEquals(2, batch!!.first.size)
+        assertEquals(0, released)
+        batch!!.second()
+        batch!!.second()
+        assertEquals(1, released)
+        assertTrue(inserted.isEmpty())
+
+        // Text alone goes into the draft and gives the grants back at once.
+        released = 0
+        assertTrue(
+            acceptChatDrop(listOf(ClipPart(null, null, "fix this")), { _, _ -> fail() }, { inserted += it; true }) { released++ }
+        )
+        assertEquals(listOf("fix this"), inserted)
+        assertEquals(1, released)
+        assertFalse(acceptChatDrop(listOf(ClipPart(null, null, " ")), { _, _ -> fail() }, { true }) { released++ })
+        assertEquals(2, released)
+    }
+
+    @Test
+    fun onlyImagesBitmapFactoryDecodesImportAsPhotos() {
+        for (type in listOf("image/jpeg", "image/png", "IMAGE/WEBP", "image/bmp"))
+            assertTrue(type, decodableImage(type, sdk = 26))
+        // TIFF, PSD and RAW never decode; a GIF would lose its animation.
+        for (type in listOf("image/tiff", "image/vnd.adobe.photoshop", "image/x-adobe-dng", "image/gif", "image/svg+xml"))
+            assertFalse(type, decodableImage(type, sdk = 36))
+        assertFalse(decodableImage("image/heic", sdk = 27))
+        assertTrue(decodableImage("image/heic", sdk = 28))
+        assertTrue(decodableImage("image/heif", sdk = 28))
+        assertFalse(decodableImage("image/avif", sdk = 30))
+        assertTrue(decodableImage("image/avif", sdk = 31))
+        // A PSD dropped with a PDF and a PNG goes in as a file, so it cannot fail the batch.
+        assertEquals(
+            listOf(
+                Picked("content://docs/art.psd", photo = false),
+                Picked("content://docs/spec.pdf", photo = false),
+                Picked("content://docs/shot.png", photo = true),
+                Picked("content://docs/loop.gif", photo = false),
+            ),
+            clipIntake(
+                listOf(
+                    ClipPart("content://docs/art.psd", "image/vnd.adobe.photoshop", null),
+                    ClipPart("content://docs/spec.pdf", "application/pdf", null),
+                    ClipPart("content://docs/shot.png", "image/png", null),
+                    ClipPart("content://docs/loop.gif", "image/gif", null),
+                ),
+                textFiles = true,
+            ).attachments,
+        )
+    }
 }

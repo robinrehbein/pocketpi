@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- What each hardware keyboard shortcut does (Keymap.kt), for the shortcut lists. -->
+    <string name="remote_keymap_search">Search sessions</string>
+    <string name="remote_keymap_previous_session">Previous session</string>
+    <string name="remote_keymap_next_session">Next session</string>
+    <string name="remote_keymap_new_session">New session</string>
+    <string name="remote_keymap_toggle_list">Show or hide the session list</string>
+    <string name="remote_keymap_previous_project">Previous project</string>
+    <string name="remote_keymap_next_project">Next project</string>
+    <string name="remote_keymap_focus_composer">Write a message</string>
+    <string name="remote_keymap_stop">Stop pi</string>
+    <string name="remote_keymap_changes">Changes</string>
+    <string name="remote_keymap_files">Files</string>
+    <string name="remote_keymap_jobs">Background jobs</string>
+    <string name="remote_keymap_history">History</string>
+    <string name="remote_keymap_settings">Settings</string>
+    <string name="remote_keymap_help">Keyboard shortcuts</string>
+    <string name="remote_keymap_expand_inspector">Widen the side pane</string>
+    <string name="remote_keymap_toggle_inspector">Show or hide the side pane</string>
+    <string name="remote_keymap_other_busy_action">Send with the other choice, steer or follow-up</string>
+    <string name="remote_keymap_refresh">Refresh</string>
+    <string name="remote_keymap_rename">Rename session</string>
+    <string name="remote_keymap_fork">Rewind from the latest message</string>
+    <string name="remote_keymap_escape">Close; press twice to stop pi</string>
+    <!-- Shown beside the composer after the first Esc while pi runs. -->
+    <string name="remote_escape_stop_hint">Press Esc again to stop pi</string>
+    <string name="remote_session_search_close">Close search</string>
+</resources>

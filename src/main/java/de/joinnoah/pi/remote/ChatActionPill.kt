@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
@@ -16,6 +17,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,24 +42,43 @@ private fun ChatAction.icon(): ImageVector =
     when (this) {
         ChatAction.CHANGES -> Icons.Default.Difference
         ChatAction.FILES -> Icons.Default.FolderOpen
+        ChatAction.JOBS -> Icons.Outlined.Terminal
         ChatAction.RENAME -> Icons.Default.Edit
         ChatAction.REFRESH -> Icons.Default.Refresh
         ChatAction.SETTINGS -> Icons.Default.Settings
         ChatAction.NEW_SESSION -> Icons.Default.Add
         ChatAction.SESSION_SETTINGS -> Icons.Outlined.Tune
         ChatAction.HISTORY -> Icons.AutoMirrored.Filled.List
+        ChatAction.CLOSE -> Icons.Default.DeleteOutline
+    }
+
+/** The key that runs the same action, for its tooltip. */
+private fun ChatAction.shortcut(): Shortcut? =
+    when (this) {
+        ChatAction.CHANGES -> Shortcut.CHANGES
+        ChatAction.FILES -> Shortcut.FILES
+        ChatAction.JOBS -> Shortcut.JOBS
+        ChatAction.RENAME -> Shortcut.RENAME
+        ChatAction.REFRESH -> Shortcut.REFRESH
+        ChatAction.SETTINGS -> Shortcut.SETTINGS
+        ChatAction.NEW_SESSION -> Shortcut.NEW_SESSION
+        ChatAction.SESSION_SETTINGS -> null
+        ChatAction.HISTORY -> Shortcut.HISTORY
+        ChatAction.CLOSE -> null
     }
 
 private fun ChatAction.label(): Int =
     when (this) {
         ChatAction.CHANGES -> R.string.remote_changes_open
         ChatAction.FILES -> R.string.remote_files_open
+        ChatAction.JOBS -> R.string.remote_jobs_title
         ChatAction.RENAME -> R.string.remote_rename_session
         ChatAction.REFRESH -> R.string.remote_refresh
         ChatAction.SETTINGS -> R.string.remote_settings
         ChatAction.NEW_SESSION -> R.string.remote_new_session
         ChatAction.SESSION_SETTINGS -> R.string.remote_session_settings_title
         ChatAction.HISTORY -> R.string.remote_chat_history
+        ChatAction.CLOSE -> R.string.remote_session_close
     }
 
 /** The chat header pill: the most used actions as buttons, the rest behind a chevron. */
@@ -66,26 +87,26 @@ internal fun ChatActionPill(layout: ChatActionLayout, color: Color, onAction: (C
     FloatingSurface(shape = CircleShape, color = color) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             for (action in layout.shown)
-                IconButton(
-                    onClick = { onAction(action) },
-                    modifier = Modifier.size(48.dp).testTag("chatAction_${action.name.lowercase()}"),
-                ) {
-                    Icon(action.icon(), stringResource(action.label()))
+                ShortcutTooltip(stringResource(action.label()), action.shortcut()) {
+                    IconButton(
+                        onClick = { onAction(action) },
+                        modifier = Modifier.size(48.dp).testTag("chatAction_${action.name.lowercase()}"),
+                    ) {
+                        Icon(action.icon(), stringResource(action.label()))
+                    }
                 }
             if (layout.menu.isNotEmpty()) {
                 var open by remember { mutableStateOf(false) }
                 Box {
-                    IconButton(
-                        onClick = { open = !open },
-                        modifier = Modifier.size(48.dp).testTag("chatActionsMore"),
-                    ) {
-                        Icon(
-                            if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                            stringResource(
-                                if (open) R.string.remote_chat_actions_close
-                                else R.string.remote_chat_actions_more
-                            ),
-                        )
+                    val moreLabel =
+                        stringResource(if (open) R.string.remote_chat_actions_close else R.string.remote_chat_actions_more)
+                    ShortcutTooltip(moreLabel) {
+                        IconButton(
+                            onClick = { open = !open },
+                            modifier = Modifier.size(48.dp).testTag("chatActionsMore"),
+                        ) {
+                            Icon(if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore, moreLabel)
+                        }
                     }
                     if (open) {
                         Popup(
@@ -120,8 +141,11 @@ internal fun ChatActionPill(layout: ChatActionLayout, color: Color, onAction: (C
     }
 }
 
-/** Wires [ChangesPane] to [model]; prefilled prompts move focus to the composer via [focusComposer]. */
-internal fun changesActions(model: ChatViewModel, focusComposer: () -> Unit) =
+/**
+ * Wires [ChangesPane] to [model]; prefilled prompts move focus to the composer via [focusComposer].
+ * [flushComposer] first hands the composer's typing to the draft the prefill extends.
+ */
+internal fun changesActions(model: ChatViewModel, flushComposer: () -> Unit = {}, focusComposer: () -> Unit) =
     ChangesActions(
         onClose = model::closeChanges,
         onSelectBase = model::selectChangesBase,
@@ -131,8 +155,12 @@ internal fun changesActions(model: ChatViewModel, focusComposer: () -> Unit) =
         onRequestPreview = model::requestChangesPreview,
         onSetComment = model::setReviewComment,
         onRemoveComment = model::removeReviewComment,
-        onUseReview = { prompt -> model.useReview(prompt).also { if (it) focusComposer() } },
+        onUseReview = { prompt ->
+            flushComposer()
+            model.useReview(prompt).also { if (it) focusComposer() }
+        },
         onPrefill = { prompt ->
+            flushComposer()
             model.prefillPrompt(prompt).also {
                 if (it) {
                     model.closeChanges()
@@ -142,8 +170,11 @@ internal fun changesActions(model: ChatViewModel, focusComposer: () -> Unit) =
         },
     )
 
-/** Wires [FilesPane] to [model]; a prefilled quote moves focus to the composer via [focusComposer]. */
-internal fun filesActions(model: ChatViewModel, focusComposer: () -> Unit) =
+/**
+ * Wires [FilesPane] to [model]; a prefilled quote moves focus to the composer via [focusComposer].
+ * [flushComposer] first hands the composer's typing to the draft the prefill extends.
+ */
+internal fun filesActions(model: ChatViewModel, flushComposer: () -> Unit = {}, focusComposer: () -> Unit) =
     FilesActions(
         onClose = model::closeFiles,
         onOpenDir = model::openFilesDir,
@@ -155,6 +186,7 @@ internal fun filesActions(model: ChatViewModel, focusComposer: () -> Unit) =
         onDismissPeek = model::dismissFilesPeek,
         onSelectLines = model::selectFileLines,
         onSend = { prompt ->
+            flushComposer()
             model.prefillPrompt(prompt).also {
                 if (it) {
                     model.closeFiles()
@@ -162,4 +194,12 @@ internal fun filesActions(model: ChatViewModel, focusComposer: () -> Unit) =
                 }
             }
         },
+        onStartEditing = model::startFileEditing,
+        onEditorText = model::updateFileEditorText,
+        onSaveEditor = model::saveFileEditor,
+        onDiscardEditor = model::discardFileEditor,
+        onReloadAfterConflict = model::reloadFileAfterConflict,
+        onEditorPrompt = model::fileEditorPrompt,
+        onConfirmLeave = model::confirmFileEditorLeave,
+        onCancelLeave = model::cancelFileEditorLeave,
     )

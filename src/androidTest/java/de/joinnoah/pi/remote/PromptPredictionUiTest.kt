@@ -37,6 +37,8 @@ class PromptPredictionUiTest {
         compose.onNodeWithTag("composerPlaceholder", useUnmergedTree = true).assertTextContains(suggestion)
         compose.onNodeWithTag("composerField").performTouchInput { doubleClick() }
         compose.waitForIdle()
+        // An accepted suggestion reaches the repository after the composer's pause.
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
         assertEquals(suggestion, harness.state.draft)
         compose.onNode(hasSetTextAction()).assertTextContains(suggestion)
         val selection = compose.onNode(hasSetTextAction()).fetchSemanticsNode()
@@ -52,6 +54,8 @@ class PromptPredictionUiTest {
         assertEquals(context.getString(R.string.remote_prediction_use), actions.single().label)
         compose.runOnIdle { actions.single().action() }
         compose.waitForIdle()
+        // An accepted suggestion reaches the repository after the composer's pause.
+        compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
         assertEquals(suggestion, harness.state.draft)
     }
 

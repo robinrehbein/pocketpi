@@ -12,16 +12,65 @@ private const val MAX_FOLDER_NAME_BYTES = 100
 private const val MAX_RELATIVE_PATH_BYTES = 4096
 private const val MAX_CLONE_URL_BYTES = 2048
 
+/** The error code of a refused request: from the host, or from the app when a capability is missing. */
+internal const val UNSUPPORTED_CODE = "unsupported"
+
 /**
- * An error result with the host's `details` object. Of the folder errors only `trust_required`
- * carries one (`{piConfig}`); every other code has none.
+ * A failed request. [code] is the host's open-ended error code (`not_found`, `trust_required`,
+ * `login_in_progress`, ...) with the host's `details` object; of the folder errors only
+ * `trust_required` carries one (`{piConfig}`). [kind] says what ended the request, so callers branch
+ * on it instead of matching messages: a request that got no reply is a [Kind.TIMEOUT] or a
+ * [Kind.CONNECTION_LOST], which may still have reached the host.
  */
 internal class RemoteRequestException(
     val code: String,
     val details: JsonObject? = null,
     /** The host's error message, for the few codes whose meaning depends on it. */
     val hostMessage: String? = null,
-) : IllegalStateException(code)
+    /** [Kind.HOST_ERROR], except for the `unsupported` code, which is always [Kind.UNSUPPORTED]. */
+    val kind: Kind = if (code == UNSUPPORTED_CODE) Kind.UNSUPPORTED else Kind.HOST_ERROR,
+    message: String = code,
+) : IllegalStateException(message) {
+    enum class Kind {
+        /** The host answered with an error [code]. */
+        HOST_ERROR,
+
+        /** The host or the app's capability check refused the request as not supported. */
+        UNSUPPORTED,
+
+        /** No reply arrived in time. */
+        TIMEOUT,
+
+        /** The connection ended before the reply arrived. */
+        CONNECTION_LOST,
+    }
+
+    /** Whether the host answered (or the app refused before sending), so no reply is outstanding. */
+    val answered: Boolean
+        get() = kind == Kind.HOST_ERROR || kind == Kind.UNSUPPORTED
+
+    companion object {
+        fun unsupported() = RemoteRequestException(UNSUPPORTED_CODE, kind = Kind.UNSUPPORTED)
+
+        // The messages stay those of the plain exceptions these replaced.
+        fun timeout() = RemoteRequestException("request_timeout", kind = Kind.TIMEOUT, message = "Request timed out")
+
+        fun connectionLost() =
+            RemoteRequestException("connection_lost", kind = Kind.CONNECTION_LOST, message = "Connection lost")
+    }
+}
+
+/** The kind of a failed request, or null when [this] is no request error. */
+internal val Throwable.requestKind: RemoteRequestException.Kind?
+    get() = (this as? RemoteRequestException)?.kind
+
+/** Whether [this] is a request the host or the app's capability check refused as unsupported. */
+internal val Throwable.isUnsupported: Boolean
+    get() = requestKind == RemoteRequestException.Kind.UNSUPPORTED
+
+/** The error code the host answered with, or null for a timeout, a lost connection or another failure. */
+internal val Throwable.hostCode: String?
+    get() = (this as? RemoteRequestException)?.takeIf { it.answered }?.code
 
 data class FolderEntry(
     val name: String,

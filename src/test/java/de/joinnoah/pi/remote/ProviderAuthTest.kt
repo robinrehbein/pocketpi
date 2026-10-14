@@ -135,7 +135,10 @@ class ProviderAuthTest {
             }
         listOf("exists", "unsupported", "not_found", "already_resolved", "forbidden", "invalid_request", "offline", "internal")
             .forEach { assertNotEquals(R.string.remote_request_error, providerErrorMessage(RemoteRequestException(it))) }
-        assertEquals(R.string.remote_request_error, providerErrorMessage(IllegalStateException("Request timed out")))
+        assertEquals(R.string.remote_request_error, providerErrorMessage(RemoteRequestException.timeout()))
+        assertEquals(R.string.providers_error_unsupported, providerErrorMessage(RemoteRequestException.unsupported()))
+        // A host code reaches its message through `code`, never through a matching exception message.
+        assertEquals(R.string.remote_request_error, providerErrorMessage(IllegalStateException("login_in_progress")))
         LoginState.entries.filter { it.finished }.forEach { state ->
             (LoginError.entries + null).forEach { assertNotEquals(0, loginFailureMessage(state, it)) }
         }

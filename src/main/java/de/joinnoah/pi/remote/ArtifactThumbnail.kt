@@ -209,7 +209,7 @@ internal fun ArtifactThumbnail(
                 live?.let { capture ->
                     AndroidView(
                         factory = { context ->
-                            createArtifactWebView(context, capture.page, capture.callbacks, background).also {
+                            createArtifactWebView(context, capture.page, capture.callbacks, background, thumbnail = true).also {
                                 capture.view = it
                                 it.isFocusable = false
                                 it.isFocusableInTouchMode = false

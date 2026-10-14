@@ -62,23 +62,82 @@ object Wire {
     fun encode(bytes: ByteArray): String =
         Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
 
+    /** The unpadded base64url alphabet; compiled once, since every received frame is matched. */
+    private val BASE64URL = Regex("[A-Za-z0-9_-]*")
+
     fun decode(value: String, size: Int? = null): ByteArray {
         require(
             value.length <= MAX_FRAME &&
-                Regex("[A-Za-z0-9_-]*").matches(value) &&
-                value.length % 4 != 1
+                BASE64URL.matches(value) &&
+                value.length % 4 != 1 &&
+                paddingBitsClear(value)
         )
         val bytes = Base64.getUrlDecoder().decode(value)
-        require(encode(bytes) == value && (size == null || bytes.size == size))
+        require(size == null || bytes.size == size)
         return bytes
     }
+
+    /**
+     * The canonical encoding sets none of the bits its last character carries beyond the data:
+     * four of six after two characters of a group, two after three. Java's decoder ignores them,
+     * so without this check several strings would decode to the same bytes.
+     */
+    private fun paddingBitsClear(value: String): Boolean {
+        val unused =
+            when (value.length % 4) {
+                2 -> 0x0f
+                3 -> 0x03
+                else -> return true
+            }
+        return (base64UrlValue(value.last()) and unused) == 0
+    }
+
+    private fun base64UrlValue(char: Char): Int =
+        when (char) {
+            in 'A'..'Z' -> char - 'A'
+            in 'a'..'z' -> char - 'a' + 26
+            in '0'..'9' -> char - '0' + 52
+            '-' -> 62
+            '_' -> 63
+            else -> throw IllegalArgumentException("Not base64url")
+        }
 
     fun random(size: Int = 16): String =
         encode(ByteArray(size).also { SecureRandom().nextBytes(it) })
 
     fun parse(text: String, limit: Int = MAX_FRAME): JsonObject {
-        require(text.toByteArray().size <= limit)
+        require(fitsUtf8(text, limit))
         return json.parseToJsonElement(text).jsonObject
+    }
+
+    /**
+     * Whether [text] takes at most [limit] bytes as UTF-8, without encoding it: a UTF-16 unit
+     * takes one to three bytes (a surrogate pair four for two units), so the length alone decides
+     * most frames, and only a frame between those bounds is counted.
+     */
+    internal fun fitsUtf8(text: String, limit: Int): Boolean {
+        if (text.length > limit) return false
+        if (text.length.toLong() * 3 <= limit) return true
+        var size = 0L
+        var index = 0
+        while (index < text.length) {
+            val char = text[index]
+            size +=
+                when {
+                    char.code < 0x80 -> 1
+                    char.code < 0x800 -> 2
+                    char.isHighSurrogate() && index + 1 < text.length && text[index + 1].isLowSurrogate() -> {
+                        index++
+                        4
+                    }
+                    // String.toByteArray() writes '?' for an unpaired surrogate.
+                    char.isSurrogate() -> 1
+                    else -> 3
+                }
+            if (size > limit) return false
+            index++
+        }
+        return true
     }
 
     fun keys(value: JsonObject, required: Set<String>, optional: Set<String> = emptySet()) {
@@ -196,22 +255,32 @@ object Wire {
             .toString()
 }
 
+/**
+ * One encrypted connection. Sending and receiving keep separate state and separate locks, so a
+ * [seal] on the main thread never waits for an [open] that is decrypting and parsing a large frame
+ * on the decoder. Any failure in either direction closes the channel for both.
+ */
 class SecureChannel(secret: String, private val context: JsonObject, client: Boolean = true) {
     private val raw = Wire.derive(secret, context)
     private val sendKey = SecretKeySpec(if (client) raw.first else raw.second, "AES")
     private val receiveKey = SecretKeySpec(if (client) raw.second else raw.first, "AES")
     private val sendDirection = if (client) "c2h" else "h2c"
     private val receiveDirection = if (client) "h2c" else "c2h"
+    private val sendLock = Any()
+    private val receiveLock = Any()
     private var sendSequence = 0L
     private var receiveSequence = 0L
-    private var closed = false
+    @Volatile private var closed = false
+
+    /** True once [close] ran or a frame in either direction failed. */
+    val isClosed: Boolean
+        get() = closed
 
     init {
         raw.first.fill(0)
         raw.second.fill(0)
     }
 
-    @Synchronized
     fun close() {
         closed = true
     }
@@ -226,8 +295,9 @@ class SecureChannel(secret: String, private val context: JsonObject, client: Boo
         }
     }
 
-    @Synchronized
-    fun seal(payload: JsonObject): JsonObject = guarded {
+    fun seal(payload: JsonObject): JsonObject = synchronized(sendLock) { sealLocked(payload) }
+
+    private fun sealLocked(payload: JsonObject): JsonObject = guarded {
         val bytes = payload.toString().toByteArray()
         require(bytes.size <= Wire.MAX_PLAINTEXT)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -242,8 +312,10 @@ class SecureChannel(secret: String, private val context: JsonObject, client: Boo
         )
     }
 
-    @Synchronized
-    fun open(frame: JsonObject): JsonObject = guarded {
+    fun open(frame: JsonObject): JsonObject = synchronized(receiveLock) { openLocked(frame) }
+
+    private fun openLocked(frame: JsonObject): JsonObject = guarded {
+        val started = System.nanoTime()
         Wire.keys(frame, setOf("v", "type", "connectionId", "seq", "ciphertext"))
         require(
             frame.long("v") == 1L &&
@@ -260,8 +332,11 @@ class SecureChannel(secret: String, private val context: JsonObject, client: Boo
             GCMParameterSpec(128, Wire.nonce(receiveSequence)),
         )
         cipher.updateAAD(Wire.aad(context, receiveDirection, receiveSequence))
-        val payload = Wire.parse(Wire.utf8(cipher.doFinal(bytes)), Wire.MAX_PLAINTEXT)
+        // The ciphertext's size already bounds the plaintext to MAX_PLAINTEXT bytes.
+        val payload = Wire.json.parseToJsonElement(Wire.utf8(cipher.doFinal(bytes))).jsonObject
         receiveSequence++
+        // The outer frame was parsed by the caller; this times decrypting and parsing the payload.
+        Diagnostics.frame(System.nanoTime() - started, bytes.size - 16)
         payload
     }
 }

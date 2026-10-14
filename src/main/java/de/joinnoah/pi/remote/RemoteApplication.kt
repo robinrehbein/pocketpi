@@ -2,8 +2,11 @@ package de.joinnoah.pi.remote
 
 import android.app.Application
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.os.Build
+import android.system.OsConstants
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -13,10 +16,10 @@ import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import okhttp3.OkHttpClient
 
 class RemoteApplication : Application() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var validatedNetwork: String? = null
     private lateinit var pushRegistration: PushRegistration
     lateinit var repository: RemoteRepository
         private set
@@ -28,6 +31,9 @@ class RemoteApplication : Application() {
         private set
 
     internal lateinit var predictions: PromptPredictions
+        private set
+
+    internal lateinit var appLock: AppLock
         private set
 
     val pushConfigured: Boolean
@@ -48,14 +54,23 @@ class RemoteApplication : Application() {
         Thread { runCatching { ImageStorage.clear(cacheDir) } }.start()
         // Opened or shared artifacts are copies of project files too.
         Thread { runCatching { ArtifactStorage.clear(cacheDir) } }.start()
+        // So are files dragged into other apps.
+        Thread { runCatching { DragStorage.clear(cacheDir) } }.start()
+        // Camera captures the import is done with are deleted then; this catches the rest.
+        Thread { runCatching { PhotoCapture.sweep(cacheDir) } }.start()
         settings = DefaultSettingsRepository(this)
+        LiveRunSettings.preload(this)
+        appLock = AppLock(AppLockStore(this), deviceSecure = { deviceSecure(this) })
         val attachments = AttachmentStore(this)
         val importer = AttachmentImporter(this, attachments)
         repository =
             DefaultRemoteRepository(
-                PairingStore(this),
+                // Pushes check their route in the cache this keeps, without decrypting the store.
+                RouteCachingPairings(PairingStore(this), PairedRouteCache(this)) { hosts ->
+                    hosts.forEach(RemoteNotifications::rememberHost)
+                },
                 DraftStore(this),
-                SecureRemoteTransport(scope),
+                remoteTransport(this, scope),
                 scope,
                 navigationStorage = NavigationSnapshotStore(this),
                 attachmentStorage = attachments,
@@ -64,6 +79,7 @@ class RemoteApplication : Application() {
                 },
                 onRecoverySignal = { onPushRecoverySignal() },
                 onUnpaired = ::onUnpaired,
+                projectHint = ::sessionProjectHint,
             )
         observeRecovery()
         predictions = PromptPredictions(this, scope, PairingStore(this))
@@ -130,6 +146,14 @@ class RemoteApplication : Application() {
         RemoteNotifications.cancelRoute(this, routeId)
     }
 
+    /**
+     * Where the home snapshot or the label worker last saw a session, for a tapped notification
+     * whose session the repository's caches do not hold.
+     */
+    private suspend fun sessionProjectHint(routeId: String, sessionId: String): String? =
+        home.load().sessions.find { it.routeId == routeId && it.sessionId == sessionId }?.projectId
+            ?: CompletionUpgrades.names.get(routeId, sessionId)?.projectId
+
     /** A push arrived for a paired host; called on the messaging worker thread. */
     internal fun onPushEvent(payload: PushPayload) {
         home.onPush(payload)
@@ -143,6 +167,11 @@ class RemoteApplication : Application() {
     ) {
         home.onAnswered(routeId, sessionId)
         if (isPlanApproval(answer)) predictions.recordPlanApproval(routeId, sessionId)
+    }
+
+    /** A notification reply started the session's next run; called off the main thread. */
+    internal fun onRepliedInBackground(routeId: String, sessionId: String) {
+        home.onAnswered(routeId, sessionId)
     }
 
     /** True unless the host was unpaired in this process or is missing from loaded pairings. */
@@ -211,28 +240,71 @@ class RemoteApplication : Application() {
         )
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(
             object : ConnectivityManager.NetworkCallback() {
-                override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                // Main thread only: each callback hops there before it touches the tracker.
+                private val tracker = NetworkTracker()
+
+                private fun report(change: () -> NetworkTracker.Report?) {
                     scope.launch {
-                        val identity = network.toString()
-                        if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
-                            validatedNetwork = identity
-                            repository.setValidatedNetwork(identity)
-                        } else if (validatedNetwork == identity) {
-                            validatedNetwork = null
-                            repository.setValidatedNetwork(null)
-                        }
+                        val report = change() ?: return@launch
+                        repository.setNetwork(report.identity, report.validated, report.path)
                     }
                 }
 
+                override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                    val internet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    val running =
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.P ||
+                            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
+                    val checked = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                    // A VPN carries the transports of the networks underneath it (the list of
+                    // those networks is no public API), so roaming between Wi-Fi and LTE keeps the
+                    // VPN's network and changes these.
+                    val under =
+                        if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) null
+                        else VPN_UNDERLYING_TRANSPORTS.filter(capabilities::hasTransport).joinToString(",")
+                    val identity = network.toString()
+                    report { tracker.capabilities(identity, internet, running, checked, under) }
+                }
+
+                override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
+                    // Temporary IPv6 addresses rotate on their own; they do not move the route.
+                    val addresses =
+                        properties.linkAddresses
+                            .filter { (it.flags and OsConstants.IFA_F_TEMPORARY) == 0 }
+                            .mapNotNull { it.address.hostAddress }
+                    val identity = network.toString()
+                    val name = properties.interfaceName
+                    report { tracker.links(identity, name, addresses) }
+                }
+
+                override fun onBlockedStatusChanged(network: Network, isBlocked: Boolean) {
+                    // Blocked is as good as lost; unblocked reports the network again.
+                    val identity = network.toString()
+                    report { tracker.blocked(identity, isBlocked) }
+                }
+
                 override fun onLost(network: Network) {
-                    scope.launch {
-                        if (validatedNetwork == network.toString()) {
-                            validatedNetwork = null
-                            repository.setValidatedNetwork(null)
-                        }
-                    }
+                    val identity = network.toString()
+                    report { tracker.lost(identity) }
                 }
             }
         )
     }
 }
+
+/**
+ * The process's one OkHttp client. The relay sockets ([SecureRemoteTransport]'s default and
+ * [BackgroundRemoteClient]'s) and the artifact CDN derive their clients from it with
+ * `newBuilder()`, so they share its dispatcher, connection pool and threads and set only their own
+ * timeouts, ping interval and cache. Built on first use; the wear app uses it too.
+ */
+internal val baseHttpClient: OkHttpClient by lazy { OkHttpClient() }
+
+/** Transports a VPN's network takes over from the networks it runs on. */
+private val VPN_UNDERLYING_TRANSPORTS =
+    listOf(
+        NetworkCapabilities.TRANSPORT_CELLULAR,
+        NetworkCapabilities.TRANSPORT_WIFI,
+        NetworkCapabilities.TRANSPORT_ETHERNET,
+        NetworkCapabilities.TRANSPORT_BLUETOOTH,
+    )

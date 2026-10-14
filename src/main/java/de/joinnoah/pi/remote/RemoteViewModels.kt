@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.scan
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -55,9 +56,21 @@ internal open class DestinationViewModel(
                 )
         }
 
+    // A chat that opens shows its cached content at once, read-only: the selection stays empty, so
+    // the composer takes no edits and every action waits until the chat is selected.
     private val initialState =
         repository.state.value.let { current ->
-            if (matches(current)) screenState(current) else RemoteState(loading = true)
+            if (matches(current)) screenState(current)
+            else
+                (key as? RemoteNavKey.Chat)?.let { repository.peekCachedChat(it.selection()) }?.let { cached ->
+                    RemoteState(
+                        loading = true,
+                        preview = true,
+                        session = cached.session,
+                        messages = cached.messages,
+                        draft = cached.draft,
+                    )
+                } ?: RemoteState(loading = true)
         }
 
     val state =
@@ -76,7 +89,18 @@ internal open class DestinationViewModel(
         if (matches(repository.state.value) && !repository.state.value.loading && !cleared) action()
     }
 
+    /**
+     * Like [active], but also while the destination loads (a reconnect), so the editor's text, a
+     * save and its prompt are never dropped without a word; the repository answers a save it
+     * cannot send with a retryable failure.
+     */
+    protected fun editing(action: () -> Unit) {
+        if (matches(repository.state.value) && !cleared) action()
+    }
+
     fun refresh() = active(repository::refresh)
+
+    fun revalidateLists() = active(repository::revalidateLists)
 
     fun renameSession(sessionId: String, title: String) = active {
         repository.renameSession(sessionId, title)
@@ -86,9 +110,20 @@ internal open class DestinationViewModel(
 
     fun older() = active(repository::older)
 
-    fun draft(text: String) = active { repository.draft(text) }
+    // The draft and its quote are local to the chat, so they are taken while it loads too.
+    fun draft(text: String) = editing { repository.draft(text) }
 
-    fun quote(messageId: String?) = active { repository.quote(messageId) }
+    /**
+     * A composer's write for this destination's chat; see [RemoteRepository.draft]. Unlike [draft]
+     * it is not held back while the chat loads or after the destination closed: a flush on the
+     * way out (Back, another chat, a notification) runs when the selection already moved on, and
+     * the repository files it under [selection]. A write naming another chat is dropped.
+     */
+    fun draft(selection: RemoteSelection, text: String) {
+        if (key is RemoteNavKey.Chat && selection == key.selection()) repository.draft(selection, text)
+    }
+
+    fun quote(messageId: String?) = editing { repository.quote(messageId) }
 
     fun refreshConfiguration() = active(repository::refreshConfiguration)
 
@@ -239,10 +274,11 @@ internal class ChatViewModel(
 
     fun recordChatAction(action: ChatAction) = settings.recordChatAction(action)
 
-    private data class PickerResult(
+    /** A picked, dropped or pasted batch waiting for its chat; identity matters, so not a data class. */
+    private class PickerResult(
         val selection: RemoteSelection,
-        val uris: List<String>,
-        val photo: Boolean,
+        val items: List<Picked>,
+        val onDone: () -> Unit,
     )
 
     private val pendingPicker = MutableStateFlow<PickerResult?>(null)
@@ -251,10 +287,11 @@ internal class ChatViewModel(
         viewModelScope.launch {
             combine(repository.state, pendingPicker) { state, result -> state to result }
                 .collect { (state, result) ->
-                    if (result != null && !state.loading && state.selection == result.selection) {
-                        pendingPicker.value = null
-                        repository.importAttachments(result.selection, result.uris, result.photo)
-                    }
+                    if (
+                        result != null && !state.loading && state.selection == result.selection &&
+                            pendingPicker.compareAndSet(result, null)
+                    )
+                        repository.importAttachments(result.selection, result.items, result.onDone)
                 }
         }
     }
@@ -324,7 +361,11 @@ internal class ChatViewModel(
         if (repository.state.value.draft.isBlank()) repository.draft(prompt)
     }
 
-    fun openChanges() = active(repository::openChanges)
+    /** Closes this chat's session on the Mac, as a session row's Close does. */
+    fun closeSession(sessionId: String) = active { repository.closeSession(sessionId) }
+
+    /** [exclusive] false keeps the files open beside the changes ([RemoteRepository.openChanges]). */
+    fun openChanges(exclusive: Boolean = true) = active { repository.openChanges(exclusive) }
 
     fun refreshJobs() = active(repository::refreshJobs)
 
@@ -351,7 +392,8 @@ internal class ChatViewModel(
 
     fun requestChangesPreview(path: String) = active { repository.requestChangesPreview(path) }
 
-    fun openFiles() = active(repository::openFiles)
+    /** [exclusive] false keeps the changes open beside the files ([RemoteRepository.openFiles]). */
+    fun openFiles(exclusive: Boolean = true) = active { repository.openFiles(exclusive) }
 
     fun closeFiles() = repository.closeFiles()
 
@@ -370,6 +412,27 @@ internal class ChatViewModel(
     fun dismissFilesPeek() = repository.dismissFilesPeek()
 
     fun selectFileLines(selection: LineSelection?) = active { repository.selectFileLines(selection) }
+
+    fun startFileEditing() = active(repository::startFileEditing)
+
+    fun updateFileEditorText(text: String) = editing { repository.updateFileEditorText(text) }
+
+    fun saveFileEditor() = editing(repository::saveFileEditor)
+
+    fun discardFileEditor() = repository.discardFileEditor()
+
+    fun reloadFileAfterConflict() = editing(repository::reloadFileAfterConflict)
+
+    fun confirmFileEditorLeave() = editing(repository::confirmFileEditorLeave)
+
+    fun cancelFileEditorLeave() = repository.cancelFileEditorLeave()
+
+    /** The edit as a diff prompt for the composer; null when unchanged. Nothing is sent. */
+    fun fileEditorPrompt(intro: String? = null): EditorPrompt? {
+        var prompt: EditorPrompt? = null
+        editing { prompt = repository.fileEditorPrompt(intro) }
+        return prompt
+    }
 
     /** False when the comment was not saved; the caller keeps the user's text on screen. */
     fun setReviewComment(comment: ReviewComment): Boolean {
@@ -401,9 +464,37 @@ internal class ChatViewModel(
         return true
     }
 
-    fun acceptAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) {
-        if (selection != key.selection() || uris.isEmpty() || cleared) return
-        pendingPicker.value = PickerResult(selection, uris, photo)
+    fun acceptAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) =
+        acceptAttachments(selection, uris.map { Picked(it, photo) }) {}
+
+    /**
+     * Imports [uris] into this chat's draft once it can take them, and reports whether it took
+     * them. [done] runs once the import no longer reads them: it ended, was refused, the result
+     * was replaced by a newer one before it started, or this chat closed first.
+     */
+    fun acceptAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean, done: () -> Unit): Boolean {
+        if (selection != key.selection() || uris.isEmpty() || cleared) return false
+        acceptAttachments(selection, uris.map { Picked(it, photo) }, done)
+        return true
+    }
+
+    /**
+     * Imports a mixed batch of images and files into [selection]'s draft once that chat is shown
+     * and loaded, as one run (see [RemoteRepository.importAttachments]). [onDone] runs exactly
+     * once: after the import read every URI or refused the batch, when a later batch replaces this
+     * one before it started, or when this chat closes first. A drop releases its grants there.
+     */
+    fun acceptAttachments(selection: RemoteSelection, items: List<Picked>, onDone: () -> Unit) {
+        if (selection != key.selection() || items.isEmpty() || cleared) {
+            onDone()
+            return
+        }
+        pendingPicker.getAndUpdate { PickerResult(selection, items, onDone) }?.onDone?.invoke()
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        pendingPicker.getAndUpdate { null }?.onDone?.invoke()
     }
 }
 

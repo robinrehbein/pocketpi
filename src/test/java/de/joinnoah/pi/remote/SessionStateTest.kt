@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -183,6 +184,68 @@ class SnapshotFencingTest {
         timeline.snapshot(snapshot(8, "first"))
         assertEquals("running", timeline.status)
         assertEquals(9L, timeline.revision)
+    }
+
+    private fun withCursor(data: kotlinx.serialization.json.JsonObject, cursor: String?) =
+        kotlinx.serialization.json.JsonObject(
+            data + ("nextCursor" to (cursor?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull))
+        )
+
+    @Test
+    fun eventsBeforeTheFirstSnapshotLeaveItMissing() {
+        val timeline = Timeline("session")
+        timeline.beginSnapshotEpoch("running")
+        // A gap, an unknown kind and another session's event: none of them is a snapshot.
+        assertTrue(
+            timeline.event(
+                Wire.objectOf("sessionId" to "session", "revision" to 5, "kind" to "session.status", "status" to "idle")
+            )
+        )
+        timeline.event(Wire.objectOf("sessionId" to "session", "revision" to 0, "kind" to "future.kind"))
+        timeline.event(
+            Wire.objectOf("sessionId" to "other", "revision" to 1, "kind" to "session.status", "status" to "idle")
+        )
+        assertFalse(timeline.hasSnapshot)
+        assertTrue(timeline.messages.isEmpty())
+        timeline.snapshot(snapshot(8, "first"))
+        assertTrue(timeline.hasSnapshot)
+        timeline.beginSnapshotEpoch("idle")
+        assertFalse(timeline.hasSnapshot)
+    }
+
+    @Test
+    fun resyncOfTheSameSessionKeepsOlderPagesAndTheirCursor() {
+        val timeline = Timeline("session")
+        timeline.snapshot(withCursor(snapshot(8, "c", "d"), "before-c"))
+        timeline.snapshot(withCursor(snapshot(8, "a", "b"), "before-a"), older = true)
+        assertEquals(listOf("a", "b", "c", "d"), timeline.messages.map { it.text("id") })
+
+        // The newest page now starts at d: a, b and c stay before it, and so does the cursor.
+        timeline.snapshot(withCursor(snapshot(12, "d", "e"), "before-d"))
+        assertEquals(listOf("a", "b", "c", "d", "e"), timeline.messages.map { it.text("id") })
+        assertEquals("before-a", timeline.nextCursor)
+
+        // A page that does not overlap what is shown replaces it.
+        timeline.snapshot(withCursor(snapshot(20, "x", "y"), "before-x"))
+        assertEquals(listOf("x", "y"), timeline.messages.map { it.text("id") })
+        assertEquals("before-x", timeline.nextCursor)
+    }
+
+    @Test
+    fun aNewEpochKeepsWhatWasShownForItsFirstSnapshot() {
+        val timeline = Timeline("session")
+        timeline.retain(
+            listOf(Wire.objectOf("id" to "a"), Wire.objectOf("id" to "b"), Wire.objectOf("id" to "c")),
+            "before-a",
+        )
+        timeline.snapshot(withCursor(snapshot(3, "b", "c", "d"), "before-b"))
+        assertEquals(listOf("a", "b", "c", "d"), timeline.messages.map { it.text("id") })
+        assertEquals("before-a", timeline.nextCursor)
+
+        timeline.beginSnapshotEpoch("idle")
+        timeline.snapshot(withCursor(snapshot(0, "c", "d"), "before-c"))
+        assertEquals(listOf("a", "b", "c", "d"), timeline.messages.map { it.text("id") })
+        assertEquals("before-a", timeline.nextCursor)
     }
 
     @Test
@@ -421,11 +484,52 @@ class SnapshotFencingTest {
                 )
             )
         )
-        assertTrue(
+        // A newer host's kind advances the revision and asks for a resync instead of a snapshot now.
+        assertFalse(
             timeline.event(Wire.objectOf("sessionId" to "one", "revision" to 3, "kind" to "future.kind"))
         )
+        assertTrue(timeline.unknownKindSeen)
+        assertEquals(3L, timeline.revision)
         assertNull(timeline.compaction)
         assertEquals("idle", timeline.status)
         assertEquals(1, timeline.messages.size)
+    }
+
+    @Test
+    fun malformedBufferedEventDoesNotUndoTheSnapshotAndAsksForAResync() {
+        val timeline = Timeline("one") { 1L }
+        timeline.snapshot(snapshotData("one", 0))
+        // Revision 2 arrives before 1, so it waits for the next snapshot; it has no message.
+        assertTrue(
+            timeline.event(Wire.objectOf("sessionId" to "one", "revision" to 2, "kind" to "message.upsert"))
+        )
+        assertFalse(timeline.unknownKindSeen)
+
+        timeline.snapshot(snapshotData("one", 1))
+
+        assertEquals(2L, timeline.revision)
+        assertTrue(timeline.unknownKindSeen)
+        assertFalse(timeline.needsSnapshot)
+    }
+
+    @Test
+    fun unknownStatusEventKeepsTheStatusAndThrowsAfterAdvancingTheRevision() {
+        val timeline = Timeline("one") { 1L }
+        timeline.snapshot(snapshotData("one", 0))
+        assertThrows(IllegalArgumentException::class.java) {
+            timeline.event(Wire.objectOf("sessionId" to "one", "revision" to 1, "kind" to "session.status", "status" to "retrying"))
+        }
+        // The revision stays in step; the caller marks the timeline for a resync.
+        assertEquals(1L, timeline.revision)
+        assertEquals("running", timeline.status)
+    }
+
+    @Test
+    fun eventWithoutASessionIsNotTheTimelines() {
+        val timeline = Timeline("one") { 1L }
+        timeline.snapshot(snapshotData("one", 0))
+        assertFalse(timeline.event(Wire.objectOf("revision" to 1, "kind" to "host.future")))
+        assertEquals(0L, timeline.revision)
+        assertFalse(timeline.unknownKindSeen)
     }
 }

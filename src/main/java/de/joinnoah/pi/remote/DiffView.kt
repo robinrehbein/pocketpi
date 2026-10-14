@@ -240,3 +240,23 @@ private fun GutterNumber(number: Int?, width: Dp, style: TextStyle, color: Color
         maxLines = 1,
     )
 }
+
+/**
+ * The hunk around [lines] at [index] as unified diff text: its @@ header and every line up to the
+ * next one, each with its '+', '-' or ' ' prefix. Dividers between hunks are left out.
+ */
+internal fun diffHunkText(lines: List<DiffLine>, index: Int): String {
+    if (index !in lines.indices) return ""
+    val start = (index downTo 0).firstOrNull { lines[it].kind == DiffKind.HUNK } ?: 0
+    val end = (index + 1 until lines.size).firstOrNull { lines[it].kind == DiffKind.HUNK } ?: lines.size
+    return lines.subList(start, end)
+        .filterNot { it.kind == DiffKind.HUNK && it.text.isEmpty() }
+        .joinToString("\n") { line ->
+            when (line.kind) {
+                DiffKind.ADDED -> "+" + line.text
+                DiffKind.REMOVED -> "-" + line.text
+                DiffKind.CONTEXT -> " " + line.text
+                DiffKind.HUNK -> line.text
+            }
+        }
+}

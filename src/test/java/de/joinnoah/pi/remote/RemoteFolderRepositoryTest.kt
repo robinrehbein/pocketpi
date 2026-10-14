@@ -182,6 +182,40 @@ class RemoteFolderRepositoryTest {
     }
 
     @Test
+    fun aHealthyConnectionCarriesBackgroundWorkUnderTheCallersRequestId() = runTest {
+        val transport = Transport()
+        transport.replies["session.prompt"] = { Wire.objectOf("kind" to "accepted") }
+        val repository = connected(transport)
+        assertEquals("sent", repository.withHealthyConnection("host") { it.prompt("session", "Go on", "mutation-1"); "sent" })
+        val prompt = transport.of("session.prompt").single()
+        assertEquals("mutation-1", prompt.text("requestId"))
+        assertEquals("Go on", prompt.text("text"))
+        // Connected to another Mac: nothing is sent, and the caller opens its own connection.
+        assertNull(repository.withHealthyConnection("other") { error("must not run") })
+        assertEquals(1, transport.of("session.prompt").size)
+    }
+
+    @Test
+    fun aQuietConnectionIsNotHealthyAndAMissingReplyTimesOut() = runTest {
+        val transport = Transport()
+        val repository = connected(transport)
+        val error = runCatching { repository.withHealthyConnection("host") { it.prompt("session", "Go on", "m") } }
+            .exceptionOrNull()
+        assertEquals(RemoteRequestException.Kind.TIMEOUT, (error as RemoteRequestException).kind)
+        assertEquals(HEALTHY_REQUEST_TIMEOUT_MILLIS, testScheduler.currentTime)
+        assertTrue(repository.state.value.connected)
+        advanceTimeBy(HEALTHY_CONNECTION_MILLIS)
+        assertNull(repository.withHealthyConnection("host") { error("must not run") })
+        assertEquals(1, transport.of("session.prompt").size)
+    }
+
+    @Test
+    fun withoutAConnectionNothingIsHealthy() = runTest {
+        val repository = repository(Transport())
+        assertNull(repository.withHealthyConnection("host") { error("must not run") })
+    }
+
+    @Test
     fun withoutCapabilityNoFolderCommandIsSent() = runTest {
         val transport = Transport()
         transport.advertised = emptyList()
@@ -345,12 +379,13 @@ class RemoteFolderRepositoryTest {
     }
 
     @Test
-    fun malformedHostEventClosesTheChannel() = runTest {
+    fun malformedHostEventIsDroppedAndKeepsTheChannel() = runTest {
         val transport = Transport()
         val repository = connected(transport)
         transport.event("kind" to "clone.progress", "cloneId" to "x", "phase" to "receiving", "percent" to 101)
         runCurrent()
-        assertFalse(repository.state.value.connected)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.folders.clone)
     }
 
     @Test

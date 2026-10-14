@@ -9,6 +9,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertWidthIsAtLeast
@@ -27,6 +32,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
@@ -70,11 +76,19 @@ class FilesPaneUiTest {
     private fun scrollToEntry(name: String) =
         compose.onNodeWithTag("filesList").performScrollToNode(hasTestTag("filesEntry:$name"))
 
-    /** Renders the pane alone; navigation only records, the test moves [state] itself. */
-    private fun render(initial: FilesState, projectName: String? = null): (FilesState) -> Unit {
+    /**
+     * Renders the pane alone, or with [besideChat] right of a focusable button as in the two-pane
+     * layout; navigation only records, the test moves [state] itself.
+     */
+    private fun render(initial: FilesState, projectName: String? = null, besideChat: Boolean = false): (FilesState) -> Unit {
         var state by mutableStateOf(initial)
         compose.setContent {
             MaterialTheme {
+                androidx.compose.foundation.layout.Row {
+                if (besideChat)
+                    androidx.compose.material3.Button(onClick = {}, modifier = androidx.compose.ui.Modifier.testTag("chatButton")) {
+                        androidx.compose.material3.Text("Chat")
+                    }
                 FilesPane(
                     state,
                     FilesActions(
@@ -97,6 +111,7 @@ class FilesPaneUiTest {
                     ),
                     projectName = projectName,
                 )
+                }
             }
         }
         return { state = it }
@@ -126,6 +141,57 @@ class FilesPaneUiTest {
         val tiles = names.map { compose.onNodeWithTag("filesEntry:$it").getUnclippedBoundsInRoot() }
         for (tile in tiles.drop(1)) assertEquals(tiles[0].top, tile.top)
         assertEquals(true, tiles.zipWithNext().all { (a, b) -> a.left < b.left })
+    }
+
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun rightOpensATileAtTheRowsEndAndBackspaceGoesUp() {
+        val listing = FileListing("src", listOf(FileEntry("lib", FileEntryType.DIR), FileEntry("Main.kt", FileEntryType.FILE, 10), FileEntry("Util.kt", FileEntryType.FILE, 10)))
+        render(FilesState("s", loading = false, path = "src", listing = listing))
+        val main = compose.onNodeWithTag("filesEntry:Main.kt")
+        main.performSemanticsAction(SemanticsActions.RequestFocus)
+        // Main.kt has Util.kt to its right: Right moves there and opens nothing.
+        main.performKeyInput { pressKey(androidx.compose.ui.input.key.Key.DirectionRight) }
+        compose.waitForIdle()
+        assertEquals(emptyList<String?>(), files)
+        compose.onNodeWithTag("filesEntry:Util.kt").assertIsFocused()
+        // At the row's end Right opens the file, as Enter would.
+        compose.onNodeWithTag("filesEntry:Util.kt").performKeyInput { pressKey(androidx.compose.ui.input.key.Key.DirectionRight) }
+        compose.waitForIdle()
+        assertEquals(listOf<String?>("src/Util.kt"), files)
+        // Backspace goes up a folder.
+        compose.onNodeWithTag("filesEntry:Util.kt").performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Backspace) }
+        compose.waitForIdle()
+        assertEquals(listOf(""), opened)
+    }
+
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    @Test
+    @Config(qualifiers = "w1205dp-h753dp")
+    fun leftOnTheFirstTileGoesUpAFolderInsteadOfIntoTheChatBesideIt() {
+        val listing = FileListing("src", listOf(FileEntry("lib", FileEntryType.DIR), FileEntry("Main.kt", FileEntryType.FILE, 10)))
+        render(FilesState("s", loading = false, path = "src", listing = listing), besideChat = true)
+        val lib = compose.onNodeWithTag("filesEntry:lib")
+        lib.performSemanticsAction(SemanticsActions.RequestFocus)
+        lib.performKeyInput { pressKey(androidx.compose.ui.input.key.Key.DirectionLeft) }
+        compose.waitForIdle()
+        assertEquals(listOf(""), opened)
+        compose.onNodeWithTag("chatButton").assertIsNotFocused()
+        lib.assertIsFocused()
+    }
+
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    @Test
+    @Config(qualifiers = "w1205dp-h753dp")
+    fun leftAtTheTopFolderMayLeaveThePane() {
+        render(FilesState("s", loading = false, listing = root), besideChat = true)
+        val src = compose.onNodeWithTag("filesEntry:src")
+        src.performSemanticsAction(SemanticsActions.RequestFocus)
+        src.performKeyInput { pressKey(androidx.compose.ui.input.key.Key.DirectionLeft) }
+        compose.waitForIdle()
+        assertEquals(emptyList<String>(), opened)
+        compose.onNodeWithTag("chatButton").assertIsFocused()
     }
 
     @Test
@@ -393,12 +459,12 @@ class FilesPaneUiTest {
 
     /*
      * On a phone either pane covers the chat header, so the other cannot be opened while it is
-     * shown; ProjectFilesLoaderTest covers the exclusion itself, whatever the layout. Beside the
-     * chat both stay reachable, so the inspector must show one at a time.
+     * shown; ProjectFilesLoaderTest covers the exclusion itself. Beside the chat both stay open,
+     * each as a tab of the inspector.
      */
     @Test
     @Config(qualifiers = "w1300dp-h800dp")
-    fun filesAndChangesReplaceEachOtherInTheInspector() {
+    fun filesAndChangesShareTheInspectorAsTabs() {
         chat(setOf(GIT_CAPABILITY, FILES_CAPABILITY))
         fun shown(tag: String) =
             compose.onNode(hasTestTag(tag) and hasAnyAncestor(hasTestTag("inspectorPane"))).assertIsDisplayed()
@@ -411,10 +477,14 @@ class FilesPaneUiTest {
         compose.waitForIdle()
         shown("filesPane")
         compose.onNodeWithTag("changesPane").assertDoesNotExist()
+        // Changes again switches back to their tab; the files stay open behind it.
         compose.onNodeWithTag("chatAction_changes").performClick()
         compose.waitForIdle()
         shown("changesPane")
         compose.onNodeWithTag("filesPane").assertDoesNotExist()
-        assertNull(repository.state.value.files)
+        assertNotNull(repository.state.value.files)
+        compose.onNodeWithTag("inspectorTab_files").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+        compose.waitForIdle()
+        shown("filesPane")
     }
 }

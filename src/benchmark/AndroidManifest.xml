@@ -5,5 +5,9 @@
             android:exported="true" />
         <activity android:name="de.joinnoah.pi.remote.PerformanceFixtureActivity"
             android:exported="true" />
+        <!-- The normal app UI on the fake relay; same window behaviour as MainActivity. -->
+        <activity android:name="de.joinnoah.pi.remote.ConnectedFlowActivity"
+            android:exported="true" android:windowSoftInputMode="adjustResize"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|navigation" />
     </application>
 </manifest>

@@ -48,7 +48,7 @@ internal fun QuestionCard(
                         onValueChange = { if (controlsEnabled) feedback = it.take(16384) },
                         enabled = controlsEnabled,
                         label = { Text(stringResource(R.string.remote_plan_feedback)) },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().then(rememberQuestionFieldKeys(feedback)),
                         minLines = 2,
                     )
                     Button(
@@ -136,7 +136,7 @@ internal fun QuestionCard(
                                 ?: stringResource(R.string.remote_answer)
                         )
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().then(rememberQuestionFieldKeys(text)),
                 )
                 Button(
                     onClick = { submit(Wire.objectOf("kind" to "input", "value" to text)) },
@@ -312,7 +312,7 @@ internal fun QuestionnaireForm(
                     onValueChange = { custom = custom + (id to it.take(4096)) },
                     enabled = controlsEnabled,
                     label = { Text(stringResource(R.string.remote_other)) },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().then(rememberQuestionFieldKeys(custom[id].orEmpty())),
                 )
             if (ownAnswerSelected)
                 TextButton(

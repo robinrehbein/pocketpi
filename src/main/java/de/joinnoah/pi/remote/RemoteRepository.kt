@@ -51,6 +51,16 @@ data class RemoteSelection(
     val sessionId: String? = null,
 )
 
+/**
+ * What a chat showed when it was last open, read while it opens again: a read-only preview, never
+ * the chat's selection. [messages] may be empty for a session known only from its list row.
+ */
+data class ChatPreview(
+    val session: JsonObject?,
+    val messages: List<JsonObject>,
+    val draft: String,
+)
+
 enum class ActivationMode {
     RESTORE,
     USER_OPEN,
@@ -58,18 +68,51 @@ enum class ActivationMode {
 
 data class RemoteState(
     val hosts: List<PairedHost> = emptyList(),
+    /**
+     * [hosts] were read from storage. Until then an empty list says nothing, so screens show a
+     * placeholder instead of the first-run text, and nothing prunes state of Macs it lacks. Stays
+     * false when the read failed.
+     */
+    val hostsLoaded: Boolean = false,
+    /** Reading [hosts] from storage failed: no list is coming, though [hostsLoaded] stays false. */
+    val hostsUnreadable: Boolean = false,
     val host: PairedHost? = null,
     val selection: RemoteSelection = RemoteSelection(),
     val loading: Boolean = false,
+    /**
+     * A chat destination shows [ChatPreview] content while its open runs: read-only, and only on
+     * that destination's own state, never the repository's.
+     */
+    val preview: Boolean = false,
     val connection: Int = R.string.remote_offline,
     val connected: Boolean = false,
+    /**
+     * The shown questions, configuration, advisor, commands, status and capabilities are the
+     * last-known ones of a lost connection: kept on screen while the same Mac reconnects, until
+     * the activation after the reconnect has read them again. Actions stay gated on [connected].
+     */
+    val stale: Boolean = false,
+    /** Epoch millis of the loss that made the state [stale]; null while it is not. */
+    val staleSince: Long? = null,
     val error: Int? = null,
     /** Epoch millis of the next automatic reconnect attempt, or null when none is scheduled. */
     val reconnectAt: Long? = null,
     /** The host whose device was denied (paused or revoked) by the current [error], if any. */
     val deniedRouteId: String? = null,
+    /**
+     * When the pairing waiting for approval on the Mac expires, in
+     * [android.os.SystemClock.elapsedRealtime] millis (see [Diagnostics.now]); null unless the Mac
+     * is asking the user right now.
+     */
+    val pairingDeadline: Long? = null,
     val projects: List<JsonObject> = emptyList(),
     val projectChats: List<ProjectChatSummary> = emptyList(),
+    /**
+     * Each project's sessions by project ID, for views across projects: every list the Mac sent
+     * for [host] on this or an earlier connection, kept fresh by live status events. Unlike
+     * [projectChats] it is not cut to the featured few.
+     */
+    val projectSessions: Map<String, ProjectSessions> = emptyMap(),
     val project: JsonObject? = null,
     val sessions: List<JsonObject> = emptyList(),
     /** [sessions] came from a sessions.list on the current connection, not from a cache. */
@@ -133,6 +176,15 @@ data class RemoteState(
     val providerAuth: ProviderAuthState = ProviderAuthState(),
 )
 
+/** The app's connection counts as healthy for a notification's request while a frame arrived this recently. */
+internal const val HEALTHY_CONNECTION_MILLIS = 25_000L
+
+/** How long a notification's request waits on the app's connection before it uses its own. */
+internal const val HEALTHY_REQUEST_TIMEOUT_MILLIS = 3_000L
+
+/** One content URI to attach; [photo] imports it as an image (scaled JPEG), otherwise as a file. */
+data class Picked(val uri: String, val photo: Boolean)
+
 interface RemoteRepository {
     val state: StateFlow<RemoteState>
 
@@ -144,6 +196,31 @@ interface RemoteRepository {
     suspend fun createSession(routeId: String, projectId: String): RemoteSelection
 
     suspend fun openNotification(routeId: String, sessionId: String): RemoteSelection?
+
+    /**
+     * The project of [sessionId] on the paired [routeId] as the app already knows it, from its
+     * caches and stores, without asking the Mac; null when only the Mac knows. A tapped
+     * notification shows its chat at once when this knows the project.
+     */
+    suspend fun notificationProject(routeId: String, sessionId: String): String? = null
+
+    /**
+     * Runs [block] over the app's own connection when it is connected to [routeId] and heard from
+     * the Mac within [HEALTHY_CONNECTION_MILLIS]; each request on it gives up after
+     * [HEALTHY_REQUEST_TIMEOUT_MILLIS]. Returns null without running [block] when the connection is
+     * not known to be healthy, so the caller opens a connection of its own. A host error passes
+     * through as a [RemoteCommandException]. A plain [RemoteCommands.request] that was not sent,
+     * timed out or was lost also ends the call with null; a [MutationCommands.mutate] under the
+     * caller's mutation ID instead throws [MutationNotSentException] when nothing was sent, and the
+     * timeout or loss otherwise, so the caller decides whether to send it again. Any thread may
+     * call it. [onSent] runs as each request goes out, so a caller that falls back after a timeout
+     * knows the Mac may already have it.
+     */
+    suspend fun <T> withHealthyConnection(
+        routeId: String,
+        onSent: () -> Unit = {},
+        block: suspend (MutationCommands) -> T,
+    ): T? = null
 
     /**
      * Starts a new session that continues from just before the user message [messageId] of the
@@ -164,7 +241,13 @@ interface RemoteRepository {
 
     fun cancelSelection()
 
+    /** The cached content of the chat [selection] for a preview while it opens, or null. */
+    fun peekCachedChat(selection: RemoteSelection): ChatPreview? = null
+
     suspend fun pair(text: String): RemoteSelection?
+
+    /** Gives up the pairing that is running, so [pair] returns without a host and loading ends. */
+    fun cancelPairing() {}
 
     fun remove(routeId: String)
 
@@ -172,7 +255,15 @@ interface RemoteRepository {
 
     fun setForeground(foreground: Boolean) {}
 
-    fun setValidatedNetwork(identity: String?) {}
+    /** A validated default network, or none: [setNetwork] for callers that only see validation. */
+    fun setValidatedNetwork(identity: String?) = setNetwork(identity, validated = identity != null)
+
+    /**
+     * The default network once it can carry traffic, or null when there is none. [validated] says
+     * whether Android validated it; one that never validates still allows reconnects. [path]
+     * fingerprints its route, so a route that moves on the same network is probed, not torn down.
+     */
+    fun setNetwork(identity: String?, validated: Boolean, path: String? = null) {}
 
     fun refresh()
 
@@ -186,9 +277,33 @@ interface RemoteRepository {
 
     fun draft(text: String)
 
+    /**
+     * Sets the draft typed in [selection]. A composer pushes its text late (after a pause, on
+     * stop, when the chat changes), so a write for a chat that is no longer selected never lands
+     * in the current one: a repository that keeps drafts per chat files it under [selection],
+     * and this default drops it.
+     */
+    fun draft(selection: RemoteSelection, text: String) {
+        if (state.value.selection == selection) draft(text)
+    }
+
     fun quote(messageId: String?)
 
     fun importAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) {}
+
+    /**
+     * Imports a mixed [batch] of images and files into [selection]'s draft in one run, with the
+     * same limits as [importAttachments]. [onDone] runs exactly once, after the import read every
+     * URI or refused the batch, so a caller can then give back the URIs' read grants (a drop's
+     * permissions). This default suits a repository whose single import reads synchronously.
+     */
+    fun importAttachments(selection: RemoteSelection, batch: List<Picked>, onDone: () -> Unit) {
+        try {
+            batch.groupBy { it.photo }.forEach { (photo, items) -> importAttachments(selection, items.map { it.uri }, photo) }
+        } finally {
+            onDone()
+        }
+    }
 
     fun removeAttachment(id: String) {}
 
@@ -236,6 +351,13 @@ interface RemoteRepository {
 
     fun refreshSessions() {}
 
+    /**
+     * Reads the lists on screen again behind what they show, for a pull to refresh: the projects,
+     * and the selected project's sessions or every project's featured chats. Without a connection
+     * it asks for one, as [refresh] does.
+     */
+    fun revalidateLists() {}
+
     fun loadToolOutput(toolCallId: String) {}
 
     fun cancelToolOutput() {}
@@ -259,18 +381,24 @@ interface RemoteRepository {
 
     /** `session.git.status`; only with [GIT_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun gitStatus(sessionId: String, base: GitBase): GitStatus =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
 
     /** `session.git.diff` for a path of the snapshot's list. Throws [RemoteRequestException]. */
     suspend fun gitDiff(sessionId: String, snapshotId: String, path: String): GitDiff =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
 
     /** `session.git.log` for the snapshot's base. Throws [RemoteRequestException]. */
     suspend fun gitLog(sessionId: String, snapshotId: String): GitLog =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
 
     /** Opens [RemoteState.changes] for the selected session, starting at session start. */
     fun openChanges() {}
+
+    /**
+     * Like [openChanges]; with [exclusive] false the files stay open beside the changes, as tabs
+     * of a side inspector do. Exclusive, as the phone shows one at a time, it closes them.
+     */
+    fun openChanges(exclusive: Boolean) = openChanges()
 
     fun closeChanges() {}
 
@@ -288,11 +416,25 @@ interface RemoteRepository {
 
     /** `session.files.list`; only with [FILES_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
 
     /** `session.files.read` of one page; a later page carries the first page's version. */
     suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?): FileChunk =
-        throw RemoteRequestException("unsupported")
+        throw RemoteRequestException.unsupported()
+
+    /**
+     * `session.files.write`: replaces [path] with [content] when its version is still
+     * [baseVersion]; only with [FILES_WRITE_CAPABILITY]. Throws [RemoteRequestException], with
+     * code `conflict` when the file changed. A [requestId] sent before gets the host's first
+     * answer again, so a retry after a lost reply cannot write twice.
+     */
+    suspend fun filesWrite(
+        sessionId: String,
+        path: String,
+        baseVersion: String,
+        content: String,
+        requestId: String = Wire.random(),
+    ): FileWritten = throw RemoteRequestException.unsupported()
 
     /**
      * The bytes of an image this device sent in [sessionId]'s chat, from memory or read from the
@@ -371,6 +513,9 @@ interface RemoteRepository {
     /** Opens [RemoteState.files] for the selected session at its folder. */
     fun openFiles() {}
 
+    /** Like [openFiles]; with [exclusive] false the changes stay open beside the files. */
+    fun openFiles(exclusive: Boolean) = openFiles()
+
     fun closeFiles() {}
 
     /** Shows the folder [path], `""` being the session folder. */
@@ -391,6 +536,32 @@ interface RemoteRepository {
     fun dismissFilesPeek() {}
 
     fun selectFileLines(selection: LineSelection?) {}
+
+    /** Opens the open file in the editor when [canEditFile] allows it. */
+    fun startFileEditing() {}
+
+    fun updateFileEditorText(text: String) {}
+
+    /** Saves the editor's text over the version it was read or last saved as. */
+    fun saveFileEditor() {}
+
+    /** Leaves the editor and drops its text; a save still on its way is ignored. */
+    fun discardFileEditor() {}
+
+    /** After a conflict: drops the edit and reads the file again. */
+    fun reloadFileAfterConflict() {}
+
+    /** Discards the unsaved edit and runs the action that waited for it ([FileEditor.leaveRequest]). */
+    fun confirmFileEditorLeave() {}
+
+    /** Keeps editing; the action that waited for the discard prompt is dropped. */
+    fun cancelFileEditorLeave() {}
+
+    /**
+     * The composer text that hands the edit to the agent as a diff, with [intro] (default
+     * [editorPromptIntro]) above it; null when nothing changed or no editor is open.
+     */
+    fun fileEditorPrompt(intro: String? = null): EditorPrompt? = null
 
     /**
      * Adds [comment], replacing one on the same line, and keeps it in the session's draft. Returns

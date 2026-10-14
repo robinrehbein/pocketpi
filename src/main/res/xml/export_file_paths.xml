@@ -3,4 +3,8 @@
     <cache-path name="exports" path="exports/" />
     <cache-path name="images" path="images/" />
     <cache-path name="artifacts" path="artifacts/" />
+    <!-- Files dragged into other apps (DragStorage). -->
+    <cache-path name="drag" path="drag/" />
+    <!-- Photos the camera app writes for the composer (PhotoCapture). -->
+    <cache-path name="camera" path="camera/" />
 </paths>

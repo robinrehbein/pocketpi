@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "seed": 7,
+  "host": {
+    "relay": "https://relay.fixture.invalid",
+    "routeId": "L5c3wIYZ58ux2hd0SOpyyg",
+    "pairId": "4d799pezG1S-o9-ag-M8cQ",
+    "pairSecret": "UsZSJ8HQN0t0vQxhZMrsr-14so1JPsXn5CDcef0kUUE",
+    "deviceId": "VtUx6dXhP7y_FWXTk5ltNg",
+    "deviceSecret": "xfD-kzG6JZlAuiBdlwJo1KuhimWihlEuwwXMrI-Venc",
+    "hostName": "Fixture Mac"
+  },
+  "capabilities": [],
+  "routeCapabilities": [],
+  "handshakeRoundTrips": 4,
+  "snapshotPageSize": 100,
+  "defaultProfile": "lte",
+  "profiles": {
+    "lan": { "roundTripMs": 30, "jitterMs": 5, "stallRate": 0.0, "stallMs": 0 },
+    "lte": { "roundTripMs": 150, "jitterMs": 50, "stallRate": 0.0, "stallMs": 0 },
+    "bad": { "roundTripMs": 400, "jitterMs": 100, "stallRate": 0.02, "stallMs": 5000 }
+  },
+  "prepare": {
+    "projectId": "project-pocketpi",
+    "sessionId": "session-cached",
+    "draft": "Draft kept from the last visit: check the cold start numbers."
+  },
+  "projects": [
+    { "id": "project-pocketpi", "name": "PocketPi fixture" },
+    { "id": "project-relay", "name": "Relay fixture" },
+    { "id": "project-docs", "name": "Docs fixture" }
+  ],
+  "sessions": [
+    {
+      "session": { "id": "session-cached", "projectId": "project-pocketpi", "title": "Cached chat fixture", "origin": "rpc", "status": "idle", "updatedAt": 1759990000000 },
+      "revision": 240, "turns": 48, "tail": "CONNECTED_FLOW_CACHED_TAIL"
+    },
+    {
+      "session": { "id": "session-uncached", "projectId": "project-pocketpi", "title": "Uncached chat fixture", "origin": "rpc", "status": "idle", "updatedAt": 1759980000000 },
+      "revision": 240, "turns": 48, "tail": "CONNECTED_FLOW_UNCACHED_TAIL"
+    },
+    {
+      "session": { "id": "session-short", "projectId": "project-pocketpi", "title": "Short chat fixture", "origin": "rpc", "status": "idle", "updatedAt": 1760000200000 },
+      "revision": 12, "turns": 2, "tail": "CONNECTED_FLOW_SHORT_TAIL"
+    },
+    {
+      "session": { "id": "session-terminal", "projectId": "project-pocketpi", "title": "Terminal chat fixture", "origin": "tui", "status": "idle", "updatedAt": 1760000100000 },
+      "revision": 30, "turns": 6, "tail": "CONNECTED_FLOW_TERMINAL_TAIL"
+    },
+    {
+      "session": { "id": "session-relay", "projectId": "project-relay", "title": "Relay chat fixture", "origin": "rpc", "status": "idle", "updatedAt": 1760000050000 },
+      "revision": 60, "turns": 12, "tail": "CONNECTED_FLOW_RELAY_TAIL"
+    },
+    {
+      "session": { "id": "session-docs", "projectId": "project-docs", "title": "Docs chat fixture", "origin": "rpc", "status": "idle", "updatedAt": 1760000010000 },
+      "revision": 20, "turns": 4, "tail": "CONNECTED_FLOW_DOCS_TAIL"
+    }
+  ],
+  "turn": [
+    { "id": "{session}-user-{turn}", "role": "user", "state": "complete", "text": "Turn {turn}: inspect example-{turn}.kt and explain the change." },
+    {
+      "id": "{session}-call-{turn}", "role": "assistant", "state": "complete", "text": "",
+      "parts": [
+        { "type": "toolCall", "id": "{session}-tool-{turn}", "name": "edit", "arguments": "{\"path\":\"example-{turn}.kt\",\"edits\":[{\"oldText\":\"return value\",\"newText\":\"return value * 2\"}]}" }
+      ]
+    },
+    {
+      "id": "{session}-result-{turn}", "role": "tool", "state": "complete", "toolCallId": "{session}-tool-{turn}", "toolName": "edit",
+      "text": "Edited example-{turn}.kt",
+      "toolDetails": { "kind": "edit", "firstChangedLine": 1, "patch": "--- example-{turn}.kt\n+++ example-{turn}.kt\n@@ -1 +1 @@\n-return value\n+return value * 2" }
+    },
+    {
+      "id": "{session}-answer-{turn}", "role": "assistant", "state": "complete",
+      "text": "## Turn {turn} findings\nA fixed **Markdown** answer with *emphasis* and a [link](https://example.com).\n\n| File | Change |\n| --- | --- |\n| example-{turn}.kt | +1 / -1 |\n\n```kotlin\nfun example(value: Int): Int = value * 2\n```\nThe edit above doubled the returned value."
+    }
+  ],
+  "stream": {
+    "intervalMs": 50,
+    "chunks": 120,
+    "toolAt": 60,
+    "parts": [
+      "## Step {chunk}\n",
+      "Chunk {chunk} reads the **fixture**, keeps `state` in one place and links [the notes](https://example.com).\n",
+      "- Item {chunk} with `inline code`\n",
+      "- Item {chunk} with *emphasis* and a longer tail that wraps on a phone screen\n\n",
+      "```kotlin\n",
+      "val chunk{chunk} = listOf({chunk}, {chunk} + 1).map { it * 2 }\n",
+      "```\n\n",
+      "| Chunk | Change |\n| --- | --- |\n| {chunk} | +1 / -1 |\n\n"
+    ],
+    "complete": "CONNECTED_FLOW_STREAM_COMPLETE"
+  }
+}
