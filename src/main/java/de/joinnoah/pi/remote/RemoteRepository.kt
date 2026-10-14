@@ -142,6 +142,8 @@ data class RemoteState(
      */
     val childControlUnsupported: Set<String> = emptySet(),
     val answering: Set<String> = emptySet(),
+    /** Questions the user cannot answer from here right now, by question ID. */
+    val questionBlocks: Map<String, QuestionBlock> = emptyMap(),
     val capabilities: Set<String> = emptySet(),
     /** True once the connection's `projects.list` reply has added its route capabilities. */
     val capabilitiesKnown: Boolean = false,

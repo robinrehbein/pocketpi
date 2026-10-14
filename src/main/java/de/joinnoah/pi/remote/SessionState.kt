@@ -222,6 +222,11 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         return false
     }
 
+    /** Forgets a question the host reported as answered or closed elsewhere. */
+    fun dropQuestion(questionId: String) {
+        questions = questions.filterNot { it.text("id") == questionId }
+    }
+
     private fun compaction(event: JsonObject) {
         fun field(key: String): String? =
             (event[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
