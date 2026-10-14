@@ -130,6 +130,19 @@ class ComposerStateTest {
     }
 
     @Test
+    fun aTextTheRepositoryClearsCannotBeUndoneInTheField() {
+        val composer = draft()
+        composer.type("Deploy")
+        composer.flush(force = true)
+        composer.sync("Deploy")
+        assertTrue(composer.textState.undoState.canUndo)
+        // The repository cleared the sent text: Ctrl+Z must not bring it back.
+        composer.sync("")
+        assertEquals("", composer.text)
+        assertFalse(composer.textState.undoState.canUndo)
+    }
+
+    @Test
     fun typingTheRepositoryHasNotSeenWinsOverAChangeMadeElsewhere() {
         val pushes = Pushes()
         val composer = draft("Deploy", pushes)

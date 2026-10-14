@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_long_paste_body">Der eingefügte Text ist lang. Als Textdatei anhängen?</string>
+    <string name="remote_long_paste_attach">Als Textdatei anhängen</string>
+    <string name="remote_long_paste_insert">Als Text einfügen</string>
+</resources>

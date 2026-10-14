@@ -15,17 +15,15 @@ import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performKeyInput
-import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.requestFocus
-import androidx.compose.ui.test.withKeyDown
 import java.io.File
 import java.lang.reflect.Proxy
 import kotlinx.coroutines.runBlocking
@@ -260,28 +258,31 @@ class AttachmentImportUiTest {
         val clipboard = compose.activity.getSystemService(ClipboardManager::class.java)
         val field = compose.onNodeWithTag("composerField")
         field.requestFocus()
+        // Ctrl+V runs the field's paste command, which hands images and files to the content
+        // receiver and the rest to the field. Robolectric's key events do not run that command, so
+        // the test runs it through the semantics action a device's paste uses.
         clipboard.setPrimaryClip(ClipData(ClipDescription("shot", arrayOf("image/png")), ClipData.Item(shot)))
-        field.performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.V) } }
+        field.performSemanticsAction(SemanticsActions.PasteText)
         compose.waitForIdle()
         assertEquals(listOf(Picked(shot.toString(), photo = true)), repository.batches.single().second)
         assertEquals("", shownText())
 
-        // Text stays the field's: the key reaches it. (Robolectric's field types the letter where
-        // a device's pastes, so the test checks that the field got the key, not the pasted text.)
+        // Text is the field's, and it lands in the field.
         clipboard.setPrimaryClip(ClipData.newPlainText("text", "hello"))
-        field.performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.V) } }
+        field.performSemanticsAction(SemanticsActions.PasteText)
         compose.waitForIdle()
-        assertTrue(shownText().isNotEmpty())
+        assertEquals("hello", shownText())
         assertEquals(1, repository.batches.size)
 
-        // A text file copied as a URI is the field's to paste, too.
+        // A text file copied as a URI is the field's to paste, too: it is no attachment, and the
+        // field pastes the clip's text, which this clip does not have.
         val before = shownText()
         clipboard.setPrimaryClip(
             ClipData(ClipDescription("log", arrayOf("text/plain")), ClipData.Item(Uri.parse("content://fixture/build.log")))
         )
-        field.performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.V) } }
+        field.performSemanticsAction(SemanticsActions.PasteText)
         compose.waitForIdle()
-        assertTrue(shownText() != before)
+        assertEquals(before, shownText())
         assertEquals(1, repository.batches.size)
     }
 

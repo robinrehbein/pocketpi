@@ -2801,7 +2801,7 @@ internal fun RemoteScreen(
                                     } else 0f
                                 val refreshing = stringResource(R.string.remote_refreshing)
                                 // The projects column is too narrow for a refresh button beside the
-                                // Mac's own actions; its list pulls to refresh instead.
+                                // Mac's own actions; its Mac overflow refreshes instead.
                                 if (projectsColumn == null)
                                     IconButton(
                                         onClick = model::refresh,
@@ -2816,18 +2816,6 @@ internal fun RemoteScreen(
                                         )
                                     }
                             }
-                            // The full projects column kept beside a chat shrinks back to the strip. It
-                            // is outside the host guard: the column can collapse whether or not the host is known.
-                            if (projectsColumn?.canCollapse == true && twoPane != null)
-                                IconButton(
-                                    onClick = { twoPane.projectsExpanded = false },
-                                    modifier = Modifier.size(48.dp).testTag("collapseProjects"),
-                                ) {
-                                    Icon(
-                                        Icons.AutoMirrored.Filled.MenuOpen,
-                                        stringResource(R.string.remote_projects_collapse),
-                                    )
-                                }
                             // The Mac's own actions, for the page that is the Mac.
                             if (projectsPage != null && macHost != null)
                                 MacOverflow(
@@ -2852,6 +2840,18 @@ internal fun RemoteScreen(
                                     stringResource(R.string.remote_settings),
                                 )
                             }
+                            // The full projects column kept beside a chat shrinks back to the strip. It
+                            // is outside the host guard: the column can collapse whether or not the host is known.
+                            if (projectsColumn?.canCollapse == true && twoPane != null)
+                                IconButton(
+                                    onClick = { twoPane.projectsExpanded = false },
+                                    modifier = Modifier.size(48.dp).testTag("collapseProjects"),
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.MenuOpen,
+                                        stringResource(R.string.remote_projects_collapse),
+                                    )
+                                }
                         }
                     } else null,
             )
@@ -3138,7 +3138,11 @@ internal fun RemoteScreen(
                             attachmentSelection = state.selection
                             filePicker.launch(arrayOf("*/*"))
                         },
-                        onPasteAttachments = { items -> chatKey?.let { chatModel?.acceptAttachments(it.selection(), items) {} } },
+                        onPasteAttachments = { items, onDone ->
+                            val selection = chatKey?.selection()
+                            if (selection != null && chatModel != null) chatModel.acceptAttachments(selection, items, onDone)
+                            else onDone()
+                        },
                         onTakePhoto =
                             if (!hasCamera) null
                             else {

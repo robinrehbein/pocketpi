@@ -23,7 +23,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -105,10 +104,6 @@ internal fun mayHoldAttachments(mimeTypes: List<String>): Boolean =
 internal fun acceptsDrop(localState: Any?, mimeTypes: Set<String>): Boolean =
     (localState == null || localState is CodeLinesDrag) &&
         mimeTypes.any { type -> listOf("image/", "text/", "application/").any { type.startsWith(it, ignoreCase = true) } }
-
-/** Ctrl+V and Shift+Insert paste; Ctrl+Shift+V pastes plain text, so it stays the field's. */
-internal fun isPasteKey(key: Key, down: Boolean, ctrl: Boolean, alt: Boolean, shift: Boolean): Boolean =
-    down && !alt && ((key == Key.V && ctrl && !shift) || (key == Key.Insert && shift && !ctrl))
 
 /** The images and files on the clipboard, or null when it holds none (plain text, nothing). */
 internal fun clipboardIntake(context: Context): ClipIntake? {
