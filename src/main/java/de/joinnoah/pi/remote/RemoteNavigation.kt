@@ -119,6 +119,7 @@ internal class RemoteNavigator(
     private fun invalidate(): Long {
         // Another navigation began before the created chat's screen took it.
         freshSession = null
+        openingNotification = null
         consumePendingNotification?.invoke()
         consumePendingNotification = null
         activation?.cancel()
@@ -501,8 +502,17 @@ internal class RemoteNavigator(
     }
 
     /**
+     * The session a tapped notification is opening while its project is still unknown here; the
+     * layout shows that it is opening over the previous screen until the Mac said where it is.
+     */
+    var openingNotification: Pair<String, String>? by mutableStateOf(null)
+        private set
+
+    /**
      * Opens the session of a tapped notification. With [jobs] it then opens that session's
-     * background jobs, and [jobId]'s output on top when given.
+     * background jobs, and [jobId]'s output on top when given. When the app already knows the
+     * session's project, its chat is on screen at once (cached content, read-only, while it opens);
+     * otherwise [openingNotification] says so until the Mac has been asked.
      */
     fun notification(
         routeId: String,
@@ -530,9 +540,22 @@ internal class RemoteNavigator(
         }
         consumePendingNotification = consumeOnce
         val operation = scope.launch {
+            // What was on screen before the chat was pushed early; a failed open returns to it.
+            var before: List<RemoteNavKey>? = null
+            val projectId = repository.notificationProject(routeId, sessionId)
+            if (current != request) return@launch
+            if (projectId != null) {
+                before = stack.filterIsInstance<RemoteNavKey>()
+                replace(RemoteSelection(routeId, projectId, sessionId), keepSettings = false, keepStackedChats = false)
+            } else openingNotification = routeId to sessionId
             val selection = repository.openNotification(routeId, sessionId)
             if (current == request) {
-                if (selection != null) replace(selection, keepSettings = false) else restore()
+                openingNotification = null
+                if (selection != null) replace(selection, keepSettings = false)
+                else {
+                    before?.let { setStack(it, keepSettings = false) }
+                    restore()
+                }
                 // Only once the session itself is open, since the jobs belong to the selection.
                 if (
                     jobs &&
@@ -828,7 +851,9 @@ internal fun RemoteNavigation(
     }
     val chatViewports = rememberSaveable(saver = ChatViewportPositions.Saver) { ChatViewportPositions() }
     LaunchedEffect(navigator) {
-        navigator.restore()
+        // A tapped notification opens its own session; restoring the previous screen first would
+        // only connect and load what the tap replaces. Its open restores when it fails.
+        if (notification == null) navigator.restore()
         repository.state.collect { navigator.reconcile(it) }
     }
     LaunchedEffect(notification, navigator) {
@@ -914,6 +939,7 @@ internal fun RemoteNavigation(
                     disablePush,
                 )
             }
+            if (navigator.openingNotification != null) NotificationOpening()
             targets.help?.let { context ->
                 ShortcutHelpDialog(context) { targets.help = null }
             }

@@ -174,6 +174,12 @@ data class RemoteState(
     val providerAuth: ProviderAuthState = ProviderAuthState(),
 )
 
+/** The app's connection counts as healthy for a notification's request while a frame arrived this recently. */
+internal const val HEALTHY_CONNECTION_MILLIS = 25_000L
+
+/** How long a notification's request waits on the app's connection before it uses its own. */
+internal const val HEALTHY_REQUEST_TIMEOUT_MILLIS = 3_000L
+
 interface RemoteRepository {
     val state: StateFlow<RemoteState>
 
@@ -185,6 +191,22 @@ interface RemoteRepository {
     suspend fun createSession(routeId: String, projectId: String): RemoteSelection
 
     suspend fun openNotification(routeId: String, sessionId: String): RemoteSelection?
+
+    /**
+     * The project of [sessionId] on the paired [routeId] as the app already knows it, from its
+     * caches and stores, without asking the Mac; null when only the Mac knows. A tapped
+     * notification shows its chat at once when this knows the project.
+     */
+    suspend fun notificationProject(routeId: String, sessionId: String): String? = null
+
+    /**
+     * Runs [block] over the app's own connection when it is connected to [routeId] and heard from
+     * the Mac within [HEALTHY_CONNECTION_MILLIS]; each request on it gives up after
+     * [HEALTHY_REQUEST_TIMEOUT_MILLIS]. Returns null when the connection is not known to be healthy,
+     * or a request on it timed out or was lost, so the caller opens a connection of its own. A host
+     * error passes through as a [RemoteCommandException]. Any thread may call it.
+     */
+    suspend fun <T> withHealthyConnection(routeId: String, block: suspend (RemoteCommands) -> T): T? = null
 
     /**
      * Starts a new session that continues from just before the user message [messageId] of the

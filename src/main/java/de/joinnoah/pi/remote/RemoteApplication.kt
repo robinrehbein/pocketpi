@@ -59,7 +59,8 @@ class RemoteApplication : Application() {
         val importer = AttachmentImporter(this, attachments)
         repository =
             DefaultRemoteRepository(
-                PairingStore(this),
+                // Pushes check their route in the cache this keeps, without decrypting the store.
+                RouteCachingPairings(PairingStore(this), PairedRouteCache(this)),
                 DraftStore(this),
                 remoteTransport(this, scope),
                 scope,
@@ -70,6 +71,7 @@ class RemoteApplication : Application() {
                 },
                 onRecoverySignal = { onPushRecoverySignal() },
                 onUnpaired = ::onUnpaired,
+                projectHint = ::sessionProjectHint,
             )
         observeRecovery()
         predictions = PromptPredictions(this, scope, PairingStore(this))
@@ -135,6 +137,14 @@ class RemoteApplication : Application() {
         CompletionUpgrades.names.forgetRoute(routeId)
         RemoteNotifications.cancelRoute(this, routeId)
     }
+
+    /**
+     * Where the home snapshot or the label worker last saw a session, for a tapped notification
+     * whose session the repository's caches do not hold.
+     */
+    private suspend fun sessionProjectHint(routeId: String, sessionId: String): String? =
+        home.load().sessions.find { it.routeId == routeId && it.sessionId == sessionId }?.projectId
+            ?: CompletionUpgrades.names.get(routeId, sessionId)?.projectId
 
     /** A push arrived for a paired host; called on the messaging worker thread. */
     internal fun onPushEvent(payload: PushPayload) {

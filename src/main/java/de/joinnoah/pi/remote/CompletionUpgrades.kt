@@ -75,6 +75,36 @@ internal class SessionNameCache(
 }
 
 /**
+ * The title and project of [sessionId] as the app's own state shows them for [routeId]: the open
+ * chat, the project's list or another project's sessions. Null when the state shows another Mac or
+ * no list holds the session. It reads only the published [state], so any thread may call it.
+ */
+internal fun knownSessionName(state: RemoteState, routeId: String, sessionId: String): SessionName? {
+    if (state.selection.routeId != routeId) return null
+    fun named(row: JsonObject, projectId: String, project: String?) =
+        SessionName(
+            row.optionalText("title")?.trim()?.takeIf { it.isNotEmpty() },
+            project?.trim()?.takeIf { it.isNotEmpty() }
+                ?: state.projects.find { it.optionalText("id") == projectId }?.optionalText("name")?.trim()
+                    ?.takeIf { it.isNotEmpty() },
+            projectId,
+        )
+    val shownProject = state.project?.optionalText("id")?.takeIf { it == state.selection.projectId }
+    if (shownProject != null) {
+        val row =
+            state.session?.takeIf { state.selection.sessionId == sessionId && it.optionalText("id") == sessionId }
+                ?: state.sessions.find { it.optionalText("id") == sessionId }
+        if (row != null) return named(row, shownProject, state.project?.optionalText("name"))
+    }
+    for (entry in state.projectSessions.values) {
+        val row = entry.sessions.find { it.optionalText("id") == sessionId } ?: continue
+        return named(row, entry.projectId, entry.projectName)
+    }
+    val chat = state.projectChats.find { it.session.optionalText("id") == sessionId } ?: return null
+    return named(chat.session, chat.projectId, chat.projectName)
+}
+
+/**
  * One label lookup per route at a time: a burst of finishing subagents would otherwise open a
  * connection each. Waiters queue inside their own timeout, so they give up (generic notice) or
  * find the cache filled. Question upgrades never use this and are never delayed by it.
@@ -91,6 +121,8 @@ internal class LabelUpgrader(
     private val timeoutMillis: Long = LABEL_TIMEOUT_MILLIS,
     private val cache: SessionNameCache = SessionNameCache(),
     private val gate: LabelGate = LabelGate(),
+    /** What the app's own state knows of a route's session, tried after the cache. */
+    private val seed: (String, String) -> SessionName? = { _, _ -> null },
     /** Host, session, whether to read the preview, and the cached name if there is one. */
     private val fetch: suspend (PairedHost, String, Boolean, SessionName?) -> SessionLabel,
 ) {
@@ -99,14 +131,16 @@ internal class LabelUpgrader(
             withTimeoutOrNull(timeoutMillis) {
                 try {
                     gate.withRoute(payload.routeId) {
-                        val known = cache.get(payload.routeId, payload.sessionId)
+                        val known =
+                            cache.get(payload.routeId, payload.sessionId)
+                                ?: seed(payload.routeId, payload.sessionId)
                         fetch(host, payload.sessionId, payload.event == PushEvent.COMPLETE, known)
                             .also {
-                                if (known == null && (it.title != null || it.project != null))
+                                if (known == null && (it.title != null || it.project != null || it.projectId != null))
                                     cache.put(
                                         payload.routeId,
                                         payload.sessionId,
-                                        SessionName(it.title, it.project),
+                                        SessionName(it.title, it.project, it.projectId),
                                     )
                             }
                     }
@@ -227,10 +261,13 @@ class LabelUpgradeWorker(context: Context, parameters: WorkerParameters) :
         }
         val result =
             try {
-                LabelUpgrader(cache = CompletionUpgrades.names, gate = CompletionUpgrades.gate) {
-                        pairedHost, sessionId, withPreview, known ->
+                LabelUpgrader(
+                        cache = CompletionUpgrades.names,
+                        gate = CompletionUpgrades.gate,
+                        seed = { routeId, sessionId -> knownSessionName(app.repository.state.value, routeId, sessionId) },
+                    ) { pairedHost, sessionId, withPreview, known ->
                         // A known name with no preview to read needs no connection at all.
-                        if (known != null && !withPreview) SessionLabel(known.title, known.project, null)
+                        if (known != null && !withPreview) SessionLabel(known.title, known.project, null, known.projectId)
                         else
                             BackgroundRemoteClient().use(pairedHost) {
                                 it.sessionLabel(sessionId, withPreview, known)

@@ -84,6 +84,69 @@ class RemoteNavigationTest {
     }
 
     @Test
+    fun `a notification whose project is known shows its chat before the repository finishes`() = runTest {
+        val repository = NavigationFakeRepository()
+        repository.knownProjects["host" to "live"] = "project"
+        val lookup = CompletableDeferred<RemoteSelection?>()
+        repository.notificationLookup = { lookup.await() }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts, RemoteNavKey.Projects("other"), RemoteNavKey.Settings)
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.notification("host", "live")
+        runCurrent()
+        assertEquals(RemoteSelection("host", "project", "live").keys(), stack)
+        assertNull(navigation.openingNotification)
+        // A history session opens as its fork: the canonical chat replaces the pushed one.
+        lookup.complete(RemoteSelection("host", "project", "fork"))
+        runCurrent()
+        assertEquals(RemoteSelection("host", "project", "fork").keys(), stack)
+        assertTrue(repository.activations.none { it.second == ActivationMode.RESTORE })
+    }
+
+    @Test
+    fun `a notification whose project is unknown says it is opening until the Mac answered`() = runTest {
+        val repository = NavigationFakeRepository()
+        val lookup = CompletableDeferred<RemoteSelection?>()
+        repository.notificationLookup = { lookup.await() }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts, RemoteNavKey.Projects("other"))
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.notification("host", "live")
+        runCurrent()
+        assertEquals("host" to "live", navigation.openingNotification)
+        assertEquals(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("other")), stack)
+        lookup.complete(RemoteSelection("host", "project", "live"))
+        runCurrent()
+        assertNull(navigation.openingNotification)
+        assertEquals(RemoteSelection("host", "project", "live").keys(), stack)
+    }
+
+    @Test
+    fun `back while a notification opens ends the opening state`() = runTest {
+        val repository = NavigationFakeRepository()
+        repository.notificationLookup = { CompletableDeferred<RemoteSelection?>().await() }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"))
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.notification("host", "live")
+        runCurrent()
+        assertNotNull(navigation.openingNotification)
+        navigation.back()
+        assertNull(navigation.openingNotification)
+    }
+
+    @Test
+    fun `a failed open after the early chat returns to the previous screen and restores it`() = runTest {
+        val repository = NavigationFakeRepository()
+        repository.knownProjects["host" to "gone"] = "project"
+        repository.notification = null
+        val before = listOf<NavKey>(RemoteNavKey.Hosts, RemoteNavKey.Projects("other"), RemoteNavKey.Sessions("other", "p"))
+        val stack = before.toMutableList()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.notification("host", "gone")
+        runCurrent()
+        assertEquals(before, stack)
+        assertEquals(RemoteSelection("other", "p") to ActivationMode.RESTORE, repository.activations.last())
+    }
+
+    @Test
     fun `reconnect fallback trims only to ancestor and preserves settings`() = runTest {
         val repository = NavigationFakeRepository()
         val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)

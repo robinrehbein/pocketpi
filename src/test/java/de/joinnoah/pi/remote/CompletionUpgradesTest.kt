@@ -316,8 +316,92 @@ class CompletionUpgradesTest {
                     log,
                 )
                 .sessionLabel("s", withPreview = true)
-        assertEquals(SessionLabel("Fix it", "Project b", "Done."), label)
+        // The project's ID comes along for the name cache, so a tap on the notification needs no walk.
+        assertEquals(SessionLabel("Fix it", "Project b", "Done.", projectId = "b"), label)
         assertEquals(2, log.count { it == "sessions.list" })
+    }
+
+    @Test
+    fun theWalkReadsUpToFourProjectsAtOnceAndStopsAtTheFirstHit() = runTest {
+        var running = 0
+        var peak = 0
+        val read = mutableListOf<String>()
+        val commands =
+            RemoteCommands { type, fields ->
+                when (type) {
+                    "projects.list" ->
+                        Wire.objectOf("kind" to "projects", "items" to JsonArray((0 until 10).map { Wire.objectOf("id" to "p$it") }))
+                    "sessions.list" -> {
+                        val projectId = fields.single { it.first == "projectId" }.second as String
+                        read += projectId
+                        running++
+                        peak = maxOf(peak, running)
+                        kotlinx.coroutines.delay(100)
+                        running--
+                        val rows = if (projectId == "p5") listOf(Wire.objectOf("id" to "s", "title" to "Found")) else emptyList()
+                        Wire.objectOf("kind" to "sessions", "items" to JsonArray(rows))
+                    }
+                    else -> error(type)
+                }
+            }
+        val label = commands.sessionLabel("s", withPreview = false)
+        assertEquals(SessionLabel("Found", null, null, projectId = "p5"), label)
+        assertEquals(LABEL_WALK_PARALLELISM, peak)
+        // Two rounds of four: the projects after the hit are never read.
+        assertEquals((0 until 8).map { "p$it" }, read)
+        assertEquals(200L, currentTime)
+    }
+
+    @Test
+    fun aKnownNameSkipsTheWalk() = runTest {
+        val log = mutableListOf<String>()
+        val label = commands(mapOf("a" to emptyList()), log).sessionLabel("s", withPreview = true, known = SessionName("T", "P", "a"))
+        assertEquals(SessionLabel("T", "P", "Done.", projectId = "a"), label)
+        assertEquals(listOf("session.snapshot"), log)
+    }
+
+    @Test
+    fun aSessionTheAppAlreadyShowsSeedsTheLookupAfterTheCache() = runTest {
+        val cache = SessionNameCache(now = { currentTime })
+        val seen = mutableListOf<SessionName?>()
+        val upgrader =
+            LabelUpgrader(cache = cache, seed = { route, id -> SessionName("Seeded", "P", "p").takeIf { route == "r" && id == "s" } }) {
+                _, _, _, known ->
+                seen += known
+                SessionLabel(known?.title, known?.project, null, known?.projectId)
+            }
+        upgrader.run(host, complete) { true }
+        cache.put("r", "s", SessionName("Cached", "P", "p"))
+        upgrader.run(host, complete) { true }
+        assertEquals(listOf(SessionName("Seeded", "P", "p"), SessionName("Cached", "P", "p")), seen)
+    }
+
+    @Test
+    fun theNameCacheKeepsTheProjectId() = runTest {
+        val cache = SessionNameCache(now = { currentTime })
+        LabelUpgrader(cache = cache) { _, _, _, _ -> SessionLabel("T", "P", null, projectId = "p") }.run(host, complete) { true }
+        assertEquals(SessionName("T", "P", "p"), cache.get("r", "s"))
+    }
+
+    @Test
+    fun theAppStateNamesSessionsOfTheMacItShows() {
+        val row = Wire.objectOf("id" to "s", "title" to " Fix it ")
+        val state =
+            RemoteState(
+                selection = RemoteSelection("r"),
+                projects = listOf(Wire.objectOf("id" to "p", "name" to "pocketpi")),
+                projectSessions = mapOf("p" to ProjectSessions("p", "pocketpi", listOf(row))),
+            )
+        assertEquals(SessionName("Fix it", "pocketpi", "p"), knownSessionName(state, "r", "s"))
+        assertNull(knownSessionName(state, "r", "unknown"))
+        assertNull("another Mac", knownSessionName(state, "r2", "s"))
+        val open =
+            RemoteState(
+                selection = RemoteSelection("r", "q", "s"),
+                project = Wire.objectOf("id" to "q", "name" to "noah"),
+                session = row,
+            )
+        assertEquals(SessionName("Fix it", "noah", "q"), knownSessionName(open, "r", "s"))
     }
 
     @Test
