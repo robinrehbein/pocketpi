@@ -19,7 +19,8 @@ class RemoteMessagingService : FirebaseMessagingService() {
         val payload = parsePushPayload(message.data) ?: return
         val paired =
             try {
-                PairingStore(this).load().any { it.routeId == payload.routeId }
+                PairingStore(this).load().find { it.routeId == payload.routeId }
+                    ?.also(RemoteNotifications::rememberHost) != null
             } catch (swallowed: Exception) {
                 Diagnostics.caught("push.onMessageReceived", swallowed)
                 false

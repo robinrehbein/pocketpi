@@ -4,7 +4,6 @@
     <string name="remote_notification_channel_updates">Updates</string>
     <string name="remote_notification_channel_updates_help">Wenn eine Sitzung, ein Subagent oder ein Hintergrundjob fertig ist</string>
     <string name="remote_notification_complete_named">%1$s ist fertig</string>
-    <string name="remote_notification_approve">Freigeben</string>
     <string name="remote_notification_answer">Antworten</string>
     <string name="remote_notification_open_action">Öffnen</string>
     <string name="remote_notification_reply">Antworten</string>

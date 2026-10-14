@@ -230,7 +230,8 @@ class NotificationModelTest {
         assertEquals(
             listOf(
                 NotificationAction.Answer(
-                    ActionLabel.Resource(R.string.remote_notification_approve),
+                    // The app's own "Approve and execute", not a shorter word that hides the run.
+                    ActionLabel.Resource(R.string.remote_plan_approve),
                     Wire.objectOf("kind" to "plan", "action" to "approve"),
                 ),
                 NotificationAction.Open,
@@ -238,6 +239,23 @@ class NotificationModelTest {
             content.actions,
         )
         assertTrue(isPlanApproval((content.actions.first() as NotificationAction.Answer).answer))
+    }
+
+    @Test
+    fun aLongPlanFromTheSnapshotOpensTheAppAndAShortOneIsApprovedAsInTheApp() {
+        // The question the upgrade reads from session.snapshot carries the whole plan. Whether the
+        // notification may approve it depends on all of it, not on the part the notification shows.
+        val long = "1. Step\n".repeat(60)
+        val tooLong =
+            questionNotification(Wire.objectOf("id" to "q", "kind" to "plan", "title" to "Plan", "plan" to long), true)!!
+        assertEquals(listOf(NotificationAction.ReviewInApp), tooLong.actions)
+        assertTrue(tooLong.body!!.endsWith("…"))
+        val short =
+            questionNotification(Wire.objectOf("id" to "q", "kind" to "plan", "title" to "Plan", "plan" to "p".repeat(400)), true)!!
+        val approve = short.actions.first() as NotificationAction.Answer
+        assertEquals(ActionLabel.Resource(R.string.remote_plan_approve), approve.label)
+        assertTrue(isPlanApproval(approve.answer))
+        assertEquals("p".repeat(400), short.body)
     }
 
     @Test
@@ -271,7 +289,7 @@ class NotificationModelTest {
         val input = Wire.objectOf("id" to "q", "kind" to "input", "title" to "Name?")
         assertEquals(listOf(NotificationAction.AnswerInApp), questionNotification(input, false)!!.actions)
         val plan = Wire.objectOf("id" to "q", "kind" to "plan", "title" to "Plan", "plan" to "1. Do it")
-        assertEquals(listOf(NotificationAction.AnswerInApp), questionNotification(plan, false)!!.actions)
+        assertEquals(listOf(NotificationAction.ReviewInApp), questionNotification(plan, false)!!.actions)
         // Content stays the same; only the actions change.
         assertEquals("Sure?", questionNotification(confirm, false)!!.body)
     }
@@ -292,7 +310,7 @@ class NotificationModelTest {
         val longTitle = Wire.objectOf("id" to "q", "kind" to "confirm", "title" to "t".repeat(121), "message" to "m")
         assertEquals(listOf(NotificationAction.AnswerInApp), questionNotification(longTitle, true)!!.actions)
         val longPlan = Wire.objectOf("id" to "q", "kind" to "plan", "title" to "Plan", "plan" to "p".repeat(401))
-        assertEquals(listOf(NotificationAction.AnswerInApp), questionNotification(longPlan, true)!!.actions)
+        assertEquals(listOf(NotificationAction.ReviewInApp), questionNotification(longPlan, true)!!.actions)
         val fits = Wire.objectOf("id" to "q", "kind" to "confirm", "title" to "Delete?", "message" to "m".repeat(400))
         assertEquals(2, questionNotification(fits, true)!!.actions.size)
     }
@@ -418,6 +436,28 @@ class NotificationModelTest {
         )
         runCurrent()
         assertEquals(listOf(question), result.await())
+    }
+
+    @Test
+    fun aReplyPromptGoesOutUnderItsMutationId() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val transport = OneShotTransport()
+        val client = BackgroundRemoteClient(dispatcher) { transport }
+        val result = async { client.use(host) { it.prompt("s", "Go on", "mutation-1") } }
+        runCurrent()
+        transport.listener.ready()
+        runCurrent()
+        val sent = transport.sent.single()
+        assertEquals("session.prompt", sent.text("type"))
+        assertEquals("mutation-1", sent.text("requestId"))
+        assertEquals("s", sent.text("sessionId"))
+        assertEquals("Go on", sent.text("text"))
+        transport.listener.message(
+            Wire.objectOf("type" to "result", "requestId" to "mutation-1", "ok" to true, "data" to Wire.objectOf("kind" to "accepted"))
+        )
+        runCurrent()
+        result.await()
+        assertTrue(transport.closed)
     }
 
     private val host = PairedHost("r", "https://relay.example", "d", "secret", "Mac")

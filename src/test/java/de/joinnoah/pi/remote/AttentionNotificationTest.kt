@@ -35,6 +35,9 @@ class AttentionNotificationTest {
     /** The one attention notification posted under [id] (2 for `*.done`, 3 for `*.stuck`). */
     private fun posted(id: Int) = manager.activeNotifications.single { it.id == id }
 
+    /** The ids posted for the session, leaving out its Mac's group summary. */
+    private fun sessionIds() = manager.activeNotifications.filter { it.tag == "pi:r:s" }.map { it.id }.toSet()
+
     private fun title(notification: android.app.Notification) =
         notification.extras.getCharSequence(NotificationCompat.EXTRA_TITLE).toString()
 
@@ -66,7 +69,7 @@ class AttentionNotificationTest {
     fun anAttentionNoticeKeepsTheSessionsQuestionNotification() {
         RemoteNotifications.postGenericQuestion(context, push("event" to "question"))
         RemoteNotifications.postAttention(context, push("event" to "job.done", "jobId" to "job_1"))
-        assertEquals(setOf(1, 2), manager.activeNotifications.map { it.id }.toSet())
+        assertEquals(setOf(1, 2), sessionIds())
         RemoteNotifications.cancel(context, "r", "s")
         assertTrue(manager.activeNotifications.isEmpty())
     }
@@ -75,7 +78,7 @@ class AttentionNotificationTest {
     fun stuckAndDoneNoticesForTheSameSessionBothShow() {
         RemoteNotifications.postAttention(context, push("event" to "job.stuck", "jobId" to "job_1"))
         RemoteNotifications.postAttention(context, push("event" to "job.done", "jobId" to "job_2"))
-        assertEquals(setOf(2, 3), manager.activeNotifications.map { it.id }.toSet())
+        assertEquals(setOf(2, 3), sessionIds())
         assertEquals("Background job looks stuck", title(posted(3).notification))
         assertEquals("Background job finished", title(posted(2).notification))
         RemoteNotifications.cancel(context, "r", "s")

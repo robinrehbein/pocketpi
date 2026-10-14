@@ -9,6 +9,7 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -198,6 +199,113 @@ class HomeSurfacesShortcutSignatureTest {
         assertEquals(BuildConfig.VERSION_CODE, prefs.getInt(PUBLISHED_SHORTCUTS_VERSION_KEY, 0))
     }
 
+    private fun longLived(shortcut: ShortcutInfo) =
+        ShortcutInfo::class.java.getMethod("isLongLived").invoke(shortcut) as Boolean
+
+    @Test
+    fun notifiedSessionsGetLongLivedShortcutsInOneSetWithinTheLimit() = runBlocking {
+        shadowOf(shortcuts).setMaxShortcutCountPerActivity(6)
+        persist(emptyList())
+        val now = System.currentTimeMillis()
+        val snapshot =
+            HomeSnapshot(
+                paired = true,
+                sessions = (1..5).map { session("s$it", "Session $it") },
+                notified =
+                    listOf(
+                        NotifiedSession("route", "n1", "Asked a question", "Project", now - 1),
+                        // Not named yet: the shortcut still needs a label.
+                        NotifiedSession("route", "n2", at = now - 2),
+                        NotifiedSession("route", "n3", at = now - 3),
+                    ),
+            )
+        surfaces().publishShortcuts(snapshot)
+        val published = shortcuts.dynamicShortcuts.sortedBy { it.rank }
+        assertEquals(6, published.size)
+        assertEquals(
+            listOf("s1", "s2", "s3", "s4", "n1", "n2").map { shortcutId("route", it) },
+            published.map { it.id },
+        )
+        assertTrue(published.all(::longLived))
+        assertTrue(published.all { it.locusId?.id == it.id })
+        assertEquals("Asked a question", published[4].shortLabel)
+        assertEquals("Untitled session", published[5].shortLabel)
+        assertEquals("n2", published[5].intent?.getStringExtra(RemoteNotifications.EXTRA_TARGET))
+    }
+
+    private fun listing(vararg ids: String): HomeInputs {
+        val host = PairedHost("route", "relay", "device", "secret", "Mac")
+        return homeInputs(
+            RemoteState(
+                hosts = listOf(host),
+                host = host,
+                selection = RemoteSelection("route", "project", null),
+                connected = true,
+                sessionsFresh = true,
+                project = Wire.objectOf("id" to "project", "name" to "Project"),
+                sessions = ids.map { Wire.objectOf("id" to it, "title" to "Title $it", "status" to "idle") },
+            )
+        )
+    }
+
+    @Test
+    @Config(shadows = [RejectingShortcutManager::class])
+    fun aClosedSessionsConversationShortcutStaysDisabled() = runBlocking {
+        FakeAndroidKeyStore.install()
+        shadowOf(shortcuts).setIsRequestPinShortcutSupported(true)
+        persist(emptyList())
+        val job = SupervisorJob()
+        val home = HomeSurfaces(context, CoroutineScope(job + Dispatchers.Unconfined), Pairings())
+        suspend fun settle() = job.children.toList().forEach { it.join() }
+        val a = shortcutId("route", "a")
+
+        home.onState(listing("a", "b"))
+        home.onPush(PushPayload("route", "a", "event-1", PushEvent.COMPLETE))
+        settle()
+        assertTrue(shortcuts.dynamicShortcuts.any { it.id == a })
+        shortcuts.requestPinShortcut(shortcuts.dynamicShortcuts.single { it.id == a }, null)
+
+        // The app shows the project without "a": it was closed, notified or not.
+        home.onState(listing("b"))
+        assertFalse(shortcuts.dynamicShortcuts.any { it.id == a })
+        assertFalse(shortcuts.pinnedShortcuts.any { it.id == a && it.isEnabled })
+        assertTrue(home.snapshot.value.notified.none { it.sessionId == "a" })
+        // Later changes keep it out, also once it is no longer waiting to be disabled.
+        home.onState(listing("b", "c"))
+        home.onState(listing("c"))
+        assertFalse(shortcuts.dynamicShortcuts.any { it.id == a })
+        assertFalse(shortcuts.pinnedShortcuts.any { it.id == a && it.isEnabled })
+    }
+
+    @Test
+    @Config(shadows = [RejectingShortcutManager::class])
+    fun anotherPushForANotifiedSessionAndItsNameDoNotRepublish() = runBlocking {
+        FakeAndroidKeyStore.install()
+        persist(emptyList())
+        val job = SupervisorJob()
+        val home = HomeSurfaces(context, CoroutineScope(job + Dispatchers.Unconfined), Pairings())
+        suspend fun settle() = job.children.toList().forEach { it.join() }
+        home.onState(listing("a"))
+        home.onPush(PushPayload("route", "n1", "event-1", PushEvent.COMPLETE))
+        home.onPush(PushPayload("route", "n2", "event-2", PushEvent.COMPLETE))
+        settle()
+        val published = RejectingShortcutManager.dynamicPublishes
+
+        // Completions of sessions already in the set, and the names read for them, reorder or
+        // rename nothing the launcher needs: no rate-limited call from the background.
+        home.onPush(PushPayload("route", "n1", "event-3", PushEvent.COMPLETE))
+        home.onNotifiedName("route", "n1", "Fix the bug", "pocketpi")
+        home.onPush(PushPayload("route", "a", "event-4", PushEvent.COMPLETE))
+        settle()
+        assertEquals(published, RejectingShortcutManager.dynamicPublishes)
+
+        // A new session joins the set once, and carries the names known by then.
+        home.onPush(PushPayload("route", "n3", "event-5", PushEvent.COMPLETE))
+        settle()
+        assertEquals(published + 1, RejectingShortcutManager.dynamicPublishes)
+        assertEquals("Fix the bug", shortcuts.dynamicShortcuts.single { it.id == shortcutId("route", "n1") }.shortLabel)
+    }
+
     @Test
     fun anUpdateReachesTheNonExportedPackageReplacedReceiver() {
         val receivers =
@@ -294,9 +402,29 @@ class HomeSurfacesShortcutSignatureTest {
     }
 }
 
-/** A ShortcutManager whose launcher rejects updateShortcuts, as when it rate-limits the app. */
+/**
+ * A ShortcutManager whose launcher rejects updateShortcuts, as when it rate-limits the app. It also
+ * marks disabled pinned shortcuts as such, which Robolectric's own shadow leaves enabled.
+ */
 @Implements(ShortcutManager::class)
 class RejectingShortcutManager : ShadowShortcutManager() {
+    private fun flag(ids: List<String>, method: String) =
+        pinnedShortcuts.filter { it.id in ids }.forEach {
+            ShortcutInfo::class.java.getMethod(method, Int::class.javaPrimitiveType).invoke(it, FLAG_DISABLED)
+        }
+
+    @Implementation
+    override fun disableShortcuts(shortcutIds: MutableList<String>, disabledMessage: CharSequence?) {
+        super.disableShortcuts(shortcutIds, disabledMessage)
+        flag(shortcutIds, "addFlags")
+    }
+
+    @Implementation
+    override fun enableShortcuts(shortcutIds: MutableList<String>) {
+        flag(shortcutIds, "clearFlags")
+        super.enableShortcuts(shortcutIds)
+    }
+
     @Implementation
     override fun updateShortcuts(shortcutInfoList: MutableList<ShortcutInfo>): Boolean =
         !rejectUpdates && super.updateShortcuts(shortcutInfoList)
@@ -308,6 +436,8 @@ class RejectingShortcutManager : ShadowShortcutManager() {
     }
 
     companion object {
+        /** ShortcutInfo.FLAG_DISABLED, which is hidden. */
+        private const val FLAG_DISABLED = 1 shl 6
         @JvmStatic var rejectUpdates = false
         @JvmStatic var dynamicPublishes = 0
     }
