@@ -146,6 +146,24 @@ internal object AttachmentImportRules {
     }
 }
 
+/** Checks for cancellation before each read, so a slow source stops an import promptly. */
+private class CancellableInput(
+    private val input: InputStream,
+    private val checkActive: () -> Unit,
+) : InputStream() {
+    override fun read(): Int {
+        checkActive()
+        return input.read()
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        checkActive()
+        return input.read(buffer, offset, length)
+    }
+
+    override fun close() = input.close()
+}
+
 class AttachmentImporter(context: Context, private val store: AttachmentStorage) {
     private val resolver = context.contentResolver
 
@@ -168,8 +186,9 @@ class AttachmentImporter(context: Context, private val store: AttachmentStorage)
                             if (cursor.moveToFirst()) cursor.getString(0) else null
                         }
                 // A photo is decoded and re-encoded in memory, and its output is bounded by the image
-                // limit. Any other file is digested in one pass and then streamed into the store, so
-                // it never sits in memory whole.
+                // limit. Any other file is read twice: once to digest it, then streamed into the
+                // store, which refuses the import if the second read differs from the first. So the
+                // file never sits in memory whole, at the cost of a second read of the source.
                 val photoData =
                     if (photo) {
                         val original =
@@ -206,7 +225,9 @@ class AttachmentImporter(context: Context, private val store: AttachmentStorage)
                 if (photoData != null) {
                     store.write(attachment, photoData)
                 } else {
-                    openSource(uri).use { store.write(attachment, it) }
+                    openSource(uri).use {
+                        store.write(attachment, CancellableInput(it) { coroutine.ensureActive() })
+                    }
                 }
                 coroutine.ensureActive()
                 attachment

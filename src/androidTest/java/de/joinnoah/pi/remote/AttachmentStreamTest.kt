@@ -3,7 +3,6 @@ package de.joinnoah.pi.remote
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.test.core.app.ApplicationProvider
-import androidx.test.filters.SdkSuppress
 import java.io.File
 import java.io.InputStream
 import java.security.KeyStore
@@ -11,7 +10,7 @@ import java.util.UUID
 import org.junit.Assert.*
 import org.junit.Test
 
-@SdkSuppress(minSdkVersion = 29)
+/** Nothing here needs a newer API than the app's minSdk, so every emulator level runs it. */
 class AttachmentStreamTest {
     private fun isolated(block: (Context, AttachmentStore) -> Unit) {
         val application = ApplicationProvider.getApplicationContext<Context>()
@@ -87,8 +86,7 @@ class AttachmentStreamTest {
                     digest.sha256,
                 )
 
-            System.gc()
-            val writeBaseline = usedHeap()
+            val writeBaseline = liveHeap()
             val writer = Pattern(size)
             store.write(stored, writer)
             assertTrue(
@@ -96,13 +94,13 @@ class AttachmentStreamTest {
                 writer.peakHeap - writeBaseline < HEAP_BUDGET,
             )
 
-            System.gc()
-            val readBaseline = usedHeap()
+            val readBaseline = liveHeap()
             var peak = readBaseline
             store.open(stored).use { input ->
                 val buffer = ByteArray(64 * 1024)
+                var reads = 0
                 while (input.read(buffer) >= 0) {
-                    peak = maxOf(peak, usedHeap())
+                    if (++reads % SAMPLE_READS == 0) peak = maxOf(peak, liveHeap())
                 }
             }
             assertTrue(
@@ -111,11 +109,10 @@ class AttachmentStreamTest {
             )
         }
 
-    private fun usedHeap(): Long = Runtime.getRuntime().let { it.totalMemory() - it.freeMemory() }
-
-    /** [size] bytes of a fixed pattern, which records the heap in use as it is read. */
+    /** [size] bytes of a fixed pattern, which records the live heap as it is read. */
     private class Pattern(private val size: Long) : InputStream() {
         private var position = 0L
+        private var sampled = 0L
         var peakHeap = 0L
             private set
 
@@ -131,7 +128,10 @@ class AttachmentStreamTest {
                 buffer[offset + index] = ((position + index) * 31 % 251).toByte()
             }
             position += count
-            peakHeap = maxOf(peakHeap, Runtime.getRuntime().let { it.totalMemory() - it.freeMemory() })
+            if (position / SAMPLE_BYTES > sampled) {
+                sampled = position / SAMPLE_BYTES
+                peakHeap = maxOf(peakHeap, liveHeap())
+            }
             return count
         }
     }
@@ -139,5 +139,18 @@ class AttachmentStreamTest {
     private companion object {
         /** A 20 MB attachment is streamed, so the heap grows by a buffer, not by a copy of it. */
         const val HEAP_BUDGET = 8L * 1024 * 1024
+
+        /** The heap is sampled once per this many bytes, and once per this many reads on the read side. */
+        const val SAMPLE_BYTES = 1L shl 20
+        const val SAMPLE_READS = 16
+
+        /**
+         * The heap in use after a full collection. Without the collection, the ciphers and buffers
+         * of finished segments still count, and a correct write would look like a large one.
+         */
+        fun liveHeap(): Long {
+            System.gc()
+            return Runtime.getRuntime().let { it.totalMemory() - it.freeMemory() }
+        }
     }
 }

@@ -4796,8 +4796,12 @@ class DefaultRemoteRepository(
                         update { it.copy(attachmentProgress = (uploaded + offset).toFloat() / total) }
                     }
                     // The bytes must end where the attachment ends and match its digest before the commit.
-                    require(withContext(io) { stream.read() } < 0)
-                    require(AttachmentImportRules.hex(digest.digest()) == local.sha256)
+                    require(withContext(io) { stream.read() } < 0) {
+                        "Attachment changed while it was sent"
+                    }
+                    require(AttachmentImportRules.hex(digest.digest()) == local.sha256) {
+                        "Attachment changed while it was sent"
+                    }
                     imageBytes = collected?.toByteArray()
                     val result =
                         request(

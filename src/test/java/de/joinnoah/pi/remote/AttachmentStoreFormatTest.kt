@@ -5,8 +5,12 @@ import android.content.ContextWrapper
 import androidx.test.core.app.ApplicationProvider
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.InputStream
 import java.security.KeyStore
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -83,13 +87,87 @@ class AttachmentStoreFormatTest {
         val store = AttachmentStore(context, alias)
         val bytes = "expected".toByteArray()
         val stored = attachment(first, bytes)
-        assertThrows(IllegalArgumentException::class.java) {
+        val refused = assertThrows(IllegalArgumentException::class.java) {
             store.write(stored, ByteArrayInputStream("other!!!".toByteArray()))
         }
+        // A source that changed between the digest pass and the store is an import failure.
+        assertEquals("Attachment changed while it was imported", refused.message)
         assertFalse(file("attachment-$first.v2").exists())
         assertFalse(file("attachment-$first.v2.new").exists())
         store.write(stored, ByteArrayInputStream(bytes))
         assertArrayEquals(bytes, store.read(stored))
+    }
+
+    @Test
+    fun aSlowStreamedWriteDoesNotHoldBackOtherAttachments() {
+        val store = AttachmentStore(context, alias)
+        val other = "other".toByteArray()
+        store.write(attachment(second, other), other)
+        val bytes = "streamed slowly".toByteArray()
+        val stored = attachment(first, bytes)
+        val reading = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        // The first read blocks until the test releases it, like a provider that is slow to deliver.
+        val slow =
+            object : InputStream() {
+                private val source = ByteArrayInputStream(bytes)
+
+                override fun read(): Int {
+                    val one = ByteArray(1)
+                    return if (read(one, 0, 1) < 0) -1 else one[0].toInt() and 0xff
+                }
+
+                override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                    reading.countDown()
+                    check(release.await(10, TimeUnit.SECONDS)) { "The test did not release the write" }
+                    return source.read(buffer, offset, length)
+                }
+            }
+        val writer = Executors.newSingleThreadExecutor()
+        val others = Executors.newSingleThreadExecutor()
+        try {
+            val writing = writer.submit { store.write(stored, slow) }
+            assertTrue(reading.await(10, TimeUnit.SECONDS))
+            // Reads and sweeps of other attachments finish while the write is still blocked.
+            assertArrayEquals(
+                other,
+                others.submit<ByteArray> { store.open(attachment(second, other)).use { it.readBytes() } }
+                    .get(5, TimeUnit.SECONDS),
+            )
+            others.submit { store.cleanup(setOf(first)) }.get(5, TimeUnit.SECONDS)
+            // The sweep removes orphans but not the file being written.
+            assertFalse(file("attachment-$second.v2").exists())
+            // The write's file is the base or, where AtomicFile writes a temporary, its `.new` file.
+            assertTrue(
+                file("attachment-$first.v2").exists() || file("attachment-$first.v2.new").exists()
+            )
+            release.countDown()
+            writing.get(10, TimeUnit.SECONDS)
+            assertArrayEquals(bytes, store.read(stored))
+        } finally {
+            release.countDown()
+            writer.shutdownNow()
+            others.shutdownNow()
+        }
+    }
+
+    @Test
+    fun anErrorDuringAStreamedWriteLeavesNoFileAndFreesTheId() {
+        val store = AttachmentStore(context, alias)
+        val bytes = "failing".toByteArray()
+        val failing =
+            object : InputStream() {
+                override fun read(): Int = throw OutOfMemoryError("test")
+
+                override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+                    throw OutOfMemoryError("test")
+            }
+        assertThrows(OutOfMemoryError::class.java) { store.write(attachment(first, bytes), failing) }
+        assertFalse(file("attachment-$first.v2").exists())
+        assertFalse(file("attachment-$first.v2.new").exists())
+        assertFalse(file("attachment-$first.v2.bak").exists())
+        store.write(attachment(first, bytes), ByteArrayInputStream(bytes))
+        assertArrayEquals(bytes, store.read(attachment(first, bytes)))
     }
 
     @Test

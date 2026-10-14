@@ -5,6 +5,7 @@ import android.util.AtomicFile
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileNotFoundException
+import java.io.FileOutputStream
 import java.io.InputStream
 import java.security.MessageDigest
 
@@ -53,6 +54,12 @@ class AttachmentStore(
 ) : AttachmentStorage {
     private val root = context.noBackupFilesDir.canonicalFile
 
+    /**
+     * Ids whose streaming write has begun and not yet been committed or abandoned. [cleanup] keeps
+     * their files. Guarded by the monitor.
+     */
+    private val writing = HashSet<String>()
+
     private fun legacyFile(id: String): File = file(id, "enc")
 
     private fun streamFile(id: String): File = file(id, "v2")
@@ -81,13 +88,21 @@ class AttachmentStore(
         require(Regex("[a-f0-9]{64}").matches(attachment.sha256))
     }
 
-    /** The bytes that were stored or read must have the size and digest of [attachment]. */
-    private fun checkContent(attachment: LocalAttachment, size: Long, sha256: String) {
+    /**
+     * The bytes that were stored or read must have the size and digest of [attachment]. A stored
+     * write that does not match says the source changed, which is the one way it can differ.
+     */
+    private fun checkContent(
+        attachment: LocalAttachment,
+        size: Long,
+        sha256: String,
+        message: String = "Attachment digest mismatch",
+    ) {
         require(
             attachment.size == size &&
                 MessageDigest.isEqual(attachment.sha256.toByteArray(), sha256.toByteArray())
         ) {
-            "Attachment digest mismatch"
+            message
         }
     }
 
@@ -96,27 +111,67 @@ class AttachmentStore(
             it.exists() || File(it.path + ".bak").exists()
         }
 
-    @Synchronized
     override fun write(attachment: LocalAttachment, bytes: ByteArray) =
         write(attachment, ByteArrayInputStream(bytes))
 
-    @Synchronized
+    /**
+     * Streams [input] into a new `.v2` file. The monitor is held only to claim the file and then to
+     * commit or abandon it, never while [input] is read, so a slow source does not stall the other
+     * attachments.
+     */
     override fun write(attachment: LocalAttachment, input: InputStream) {
         validate(attachment)
-        require(!stored(attachment.id)) { "Attachment already exists" }
-        val target = AtomicFile(streamFile(attachment.id))
-        val output = target.startWrite()
+        val output = beginWrite(attachment.id)
         try {
             val written =
                 StreamingCipher.writeTo(input, output, AttachmentImportRules.FILE_BYTES.toLong()) {
                     EncryptedFileStore.wrapKey(alias, it)
                 }
-            checkContent(attachment, written.size, written.sha256)
-            target.finishWrite(output)
-        } catch (e: Exception) {
-            Diagnostics.caught("attachment.write", e)
-            target.failWrite(output)
-            throw e
+            checkContent(
+                attachment,
+                written.size,
+                written.sha256,
+                "Attachment changed while it was imported",
+            )
+        } catch (error: Throwable) {
+            Diagnostics.caught("attachment.write", error)
+            try {
+                abandonWrite(attachment.id, output)
+            } catch (cleanup: Throwable) {
+                error.addSuppressed(cleanup)
+            }
+            throw error
+        }
+        commitWrite(attachment.id, output)
+    }
+
+    @Synchronized
+    private fun beginWrite(id: String): FileOutputStream {
+        require(!stored(id)) { "Attachment already exists" }
+        writing += id
+        return try {
+            AtomicFile(streamFile(id)).startWrite()
+        } catch (error: Throwable) {
+            writing -= id
+            throw error
+        }
+    }
+
+    @Synchronized
+    private fun commitWrite(id: String, output: FileOutputStream) {
+        try {
+            AtomicFile(streamFile(id)).finishWrite(output)
+        } finally {
+            writing -= id
+        }
+    }
+
+    @Synchronized
+    private fun abandonWrite(id: String, output: FileOutputStream) {
+        try {
+            AtomicFile(streamFile(id)).failWrite(output)
+        } finally {
+            writing -= id
         }
     }
 
@@ -211,7 +266,7 @@ class AttachmentStore(
         override fun close() = source.close()
     }
 
-    @Synchronized
+    /** Only [open] takes the monitor, so the bytes are decrypted without holding it. */
     override fun read(attachment: LocalAttachment): ByteArray =
         open(attachment).use { input ->
             val bytes = ByteArray(attachment.size.toInt())
@@ -234,7 +289,8 @@ class AttachmentStore(
         val pattern = Regex("attachment-([A-Za-z0-9_-]{22})\\.(?:enc|v2)(?:\\.bak|\\.new)?")
         root.listFiles()?.forEach { candidate ->
             val id = pattern.matchEntire(candidate.name)?.groupValues?.get(1) ?: return@forEach
-            if (id !in keepIds) remove(id)
+            // A file still being written is not an orphan yet; its import commits it or removes it.
+            if (id !in keepIds && id !in writing) remove(id)
         }
     }
 }
