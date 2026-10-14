@@ -30,6 +30,9 @@ interface DraftStorage {
     fun load(): Map<DraftKey, StoredDraft>
 
     fun save(drafts: Map<DraftKey, StoredDraft>)
+
+    /** True once after a [load] found the stored drafts unreadable and reset them to none. */
+    fun takeReset(): Boolean = false
 }
 
 class DraftStore(
@@ -40,6 +43,8 @@ class DraftStore(
     private val file = EncryptedFileStore(context, name, alias)
 
     override fun load(): Map<DraftKey, StoredDraft> = file.read()?.let(::parseStoredDrafts).orEmpty()
+
+    override fun takeReset() = file.takeReset()
 
     override fun save(drafts: Map<DraftKey, StoredDraft>) {
         require(drafts.values.all { it.text.toByteArray().size <= 128 * 1024 && it.followUps.size <= 64 })

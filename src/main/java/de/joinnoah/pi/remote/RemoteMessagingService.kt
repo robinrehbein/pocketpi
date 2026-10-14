@@ -27,8 +27,10 @@ class RemoteMessagingService : FirebaseMessagingService() {
             try {
                 // On a cache hit the Mac's name comes from the app's own pairing load.
                 routeId in
-                    PairedRouteCache(service).routes {
-                        PairingStore(service).load().onEach(RemoteNotifications::rememberHost)
+                    app.stores.let { stores ->
+                        stores.routes.routes {
+                            stores.pairingFile.load().onEach(RemoteNotifications::rememberHost)
+                        }
                     }
             } catch (swallowed: Exception) {
                 Diagnostics.caught("push.onMessageReceived", swallowed)
