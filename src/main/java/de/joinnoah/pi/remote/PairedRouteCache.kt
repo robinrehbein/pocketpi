@@ -39,6 +39,16 @@ internal class PairedRouteCache(private val preferences: SharedPreferences) {
         locked { preferences.edit(commit = true) { clear() } }
     }
 
+    /**
+     * The pairing store was unreadable and is being reset: no route stays cached, even if the
+     * process dies before the next load writes the empty set. It runs under the store's own lock
+     * and so does not take [lock], which a load holds while it waits for the store; one commit is
+     * atomic on its own.
+     */
+    fun onPairingsReset() {
+        preferences.edit(commit = true) { clear() }
+    }
+
     /** Every cache in the process shares one lock, so a rebuild never writes back routes a save replaced. */
     fun <T> locked(block: () -> T): T = synchronized(lock) { block() }
 
@@ -63,6 +73,8 @@ internal class RouteCachingPairings(
 ) : PairingStorage {
     override fun load(): List<PairedHost> =
         cache.locked { pairings.load().also { hosts -> cache.write(hosts.map { it.routeId }) } }.also(onHosts)
+
+    override fun takeReset() = pairings.takeReset()
 
     override fun save(hosts: List<PairedHost>) {
         cache.locked {

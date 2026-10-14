@@ -192,8 +192,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
         suspend fun pairedHost(context: Context, routeId: String): PairedHost? =
             awaitApart(scope) {
                 try {
-                    PairingStore(context).load().find { it.routeId == routeId }
-                        ?.also(RemoteNotifications::rememberHost)
+                    // The process's pairings remember every host's name as they load.
+                    context.stores.pairings.load().find { it.routeId == routeId }
                 } catch (swallowed: Exception) {
                     Diagnostics.caught("notificationAction.pairedHost", swallowed)
                     null
