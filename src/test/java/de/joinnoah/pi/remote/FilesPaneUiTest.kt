@@ -9,6 +9,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.platform.testTag
@@ -486,5 +488,49 @@ class FilesPaneUiTest {
         compose.onNodeWithTag("inspectorTab_files").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
         compose.waitForIdle()
         shown("filesPane")
+    }
+
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    @Test
+    @Config(qualifiers = "w900dp-h1000dp")
+    fun aWidePaneKeepsTheFolderBesideTheOpenFile() {
+        val listing = FileListing("", listOf(FileEntry("src", FileEntryType.DIR), FileEntry("a.kt", FileEntryType.FILE), FileEntry("b.kt", FileEntryType.FILE)))
+        render(FilesState("s", loading = false, listing = listing, file = OpenFile("a.kt", loading = false, content = "val a = 1")))
+        compose.onNodeWithTag("filesSideList").assertIsDisplayed()
+        compose.onNodeWithTag("filesFile").assertIsDisplayed()
+        // Up from the first file reaches a folder, which opens only when chosen.
+        compose.onNodeWithTag("filesSideEntry:a.kt").performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.onNodeWithTag("filesSideEntry:a.kt").performKeyInput { pressKey(androidx.compose.ui.input.key.Key.DirectionUp) }
+        assertEquals(emptyList<String?>(), files)
+        // Down on the open file's row opens the next file as focus moves there.
+        compose.onNodeWithTag("filesSideEntry:a.kt").performSemanticsAction(SemanticsActions.RequestFocus)
+        compose.onNodeWithTag("filesSideEntry:a.kt").performKeyInput { pressKey(androidx.compose.ui.input.key.Key.DirectionDown) }
+        assertEquals(listOf<String?>("b.kt"), files)
+        compose.onNodeWithTag("filesSideEntry:src").performClick()
+        assertEquals(listOf("src"), opened)
+    }
+
+    @Test
+    fun aNarrowPaneShowsTheFileAlone() {
+        render(FilesState("s", loading = false, listing = root, file = OpenFile("README.md", loading = false, content = "# Pi")))
+        compose.onNodeWithTag("filesFile").assertIsDisplayed()
+        compose.onNodeWithTag("filesSideList").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w600dp-h900dp")
+    fun wrapLinesIsOneChoiceThatPersists() {
+        val show = render(FilesState("s", loading = false, listing = root, file = OpenFile("README.md", loading = false, content = "x".repeat(400))))
+        compose.onNodeWithTag("filesWrap").assertIsOff()
+        compose.onNodeWithTag("filesWrap").performClick()
+        compose.onNodeWithTag("filesWrap").assertIsOn()
+        assertEquals(true, PaneLayoutStore(compose.activity).loadWrapLines())
+        // The folder has nothing to wrap; the next file wraps again.
+        show(FilesState("s", loading = false, listing = root))
+        compose.onNodeWithTag("filesWrap").assertDoesNotExist()
+        show(FilesState("s", loading = false, listing = root, file = OpenFile("README.md", loading = false, content = "short")))
+        compose.onNodeWithTag("filesWrap").assertIsOn()
+        compose.onNodeWithTag("filesWrap").performClick()
+        assertEquals(false, PaneLayoutStore(compose.activity).loadWrapLines())
     }
 }

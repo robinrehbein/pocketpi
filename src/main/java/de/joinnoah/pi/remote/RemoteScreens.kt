@@ -72,6 +72,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.focus.onFocusChanged
@@ -133,6 +135,8 @@ private const val CHILD_REFRESH_INTERVAL_MILLIS = 5_000L
 private const val TOUCHED_LINES_STREAMING_MILLIS = 1_000L
 private const val JUMP_HIGHLIGHT_MILLIS = 2_000L
 private const val COMPACTION_TICK_MILLIS = 30_000L
+/** How long review mode waits for the Changes pane Ctrl+Shift+D opened for it. */
+private const val REVIEW_OPEN_GRACE_MILLIS = 2_000L
 private const val PRIVACY_POLICY_URL = "https://robinrehbein.de/privacy"
 private val LIST_TO_HEADER_END_SHIFT = 4.dp
 
@@ -710,8 +714,8 @@ internal fun RemoteScreen(
         if (composerFocusRequest == 0) return@LaunchedEffect
         // A prompt filled in or a composer asked for behind the strip: the chat comes back first,
         // so the user sees what they type into.
-        if (chatStripped) {
-            twoPane?.inspectorExpanded = false
+        if (chatStripped && twoPane?.inspectorExpanded == true) {
+            if (twoPane.reviewing) twoPane.leaveReview() else twoPane.inspectorExpanded = false
             withTimeoutOrNull(1_000) { snapshotFlow { chatStripped }.first { !it } }
         }
         withFrameNanos { }
@@ -1501,7 +1505,12 @@ internal fun RemoteScreen(
                     onSelect = { inspectorTabs = inspectorTabs.open(it) },
                     onClose = ::closeTab,
                     expanded = twoPane?.inspectorExpanded == true,
-                    onExpand = { twoPane?.let { it.inspectorExpanded = !it.inspectorExpanded } },
+                    onExpand = {
+                        twoPane?.let {
+                            // Review mode holds the pane wide; narrowing it ends review mode.
+                            if (it.reviewing) it.leaveReview() else it.inspectorExpanded = !it.inspectorExpanded
+                        }
+                    },
                     // An unsaved edit closes through its own prompt in the pane.
                     closable = { tab -> tab != InspectorTab.FILES || filesOpen?.editor?.changed != true },
                 )
@@ -1516,7 +1525,8 @@ internal fun RemoteScreen(
     val paneOverChat =
         chatKey != null && chatModel != null && !panesBeside &&
             (jobsOpen || changesOpen != null || filesOpen != null || openTool != null)
-    val composerCovered = paneOverChat || (chatKey != null && inspectorShown && chatStripped)
+    // The strip reports itself a frame late; a pane no longer expanded gives the chat back at once.
+    val composerCovered = paneOverChat || (chatKey != null && inspectorShown && chatStripped && twoPane?.inspectorExpanded == true)
     if (chatKey != null)
         LaunchedEffect(chatKey, hardwareKeyboard) {
             if (!hardwareKeyboard || questionPending || chatDialogOpen || composerCovered || touchExplorationEnabled(context))
@@ -1549,6 +1559,8 @@ internal fun RemoteScreen(
                 if (chatFocusParked) composerFocusRequest++
             }
         }
+    // Ctrl+Shift+D entered review mode while Changes was still opening for it.
+    var reviewOpening by remember(key) { mutableStateOf(false) }
     /** A chat shortcut from the keyboard ([KeyContext.CHAT]); false when it does not apply now. */
     fun chatShortcut(shortcut: Shortcut): Boolean {
         val chat = chatModel ?: return false
@@ -1566,7 +1578,22 @@ internal fun RemoteScreen(
             Shortcut.EXPAND_INSPECTOR -> {
                 val pane = twoPane ?: return false
                 if (!inspectorShown || tabs.open.isEmpty()) return false
-                pane.inspectorExpanded = !pane.inspectorExpanded
+                if (pane.reviewing) pane.leaveReview() else pane.inspectorExpanded = !pane.inspectorExpanded
+                true
+            }
+            Shortcut.REVIEW -> {
+                val pane = twoPane ?: return false
+                if (pane.reviewing) {
+                    pane.leaveReview()
+                    return true
+                }
+                if (!canViewChanges(state)) return false
+                if (changesOpen == null) {
+                    if (!state.connected) return false
+                    openInspector(InspectorTab.CHANGES)
+                    reviewOpening = true
+                } else showTab(InspectorTab.CHANGES)
+                pane.enterReview()
                 true
             }
             Shortcut.TOGGLE_INSPECTOR -> {
@@ -1645,8 +1672,34 @@ internal fun RemoteScreen(
                 if (conversationFocused) parkFocus() else chatModel?.selectFileLines(null)
             }
             chatKeyTarget.shortcut = ::chatShortcut
+            chatKeyTarget.reviewing = { twoPane?.reviewing == true }
+            chatKeyTarget.leaveReview = { twoPane?.leaveReview() }
+            chatKeyTarget.leaveReviewToType = leave@{
+                val pane = twoPane
+                if (pane?.reviewing != true || paneOverChat) return@leave false
+                pane.leaveReview()
+                // Uncovered from now on, so keys typed before the next frame reach the draft too.
+                chatKeyTarget.composerCovered = false
+                composerFocusRequest++
+                true
+            }
         }
     }
+    // Review mode lives in the Changes pane: it ends once that closes, or another tab takes its place.
+    val reviewable = changesOpen != null && (!panesBeside || (inspectorShown && (tabs.active ?: tabs.open.firstOrNull()) == InspectorTab.CHANGES))
+    if (chatKey != null && twoPane != null)
+        LaunchedEffect(twoPane, reviewable, twoPane.reviewing) {
+            if (reviewable || !twoPane.reviewing) {
+                reviewOpening = false
+                return@LaunchedEffect
+            }
+            // Changes opening for review mode gets a moment to show; one that never does ends it.
+            if (reviewOpening) {
+                delay(REVIEW_OPEN_GRACE_MILLIS)
+                reviewOpening = false
+            }
+            twoPane.leaveReview()
+        }
     // F6 into the chat goes to the composer, or with a question to the chat itself; a pane over
     // the chat is a region of its own.
     val chatRegion =
@@ -1678,17 +1731,19 @@ internal fun RemoteScreen(
                     ChatStrip(
                         chatStatusColor(state.status, state.connected),
                         stringResource(chatStatusLabel(state)),
-                        onShowChat = { pane.inspectorExpanded = false },
+                        onShowChat = { if (pane.reviewing) pane.leaveReview() else pane.inspectorExpanded = false },
                     )
                 }
             },
         onChatStripped = { chatStripped = it },
+        review = twoPane?.reviewing == true,
     ) {
     Scaffold(
         // Esc parks keyboard focus here, on the chat itself: clearing it would hand it to the
         // first button (Back) while a keyboard is in use, and Enter would then press it. It is
         // focusable only while parked, so Tab and the initial focus never stop on it. Enter on
-        // it is used up: Compose would move focus into the first button (Back) instead.
+        // it is used up: Compose would move focus into the first button (Back) instead. In review
+        // mode it is review's "Use review" ([ReviewKey]).
         modifier =
             if (chatKey != null)
                 chatRegion.focusRequester(chatFocus)
@@ -1698,7 +1753,11 @@ internal fun RemoteScreen(
                         if (chatFocused && !it.isFocused) chatFocusParked = false
                         chatFocused = it.isFocused
                     }
-                    .onKeyEvent { chatFocused && it.key in FOCUS_ENTER_KEYS }
+                    .onKeyEvent {
+                        if (!chatFocused || it.key !in FOCUS_ENTER_KEYS) return@onKeyEvent false
+                        if (it.type == KeyEventType.KeyDown && twoPane?.reviewing == true) chatKeyTarget.reviewKey(ReviewKey.USE_REVIEW)
+                        true
+                    }
                     .focusProperties { canFocus = chatFocusParked }
                     .focusTarget()
             else Modifier,
