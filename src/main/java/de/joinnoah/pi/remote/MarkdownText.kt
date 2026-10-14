@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import android.content.ClipData
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.draganddrop.dragAndDropSource
 import androidx.compose.foundation.horizontalScroll
@@ -20,6 +21,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
@@ -36,7 +39,7 @@ internal val LocalMarkdownLinkColor = compositionLocalOf<Color?> { null }
 internal val LocalCodeBlockDrag = compositionLocalOf { true }
 
 /** Code blocks longer than this many lines stay plain, so a long streamed block is not re-highlighted each update. */
-private const val MAX_CHAT_HIGHLIGHT_LINES = 1000
+private const val MAX_CHAT_HIGHLIGHT_LINES = 300
 
 /** Nesting step and hanging indent of list items, in sp so they scale with the text beside them. */
 private const val LIST_STEP_SP = 20
@@ -135,14 +138,28 @@ private fun linesText(lines: List<String>, linkColor: Color, files: FileOpener?,
 @Composable
 private fun MarkdownListItems(items: List<MarkdownListItem>, linkColor: Color, files: FileOpener?, codeBackground: Color) {
     val step = with(LocalDensity.current) { LIST_STEP_SP.sp.toDp() }
+    val done = stringResource(R.string.remote_markdown_task_done)
+    val open = stringResource(R.string.remote_markdown_task_open)
     Column(Modifier.widthIn(max = PROSE_READING_WIDTH)) {
         items.forEach { item ->
+            // TalkBack reads the item's text, not the bullet; a task says whether it is done.
+            val task = when (item.marker) {
+                TASK_DONE_MARKER -> done
+                TASK_OPEN_MARKER -> open
+                else -> null
+            }
             Row(Modifier.fillMaxWidth().padding(start = step * item.depth)) {
-                Text(item.marker, Modifier.width(step), style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    item.marker,
+                    Modifier.width(step).semantics { hideFromAccessibility() },
+                    style = MaterialTheme.typography.bodyLarge,
+                )
                 LinkMenuText(
                     remember(item.text, linkColor, files, codeBackground) { inlineMarkdown(item.text, linkColor, files, codeBackground) },
                     style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).then(
+                        if (task != null) Modifier.semantics { stateDescription = task } else Modifier
+                    ),
                 )
             }
         }
@@ -183,6 +200,8 @@ private fun CodeBlock(code: String, language: String? = null, closed: Boolean = 
         modifier = Modifier.fillMaxWidth().testTag("codeBlock"),
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
         shape = RoundedCornerShape(12.dp),
+        // The edge keeps the block apart from a bubble whose colour is close to its own.
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column {
             Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -222,10 +241,15 @@ private fun CodeBlock(code: String, language: String? = null, closed: Boolean = 
 
 /**
  * What dragging a code block carries: its text, labelled with the language. The text is cut as a
- * copy is, so a very large block cannot overflow the drag's transfer.
+ * copy is, so a very large block cannot overflow the drag's transfer. Like a dragged path it reaches
+ * other apps ([DRAG_TEXT_FLAGS]), and the chat's own drop target leaves it alone ([OwnDrag]).
  */
 internal fun codeDragTransfer(code: String, label: String): DragAndDropTransferData =
-    DragAndDropTransferData(ClipData.newPlainText(label, clipboardSafeText(code).first))
+    DragAndDropTransferData(
+        ClipData.newPlainText(label, clipboardSafeText(code).first),
+        localState = OwnDrag,
+        flags = DRAG_TEXT_FLAGS,
+    )
 
 /** What an image block shows where no image loader exists: its description, else the file name. */
 internal fun markdownImageAltText(image: MarkdownBlock.Image): String =

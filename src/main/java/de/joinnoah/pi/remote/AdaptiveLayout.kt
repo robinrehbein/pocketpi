@@ -14,10 +14,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.graphicsLayer
@@ -162,20 +162,37 @@ internal val PROSE_READING_WIDTH = 700.dp
 internal val WIDE_READING_WIDTH = 1120.dp
 
 /**
- * Centres the column of a chat item, at most [widest] wide, in the list. The item is measured
- * inside that column and keeps its own alignment there, so the scrollbar lane and the list padding
- * stay where they are.
+ * Places the column of a chat item, at most [widest] wide, in the list. Every column starts where
+ * the centred prose column ([PROSE_READING_WIDTH]) starts, and a wider one (code, tables, cards)
+ * grows from there toward the end only. Prose and wide content so share one start edge, and an
+ * item that turns wide while it streams grows to one side instead of jumping. An [outgoing] item
+ * mirrors this: it shares the prose column's end edge and grows toward the start. The item is
+ * measured inside its column and keeps its own alignment there, so the scrollbar lane and the list
+ * padding stay where they are.
  */
-internal fun Modifier.readingColumn(widest: Dp): Modifier = layout { measurable, constraints ->
+internal fun Modifier.readingColumn(widest: Dp, outgoing: Boolean = false): Modifier = layout { measurable, constraints ->
     if (!constraints.hasBoundedWidth) {
         val placeable = measurable.measure(constraints)
         return@layout layout(placeable.width, placeable.height) { placeable.place(0, 0) }
     }
-    val width = minOf(constraints.maxWidth, widest.roundToPx())
-    val placeable = measurable.measure(constraints.copy(minWidth = 0, maxWidth = width))
-    layout(constraints.maxWidth, placeable.height) {
-        placeable.placeRelative((constraints.maxWidth - width) / 2, 0)
-    }
+    val available = constraints.maxWidth
+    val column = readingColumnBounds(available, widest.roundToPx(), PROSE_READING_WIDTH.roundToPx(), outgoing)
+    val placeable = measurable.measure(constraints.copy(minWidth = 0, maxWidth = column.width))
+    layout(available, placeable.height) { placeable.placeRelative(column.start, 0) }
+}
+
+/** A reading column: where it starts, in pixels from the start edge, and how wide it is. */
+internal data class ReadingColumn(val start: Int, val width: Int)
+
+/**
+ * The reading column at most [widest] wide in [available], next to a centred prose column [prose]
+ * wide: it starts where the prose column starts and ends at most at the end of [available]. An
+ * [outgoing] column ends where the prose column ends and starts at most at the start.
+ */
+internal fun readingColumnBounds(available: Int, widest: Int, prose: Int, outgoing: Boolean): ReadingColumn {
+    val proseStart = (available - minOf(available, prose)) / 2
+    val width = minOf(widest, available - proseStart)
+    return if (outgoing) ReadingColumn(available - proseStart - width, width) else ReadingColumn(proseStart, width)
 }
 
 /**

@@ -19,6 +19,7 @@ import androidx.compose.ui.semantics.collectionItemInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 
 internal sealed interface MarkdownBlock {
@@ -131,17 +132,21 @@ internal fun markdownBlocks(text: String): List<MarkdownBlock> {
 }
 
 /**
- * The grid lines of one cell, 1dp wide and drawn inside the cell's edges: the right and bottom
- * always, the top and left only on the outer edge of the table. Every inner line is then drawn by
- * exactly one cell, so it is 1dp and not 2dp.
+ * The grid lines of one cell, 1dp wide and drawn inside the cell's edges: the end and bottom
+ * always, the top and start only on the outer edge of the table. Every inner line is then drawn by
+ * exactly one cell, so it is 1dp and not 2dp. Start and end follow the layout direction, as the
+ * columns do, so a right-to-left table is closed on both sides too.
  */
-private fun DrawScope.cellGridLines(color: Color, top: Boolean, left: Boolean) {
+private fun DrawScope.cellGridLines(color: Color, top: Boolean, start: Boolean) {
     val stroke = 1.dp.toPx()
     val half = stroke / 2
-    drawLine(color, Offset(size.width - half, 0f), Offset(size.width - half, size.height), stroke)
+    val rtl = layoutDirection == LayoutDirection.Rtl
+    val endX = if (rtl) half else size.width - half
+    val startX = if (rtl) size.width - half else half
+    drawLine(color, Offset(endX, 0f), Offset(endX, size.height), stroke)
     drawLine(color, Offset(0f, size.height - half), Offset(size.width, size.height - half), stroke)
     if (top) drawLine(color, Offset(0f, half), Offset(size.width, half), stroke)
-    if (left) drawLine(color, Offset(half, 0f), Offset(half, size.height), stroke)
+    if (start) drawLine(color, Offset(startX, 0f), Offset(startX, size.height), stroke)
 }
 
 @Composable
@@ -170,7 +175,7 @@ internal fun MarkdownTable(table: MarkdownBlock.Table) {
                             ),
                             modifier = Modifier.width(width).fillMaxHeight()
                                 .background(if (rowIndex == 0) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface)
-                                .drawBehind { cellGridLines(outline, top = rowIndex == 0, left = column == 0) }
+                                .drawBehind { cellGridLines(outline, top = rowIndex == 0, start = column == 0) }
                                 .padding(12.dp)
                                 .semantics {
                                     collectionItemInfo = CollectionItemInfo(rowIndex, 1, column, 1)

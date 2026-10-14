@@ -634,4 +634,6 @@
     <string name="remote_jobs_expand">Expand background jobs</string>
     <string name="remote_jobs_collapse">Collapse background jobs</string>
     <string name="remote_jobs_close">Close background jobs</string>
+    <string name="remote_markdown_task_done">Done</string>
+    <string name="remote_markdown_task_open">Not done</string>
 </resources>

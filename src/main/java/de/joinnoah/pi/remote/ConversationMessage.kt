@@ -97,10 +97,14 @@ internal fun conversationItemWidth(item: ConversationItem): Dp =
         is ConversationItem.Subagent -> PROSE_READING_WIDTH
     }
 
-/** One chat item in its reading column, centred and at most [conversationItemWidth] wide. */
+/**
+ * One chat item in its reading column, at most [conversationItemWidth] wide and anchored to the
+ * prose column's edge on its sender's side (see [readingColumn]).
+ */
 @Composable
 internal fun ConversationItemColumn(item: ConversationItem, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    Box(modifier.readingColumn(remember(item) { conversationItemWidth(item) })) { content() }
+    val outgoing = item is ConversationItem.Bubble && item.role == "user"
+    Box(modifier.readingColumn(remember(item) { conversationItemWidth(item) }, outgoing)) { content() }
 }
 
 private class BubbleShape(private val outgoing: Boolean) : Shape {
@@ -202,9 +206,10 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
 /**
  * A brief 2dp outline in the primary color that fades out, for the target of a jump. It starts on
  * the transition to [highlighted] true; with animations off it holds for the same time instead.
- * Clearing [highlighted] early removes the outline at once.
+ * Clearing [highlighted] early removes the outline at once. With a [shape] (a bubble's, tail
+ * included) the outline follows it; without one it is a rounded rectangle around the item.
  */
-private fun Modifier.jumpHighlight(highlighted: Boolean): Modifier = composed {
+private fun Modifier.jumpHighlight(highlighted: Boolean, shape: Shape? = null): Modifier = composed {
     val alpha = remember { Animatable(0f) }
     LaunchedEffect(highlighted) {
         if (highlighted) {
@@ -224,7 +229,13 @@ private fun Modifier.jumpHighlight(highlighted: Boolean): Modifier = composed {
     drawWithContent {
         drawContent()
         val a = alpha.value
-        if (a > 0f) {
+        if (a > 0f && shape != null) {
+            drawOutline(
+                shape.createOutline(size, layoutDirection, this),
+                color = color.copy(alpha = a),
+                style = Stroke(2.dp.toPx()),
+            )
+        } else if (a > 0f) {
             val stroke = 2.dp.toPx()
             drawRoundRect(
                 color = color.copy(alpha = a),
@@ -262,9 +273,11 @@ internal fun ConversationMessage(
     forkMenuRequested: Boolean = false,
     onForkMenuRequestHandled: () -> Unit = {},
 ) {
-    Box(Modifier.jumpHighlight(highlighted)) {
+    // A bubble draws the outline along its own shape; other items get it around their box.
+    Box(Modifier.jumpHighlight(highlighted && item !is ConversationItem.Bubble)) {
         ConversationMessageContent(
             item,
+            highlighted,
             thinkingDisplay,
             thinkingActive,
             onQuote,
@@ -286,6 +299,7 @@ internal fun ConversationMessage(
 @Composable
 private fun ConversationMessageContent(
     item: ConversationItem,
+    highlighted: Boolean,
     thinkingDisplay: String,
     thinkingActive: Boolean,
     onQuote: (String) -> Unit,
@@ -408,9 +422,11 @@ private fun ConversationMessageContent(
                                     forkConfirming,
                                     { forkConfirming = it },
                                 )
+                            val bubbleShape = remember(outgoing) { BubbleShape(outgoing) }
                             Surface(
                                 modifier = Modifier.weight(1f, fill = false)
                                     .quoteSwipe(canQuote) { onQuote(item.sourceId) }
+                                    .jumpHighlight(highlighted, bubbleShape)
                                     .semantics {
                                         customActions = buildList {
                                             if (canQuote)
@@ -443,7 +459,7 @@ private fun ConversationMessageContent(
                                                 )
                                         }
                                     },
-                                shape = remember(outgoing) { BubbleShape(outgoing) },
+                                shape = bubbleShape,
                                 color =
                                     if (outgoing) MaterialTheme.colorScheme.primaryContainer
                                     else MaterialTheme.colorScheme.surfaceContainer,

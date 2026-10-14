@@ -28,6 +28,9 @@ private val listLine = Regex("^([ \\t]*)[-+*] (.*)$")
 private val taskStart = Regex("^\\[([ xX])\\](?: (.*))?$")
 private val quoteLine = Regex("^ {0,3}>(?: ?)(.*)$")
 
+internal const val TASK_OPEN_MARKER = "☐"
+internal const val TASK_DONE_MARKER = "☑"
+
 /** The bullet or task a line starts with, or null for a line that is not a list item. */
 internal fun listItem(line: String): MarkdownListItem? {
     val match = listLine.matchEntire(line) ?: return null
@@ -36,7 +39,7 @@ internal fun listItem(line: String): MarkdownListItem? {
     val body = match.groupValues[2]
     val task = taskStart.matchEntire(body)
     return if (task != null) {
-        val marker = if (task.groupValues[1] == " ") "☐" else "☑"
+        val marker = if (task.groupValues[1] == " ") TASK_OPEN_MARKER else TASK_DONE_MARKER
         MarkdownListItem(depth, marker, task.groupValues[2])
     } else MarkdownListItem(depth, bulletMarker(depth), body)
 }

@@ -634,4 +634,6 @@
     <string name="remote_jobs_expand">Hintergrundjobs aufklappen</string>
     <string name="remote_jobs_collapse">Hintergrundjobs zuklappen</string>
     <string name="remote_jobs_close">Hintergrundjobs schließen</string>
+    <string name="remote_markdown_task_done">Erledigt</string>
+    <string name="remote_markdown_task_open">Offen</string>
 </resources>
