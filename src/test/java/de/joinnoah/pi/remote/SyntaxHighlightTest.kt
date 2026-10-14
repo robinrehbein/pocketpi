@@ -211,4 +211,15 @@ class SyntaxHighlightTest {
         assertEquals(3, incremental.tokenized)
         assertEquals(listOf("val"), lines[1].spans(Color.Red))
     }
+
+    @Test fun chatFencesHighlightKnownLanguagesAndStayPlainForTheRest() {
+        assertEquals(SyntaxLanguage.TYPESCRIPT, fenceLanguage("TS"))
+        assertEquals(SyntaxLanguage.KOTLIN, fenceLanguage("kt"))
+        assertEquals(SyntaxLanguage.YAML, fenceLanguage("yml"))
+        assertNull(fenceLanguage("mermaid"))
+        assertNull(fenceLanguage("python"))
+        assertNull(fenceLanguage(null))
+        assertTrue(highlight(fenceLanguage("kotlin"), "val answer = 42").single().spanStyles.isNotEmpty())
+        assertTrue(highlight(fenceLanguage("python"), "val answer = 42").single().spanStyles.isEmpty())
+    }
 }

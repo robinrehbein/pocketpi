@@ -113,39 +113,6 @@
 
     <issue
         id="ConfigurationScreenWidthHeight"
-        message="Using Configuration.screenHeightDp instead of LocalWindowInfo.current.containerSize"
-        errorLine1="    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.84f).dp"
-        errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/de/joinnoah/pi/remote/AdvisorPickerSheet.kt"
-            line="49"
-            column="22"/>
-    </issue>
-
-    <issue
-        id="ConfigurationScreenWidthHeight"
-        message="Using Configuration.screenHeightDp instead of LocalWindowInfo.current.containerSize"
-        errorLine1="    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.75f).dp"
-        errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/de/joinnoah/pi/remote/AttachmentPreview.kt"
-            line="149"
-            column="22"/>
-    </issue>
-
-    <issue
-        id="ConfigurationScreenWidthHeight"
-        message="Using Configuration.screenHeightDp instead of LocalWindowInfo.current.containerSize"
-        errorLine1="            val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.6f).dp"
-        errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/de/joinnoah/pi/remote/ConversationAttachmentPreview.kt"
-            line="99"
-            column="30"/>
-    </issue>
-
-    <issue
-        id="ConfigurationScreenWidthHeight"
         message="Using Configuration.screenWidthDp instead of LocalWindowInfo.current.containerSize"
         errorLine1="    val windowWidth = with(density) { LocalConfiguration.current.screenWidthDp.dp.roundToPx() }"
         errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
@@ -153,28 +120,6 @@
             file="src/main/java/de/joinnoah/pi/remote/FileTiles.kt"
             line="232"
             column="39"/>
-    </issue>
-
-    <issue
-        id="ConfigurationScreenWidthHeight"
-        message="Using Configuration.screenHeightDp instead of LocalWindowInfo.current.containerSize"
-        errorLine1="    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.9f).dp"
-        errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/de/joinnoah/pi/remote/SessionArtifactsSheet.kt"
-            line="183"
-            column="22"/>
-    </issue>
-
-    <issue
-        id="ConfigurationScreenWidthHeight"
-        message="Using Configuration.screenHeightDp instead of LocalWindowInfo.current.containerSize"
-        errorLine1="    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.9f).dp"
-        errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/de/joinnoah/pi/remote/TreeSheet.kt"
-            line="135"
-            column="22"/>
     </issue>
 
     <issue

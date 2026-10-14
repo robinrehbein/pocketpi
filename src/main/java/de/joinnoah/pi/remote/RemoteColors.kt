@@ -135,7 +135,8 @@ internal fun remoteColorScheme(dark: Boolean, synthwave: Boolean = false): Color
             onSecondary = Color.White,
             secondaryContainer = Color(0xFFDAE2F9),
             onSecondaryContainer = Color(0xFF131C2F),
-            tertiary = Color(0xFFB45309),
+            // Darker than the waiting amber: strings and warnings on the light surfaces reach 4.5:1.
+            tertiary = Color(0xFF9A4306),
             onTertiary = Color.White,
             tertiaryContainer = Color(0xFFFDEBD3),
             onTertiaryContainer = Color(0xFF8A3B0B),

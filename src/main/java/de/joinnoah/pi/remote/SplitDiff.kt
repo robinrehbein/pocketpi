@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -193,7 +194,10 @@ private fun RowScope.SplitCell(
             .fillMaxHeight()
             .then(if (container != null) Modifier.background(container) else Modifier)
             .then(modifier)
-            .semantics(mergeDescendants = true) {}
+            // TalkBack reads whether the line was added or removed, with this side's number.
+            .semantics(mergeDescendants = true) {
+                line?.let { diffLineDescription(it, rowStyle.labels, number) }?.let { contentDescription = it }
+            }
     ) {
         if (line != null) leading(line)
         if (rowStyle.numbered) GutterNumber(number, rowStyle.numberWidth, rowStyle.text, rowStyle.muted)

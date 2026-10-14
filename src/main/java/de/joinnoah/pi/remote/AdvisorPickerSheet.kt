@@ -7,13 +7,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
@@ -50,7 +49,7 @@ internal fun AdvisorPickerSheet(
     }
     val groups = remember(advisor?.choices) { groupAdvisorChoices(advisor?.choices.orEmpty()) }
     val currentLabel = stringResource(R.string.remote_advisor_current_label)
-    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.84f).dp
+    val maxHeight = windowHeightFraction(0.84f)
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().heightIn(max = maxHeight).navigationBarsPadding()) {
@@ -246,7 +245,7 @@ internal fun ManageProvidersRow(onClick: () -> Unit) {
     HorizontalDivider()
     ListItem(
         headlineContent = { Text(stringResource(R.string.remote_page_manage_providers)) },
-        trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
+        trailingContent = { Icon(Icons.AutoMirrored.Filled.NavigateNext, contentDescription = null) },
         modifier = Modifier.clickable(role = Role.Button, onClick = onClick).testTag("managePickerProviders"),
     )
 }

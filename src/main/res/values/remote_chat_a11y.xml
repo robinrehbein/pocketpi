@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- TalkBack state of a row that shows or hides more below it. -->
+    <string name="remote_chat_a11y_expanded">Expanded</string>
+    <string name="remote_chat_a11y_collapsed">Collapsed</string>
+    <!-- TalkBack reading of one diff line: its kind, its line number and its text. -->
+    <string name="remote_chat_a11y_diff_added_line">Added line %1$d: %2$s</string>
+    <string name="remote_chat_a11y_diff_removed_line">Removed line %1$d: %2$s</string>
+    <string name="remote_chat_a11y_diff_context_line">Line %1$d: %2$s</string>
+    <string name="remote_chat_a11y_diff_added">Added: %1$s</string>
+    <string name="remote_chat_a11y_diff_removed">Removed: %1$s</string>
+    <!-- Read in place of a diff line's text when the line is empty. -->
+    <string name="remote_chat_a11y_diff_blank">blank line</string>
+</resources>

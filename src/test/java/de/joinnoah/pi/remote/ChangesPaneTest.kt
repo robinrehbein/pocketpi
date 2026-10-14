@@ -33,6 +33,12 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assert
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -852,5 +858,14 @@ class ChangesPaneTest {
         compose.onAllNodesWithTag("changesDiff").onFirst().performKeyInput { keyUp(Key.ShiftLeft) }
         compose.waitForIdle()
         compose.onAllNodesWithTag("changesDiffLine").onFirst().assertExists()
+    }
+
+    @Test
+    fun aFailedStatusUsesTheSharedFailureNotice() {
+        render(ChangesState("s", loading = false, failure = ChangesFailure.OFFLINE), Recorder())
+        compose.onNode(hasAnyAncestor(hasTestTag("changesFailure")) and hasText(context.getString(R.string.remote_changes_failure_offline)))
+            .assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
+        compose.onNode(hasAnyAncestor(hasTestTag("changesFailure")) and hasText(context.getString(R.string.remote_changes_retry))).assertIsDisplayed()
     }
 }

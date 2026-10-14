@@ -37,7 +37,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -145,7 +144,7 @@ private fun PhotoDialog(
     onDismiss: () -> Unit,
 ) {
     val photo by rememberPhoto(attachment, storage, maxSide = 2048)
-    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.75f).dp
+    val maxHeight = windowHeightFraction(0.75f)
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             Modifier.fillMaxWidth().padding(16.dp),
