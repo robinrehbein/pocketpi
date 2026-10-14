@@ -150,9 +150,13 @@ internal class RemoteNavigator(
         return ++request
     }
 
-    private fun setStack(target: List<RemoteNavKey>, keepSettings: Boolean) {
+    private fun setStack(
+        target: List<RemoteNavKey>,
+        keepSettings: Boolean,
+        board: RemoteNavKey.Activity? = null,
+    ) {
         val settings = keepSettings && stack.lastOrNull() == RemoteNavKey.Settings
-        val keys = target + if (settings) listOf(RemoteNavKey.Settings) else emptyList()
+        val keys = target + listOfNotNull(board) + if (settings) listOf(RemoteNavKey.Settings) else emptyList()
         // Keep equal entries so their ViewModel stores and saved UI state survive.
         val common = stack.zip(keys).takeWhile { (old, new) -> old == new }.size
         while (stack.size > common) stack.removeAt(stack.lastIndex)
@@ -165,9 +169,16 @@ internal class RemoteNavigator(
     private fun topKey(): RemoteNavKey? =
         stack.lastOrNull { it != RemoteNavKey.Settings } as? RemoteNavKey
 
+    /**
+     * The destination beneath the overlays: Settings and the activity board sit on top of the
+     * open project or chat without being part of the selection.
+     */
+    private fun contentKey(): RemoteNavKey? =
+        stack.lastOrNull { it != RemoteNavKey.Settings && it !is RemoteNavKey.Activity } as? RemoteNavKey
+
     /** Chat entries stacked directly beneath the top chat in the same project, oldest first. */
     private fun chatsBeneathTop(): List<RemoteNavKey.Chat> {
-        val entries = stack.filter { it != RemoteNavKey.Settings }
+        val entries = stack.filter { it != RemoteNavKey.Settings && it !is RemoteNavKey.Activity }
         val top = entries.lastOrNull() as? RemoteNavKey.Chat ?: return emptyList()
         return entries
             .dropLast(1)
@@ -190,8 +201,12 @@ internal class RemoteNavigator(
         selection: RemoteSelection,
         keepSettings: Boolean = true,
         keepStackedChats: Boolean = true,
+        keepActivity: Boolean = false,
     ) {
         val keys = selection.keys()
+        // The activity board stays on top of the content it was opened over, across a restore and
+        // a reconcile, while the same host is open. A navigation to a destination closes it.
+        val board = (topKey() as? RemoteNavKey.Activity)?.takeIf { keepActivity && it.routeId == selection.routeId }
         // The folder browser shares the Projects selection, so it survives a restore on top of it.
         val folders = topKey()?.takeIf { it is RemoteNavKey.FolderBrowser || it is RemoteNavKey.Providers }
         if (folders != null && selection == folders.selection()) {
@@ -202,12 +217,12 @@ internal class RemoteNavigator(
         // A child chat opened on top of its parent keeps the parent beneath it across
         // restores and reconnects.
         val beneath =
-            if (keepStackedChats && chat != null && topKey() == chat) chatsBeneathTop()
+            if (keepStackedChats && chat != null && contentKey() == chat) chatsBeneathTop()
             else emptyList()
         if (chat == null || beneath.isEmpty()) {
-            setStack(keys, keepSettings)
+            setStack(keys, keepSettings, board)
         } else {
-            setStack(sessionKeys(chat) + stacked(beneath + chat), keepSettings)
+            setStack(sessionKeys(chat) + stacked(beneath + chat), keepSettings, board)
         }
     }
 
@@ -224,19 +239,24 @@ internal class RemoteNavigator(
             // and land on the first one that is still live. An ancestor that is itself gone is
             // skipped in favor of the next one further out; only when none of them resolve does
             // the whole stack collapse to the sessions list underneath it.
-            if (mode == ActivationMode.RESTORE && chat == null && key is RemoteNavKey.Chat && topKey() == key) {
+            if (mode == ActivationMode.RESTORE && chat == null && key is RemoteNavKey.Chat && contentKey() == key) {
                 val ancestors = chatsBeneathTop()
+                val board = topKey() as? RemoteNavKey.Activity
                 for (index in ancestors.indices.reversed()) {
                     val candidate = ancestors[index]
                     val restored = repository.activate(candidate.selection(), ActivationMode.RESTORE)
                     if (current != request) return@launch
                     if (restored == candidate.selection()) {
-                        setStack(sessionKeys(candidate) + stacked(ancestors.subList(0, index + 1)), keepSettings = true)
+                        setStack(
+                            sessionKeys(candidate) + stacked(ancestors.subList(0, index + 1)),
+                            keepSettings = true,
+                            board = board?.takeIf { it.routeId == candidate.routeId },
+                        )
                         return@launch
                     }
                 }
             }
-            replace(canonical)
+            replace(canonical, keepActivity = mode == ActivationMode.RESTORE)
         }
     }
 
@@ -246,18 +266,18 @@ internal class RemoteNavigator(
             if (held.routeId != state.selection.routeId || held.sessionId != state.selection.sessionId) hold(null)
         }
         if (state.loading || activation?.isActive == true) return
-        val current = stack.lastOrNull { it != RemoteNavKey.Settings } as? RemoteNavKey ?: return
+        val current = contentKey() ?: return
         val keys = current.selection().keys()
         val validated = state.selection.keys()
         if (validated.size < keys.size && keys.take(validated.size) == validated) {
-            replace(state.selection)
+            replace(state.selection, keepActivity = true)
         }
     }
 
     fun restore() {
-        val key =
-            stack.lastOrNull { it != RemoteNavKey.Settings } as? RemoteNavKey ?: RemoteNavKey.Hosts
-        activate(key, ActivationMode.RESTORE)
+        // The board is an overlay: the content beneath it is what gets restored, and the board
+        // goes back on top of it.
+        activate(contentKey() ?: RemoteNavKey.Hosts, ActivationMode.RESTORE)
     }
 
     fun open(key: RemoteNavKey) {
@@ -536,6 +556,8 @@ internal class RemoteNavigator(
      * [open], which replaces the board.
      */
     fun openActivity(routeId: String) {
+        // Settings stays on top of whatever is beneath it, like for the other pages.
+        if (stack.lastOrNull() == RemoteNavKey.Settings) return
         val top = topKey()
         if (top == RemoteNavKey.Activity(routeId) || top?.selection()?.routeId != routeId) return
         stack.add(RemoteNavKey.Activity(routeId))
@@ -916,6 +938,8 @@ internal class RemoteNavigator(
             state.loading,
             hideOffline = hidesOfflineSessions(targets.hideOfflineSessions, state.connected, state.stale),
             stale = state.stale,
+            marks = sessionMarksById(targets.sessionMarks, sessions.routeId),
+            openSessionId = state.selection.sessionId,
         ).map { it.id }
     }
 
@@ -1106,7 +1130,11 @@ internal fun RemoteNavigation(
         val shortcuts = hardwareKeyboard
         val targets = remember { ShortcutTargets() }
         val hideOfflineSessions = pushSettings.hideOfflineSessions
-        SideEffect { targets.hideOfflineSessions = hideOfflineSessions }
+        val sessionMarks by sessionMarksState()
+        SideEffect {
+            targets.hideOfflineSessions = hideOfflineSessions
+            targets.sessionMarks = sessionMarks
+        }
         val activeTwoPane by rememberUpdatedState(twoPane.takeIf { layout.twoPane })
         val collapsed = twoPane.listCollapsed
         val sceneStrategies =

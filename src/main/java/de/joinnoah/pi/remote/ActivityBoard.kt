@@ -33,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,11 +48,14 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+
+private const val ELAPSED_TICK_MILLIS = 60_000L
 
 // The activity board: every session of the connected Mac that waits for the user, runs, or
 // finished since the user last looked. It reads the app's state only; it never asks the Mac.
@@ -108,10 +112,17 @@ internal fun activityBoard(cards: List<ActivityCard>): Map<ActivityGroup, List<A
  * first and then every project's last list. A session counts once. Nothing is listed while no Mac
  * is open.
  */
-internal fun activityCards(state: RemoteState, marks: Map<String, SessionMark>): List<ActivityCard> {
+internal fun activityCards(
+    state: RemoteState,
+    marks: Map<String, SessionMark>,
+    /**
+     * The session whose chat is on screen (see [SessionMarksStore.visibleChat]); it is never
+     * unread. A chat that is only selected, with the board over it, is not on screen.
+     */
+    visibleSessionId: String? = null,
+): List<ActivityCard> {
     val route = state.host?.routeId ?: return emptyList()
-    // The selection names the open chat: the screens' own states strip the chat's session.
-    val open = state.selection.sessionId
+    val open = visibleSessionId
     val seen = mutableSetOf<String>()
     val cards = mutableListOf<ActivityCard>()
     fun add(session: JsonObject, projectId: String, projectName: String) {
@@ -148,6 +159,15 @@ internal fun activityCards(state: RemoteState, marks: Map<String, SessionMark>):
 internal fun needsYouCount(state: RemoteState, marks: Map<String, SessionMark>): Int =
     activityCards(state, marks).count { activityGroup(it) == ActivityGroup.NEEDS_YOU }
 
+/** The chat on screen as (routeId, sessionId), or null; always null without a store. */
+@Composable
+internal fun visibleChatState(): State<Pair<String, String>?> {
+    val store = LocalSessionMarks.current
+    val none = remember { MutableStateFlow<Pair<String, String>?>(null) }
+    val flow: StateFlow<Pair<String, String>?> = store?.visibleChat ?: none
+    return flow.collectAsStateWithLifecycle()
+}
+
 /** The session marks of the app as a state the composables read; empty without a store. */
 @Composable
 internal fun sessionMarksState(): State<Map<Pair<String, String>, SessionMark>> {
@@ -166,8 +186,17 @@ internal fun ActivityBoardScreen(
     val state by model.state.collectAsStateWithLifecycle()
     val marksAll by sessionMarksState()
     val marks = remember(marksAll, key.routeId) { sessionMarksById(marksAll, key.routeId) }
-    val cards = remember(state.sessions, state.projectSessions, state.host, state.selection, state.session, marks) {
-        activityCards(state, marks)
+    val visibleChat by visibleChatState()
+    val visibleSessionId = visibleChat?.takeIf { it.first == key.routeId }?.second
+    val cards = remember(state.sessions, state.projectSessions, state.host, state.selection, marks, visibleSessionId) {
+        activityCards(state, marks, visibleSessionId)
+    }
+    // "x minutes ago" moves on while the board stays open without any state change.
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) {
+            delay(ELAPSED_TICK_MILLIS)
+            value = System.currentTimeMillis()
+        }
     }
     // A board beside no chat takes the window's width: a grid where the window is wide enough.
     val density = LocalDensity.current
@@ -177,6 +206,7 @@ internal fun ActivityBoardScreen(
         groups = remember(cards) { activityBoard(cards) },
         lastKnown = !state.connected && cards.isNotEmpty(),
         wide = wide,
+        now = now,
         onBack = navigator::back,
         onOpen = { card -> navigator.open(RemoteNavKey.Chat(card.routeId, card.projectId, card.sessionId)) },
     )
@@ -190,6 +220,7 @@ internal fun ActivityBoardContent(
     wide: Boolean,
     onBack: () -> Unit,
     onOpen: (ActivityCard) -> Unit,
+    now: Long = System.currentTimeMillis(),
 ) {
     val empty = groups.values.all { it.isEmpty() }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -234,7 +265,7 @@ internal fun ActivityBoardContent(
                             ActivityHeading(group, items.size)
                         }
                         items(items, key = { "${it.routeId}:${it.sessionId}" }) { card ->
-                            ActivityCardView(card, group) { onOpen(card) }
+                            ActivityCardView(card, group, now) { onOpen(card) }
                         }
                     }
                 }
@@ -248,7 +279,7 @@ internal fun ActivityBoardContent(
                     if (items.isNotEmpty()) {
                         item(key = "heading_${group.name}") { ActivityHeading(group, items.size) }
                         items(items, key = { "${it.routeId}:${it.sessionId}" }) { card ->
-                            ActivityCardView(card, group) { onOpen(card) }
+                            ActivityCardView(card, group, now) { onOpen(card) }
                         }
                     }
                 }
@@ -278,14 +309,14 @@ private fun ActivityHeading(group: ActivityGroup, count: Int) {
 }
 
 @Composable
-private fun ActivityCardView(card: ActivityCard, group: ActivityGroup, onOpen: () -> Unit) {
+private fun ActivityCardView(card: ActivityCard, group: ActivityGroup, now: Long, onOpen: () -> Unit) {
     val title = card.title.ifBlank { stringResource(R.string.remote_new_session) }
     val status = stringResource(group.cardLabelRes)
     val pinned = stringResource(R.string.remote_activity_pinned)
     val unread = stringResource(R.string.remote_activity_unread)
     val elapsed =
         card.updatedAt?.let {
-            DateUtils.getRelativeTimeSpanString(it, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString()
+            DateUtils.getRelativeTimeSpanString(it, now, DateUtils.MINUTE_IN_MILLIS).toString()
         }
     val description =
         listOfNotNull(card.projectName, title, card.preview, status, elapsed,

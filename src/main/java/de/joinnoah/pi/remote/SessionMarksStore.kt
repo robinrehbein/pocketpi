@@ -22,7 +22,7 @@ import kotlinx.serialization.json.longOrNull
  */
 internal data class SessionMark(
     val pinned: Boolean = false,
-    /** When the chat was last visible at its bottom; null until then. */
+    /** When the chat was first seen at its bottom; null until then. */
     val seenAt: Long? = null,
     /** The sessions.list `updatedAt` that [seenAt] saw; a newer one makes the session unread. */
     val seenUpdatedAt: Long? = null,
@@ -43,6 +43,23 @@ internal fun sessionUnread(mark: SessionMark?, updatedAt: Long?, open: Boolean):
     if (mark.finishedAt != null) return true
     val seen = mark.seenUpdatedAt ?: return false
     return updatedAt != null && updatedAt > seen
+}
+
+/**
+ * Whether the repository selected the chat of [sessionId] and loaded its session, as opposed to
+ * the cached preview a chat shows first (empty selection, session from the cache).
+ */
+internal fun chatSelected(state: RemoteState, sessionId: String): Boolean =
+    state.session != null && state.selection.sessionId == sessionId
+
+/**
+ * The `updatedAt` of the chat's session as the project's list has it now. The list refreshes
+ * while the chat runs; the session snapshot taken at selection does not, so it only answers while
+ * the list has no row for the session.
+ */
+internal fun liveUpdatedAt(state: RemoteState, sessionId: String): Long? {
+    val row = state.sessions.firstOrNull { it.optionalText("id") == sessionId } ?: state.session
+    return row?.get("updatedAt")?.jsonPrimitive?.longOrNull
 }
 
 /** A session's status and update time at one observation of the app's state. */
@@ -73,15 +90,38 @@ internal class SessionMarksStore(private val prefs: SharedPreferences) {
     /** Every mark by (routeId, sessionId). Changes on the main thread only. */
     val marks: StateFlow<Map<Pair<String, String>, SessionMark>> = mutable.asStateFlow()
 
+    private val visible = MutableStateFlow<Pair<String, String>?>(null)
+
+    /**
+     * The chat on screen right now: its screen is composed and the app is resumed. A session that
+     * is selected but not shown (the board or another page covers it, the app is in the
+     * background) is not visible, so a run that ends meanwhile counts as finished.
+     */
+    val visibleChat: StateFlow<Pair<String, String>?> = visible.asStateFlow()
+
+    fun chatShown(routeId: String, sessionId: String) {
+        visible.value = routeId to sessionId
+    }
+
+    /** The chat left the screen; another chat that already took its place stays visible. */
+    fun chatHidden(routeId: String, sessionId: String) {
+        if (visible.value == routeId to sessionId) visible.value = null
+    }
+
     fun mark(routeId: String, sessionId: String): SessionMark? = mutable.value[routeId to sessionId]
 
     fun setPinned(routeId: String, sessionId: String, pinned: Boolean) =
         change(routeId, sessionId) { it.copy(pinned = pinned) }
 
-    /** The chat was seen at its bottom: the session reads as read until the next change. */
+    /**
+     * The chat was seen at its bottom: the session reads as read until the next change. Seeing a
+     * session again at the same update changes nothing, so a streaming chat does not write.
+     */
     fun markSeen(routeId: String, sessionId: String, updatedAt: Long?, now: Long) =
         change(routeId, sessionId) {
-            it.copy(seenAt = now, seenUpdatedAt = updatedAt ?: it.seenUpdatedAt, finishedAt = null)
+            val seenUpdatedAt = updatedAt ?: it.seenUpdatedAt
+            if (it.seenAt != null && it.seenUpdatedAt == seenUpdatedAt && it.finishedAt == null) it
+            else it.copy(seenAt = it.seenAt ?: now, seenUpdatedAt = seenUpdatedAt, finishedAt = null)
         }
 
     fun markFinished(routeId: String, sessionId: String, now: Long) =
@@ -111,11 +151,20 @@ internal class SessionMarksStore(private val prefs: SharedPreferences) {
         scope.launch {
             var previous: Map<Pair<String, String>, String> = emptyMap()
             state
+                // Streaming emits many states a second that leave the rows alone: compare the
+                // references the rows are built from before building them.
+                .distinctUntilChanged { old, new ->
+                    old.sessions === new.sessions &&
+                        old.projectSessions === new.projectSessions &&
+                        old.host?.routeId == new.host?.routeId &&
+                        old.hosts === new.hosts &&
+                        old.hostsLoaded == new.hostsLoaded
+                }
                 .map { it.observedRows() }
                 .distinctUntilChanged()
                 .collect { rows ->
                     val statuses = rows.sessions
-                    finishedSessions(previous, statuses, rows.open).forEach { (route, session) ->
+                    finishedSessions(previous, statuses, visible.value).forEach { (route, session) ->
                         markFinished(route, session, now())
                     }
                     previous = statuses.mapValues { it.value.status }
@@ -130,11 +179,25 @@ internal class SessionMarksStore(private val prefs: SharedPreferences) {
         val previous = current[key] ?: SessionMark()
         val next = update(previous)
         if (next == previous) return
-        val marks = if (next.isEmpty) current - key else current + (key to next)
+        var marks = if (next.isEmpty) current - key else current + (key to next)
+        // Every viewed session leaves a mark and the Mac's closed sessions never report back:
+        // when a host's marks outgrow the cap, the ones that changed longest ago go first.
+        val forgotten = if (key !in current) oldestUnpinned(marks, routeId) else emptyList()
+        marks = marks - forgotten.toSet()
         prefs.edit {
             if (next.isEmpty) remove(storageKey(key)) else putString(storageKey(key), encode(next))
+            forgotten.forEach { remove(storageKey(it)) }
         }
         mutable.value = marks
+    }
+
+    private fun oldestUnpinned(
+        marks: Map<Pair<String, String>, SessionMark>,
+        routeId: String,
+    ): List<Pair<String, String>> {
+        val own = marks.entries.filter { it.key.first == routeId && !it.value.pinned && it.value.finishedAt == null }
+        if (own.size <= MAX_PLAIN_MARKS_PER_ROUTE) return emptyList()
+        return own.sortedBy { it.value.seenUpdatedAt ?: it.value.seenAt ?: 0L }.take(own.size - MAX_PLAIN_MARKS_PER_ROUTE).map { it.key }
     }
 
     private fun load(): Map<Pair<String, String>, SessionMark> =
@@ -151,7 +214,6 @@ internal class SessionMarksStore(private val prefs: SharedPreferences) {
     private data class Observed(
         val hostRoutes: Set<String>,
         val hostsLoaded: Boolean,
-        val open: Pair<String, String>?,
         val sessions: Map<Pair<String, String>, ObservedSession>,
     )
 
@@ -165,11 +227,9 @@ internal class SessionMarksStore(private val prefs: SharedPreferences) {
             projectSessions.values.forEach { project -> project.sessions.forEach { rows.observe(route, it) } }
             sessions.forEach { rows.observe(route, it) }
         }
-        val open = selection.routeId?.let { r -> selection.sessionId?.let { s -> r to s } }
         return Observed(
             hostRoutes = hosts.mapTo(mutableSetOf()) { it.routeId },
             hostsLoaded = hostsLoaded,
-            open = open?.takeIf { session != null },
             sessions = rows,
         )
     }
@@ -182,6 +242,9 @@ internal class SessionMarksStore(private val prefs: SharedPreferences) {
 
     companion object {
         const val PREFS_NAME = "session-marks"
+
+        /** Marks per host that only remember a look (not pinned, not finished) before the oldest go. */
+        const val MAX_PLAIN_MARKS_PER_ROUTE = 300
 
         // A unit separator cannot occur in the opaque IDs of hosts and sessions.
         private const val SEPARATOR = "\u001F"

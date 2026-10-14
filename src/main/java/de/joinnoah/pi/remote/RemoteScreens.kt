@@ -104,6 +104,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -448,12 +449,25 @@ internal fun RemoteScreen(
     val listScope = rememberCoroutineScope()
     var autoFollow by rememberSaveable(key) { mutableStateOf(savedViewport?.following ?: true) }
     // The chat counts as read once it shows its end; a newer update after that is unread again.
-    val chatUpdatedAt = state.session?.get("updatedAt")?.jsonPrimitive?.longOrNull
-    LaunchedEffect(chatKey, autoFollow, chatUpdatedAt) {
+    // The chat is only the selected one once the repository confirmed it; a chat opened from a
+    // list, a notification or a restore first shows cached content with an empty selection.
+    val chatSelected = chatKey != null && chatSelected(state, chatKey.sessionId)
+    // The list row moves ahead of the session snapshot taken at selection while the chat runs.
+    val chatUpdatedAt =
+        remember(chatKey, state.sessions, state.session) {
+            chatKey?.let { liveUpdatedAt(state, it.sessionId) }
+        }
+    LaunchedEffect(chatKey, autoFollow, chatUpdatedAt, chatSelected) {
         val chat = chatKey ?: return@LaunchedEffect
-        if (autoFollow && state.session != null && state.selection.sessionId == chat.sessionId)
+        if (autoFollow && chatSelected)
             sessionMarkStore?.markSeen(chat.routeId, chat.sessionId, chatUpdatedAt, System.currentTimeMillis())
     }
+    // The chat counts as open for the marks only while it is on screen and the app is resumed.
+    if (chatKey != null && sessionMarkStore != null)
+        LifecycleResumeEffect(chatKey, sessionMarkStore) {
+            sessionMarkStore.chatShown(chatKey.routeId, chatKey.sessionId)
+            onPauseOrDispose { sessionMarkStore.chatHidden(chatKey.routeId, chatKey.sessionId) }
+        }
     var tuiInfoOpen by remember { mutableStateOf(false) }
     var scrollingProgrammatically by remember { mutableStateOf(false) }
     var waitingForOutput by remember { mutableStateOf(false) }

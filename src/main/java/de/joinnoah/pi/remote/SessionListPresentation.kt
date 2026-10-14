@@ -239,18 +239,17 @@ internal fun visibleSessionListItems(
     val result = mutableListOf<SessionListItem>()
     fun addVisibleItems(parentId: String?, depth: Int) {
         val siblings = childrenByParentId[parentId].orEmpty()
-        // Pinned sessions come first, then top-level sessions waiting for an answer; the sort is
-        // stable, so the rest keep their order and subagents stay under their parent.
+        // Pinned sessions come first among their siblings, then top-level sessions waiting for an
+        // answer; the sort is stable, so the rest keep their order and subagents stay under their
+        // parent.
         val ordered =
-            if (parentId == null)
-                siblings.sortedBy {
-                    when {
-                        it.pinned -> 0
-                        it.availability == SessionAvailability.WAITING -> 1
-                        else -> 2
-                    }
+            siblings.sortedBy {
+                when {
+                    it.pinned -> 0
+                    parentId == null && it.availability == SessionAvailability.WAITING -> 1
+                    else -> 2
                 }
-            else siblings
+            }
         ordered.forEach { item ->
             if (isVisible(item)) {
                 val visibleChildren = childrenByParentId[item.id].orEmpty().count(::isVisible)

@@ -126,20 +126,7 @@ internal fun ProjectStrip(
             remember(state.sessions, state.projectSessions, state.host, state.selection, state.session, marksAll) {
                 needsYouCount(state, sessionMarksById(marksAll, key.routeId))
             }
-        val activityLabel = stringResource(R.string.remote_activity_title)
-        val needsYouLabel =
-            if (needsYou > 0) pluralStringResource(R.plurals.remote_activity_needs_you_count, needsYou, needsYou)
-            else null
-        FloatingSurface(modifier = Modifier.testTag("projectStripActivity"), shape = CircleShape) {
-            IconButton(onClick = { navigator.openActivity(key.routeId) }, modifier = Modifier.size(48.dp)) {
-                BadgedBox(badge = { if (needsYou > 0) Badge { Text(needsYou.toString()) } }) {
-                    Icon(
-                        Icons.Default.Dashboard,
-                        contentDescription = listOfNotNull(activityLabel, needsYouLabel).joinToString(", "),
-                    )
-                }
-            }
-        }
+        ActivityStripButton(needsYou) { navigator.openActivity(key.routeId) }
         Spacer(Modifier.height(26.dp))
         CompositionLocalProvider(LocalFocusRegionChildren provides regionChildren) {
             LazyColumn(
@@ -165,6 +152,25 @@ internal fun ProjectStrip(
         }
         if (!selectedName.isNullOrBlank())
             VerticalLabel(selectedName, Modifier.padding(top = 12.dp).testTag("projectStripLabel"))
+    }
+}
+
+/** The strip's button to the activity board; its badge counts the sessions that wait for the user. */
+@Composable
+internal fun ActivityStripButton(needsYou: Int, onClick: () -> Unit) {
+    val activityLabel = stringResource(R.string.remote_activity_title)
+    val needsYouLabel =
+        if (needsYou > 0) pluralStringResource(R.plurals.remote_activity_needs_you_count, needsYou, needsYou)
+        else null
+    FloatingSurface(modifier = Modifier.testTag("projectStripActivity"), shape = CircleShape) {
+        IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
+            BadgedBox(badge = { if (needsYou > 0) Badge { Text(needsYou.toString()) } }) {
+                Icon(
+                    Icons.Default.Dashboard,
+                    contentDescription = listOfNotNull(activityLabel, needsYouLabel).joinToString(", "),
+                )
+            }
+        }
     }
 }
 

@@ -80,4 +80,22 @@ class ActivityBoardUiTest {
         // The card merges its text into one description, which names the pin.
         assertTrue(compose.onAllNodesWithContentDescription("Pinned", substring = true).fetchSemanticsNodes().isNotEmpty())
     }
+
+    @Test
+    fun theStripButtonBadgesTheSessionsThatWaitAndNamesThemForAccessibility() {
+        var opened = 0
+        compose.setContent { MaterialTheme { ActivityStripButton(needsYou = 2) { opened++ } } }
+
+        compose.onNodeWithText("2").assertExists()
+        compose.onNodeWithContentDescription("Activity, 2", substring = true).performClick()
+        assertEquals(1, opened)
+    }
+
+    @Test
+    fun theStripButtonShowsNoBadgeWhenNothingWaits() {
+        compose.setContent { MaterialTheme { ActivityStripButton(needsYou = 0) {} } }
+
+        assertTrue(compose.onAllNodesWithText("0").fetchSemanticsNodes().isEmpty())
+        compose.onNodeWithContentDescription("Activity").assertExists()
+    }
 }

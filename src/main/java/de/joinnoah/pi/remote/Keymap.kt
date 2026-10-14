@@ -608,6 +608,9 @@ internal class ShortcutTargets {
     /** The "hide offline sessions" setting, which the session list applies. */
     var hideOfflineSessions = false
 
+    /** The session marks, so the shortcuts order the sessions like the list does (pinned first). */
+    var sessionMarks: Map<Pair<String, String>, SessionMark> = emptyMap()
+
     private val refreshers = mutableMapOf<RemoteNavKey, () -> Unit>()
 
     /** What Ctrl+R and F5 refresh while [key] is on top. */

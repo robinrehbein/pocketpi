@@ -98,14 +98,73 @@ class SessionMarksStoreTest {
         val store = SessionMarksStore(context)
         val state = MutableStateFlow(stateWith(status = "running", open = "s2"))
         store.observe(state, backgroundScope, now = { 500L })
+        store.chatShown("host", "s2")
         runCurrent()
 
-        // s1 ran in the background and ended; s2 ended while its chat was open.
+        // s1 ran in the background and ended; s2 ended while its chat was on screen.
         state.value = stateWith(status = "idle", open = "s2")
         runCurrent()
 
         assertEquals(SessionMark(finishedAt = 500), store.mark("host", "s1"))
         assertNull(store.mark("host", "s2"))
+    }
+
+    @Test
+    fun aSelectedChatThatIsCoveredOrInTheBackgroundDoesNotCountAsOpen() = runTest {
+        val store = SessionMarksStore(context)
+        val state = MutableStateFlow(stateWith(status = "running", open = "s2"))
+        store.observe(state, backgroundScope, now = { 500L })
+        store.chatShown("host", "s2")
+        runCurrent()
+        // The board opens over the chat (or the app pauses): the selection stays, the chat leaves.
+        store.chatHidden("host", "s2")
+
+        state.value = stateWith(status = "idle", open = "s2")
+        runCurrent()
+
+        assertEquals(SessionMark(finishedAt = 500), store.mark("host", "s2"))
+    }
+
+    @Test
+    fun aHiddenChatDoesNotHideTheChatThatTookItsPlace() {
+        val store = SessionMarksStore(context)
+        store.chatShown("host", "s1")
+        store.chatShown("host", "s2")
+        store.chatHidden("host", "s1")
+
+        assertEquals("host" to "s2", store.visibleChat.value)
+    }
+
+    @Test
+    fun seeingASessionAgainAtTheSameUpdateWritesNothing() {
+        val store = SessionMarksStore(context)
+        store.markSeen("host", "s1", updatedAt = 100, now = 200)
+        val first = store.marks.value
+
+        store.markSeen("host", "s1", updatedAt = 100, now = 900)
+
+        assertTrue(first === store.marks.value)
+        store.markSeen("host", "s1", updatedAt = 150, now = 950)
+        assertEquals(SessionMark(seenAt = 200, seenUpdatedAt = 150), store.mark("host", "s1"))
+    }
+
+    @Test
+    fun theMarksOfOneHostAreCappedAndKeepPinnedAndFinishedSessions() {
+        val store = SessionMarksStore(context)
+        store.setPinned("host", "pinned", true)
+        store.markFinished("host", "finished", now = 1)
+        repeat(SessionMarksStore.MAX_PLAIN_MARKS_PER_ROUTE + 20) { index ->
+            store.markSeen("host", "s$index", updatedAt = index + 10L, now = index + 10L)
+        }
+        store.markSeen("other", "o1", updatedAt = 1, now = 1)
+
+        val host = store.marks.value.keys.filter { it.first == "host" }
+        assertEquals(SessionMarksStore.MAX_PLAIN_MARKS_PER_ROUTE + 2, host.size)
+        assertNull(store.mark("host", "s0"))
+        assertTrue(store.mark("host", "s${SessionMarksStore.MAX_PLAIN_MARKS_PER_ROUTE + 19}") != null)
+        assertTrue(store.mark("host", "pinned")?.pinned == true)
+        assertTrue(store.mark("host", "finished") != null)
+        assertTrue(store.mark("other", "o1") != null)
     }
 
     @Test
@@ -116,6 +175,45 @@ class SessionMarksStoreTest {
         runCurrent()
 
         assertTrue(store.marks.value.isEmpty())
+    }
+
+    @Test
+    fun aChatOpenedFromAPreviewIsSelectedOnlyOnceTheRepositoryConfirmedIt() {
+        val cached = Wire.objectOf("id" to "s1", "title" to "One", "status" to "idle", "updatedAt" to 10L)
+        val preview = RemoteState(loading = true, preview = true, session = cached)
+        assertFalse(chatSelected(preview, "s1"))
+
+        val selected = preview.copy(selection = RemoteSelection(host.routeId, "project", "s1"))
+        assertTrue(chatSelected(selected, "s1"))
+        assertFalse(chatSelected(selected, "s2"))
+    }
+
+    @Test
+    fun theChatsUpdateTimeComesFromTheLiveListRow() {
+        val snapshot = Wire.objectOf("id" to "s1", "title" to "One", "status" to "running", "updatedAt" to 10L)
+        val row = Wire.objectOf("id" to "s1", "title" to "One", "status" to "running", "updatedAt" to 40L)
+        val state =
+            RemoteState(
+                selection = RemoteSelection(host.routeId, "project", "s1"),
+                session = snapshot,
+                sessions = listOf(row),
+            )
+
+        assertEquals(40L, liveUpdatedAt(state, "s1"))
+        assertEquals(10L, liveUpdatedAt(state.copy(sessions = emptyList()), "s1"))
+        assertNull(liveUpdatedAt(state.copy(sessions = emptyList(), session = null), "s1"))
+    }
+
+    @Test
+    fun theBoardTreatsOnlyTheChatOnScreenAsOpen() {
+        val row = Wire.objectOf("id" to "s1", "title" to "One", "status" to "idle", "updatedAt" to 50L)
+        val state =
+            stateWith(status = "idle", open = "s1").copy(sessions = listOf(row))
+        val marks = mapOf("s1" to SessionMark(seenAt = 1, seenUpdatedAt = 10))
+
+        // Selected under the board but not on screen: the change since the last look shows.
+        assertTrue(activityCards(state, marks, visibleSessionId = null).first { it.sessionId == "s1" }.unread)
+        assertFalse(activityCards(state, marks, visibleSessionId = "s1").first { it.sessionId == "s1" }.unread)
     }
 
     private fun stateWith(status: String, open: String?): RemoteState {
@@ -133,3 +231,4 @@ class SessionMarksStoreTest {
         )
     }
 }
+
