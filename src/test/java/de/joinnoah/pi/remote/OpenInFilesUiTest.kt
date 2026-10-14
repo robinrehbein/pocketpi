@@ -44,14 +44,14 @@ class OpenInFilesUiTest {
 
     @Test
     fun aToolCardOpensItsFileAtTheLinesItRead() {
-        host { ConversationMessage(read("/Users/robin/app/src/a.kt"), "status", thinkingActive = false, onQuote = {}, onOpenTool = {}) }
+        host { ConversationMessage(read("/Users/robin/app/src/a.kt"), ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}, onOpenTool = {}) }
         compose.onNodeWithTag("openInFiles").performClick()
         assertEquals(listOf(FileTarget("src/a.kt", LineSelection(12, 15))), opened)
     }
 
     @Test
     fun aFileOutsideTheProjectOffersItsPathToCopy() {
-        host { ConversationMessage(read("/etc/hosts"), "status", thinkingActive = false, onQuote = {}, onOpenTool = {}) }
+        host { ConversationMessage(read("/etc/hosts"), ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}, onOpenTool = {}) }
         compose.onNodeWithTag("openInFiles").assertDoesNotExist()
         compose.onNodeWithTag("copyOutsidePath").performClick()
         assertEquals(listOf("/etc/hosts"), copied)
@@ -61,14 +61,14 @@ class OpenInFilesUiTest {
     @Test
     fun aToolCardWithoutAFileShowsNoIcon() {
         val bash = ConversationItem.Activity("tool-2", "tool-2", "bash", """{"command":"ls"}""", "a.kt", "complete", false)
-        host { ConversationMessage(bash, "status", thinkingActive = false, onQuote = {}) }
+        host { ConversationMessage(bash, ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}) }
         compose.onNodeWithTag("toolCard").assertIsDisplayed()
         compose.onNodeWithTag("openInFiles").assertDoesNotExist()
     }
 
     @Test
     fun outsideAChatAToolCardShowsNoIcon() {
-        compose.setContent { MaterialTheme { ConversationMessage(read("src/a.kt"), "status", thinkingActive = false, onQuote = {}) } }
+        compose.setContent { MaterialTheme { ConversationMessage(read("src/a.kt"), ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}) } }
         compose.onNodeWithTag("toolCard").assertIsDisplayed()
         compose.onNodeWithTag("openInFiles").assertDoesNotExist()
         compose.onNodeWithTag("copyOutsidePath").assertDoesNotExist()

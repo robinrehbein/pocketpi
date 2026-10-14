@@ -61,10 +61,11 @@ class FullChatFixtureActivity : ComponentActivity() {
 }
 
 private class FixtureSettings : SettingsRepository {
-    override val state = MutableStateFlow(RemoteSettings(theme = "light", thinkingDisplay = "text"))
-    override fun setTheme(theme: String) {}
+    override val state = MutableStateFlow(RemoteSettings(theme = ThemePalette.BRAND, thinkingDisplay = ThinkingDisplay.TEXT))
+    override fun setTheme(theme: ThemePalette) {}
+    override fun setThemeMode(mode: ThemeMode) {}
     override fun setPushEnabled(enabled: Boolean) {}
-    override fun setThinkingDisplay(display: String) {}
+    override fun setThinkingDisplay(display: ThinkingDisplay) {}
     override fun setHideOfflineSessions(hide: Boolean) {}
     override fun setSwipeEndToStart(action: SwipeAction) {}
     override fun setSwipeStartToEnd(action: SwipeAction) {}

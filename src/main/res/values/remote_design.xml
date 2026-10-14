@@ -11,5 +11,5 @@
     <string name="remote_design_pair_input_hint">Paste code</string>
     <string name="remote_design_thinking_help">Off shows only the thinking status. On shows thinking text when the host provides it. Hidden or redacted reasoning cannot be shown.</string>
     <string name="remote_design_show_thinking">Show thinking</string>
-    <string name="remote_design_appearance_help">Choose System or Synthwave. Both automatically follow your device’s light or dark mode.</string>
+    <string name="remote_design_appearance_help">Choose light, dark or your device’s setting. The colours are picked separately.</string>
 </resources>

@@ -3,7 +3,6 @@ package de.joinnoah.pi.remote
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
@@ -72,7 +71,7 @@ internal fun ConversationAttachmentPreview(
                 Box(
                     (if (item.thumbnail is ConversationAttachmentImageState.Ready) Modifier.size(128.dp)
                     else Modifier.widthIn(max = 240.dp).heightIn(min = 128.dp))
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(MaterialTheme.shapes.small)
                         .then(if (item.thumbnail is ConversationAttachmentImageState.Ready)
                             Modifier.clickable(role = Role.Button, onClickLabel = label) {
                                 openId = item.id
@@ -99,7 +98,7 @@ internal fun ConversationAttachmentPreview(
             val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.6f).dp
             Surface(
                 Modifier.fillMaxWidth().padding(16.dp),
-                shape = RoundedCornerShape(24.dp),
+                shape = MaterialTheme.shapes.large,
             ) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {

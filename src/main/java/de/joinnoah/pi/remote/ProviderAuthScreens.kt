@@ -18,7 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -511,7 +511,7 @@ private fun ProviderRow(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(provider.name, style = MaterialTheme.typography.titleMedium)
             Surface(
-                shape = RoundedCornerShape(50),
+                shape = CircleShape,
                 color =
                     if (provider.status.configured) MaterialTheme.colorScheme.secondaryContainer
                     else MaterialTheme.colorScheme.surfaceVariant,

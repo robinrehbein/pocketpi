@@ -1,7 +1,6 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.contentColorFor
@@ -26,7 +25,7 @@ internal fun floatingHeaderColor(): Color =
 @Composable
 internal fun FloatingSurface(
     modifier: Modifier = Modifier,
-    shape: Shape = RoundedCornerShape(28.dp),
+    shape: Shape = MaterialTheme.shapes.extraLarge,
     color: Color = floatingHeaderColor(),
     // contentColorFor only knows the opaque scheme colors, so a translucent one is looked up as such.
     contentColor: Color = contentColorFor(color.copy(alpha = 1f)),

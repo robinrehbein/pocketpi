@@ -23,7 +23,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
@@ -401,9 +400,9 @@ private fun ArtifactCard(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Surface(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
+            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small),
             color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = RoundedCornerShape(12.dp),
+            shape = MaterialTheme.shapes.small,
         ) {
             when (val current = content) {
                 is ArtifactCardContent.Text ->

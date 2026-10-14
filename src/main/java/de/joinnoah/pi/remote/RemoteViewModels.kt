@@ -540,9 +540,11 @@ internal class SettingsViewModel(
 ) : DestinationViewModel(repository, RemoteNavKey.Settings) {
     val preferences = settings.state
 
-    fun setTheme(theme: String) = settings.setTheme(theme)
+    fun setTheme(theme: ThemePalette) = settings.setTheme(theme)
 
-    fun setThinkingDisplay(display: String) = settings.setThinkingDisplay(display)
+    fun setThemeMode(mode: ThemeMode) = settings.setThemeMode(mode)
+
+    fun setThinkingDisplay(display: ThinkingDisplay) = settings.setThinkingDisplay(display)
 
     fun setSwipeEndToStart(action: SwipeAction) = settings.setSwipeEndToStart(action)
 

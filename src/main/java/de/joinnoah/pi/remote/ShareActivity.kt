@@ -57,8 +57,12 @@ class ShareActivity : ComponentActivity() {
         val received = intent
         setContent {
             val preferences by app.settings.state.collectAsState()
+            val systemDark = isSystemInDarkTheme()
             MaterialTheme(
-                colorScheme = remoteColorScheme(isSystemInDarkTheme(), synthwave = preferences.theme == "synthwave"),
+                colorScheme =
+                    remember(preferences.themeMode, preferences.theme, systemDark) {
+                        appColorScheme(this@ShareActivity, preferences.themeMode.isDark(systemDark), preferences.theme)
+                    },
                 typography = RemoteTypography,
             ) {
                 var stage by remember { mutableStateOf<ShareStage>(ShareStage.Loading) }

@@ -11,6 +11,7 @@ import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.draganddrop.DragAndDropEvent
 import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.mimeTypes
@@ -36,7 +37,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
@@ -240,7 +240,7 @@ internal fun RemoteScreen(
     val settings = key == RemoteNavKey.Settings
     val preferences =
         (model as? SettingsViewModel)?.preferences?.collectAsStateWithLifecycle()?.value
-    val theme = preferences?.theme ?: "system"
+    val theme = preferences?.theme ?: ThemePalette.BRAND
     val chatPreferences =
         (model as? ChatViewModel)?.preferences?.collectAsStateWithLifecycle()?.value
     val sessionPreferences =
@@ -323,7 +323,7 @@ internal fun RemoteScreen(
         remember(presentation, state.pendingSend) {
             state.pendingSend?.let { presentation.items + pendingSendItem(it) } ?: presentation.items
         }
-    val thinkingDisplay = chatPreferences?.thinkingDisplay ?: "status"
+    val thinkingDisplay = chatPreferences?.thinkingDisplay ?: ThinkingDisplay.STATUS
     val thinkingActive = state.connected && !state.loading && state.status == "running"
     val visibleConversation =
         remember(conversation, thinkingDisplay, thinkingActive) {
@@ -1936,7 +1936,7 @@ internal fun RemoteScreen(
                     if (newSessionEnabled) MaterialTheme.colorScheme.onPrimary
                     else MaterialTheme.colorScheme.onSurfaceVariant
                 FloatingSurface(
-                    shape = RoundedCornerShape(28.dp),
+                    shape = MaterialTheme.shapes.extraLarge,
                     color =
                         if (newSessionEnabled) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -2288,12 +2288,12 @@ internal fun RemoteScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            val showThinking = preferences?.thinkingDisplay == "text"
+                            val showThinking = preferences?.thinkingDisplay == ThinkingDisplay.TEXT
                             Row(
                                 Modifier.fillMaxWidth()
                                     .toggleable(value = showThinking, role = Role.Switch) {
                                         (model as SettingsViewModel).setThinkingDisplay(
-                                            if (it) "text" else "status"
+                                            if (it) ThinkingDisplay.TEXT else ThinkingDisplay.STATUS
                                         )
                                     }
                                     .testTag("thinkingSwitch")
@@ -2315,42 +2315,51 @@ internal fun RemoteScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            Row(
-                                Modifier.fillMaxWidth()
-                                    .toggleable(value = theme == "synthwave", role = Role.Switch) {
-                                        (model as SettingsViewModel).setTheme(if (it) "synthwave" else "system")
-                                    }
-                                    .testTag("themeSynthwaveSwitch")
-                                    .padding(vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(stringResource(R.string.remote_theme_system))
-                                Switch(
-                                    checked = theme == "synthwave",
-                                    onCheckedChange = null,
-                                    modifier = Modifier.padding(horizontal = 12.dp),
-                                )
-                                Text(stringResource(R.string.remote_theme_synthwave))
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                listOf(false, true).forEach { dark ->
-                                    Column(
-                                        Modifier.weight(1f),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                            val mode = preferences?.themeMode ?: ThemeMode.SYSTEM
+                            val dark = mode.isDark(isSystemInDarkTheme())
+                            Text(stringResource(R.string.remote_theme_mode), style = MaterialTheme.typography.labelLarge)
+                            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                                ThemeMode.entries.forEachIndexed { index, option ->
+                                    SegmentedButton(
+                                        selected = mode == option,
+                                        onClick = { (model as SettingsViewModel).setThemeMode(option) },
+                                        shape = SegmentedButtonDefaults.itemShape(index, ThemeMode.entries.size),
+                                        modifier = Modifier.testTag("themeMode-${option.stored}"),
+                                        icon = {},
                                     ) {
-                                        ThemePreview(
-                                            if (theme == "synthwave") {
-                                                if (dark) "synthwave" else "synthwave-light"
-                                            } else if (dark) "dark" else "light"
-                                        )
                                         Text(
-                                            stringResource(if (dark) R.string.remote_theme_dark else R.string.remote_theme_light),
-                                            style = MaterialTheme.typography.labelLarge,
+                                            stringResource(
+                                                when (option) {
+                                                    ThemeMode.SYSTEM -> R.string.remote_theme_system
+                                                    ThemeMode.LIGHT -> R.string.remote_theme_light
+                                                    ThemeMode.DARK -> R.string.remote_theme_dark
+                                                }
+                                            ),
+                                            maxLines = 1,
                                         )
                                     }
                                 }
                             }
+                            Text(stringResource(R.string.remote_theme_palette), style = MaterialTheme.typography.labelLarge)
+                            ThemePalette.entries
+                                // Wallpaper colours need Android 12; without it the choice is not offered at all.
+                                .filter { it != ThemePalette.DYNAMIC || Build.VERSION.SDK_INT >= Build.VERSION_CODES.S }
+                                .forEach { palette ->
+                                    PaletteChoice(
+                                        label =
+                                            stringResource(
+                                                when (palette) {
+                                                    ThemePalette.BRAND -> R.string.remote_theme_brand
+                                                    ThemePalette.SYNTHWAVE -> R.string.remote_theme_synthwave
+                                                    ThemePalette.DYNAMIC -> R.string.remote_theme_dynamic
+                                                }
+                                            ),
+                                        palette = palette,
+                                        selected = theme == palette,
+                                        dark = dark,
+                                        onSelect = { (model as SettingsViewModel).setTheme(palette) },
+                                    )
+                                }
                         }
                     }
                     item {
@@ -3701,22 +3710,50 @@ private fun SwipeActionChoice(
     }
 }
 
+/** A palette as a radio card: the whole card is the target, and its preview shows the chosen mode. */
 @Composable
-private fun ThemePreview(value: String) {
-    val colors = remoteColorScheme(dark = value != "light" && value != "synthwave-light", synthwave = value.startsWith("synthwave"))
+private fun PaletteChoice(
+    label: String,
+    palette: ThemePalette,
+    selected: Boolean,
+    dark: Boolean,
+    onSelect: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scheme = remember(context, dark, palette) { appColorScheme(context, dark, palette) }
+    Surface(
+        Modifier.fillMaxWidth()
+            .selectable(selected = selected, onClick = onSelect, role = Role.RadioButton)
+            .testTag("themePalette-${palette.stored}"),
+        shape = MaterialTheme.shapes.medium,
+        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                RadioButton(selected = selected, onClick = null)
+                Spacer(Modifier.width(8.dp))
+                Text(label, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+            }
+            ThemePreview(scheme, palette)
+        }
+    }
+}
+
+@Composable
+private fun ThemePreview(colors: ColorScheme, palette: ThemePalette) {
     val shell = colors.background
     val panel = colors.surfaceContainerHigh
     val line = colors.onSurfaceVariant
     val dot = colors.primary
     Box(
         Modifier.fillMaxWidth().height(92.dp)
-            .background(shell, RoundedCornerShape(12.dp))
+            .background(shell, MaterialTheme.shapes.small)
             .clearAndSetSemantics {}
             .padding(10.dp),
         contentAlignment = androidx.compose.ui.Alignment.Center,
     ) {
         Column(
-            Modifier.fillMaxWidth().background(panel, RoundedCornerShape(8.dp)).padding(10.dp),
+            Modifier.fillMaxWidth().background(panel, MaterialTheme.shapes.extraSmall).padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             repeat(2) { index ->
@@ -3726,13 +3763,13 @@ private fun ThemePreview(value: String) {
                 ) {
                     Box(
                         Modifier.size(8.dp).background(
-                            if (value.startsWith("synthwave") && index == 1) colors.secondary else dot,
+                            if (palette == ThemePalette.SYNTHWAVE && index == 1) colors.secondary else dot,
                             CircleShape,
                         )
                     )
                     Box(
                         Modifier.fillMaxWidth(if (index == 0) 0.82f else 0.6f)
-                            .height(5.dp).background(line, RoundedCornerShape(3.dp))
+                            .height(5.dp).background(line, MaterialTheme.shapes.extraSmall)
                     )
                 }
             }
@@ -3898,7 +3935,7 @@ private fun HostListSkeleton() {
     val label = stringResource(R.string.remote_hosts_loading)
     Row(
         Modifier.fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerLow, RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
             .padding(16.dp)
             .clearAndSetSemantics { contentDescription = label },
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -3939,7 +3976,7 @@ private fun ChatSkeleton() {
             ) {
                 Column(
                     Modifier.fillMaxWidth(if (index == 1) 0.66f else 0.78f)
-                        .background(placeholder, RoundedCornerShape(16.dp))
+                        .background(placeholder, MaterialTheme.shapes.medium)
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
@@ -3956,7 +3993,7 @@ private fun ChatSkeleton() {
 private fun SkeletonBar(modifier: Modifier) {
     Box(
         modifier.height(10.dp)
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(5.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.shapes.extraSmall)
     )
 }
 

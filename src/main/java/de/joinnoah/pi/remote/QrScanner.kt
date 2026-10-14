@@ -11,7 +11,6 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.QrCodeScanner
@@ -76,7 +75,7 @@ fun QrScanner(onCode: (String) -> Unit, onClose: () -> Unit, onPaste: () -> Unit
                             Modifier.align(Alignment.Center)
                                 .fillMaxWidth(0.72f)
                                 .aspectRatio(1f)
-                                .border(3.dp, Color.White, RoundedCornerShape(24.dp))
+                                .border(3.dp, Color.White, MaterialTheme.shapes.large)
                         )
                     }
                 else

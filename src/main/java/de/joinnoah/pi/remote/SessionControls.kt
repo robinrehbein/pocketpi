@@ -12,7 +12,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Info
@@ -415,7 +414,7 @@ internal fun SessionControls(
                             colors = suggestionColors(index == highlight),
                             modifier = Modifier.alpha(if (dimmed) 0.6f else 1f)
                                 .suggestionHighlight(index == highlight)
-                                .focusRing()
+                                .focusRing(MaterialTheme.shapes.small)
                                 .clickable { selectLocalCommand(command) },
                         )
                     }
@@ -429,7 +428,7 @@ internal fun SessionControls(
                                 }
                             },
                             colors = suggestionColors(index == highlight),
-                            modifier = Modifier.suggestionHighlight(index == highlight).focusRing().clickable { selectCommand(command) },
+                            modifier = Modifier.suggestionHighlight(index == highlight).focusRing(MaterialTheme.shapes.small).clickable { selectCommand(command) },
                         )
                     }
                 }
@@ -533,7 +532,7 @@ internal fun SessionControls(
                         .padding(horizontal = 16.dp, vertical = 4.dp)
                         .background(
                             MaterialTheme.colorScheme.surfaceContainerHigh,
-                            RoundedCornerShape(12.dp),
+                            MaterialTheme.shapes.small,
                         )
                         .padding(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -846,12 +845,12 @@ private fun PickerRow(
     Row(
         Modifier.fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(MaterialTheme.shapes.small)
             .then(
                 if (chosen)
                     Modifier.background(
                         MaterialTheme.colorScheme.primaryContainer,
-                        RoundedCornerShape(12.dp),
+                        MaterialTheme.shapes.small,
                     )
                 else Modifier
             )

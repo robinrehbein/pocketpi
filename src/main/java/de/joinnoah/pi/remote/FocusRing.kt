@@ -1,7 +1,7 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
@@ -62,7 +62,7 @@ internal val FocusRingShown = SemanticsPropertyKey<Boolean>("FocusRingShown")
  * so a keyboard-only user sees where focus is. Put it before the element's `clickable` or
  * `focusable`, whose focus it shows. Touch never shows it.
  */
-internal fun Modifier.focusRing(shape: Shape = RoundedCornerShape(12.dp)): Modifier = this then FocusRingElement(shape)
+internal fun Modifier.focusRing(shape: Shape): Modifier = this then FocusRingElement(shape)
 
 private data class FocusRingElement(val shape: Shape) : ModifierNodeElement<FocusRingNode>() {
     override fun create() = FocusRingNode(shape)

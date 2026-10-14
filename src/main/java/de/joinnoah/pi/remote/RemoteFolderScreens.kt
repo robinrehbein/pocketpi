@@ -8,7 +8,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
@@ -450,7 +449,7 @@ private fun FolderBadge(label: String) {
         maxLines = 1,
         modifier =
             Modifier.padding(start = 8.dp)
-                .clip(RoundedCornerShape(8.dp))
+                .clip(MaterialTheme.shapes.extraSmall)
                 .background(MaterialTheme.colorScheme.secondaryContainer)
                 .padding(horizontal = 6.dp, vertical = 2.dp),
     )
@@ -667,7 +666,7 @@ private fun TrustDialog(
                 if (prompt.piConfig)
                     Row(
                         Modifier.fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(MaterialTheme.shapes.small)
                             .background(MaterialTheme.colorScheme.errorContainer)
                             .padding(12.dp)
                             .testTag("trustPiConfigWarning"),

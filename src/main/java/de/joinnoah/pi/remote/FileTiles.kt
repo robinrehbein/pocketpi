@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Close
@@ -132,14 +131,14 @@ internal fun FileEntryTile(
             .dragOut(path, enabled = path != null) { path?.let(::pathTransfer) }
             .then(
                 // Right opens the tile as Enter does, where no tile lies to its right.
-                if (openable) Modifier.focusRing(RoundedCornerShape(18.dp)).then(regionChild).openOnRight(focusManager, onOpen)
+                if (openable) Modifier.focusRing(MaterialTheme.shapes.medium).then(regionChild).openOnRight(focusManager, onOpen)
                     .pointerHoverIcon(PointerIcon.Hand).combinedClickable(
                     onClick = onOpen,
                     onLongClickLabel = peekAction,
                     onLongClick = { onPeek(bounds) },
                 ) else Modifier.semantics { disabled() }
             ),
-        shape = RoundedCornerShape(18.dp),
+        shape = MaterialTheme.shapes.medium,
         colors = androidx.compose.material3.CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
         ),
@@ -269,7 +268,7 @@ internal fun FilePeekPopup(
     ) {
         Card(
             modifier = Modifier.width(popupWidth).testTag("filePeek"),
-            shape = RoundedCornerShape(20.dp),
+            shape = MaterialTheme.shapes.medium,
             colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         ) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -68,6 +68,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
+// A documented exception to the shape scale (MaterialTheme.shapes): a body with a tail on one side
+// is not a rounded rectangle, so its corner radius stays here.
 private class BubbleShape(private val outgoing: Boolean) : Shape {
     override fun createOutline(
         size: Size,
@@ -205,7 +207,7 @@ private fun Modifier.jumpHighlight(highlighted: Boolean): Modifier = composed {
 @Composable
 internal fun ConversationMessage(
     item: ConversationItem,
-    thinkingDisplay: String,
+    thinkingDisplay: ThinkingDisplay,
     thinkingActive: Boolean,
     onQuote: (String) -> Unit,
     onOpenTool: ((ConversationItem.Activity) -> Unit)? = null,
@@ -250,7 +252,7 @@ internal fun ConversationMessage(
 @Composable
 private fun ConversationMessageContent(
     item: ConversationItem,
-    thinkingDisplay: String,
+    thinkingDisplay: ThinkingDisplay,
     thinkingActive: Boolean,
     onQuote: (String) -> Unit,
     onOpenTool: ((ConversationItem.Activity) -> Unit)?,
@@ -579,7 +581,7 @@ private fun ConversationMessageContent(
         }
         // Mirrors conversationItemVisible: any other Thinking state renders nothing.
         is ConversationItem.Thinking -> {
-            if (thinkingDisplay == "text" && item.text.isNotEmpty())
+            if (thinkingDisplay == ThinkingDisplay.TEXT && item.text.isNotEmpty())
                 CompositionLocalProvider(
                     LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant
                 ) {

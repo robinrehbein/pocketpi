@@ -3,7 +3,6 @@ package de.joinnoah.pi.remote
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -85,7 +84,7 @@ private fun CodeBlock(code: String) {
     val clipboard = LocalClipboardManager.current
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.small,
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp)) {
             Text(

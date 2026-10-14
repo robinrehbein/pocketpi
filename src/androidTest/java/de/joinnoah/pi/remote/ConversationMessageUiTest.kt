@@ -61,7 +61,7 @@ class ConversationMessageUiTest {
             MaterialTheme {
                 ConversationMessage(
                     item,
-                    thinkingDisplay = "text",
+                    thinkingDisplay = ThinkingDisplay.TEXT,
                     thinkingActive = false,
                     onQuote = {},
                     onOpenTool = onOpenTool,

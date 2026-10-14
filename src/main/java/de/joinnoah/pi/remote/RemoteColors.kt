@@ -1,8 +1,12 @@
 package de.joinnoah.pi.remote
 
+import android.content.Context
+import android.os.Build
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
@@ -153,6 +157,17 @@ internal fun remoteColorScheme(dark: Boolean, synthwave: Boolean = false): Color
             surfaceContainerHigh = Color(0xFFE4E7EF),
             surfaceContainerHighest = Color(0xFFDDE1EA),
         )
+
+/**
+ * The scheme for [palette] in the given light or dark mode. [ThemePalette.DYNAMIC] takes the wallpaper
+ * colours on Android 12 and later; below that, and for the other palettes, it is the app's own scheme.
+ */
+internal fun appColorScheme(context: Context, dark: Boolean, palette: ThemePalette): ColorScheme =
+    if (palette == ThemePalette.DYNAMIC && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    } else {
+        remoteColorScheme(dark, synthwave = palette == ThemePalette.SYNTHWAVE)
+    }
 
 /** Marks a folder that brings its own pi resources, which would run on the Mac once trusted. */
 @Composable

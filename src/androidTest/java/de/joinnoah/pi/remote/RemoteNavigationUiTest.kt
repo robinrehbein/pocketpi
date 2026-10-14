@@ -470,7 +470,7 @@ class RemoteNavigationUiTest {
     @Suppress("DEPRECATION")
     @LargeScreen
     fun systemBarIconsFollowDeviceAppearanceForBothDesigns() {
-        for (theme in listOf("system", "synthwave", "system")) {
+        for (theme in listOf(ThemePalette.BRAND, ThemePalette.SYNTHWAVE, ThemePalette.BRAND)) {
             compose.runOnIdle { uiSettings.setTheme(theme) }
             compose.waitForIdle()
             compose.runOnIdle {
@@ -1361,9 +1361,9 @@ class RemoteNavigationUiTest {
                         }
                 )
         }
-        for (theme in listOf("light", "dark")) {
-            compose.runOnIdle { uiSettings.setTheme(theme) }
-            captureFixture("sessions-$theme")
+        for (mode in listOf(ThemeMode.LIGHT, ThemeMode.DARK)) {
+            compose.runOnIdle { uiSettings.setThemeMode(mode) }
+            captureFixture("sessions-${mode.stored}")
         }
 
         compose
@@ -1373,7 +1373,7 @@ class RemoteNavigationUiTest {
             .performClick()
         compose.onNodeWithText("Message for created").assertIsDisplayed()
         compose.runOnIdle {
-            uiSettings.setThinkingDisplay("text")
+            uiSettings.setThinkingDisplay(ThinkingDisplay.TEXT)
             repository.state.value =
                 repository.state.value.copy(
                     capabilities =
@@ -1429,9 +1429,9 @@ class RemoteNavigationUiTest {
                             .map { it.jsonObject },
                 )
         }
-        for (theme in listOf("light", "dark")) {
-            compose.runOnIdle { uiSettings.setTheme(theme) }
-            captureFixture("chat-$theme")
+        for (mode in listOf(ThemeMode.LIGHT, ThemeMode.DARK)) {
+            compose.runOnIdle { uiSettings.setThemeMode(mode) }
+            captureFixture("chat-${mode.stored}")
         }
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         val previousIme =
@@ -1666,23 +1666,26 @@ class RemoteNavigationUiTest {
         ).assertCountEquals(0)
         thinking().performClick()
         thinking().assertIsOn()
-        compose.runOnIdle { assertEquals("text", uiSettings.state.value.thinkingDisplay) }
+        compose.runOnIdle { assertEquals(ThinkingDisplay.TEXT, uiSettings.state.value.thinkingDisplay) }
         thinking().performClick()
         thinking().assertIsOff()
-        compose.runOnIdle { assertEquals("status", uiSettings.state.value.thinkingDisplay) }
+        compose.runOnIdle { assertEquals(ThinkingDisplay.STATUS, uiSettings.state.value.thinkingDisplay) }
 
-        val themeSwitch = compose.onNodeWithTag("themeSynthwaveSwitch")
-        themeSwitch.performScrollTo().assertIsOff()
-            .assert(hasClickAction())
-            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
-        compose.onAllNodes(
-            hasClickAction() and hasAnyAncestor(hasTestTag("themeSynthwaveSwitch")),
-            useUnmergedTree = true,
-        ).assertCountEquals(0)
-        themeSwitch.performClick().assertIsOn()
-        compose.runOnIdle { assertEquals("synthwave", uiSettings.state.value.theme) }
-        themeSwitch.performClick().assertIsOff()
-        compose.runOnIdle { assertEquals("system", uiSettings.state.value.theme) }
+        // Mode and palette are two pickers: each shows one selection and changes only its own setting.
+        compose.onNodeWithTag("themeMode-dark").performScrollTo().performClick().assertIsSelected()
+        compose.runOnIdle { assertEquals(ThemeMode.DARK, uiSettings.state.value.themeMode) }
+        compose.onNodeWithTag("themeMode-system").assertIsNotSelected()
+        compose.onNodeWithTag("themePalette-synthwave").performScrollTo().performClick().assertIsSelected()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
+        compose.runOnIdle {
+            assertEquals(ThemePalette.SYNTHWAVE, uiSettings.state.value.theme)
+            assertEquals(ThemeMode.DARK, uiSettings.state.value.themeMode)
+        }
+        compose.onNodeWithTag("themePalette-system").assertIsNotSelected()
+        compose.onNodeWithTag("themeMode-system").performScrollTo().performClick().assertIsSelected()
+        compose.runOnIdle { assertEquals(ThemeMode.SYSTEM, uiSettings.state.value.themeMode) }
+        compose.onNodeWithTag("themePalette-system").performScrollTo().performClick().assertIsSelected()
+        compose.runOnIdle { assertEquals(ThemePalette.BRAND, uiSettings.state.value.theme) }
     }
 
     @Test
@@ -1695,33 +1698,40 @@ class RemoteNavigationUiTest {
             }
         val preferences = context.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
         try {
-            assertEquals("status", DefaultSettingsRepository(context).state.value.thinkingDisplay)
+            assertEquals(ThinkingDisplay.STATUS, DefaultSettingsRepository(context).state.value.thinkingDisplay)
             preferences.edit().putString("thinking_display", "status").commit()
-            assertEquals("status", DefaultSettingsRepository(context).state.value.thinkingDisplay)
+            assertEquals(ThinkingDisplay.STATUS, DefaultSettingsRepository(context).state.value.thinkingDisplay)
             preferences.edit().putString("thinking_display", "unknown").commit()
-            assertEquals("status", DefaultSettingsRepository(context).state.value.thinkingDisplay)
+            assertEquals(ThinkingDisplay.STATUS, DefaultSettingsRepository(context).state.value.thinkingDisplay)
             preferences.edit()
                 .putString("thinking_display", "text")
                 .putBoolean("hide_offline_sessions", true)
                 .commit()
-            for (theme in listOf("system", "synthwave")) {
-                DefaultSettingsRepository(context).setTheme(theme)
-                assertEquals(theme, preferences.getString("theme", null))
+            for (palette in ThemePalette.entries) {
+                DefaultSettingsRepository(context).setTheme(palette)
+                assertEquals(palette.stored, preferences.getString("theme", null))
                 val restored = DefaultSettingsRepository(context).state.value
-                assertEquals(theme, restored.theme)
-                assertEquals("text", restored.thinkingDisplay)
+                assertEquals(palette, restored.theme)
+                assertEquals(ThinkingDisplay.TEXT, restored.thinkingDisplay)
                 assertTrue(restored.hideOfflineSessions)
+            }
+            for (mode in ThemeMode.entries) {
+                DefaultSettingsRepository(context).setThemeMode(mode)
+                assertEquals(mode.stored, preferences.getString("theme_mode", null))
+                assertEquals(mode, DefaultSettingsRepository(context).state.value.themeMode)
             }
             for (legacyTheme in listOf("light", "dark")) {
                 preferences.edit().putString("theme", legacyTheme).commit()
-                assertEquals("system", DefaultSettingsRepository(context).state.value.theme)
+                assertEquals(ThemePalette.BRAND, DefaultSettingsRepository(context).state.value.theme)
             }
             val repository = DefaultSettingsRepository(context)
-            repository.setTheme("synthwave")
-            repository.setThinkingDisplay("status")
+            repository.setTheme(ThemePalette.SYNTHWAVE)
+            repository.setThemeMode(ThemeMode.DARK)
+            repository.setThinkingDisplay(ThinkingDisplay.STATUS)
             val restored = DefaultSettingsRepository(context).state.value
-            assertEquals("status", restored.thinkingDisplay)
-            assertEquals("synthwave", restored.theme)
+            assertEquals(ThinkingDisplay.STATUS, restored.thinkingDisplay)
+            assertEquals(ThemePalette.SYNTHWAVE, restored.theme)
+            assertEquals(ThemeMode.DARK, restored.themeMode)
             assertTrue(restored.hideOfflineSessions)
         } finally {
             preferences.edit().clear().commit()
@@ -2311,15 +2321,19 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
 private class UiSettingsRepository : SettingsRepository {
     override val state = MutableStateFlow(RemoteSettings())
 
-    override fun setTheme(theme: String) {
+    override fun setTheme(theme: ThemePalette) {
         state.value = state.value.copy(theme = theme)
+    }
+
+    override fun setThemeMode(mode: ThemeMode) {
+        state.value = state.value.copy(themeMode = mode)
     }
 
     override fun setPushEnabled(enabled: Boolean) {
         state.value = state.value.copy(pushEnabled = enabled)
     }
 
-    override fun setThinkingDisplay(display: String) {
+    override fun setThinkingDisplay(display: ThinkingDisplay) {
         state.value = state.value.copy(thinkingDisplay = display)
     }
 

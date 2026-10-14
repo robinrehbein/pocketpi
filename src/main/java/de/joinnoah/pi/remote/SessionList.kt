@@ -6,7 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
@@ -165,7 +164,7 @@ internal fun SessionListRow(
                             if (selected)
                                 Modifier.background(
                                     MaterialTheme.colorScheme.secondaryContainer,
-                                    RoundedCornerShape(16.dp),
+                                    MaterialTheme.shapes.medium,
                                 )
                             else Modifier
                         )
@@ -184,7 +183,7 @@ internal fun SessionListRow(
                                 })
                             }
                         }
-                        .focusRing(RoundedCornerShape(16.dp))
+                        .focusRing(MaterialTheme.shapes.medium)
                         .then(regionChild)
                         .contextMenu(menuAnchor, enabled) { menuItems() }
                         .pointerHoverIcon(PointerIcon.Hand)

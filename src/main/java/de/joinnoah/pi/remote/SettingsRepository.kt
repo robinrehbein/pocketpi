@@ -1,6 +1,8 @@
 package de.joinnoah.pi.remote
 
+import android.app.UiModeManager
 import android.content.Context
+import android.os.Build
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -11,10 +13,58 @@ enum class SwipeAction {
     NONE,
 }
 
+/**
+ * The colour palette, stored under the `theme` key. [BRAND] is the default and keeps the stored value
+ * "system" from before the mode existed; [DYNAMIC] takes the wallpaper colours on Android 12 and later.
+ */
+enum class ThemePalette(val stored: String) {
+    BRAND("system"),
+    SYNTHWAVE("synthwave"),
+    DYNAMIC("dynamic"),
+    ;
+
+    companion object {
+        /** Unknown or missing values read as the default, so a stored value from another version is harmless. */
+        fun fromStored(value: String?): ThemePalette = entries.firstOrNull { it.stored == value } ?: BRAND
+    }
+}
+
+/** Light, dark or the device's setting, stored under the `theme_mode` key; independent of the palette. */
+enum class ThemeMode(val stored: String) {
+    SYSTEM("system"),
+    LIGHT("light"),
+    DARK("dark"),
+    ;
+
+    /** Whether the app draws dark: a forced mode wins, [SYSTEM] follows [systemDark]. */
+    fun isDark(systemDark: Boolean): Boolean =
+        when (this) {
+            SYSTEM -> systemDark
+            LIGHT -> false
+            DARK -> true
+        }
+
+    companion object {
+        fun fromStored(value: String?): ThemeMode = entries.firstOrNull { it.stored == value } ?: SYSTEM
+    }
+}
+
+/** How a running chat shows the host's thinking; stored under `thinking_display`. */
+enum class ThinkingDisplay(val stored: String) {
+    STATUS("status"),
+    TEXT("text"),
+    ;
+
+    companion object {
+        fun fromStored(value: String?): ThinkingDisplay = entries.firstOrNull { it.stored == value } ?: STATUS
+    }
+}
+
 data class RemoteSettings(
-    val theme: String = "system",
+    val theme: ThemePalette = ThemePalette.BRAND,
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val pushEnabled: Boolean = false,
-    val thinkingDisplay: String = "status",
+    val thinkingDisplay: ThinkingDisplay = ThinkingDisplay.STATUS,
     val hideOfflineSessions: Boolean = false,
     val swipeEndToStart: SwipeAction = SwipeAction.CLOSE,
     val swipeStartToEnd: SwipeAction = SwipeAction.RENAME,
@@ -32,14 +82,16 @@ data class RemoteSettings(
 interface SettingsRepository {
     val state: StateFlow<RemoteSettings>
 
-    fun setTheme(theme: String)
+    fun setTheme(theme: ThemePalette)
+
+    fun setThemeMode(mode: ThemeMode)
 
     fun setPushEnabled(enabled: Boolean)
 
     /** Remembers that the permission was offered, whatever the answer was. */
     fun markNotificationPromptShown() {}
 
-    fun setThinkingDisplay(display: String)
+    fun setThinkingDisplay(display: ThinkingDisplay)
 
     fun setHideOfflineSessions(hide: Boolean)
 
@@ -59,30 +111,40 @@ interface SettingsRepository {
     fun chatActionUsage(): Map<ChatAction, ActionUsage> = emptyMap()
 }
 
-class DefaultSettingsRepository(context: Context) : SettingsRepository {
+class DefaultSettingsRepository(
+    context: Context,
+    /** Tells the system which night mode the app wants (API 31+); a test replaces it. */
+    private val applyNightMode: (ThemeMode) -> Unit = { mode -> applyAppNightMode(context, mode) },
+) : SettingsRepository {
     private val preferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
     private val mutable =
         MutableStateFlow(
             RemoteSettings(
-                if (preferences.getString("theme", "system") == "synthwave") "synthwave" else "system",
-                preferences.getBoolean("push_enabled", false),
-                preferences.getString("thinking_display", "status")?.takeIf {
-                    it in setOf("status", "text")
-                } ?: "status",
-                preferences.getBoolean("hide_offline_sessions", false),
-                swipeAction("swipe_end_to_start", SwipeAction.CLOSE),
-                swipeAction("swipe_start_to_end", SwipeAction.RENAME),
-                preferences.getBoolean("enter_sends", true),
-                preferences.getBoolean("push_opted_out", false),
-                preferences.getBoolean("notification_prompt_shown", false),
+                theme = ThemePalette.fromStored(preferences.getString("theme", null)),
+                themeMode = ThemeMode.fromStored(preferences.getString("theme_mode", null)),
+                pushEnabled = preferences.getBoolean("push_enabled", false),
+                thinkingDisplay = ThinkingDisplay.fromStored(preferences.getString("thinking_display", null)),
+                hideOfflineSessions = preferences.getBoolean("hide_offline_sessions", false),
+                swipeEndToStart = swipeAction("swipe_end_to_start", SwipeAction.CLOSE),
+                swipeStartToEnd = swipeAction("swipe_start_to_end", SwipeAction.RENAME),
+                enterSends = preferences.getBoolean("enter_sends", true),
+                pushOptedOut = preferences.getBoolean("push_opted_out", false),
+                notificationPromptShown = preferences.getBoolean("notification_prompt_shown", false),
             )
         )
     override val state = mutable.asStateFlow()
 
-    override fun setTheme(theme: String) {
-        require(theme in setOf("system", "synthwave"))
-        preferences.edit().putString("theme", theme).apply()
+    override fun setTheme(theme: ThemePalette) {
+        preferences.edit().putString("theme", theme.stored).apply()
         mutable.value = mutable.value.copy(theme = theme)
+    }
+
+    override fun setThemeMode(mode: ThemeMode) {
+        val changed = mutable.value.themeMode != mode
+        preferences.edit().putString("theme_mode", mode.stored).apply()
+        mutable.value = mutable.value.copy(themeMode = mode)
+        // The system keeps the app's night mode, so a cold start shows the same window colour.
+        if (changed) applyNightMode(mode)
     }
 
     override fun setPushEnabled(enabled: Boolean) {
@@ -99,9 +161,8 @@ class DefaultSettingsRepository(context: Context) : SettingsRepository {
         mutable.value = mutable.value.copy(notificationPromptShown = true)
     }
 
-    override fun setThinkingDisplay(display: String) {
-        require(display in setOf("status", "text"))
-        preferences.edit().putString("thinking_display", display).apply()
+    override fun setThinkingDisplay(display: ThinkingDisplay) {
+        preferences.edit().putString("thinking_display", display.stored).apply()
         mutable.value = mutable.value.copy(thinkingDisplay = display)
     }
 
@@ -155,3 +216,19 @@ class DefaultSettingsRepository(context: Context) : SettingsRepository {
 
 internal fun parseSwipeAction(stored: String?, default: SwipeAction): SwipeAction =
     SwipeAction.entries.firstOrNull { it.name == stored } ?: default
+
+/**
+ * Sets the app's night mode in the system, so the values-night window background and the system
+ * bars follow the in-app choice from the next cold start on. Only API 31 and later have a per-app
+ * night mode; below that the window keeps the system's mode until the next start.
+ */
+internal fun applyAppNightMode(context: Context, mode: ThemeMode) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+    val nightMode =
+        when (mode) {
+            ThemeMode.SYSTEM -> UiModeManager.MODE_NIGHT_AUTO
+            ThemeMode.LIGHT -> UiModeManager.MODE_NIGHT_NO
+            ThemeMode.DARK -> UiModeManager.MODE_NIGHT_YES
+        }
+    context.getSystemService(UiModeManager::class.java)?.setApplicationNightMode(nightMode)
+}

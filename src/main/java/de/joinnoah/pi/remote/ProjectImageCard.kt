@@ -5,7 +5,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -123,7 +122,7 @@ internal fun ProjectImageCard(alt: String, path: String, source: ProjectImageSou
                     // The cap comes first so a wide layout is capped too; the shape then narrows.
                     .heightIn(max = 320.dp)
                     .aspectRatio(CARD_ASPECT)
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(MaterialTheme.shapes.small)
                     // Dragged into another app, the card is the image file.
                     .dragOut(ready?.sha256, enabled = ready != null) { dragImage(context, source, path) }
                     .then(
@@ -132,7 +131,7 @@ internal fun ProjectImageCard(alt: String, path: String, source: ProjectImageSou
                         else Modifier
                     ),
             color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = RoundedCornerShape(12.dp),
+            shape = MaterialTheme.shapes.small,
         ) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 if (ready != null)

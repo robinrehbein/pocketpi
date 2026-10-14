@@ -396,15 +396,15 @@ class ConversationPresentationTest {
         val done = ConversationItem.Thinking("t", "s", "Reasoning", streaming = false)
         val empty = done.copy(text = "")
         val live = empty.copy(streaming = true)
-        assertTrue(conversationItemVisible(done, "text", thinkingActive = false))
-        assertFalse(conversationItemVisible(empty, "text", thinkingActive = false))
-        assertFalse(conversationItemVisible(done, "status", thinkingActive = false))
-        assertFalse(conversationItemVisible(done, "status", thinkingActive = true))
-        assertTrue(conversationItemVisible(live, "status", thinkingActive = true))
-        assertTrue(conversationItemVisible(live, "text", thinkingActive = true))
-        assertFalse(conversationItemVisible(live, "status", thinkingActive = false))
+        assertTrue(conversationItemVisible(done, ThinkingDisplay.TEXT, thinkingActive = false))
+        assertFalse(conversationItemVisible(empty, ThinkingDisplay.TEXT, thinkingActive = false))
+        assertFalse(conversationItemVisible(done, ThinkingDisplay.STATUS, thinkingActive = false))
+        assertFalse(conversationItemVisible(done, ThinkingDisplay.STATUS, thinkingActive = true))
+        assertTrue(conversationItemVisible(live, ThinkingDisplay.STATUS, thinkingActive = true))
+        assertTrue(conversationItemVisible(live, ThinkingDisplay.TEXT, thinkingActive = true))
+        assertFalse(conversationItemVisible(live, ThinkingDisplay.STATUS, thinkingActive = false))
         val bubble = ConversationItem.Bubble("b", "b", "user", null, "Hi", null, false, null)
-        assertTrue(conversationItemVisible(bubble, "status", thinkingActive = false))
+        assertTrue(conversationItemVisible(bubble, ThinkingDisplay.STATUS, thinkingActive = false))
     }
 
     private val insights: Map<String, JsonObject> by lazy {
@@ -707,7 +707,7 @@ class ConversationPresenterTest {
     private val toolNames = listOf("edit", "read", "write", "bash", "Agent", "questionnaire", "submit_plan")
     private val states = listOf("complete", "streaming", "error")
 
-    private fun Random.pick(values: List<String>) = values[nextInt(values.size)]
+    private fun <T> Random.pick(values: List<T>) = values[nextInt(values.size)]
 
     private fun progress(random: Random) =
         Wire.objectOf(
@@ -837,7 +837,7 @@ class ConversationPresenterTest {
                 val shown =
                     if (random.nextInt(4) == 0) onlyErrors(presentation.items)
                     else presentation.items.filter {
-                        conversationItemVisible(it, random.pick(listOf("text", "status")), random.nextBoolean())
+                        conversationItemVisible(it, random.pick(listOf(ThinkingDisplay.TEXT, ThinkingDisplay.STATUS)), random.nextBoolean())
                     }
                 assertEquals(where, timelineMarkers(shown), presenter.timelineMarkers(shown))
                 if (replacedUser != null && previous != null) {

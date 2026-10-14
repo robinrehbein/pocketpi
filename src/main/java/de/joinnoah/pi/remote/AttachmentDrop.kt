@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material3.Icon
@@ -144,7 +143,7 @@ internal fun acceptChatDrop(
 /** Covers the chat while a drag it takes hovers over it. */
 @Composable
 internal fun DropScrim(modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(24.dp)
+    val shape = MaterialTheme.shapes.large
     Box(
         modifier
             .fillMaxSize()
