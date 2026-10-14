@@ -10,7 +10,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Download
@@ -240,9 +240,10 @@ internal fun FolderBrowserContent(
                 // The connection chip above says why there is no listing.
                 !connected -> Unit
                 !available ->
-                    FolderMessage(
+                    PaneNotice(
                         stringResource(R.string.remote_folders_unavailable),
                         Modifier.testTag("folderUnavailable"),
+                        FolderNoticePadding,
                     )
                 else ->
                     RemoteFolderList(
@@ -282,15 +283,8 @@ internal fun FolderBrowserContent(
     }
 }
 
-@Composable
-private fun FolderMessage(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text,
-        modifier = modifier.padding(top = 16.dp),
-        style = MaterialTheme.typography.bodyLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
+/** The page already insets its content at the sides, so a notice there only keeps clear of the top. */
+private val FolderNoticePadding = PaddingValues(top = 16.dp)
 
 /** Tap-to-jump path from the root label down to the shown folder. */
 @Composable
@@ -314,7 +308,7 @@ internal fun FolderBreadcrumb(
         crumbs.forEachIndexed { index, (label, target) ->
             if (index > 0)
                 Icon(
-                    Icons.Default.ChevronRight,
+                    Icons.AutoMirrored.Filled.NavigateNext,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(18.dp),
@@ -354,17 +348,13 @@ internal fun RemoteFolderList(
     val error = folders.error
     when {
         error != null ->
-            Column(
-                modifier.fillMaxWidth().padding(top = 16.dp).testTag("folderError"),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text(
-                    stringResource(error),
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                )
-                OutlinedButton(onClick = onRetry) { Text(stringResource(R.string.remote_folders_retry)) }
-            }
+            PaneFailureNotice(
+                stringResource(error),
+                stringResource(R.string.remote_folders_retry),
+                onRetry,
+                modifier.testTag("folderError"),
+                contentPadding = FolderNoticePadding,
+            )
         !folders.loaded -> {
             val loadingLabel = stringResource(R.string.remote_folders_loading)
             Box(modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.TopCenter) {
@@ -374,7 +364,7 @@ internal fun RemoteFolderList(
             }
         }
         folders.entries.isEmpty() ->
-            FolderMessage(stringResource(R.string.remote_folders_empty), modifier.testTag("folderEmpty"))
+            PaneNotice(stringResource(R.string.remote_folders_empty), modifier.testTag("folderEmpty"), FolderNoticePadding)
         else ->
             LazyColumn(modifier.fillMaxWidth().testTag("folderList"), contentPadding = contentPadding) {
                 items(folders.entries, key = { it.name }) { entry ->
@@ -436,7 +426,7 @@ private fun FolderRow(entry: FolderEntry, enabled: Boolean, onClick: () -> Unit)
                 modifier = Modifier.padding(start = 8.dp).size(20.dp).testTag("folderPiConfig:${entry.name}"),
             )
         Spacer(Modifier.weight(0.001f))
-        Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Icon(Icons.AutoMirrored.Filled.NavigateNext, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

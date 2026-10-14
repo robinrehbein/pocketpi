@@ -17,6 +17,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -33,6 +34,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import java.util.Date
 
@@ -160,6 +162,8 @@ internal fun SessionListRow(
             Row(
                 modifier =
                     Modifier.fillMaxWidth()
+                        // The press ripple follows the rounded selection instead of a square.
+                        .clip(MaterialTheme.shapes.medium)
                         .then(
                             if (selected)
                                 Modifier.background(
@@ -195,7 +199,7 @@ internal fun SessionListRow(
                             onLongClickLabel = showActionsLabel,
                         )
                         .padding(
-                            start = 4.dp + (item.depth.coerceAtMost(4) * 28).dp,
+                            start = 4.dp + subagentIndent(item.depth),
                             top = 12.dp,
                             end = 4.dp,
                             bottom = 12.dp,
@@ -361,3 +365,9 @@ private fun SessionSwipeBackground(action: SwipeAction, atEnd: Boolean) {
         SwipeAction.NONE -> Unit
     }
 }
+
+/**
+ * How far a subagent's row moves in: 16dp per level, at most two levels, so a deep tree keeps
+ * room for its titles on a phone.
+ */
+internal fun subagentIndent(depth: Int): Dp = 16.dp * depth.coerceIn(0, 2)

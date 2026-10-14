@@ -1,7 +1,6 @@
 package de.joinnoah.pi.remote
 
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -10,6 +9,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -36,15 +36,17 @@ internal fun outputFormat(name: String?, arguments: String?, text: String): Outp
  * A tool's output in its card, at most 24 lines; Peek shows all of it in [ToolOutputPeek], or calls
  * [onPeek] where the tool's own tab beside the chat shows it instead.
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ToolOutputView(text: String, name: String? = null, arguments: String? = null, onPeek: (() -> Unit)? = null) {
     var peek by remember { mutableStateOf(false) }
     val format = remember(name, arguments, text) { outputFormat(name, arguments, text) }
     val preview = remember(text) { text.lineSequence().take(24).joinToString("\n").take(6000) }
     val showAll = onPeek ?: { peek = true }
-    Column(Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = showAll)) {
-        // The card's long press opens the output, so its code blocks do not start a drag.
+    val latestShowAll by rememberUpdatedState(showAll)
+    // Only a long press opens the peek: a tap does nothing here, so the preview offers TalkBack no
+    // click action of its own. The Peek button below is the accessible route. As the long press
+    // opens the output, its code blocks do not start a drag.
+    Column(Modifier.fillMaxWidth().pointerInput(Unit) { detectTapGestures(onLongPress = { latestShowAll() }) }) {
         OutputContent(preview, format, draggable = false)
         TextButton(onClick = showAll, modifier = Modifier.testTag("toolOutputPeek")) {
             Text(stringResource(R.string.remote_output_peek))

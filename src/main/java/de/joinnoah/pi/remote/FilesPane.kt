@@ -298,26 +298,13 @@ private fun failureText(failure: FilesFailure): Int =
     }
 
 @Composable
-private fun FilesNotice(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text,
-        modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
-
-@Composable
 private fun FilesFailureNotice(failure: FilesFailure, onRetry: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(16.dp).testTag("filesFailure")) {
-        Text(
-            stringResource(failureText(failure)),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.error,
-        )
-        if (failure != FilesFailure.UNSUPPORTED && failure != FilesFailure.INVALID_PATH)
-            TextButton(onClick = onRetry) { Text(stringResource(R.string.remote_files_retry)) }
-    }
+    PaneFailureNotice(
+        stringResource(failureText(failure)),
+        stringResource(R.string.remote_files_retry),
+        onRetry.takeIf { failure != FilesFailure.UNSUPPORTED && failure != FilesFailure.INVALID_PATH },
+        Modifier.testTag("filesFailure"),
+    )
 }
 
 @Composable
@@ -377,7 +364,7 @@ private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: D
                 state.loading || listing == null -> item(key = "loading", span = { GridItemSpan(maxLineSpan) }) { FilesLoading() }
                 listing.unavailable != null ->
                     item(key = "unavailable", span = { GridItemSpan(maxLineSpan) }) {
-                        FilesNotice(
+                        PaneNotice(
                             stringResource(
                                 when (listing.unavailable) {
                                     FilesUnavailable.GIT_UNAVAILABLE -> R.string.remote_files_git_unavailable
@@ -389,7 +376,7 @@ private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: D
                     }
                 else -> {
                     if (listing.entries.isEmpty() && listing.nextAfter == null)
-                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) { FilesNotice(stringResource(R.string.remote_files_empty)) }
+                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) { PaneNotice(stringResource(R.string.remote_files_empty)) }
                     val folders = listing.entries.filter { it.type == FileEntryType.DIR }
                     val files = listing.entries.filter { it.type != FileEntryType.DIR }
                     if (folders.isNotEmpty())
@@ -440,7 +427,7 @@ private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: D
                         }
                     if (listing.truncated)
                         item(key = "truncated", span = { GridItemSpan(maxLineSpan) }) {
-                            FilesNotice(stringResource(R.string.remote_files_truncated))
+                            PaneNotice(stringResource(R.string.remote_files_truncated))
                         }
                 }
             }
@@ -593,7 +580,7 @@ private fun FileView(
         ) {
             if (file.reopened)
                 item(key = "reopened") {
-                    FilesNotice(stringResource(R.string.remote_files_reopened), Modifier.testTag("filesReopened"))
+                    PaneNotice(stringResource(R.string.remote_files_reopened), Modifier.testTag("filesReopened"))
                 }
             val failure = file.failure
             when {
@@ -601,14 +588,14 @@ private fun FileView(
                 file.loading -> item(key = "loading") { FilesLoading() }
                 file.binary ->
                     item(key = "binary") {
-                        FilesNotice(stringResource(R.string.remote_files_binary), Modifier.testTag("filesBinary"))
+                        PaneNotice(stringResource(R.string.remote_files_binary), Modifier.testTag("filesBinary"))
                     }
                 file.tooLarge ->
                     item(key = "tooLarge") {
-                        FilesNotice(stringResource(R.string.remote_files_too_large), Modifier.testTag("filesTooLarge"))
+                        PaneNotice(stringResource(R.string.remote_files_too_large), Modifier.testTag("filesTooLarge"))
                     }
                 lines.isEmpty() && file.nextOffset == null ->
-                    item(key = "empty") { FilesNotice(stringResource(R.string.remote_files_file_empty)) }
+                    item(key = "empty") { PaneNotice(stringResource(R.string.remote_files_file_empty)) }
                 else -> {
                     // Rows stay one text line high to keep code dense; the number cell is at
                     // least 48dp wide, so it stays easy to hit sideways.

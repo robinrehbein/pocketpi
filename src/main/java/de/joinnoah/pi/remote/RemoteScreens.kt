@@ -2843,71 +2843,73 @@ internal fun RemoteScreen(
                             else if (listedSessions.isEmpty() && visibleSessions.isNotEmpty())
                                 item { Text(stringResource(R.string.remote_session_search_empty)) }
                             items(listedSessions, key = SessionListItem::id) { session ->
-                                SessionListRow(
-                                    item = session,
-                                    selected = session.id == listPane?.selectedSessionId,
-                                    onTogglePin = {
-                                        sessionMarkStore?.setPinned(key.routeId, session.id, !session.pinned)
-                                    },
-                                    onMarkRead =
-                                        if (!session.unread) null
-                                        else {
-                                            {
-                                                sessionMarkStore?.markSeen(key.routeId, session.id, session.updatedAt, System.currentTimeMillis())
-                                            }
+                                Box(Modifier.itemMotion(this)) {
+                                    SessionListRow(
+                                        item = session,
+                                        selected = session.id == listPane?.selectedSessionId,
+                                        onTogglePin = {
+                                            sessionMarkStore?.setPinned(key.routeId, session.id, !session.pinned)
                                         },
-                                    enabled = !state.connected || !state.loading,
-                                    closeAvailable =
-                                        canCloseSession(
-                                            session,
-                                            state.connected,
-                                            state.loading,
-                                            state.capabilities,
-                                        ),
-                                    onClick = {
-                                        navigator.open(
-                                            RemoteNavKey.Chat(
-                                                key.routeId,
-                                                key.projectId,
-                                                session.id,
-                                            )
-                                        )
-                                    },
-                                    onRename =
-                                        if (
-                                            state.connected && !state.loading &&
-                                            RENAME_CAPABILITY in state.capabilities &&
-                                            session.availability != SessionAvailability.OFFLINE &&
-                                            !session.continuesAsCopy
-                                        ) {
-                                            {
-                                                startRename(session.id, session.title)
-                                            }
-                                        } else null,
-                                    onClose = { closing = session },
-                                    onForkLatest =
-                                        if (
-                                            state.connected && !state.loading && !navigator.mutating &&
-                                                SESSION_FORK_CAPABILITY in state.capabilities &&
-                                                session.parentSessionId == null
-                                        ) {
-                                            { navigator.openAndForkLatest(RemoteNavKey.Chat(key.routeId, key.projectId, session.id)) }
-                                        } else null,
-                                    swipe =
-                                        (sessionPreferences?.swipeEndToStart ?: SwipeAction.CLOSE) to
-                                            (sessionPreferences?.swipeStartToEnd ?: SwipeAction.RENAME),
-                                    childrenExpanded = session.id !in collapsedIds,
-                                    onToggleChildren =
-                                        if (session.hasChildren) {
-                                            {
-                                                collapsedSessionIds = ArrayList(
-                                                    if (session.id in collapsedIds)
-                                                        collapsedSessionIds.filterNot { it == session.id }
-                                                    else collapsedSessionIds + session.id
+                                        onMarkRead =
+                                            if (!session.unread) null
+                                            else {
+                                                {
+                                                    sessionMarkStore?.markSeen(key.routeId, session.id, session.updatedAt, System.currentTimeMillis())
+                                                }
+                                            },
+                                        enabled = !state.connected || !state.loading,
+                                        closeAvailable =
+                                            canCloseSession(
+                                                session,
+                                                state.connected,
+                                                state.loading,
+                                                state.capabilities,
+                                            ),
+                                        onClick = {
+                                            navigator.open(
+                                                RemoteNavKey.Chat(
+                                                    key.routeId,
+                                                    key.projectId,
+                                                    session.id,
                                                 )
-                                            }
-                                        } else null,
-                                )
+                                            )
+                                        },
+                                        onRename =
+                                            if (
+                                                state.connected && !state.loading &&
+                                                RENAME_CAPABILITY in state.capabilities &&
+                                                session.availability != SessionAvailability.OFFLINE &&
+                                                !session.continuesAsCopy
+                                            ) {
+                                                {
+                                                    startRename(session.id, session.title)
+                                                }
+                                            } else null,
+                                        onClose = { closing = session },
+                                        onForkLatest =
+                                            if (
+                                                state.connected && !state.loading && !navigator.mutating &&
+                                                    SESSION_FORK_CAPABILITY in state.capabilities &&
+                                                    session.parentSessionId == null
+                                            ) {
+                                                { navigator.openAndForkLatest(RemoteNavKey.Chat(key.routeId, key.projectId, session.id)) }
+                                            } else null,
+                                        swipe =
+                                            (sessionPreferences?.swipeEndToStart ?: SwipeAction.CLOSE) to
+                                                (sessionPreferences?.swipeStartToEnd ?: SwipeAction.RENAME),
+                                        childrenExpanded = session.id !in collapsedIds,
+                                        onToggleChildren =
+                                            if (session.hasChildren) {
+                                                {
+                                                    collapsedSessionIds = ArrayList(
+                                                        if (session.id in collapsedIds)
+                                                            collapsedSessionIds.filterNot { it == session.id }
+                                                        else collapsedSessionIds + session.id
+                                                    )
+                                                }
+                                            } else null,
+                                    )
+                                }
                             }
                         }
 
@@ -2940,9 +2942,11 @@ internal fun RemoteScreen(
                                 val highlighted = item.id == highlightedId
                                 ConversationItemColumn(
                                     item,
-                                    if (highlighted)
-                                        Modifier.testTag("jumpTarget").focusRequester(jumpFocus).focusable()
-                                    else Modifier
+                                    Modifier.itemMotion(this).then(
+                                        if (highlighted)
+                                            Modifier.testTag("jumpTarget").focusRequester(jumpFocus).focusable()
+                                        else Modifier
+                                    ),
                                 ) {
                                     ConversationMessage(
                                         item,

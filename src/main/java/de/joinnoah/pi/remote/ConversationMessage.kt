@@ -47,6 +47,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -54,6 +55,8 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
@@ -111,7 +114,11 @@ internal fun ConversationItemColumn(item: ConversationItem, modifier: Modifier =
     Box(modifier.readingColumn(remember(item) { conversationItemWidth(item) }, outgoing)) { content() }
 }
 
-private class BubbleShape(private val outgoing: Boolean) : Shape {
+/**
+ * A bubble with its tail at the bottom corner of the side it comes from: the end edge for an
+ * [outgoing] message, the start edge otherwise, so the tail follows a right-to-left layout.
+ */
+internal class BubbleShape(private val outgoing: Boolean) : Shape {
     override fun createOutline(
         size: Size,
         layoutDirection: LayoutDirection,
@@ -119,13 +126,14 @@ private class BubbleShape(private val outgoing: Boolean) : Shape {
     ): Outline {
         val tail = with(density) { BUBBLE_TAIL.toPx() }
         val radius = with(density) { BUBBLE_RADIUS.toPx() }
+        val tailRight = outgoing == (layoutDirection == LayoutDirection.Ltr)
         val body =
             Path().apply {
                 addRoundRect(
                     RoundRect(
-                        if (outgoing) 0f else tail,
+                        if (tailRight) 0f else tail,
                         0f,
-                        if (outgoing) size.width - tail else size.width,
+                        if (tailRight) size.width - tail else size.width,
                         size.height,
                         CornerRadius(radius),
                     )
@@ -133,7 +141,7 @@ private class BubbleShape(private val outgoing: Boolean) : Shape {
             }
         val tip =
             Path().apply {
-                if (outgoing) {
+                if (tailRight) {
                     moveTo(size.width - tail * 2, size.height - tail * 2)
                     lineTo(size.width, size.height)
                     lineTo(size.width - tail * 3, size.height - tail / 2)
@@ -146,11 +154,21 @@ private class BubbleShape(private val outgoing: Boolean) : Shape {
             }
         return Outline.Generic(Path.combine(PathOperation.Union, body, tip))
     }
+
+    override fun equals(other: Any?) = other is BubbleShape && other.outgoing == outgoing
+
+    override fun hashCode() = outgoing.hashCode()
 }
 
+/**
+ * A swipe toward the start edge, past 64dp, quotes the message: leftward, or rightward in a
+ * right-to-left layout.
+ */
 private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier = composed {
     if (!enabled) this
     else {
+        // The screen x sign of the start direction: the swipe and its offset follow the layout.
+        val towardStart = if (LocalLayoutDirection.current == LayoutDirection.Rtl) 1f else -1f
         var dragOffset by remember { mutableFloatStateOf(0f) }
         var dragging by remember { mutableStateOf(false) }
         val haptics = LocalHapticFeedback.current
@@ -161,7 +179,7 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
                 animationSpec = if (dragging) snap() else spring(),
                 label = "quote-swipe-offset",
             )
-        this.graphicsLayer { translationX = offsetX }.pointerInput(Unit) {
+        this.graphicsLayer { translationX = offsetX * towardStart }.pointerInput(towardStart) {
             val threshold = 64.dp.toPx()
             val verticalTolerance = 24.dp.toPx()
             awaitEachGesture {
@@ -182,12 +200,14 @@ private fun Modifier.quoteSwipe(enabled: Boolean, onQuote: () -> Unit): Modifier
                             break
                         val delta = change.position - down.position
                         if (abs(delta.y) > verticalTolerance) break
+                        // How far the finger moved toward the start edge; negative toward the end.
+                        val travel = delta.x * towardStart
                         // A tap must not recompose the parent and restart child click detectors.
                         // Start the visual swipe only after horizontal touch slop is crossed.
-                        if (!dragging && delta.x < -viewConfiguration.touchSlop && abs(delta.x) > abs(delta.y))
+                        if (!dragging && travel > viewConfiguration.touchSlop && abs(delta.x) > abs(delta.y))
                             dragging = true
-                        if (dragging) dragOffset = delta.x.coerceIn(-threshold, 0f)
-                        val pastThreshold = delta.x <= -threshold && abs(delta.x) > abs(delta.y) * 3
+                        if (dragging) dragOffset = travel.coerceIn(0f, threshold)
+                        val pastThreshold = travel >= threshold && abs(delta.x) > abs(delta.y) * 3
                         if (pastThreshold && !armed) {
                             armed = true
                             haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
@@ -470,10 +490,11 @@ private fun ConversationMessageContent(
                             ) {
                                 // The tail takes BUBBLE_TAIL off its side, so the text keeps 16dp from the body on both sides.
                                 Column(
-                                    // Physical sides, as BubbleShape draws its tail on a fixed side in every layout direction.
-                                    Modifier.absolutePadding(
-                                        left = if (outgoing) 16.dp else 16.dp + BUBBLE_TAIL,
-                                        right = if (outgoing) 16.dp + BUBBLE_TAIL else 16.dp,
+                                    // Start and end sides, as BubbleShape puts its tail on the end edge of an outgoing
+                                    // bubble and the start edge of an incoming one in either layout direction.
+                                    Modifier.padding(
+                                        start = if (outgoing) 16.dp else 16.dp + BUBBLE_TAIL,
+                                        end = if (outgoing) 16.dp + BUBBLE_TAIL else 16.dp,
                                         top = 12.dp,
                                         bottom = 12.dp,
                                     ),
@@ -564,13 +585,18 @@ private fun ConversationMessageContent(
         }
         is ConversationItem.Subagent -> {
             var expanded by rememberSaveable(item.id) { mutableStateOf(false) }
+            val expandState = expandStateDescription(expanded)
             Card(
                 Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest),
             ) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(
-                        Modifier.fillMaxWidth().clickable { expanded = !expanded }.heightIn(min = 40.dp),
+                        Modifier.fillMaxWidth()
+                            .testTag("subagentHeader")
+                            .clickable(role = Role.Button) { expanded = !expanded }
+                            .semantics { stateDescription = expandState }
+                            .heightIn(min = 48.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
@@ -602,8 +628,8 @@ private fun ConversationMessageContent(
                                     Modifier.fillMaxWidth()
                                         .testTag("subagentAgent")
                                         .pointerHoverIcon(PointerIcon.Hand)
-                                        .clickable(onClickLabel = openAgentLabel) { onOpenAgent(item, index) }
-                                        .heightIn(min = 40.dp)
+                                        .clickable(onClickLabel = openAgentLabel, role = Role.Button) { onOpenAgent(item, index) }
+                                        .heightIn(min = 48.dp)
                                 else Modifier.fillMaxWidth(),
                                 verticalArrangement = Arrangement.spacedBy(2.dp),
                             ) {
@@ -738,12 +764,14 @@ private fun ConversationMessageContent(
                         }
                     val stateLabel = stringResource(state)
                     val openToolLabel = stringResource(R.string.remote_card_open_tool)
+                    val expandState = expandStateDescription(expanded)
                     Row(
                         Modifier.fillMaxWidth()
                             .testTag("toolCardHeader")
                             .pointerHoverIcon(PointerIcon.Hand)
                             .combinedClickable(
                                 onClickLabel = if (openTool != null) openToolLabel else null,
+                                role = Role.Button,
                                 onClick = {
                                     if (openTool != null) openTool(item)
                                     else expanded = !expanded
@@ -751,7 +779,9 @@ private fun ConversationMessageContent(
                                 onLongClickLabel = stringResource(R.string.remote_output_peek),
                                 onLongClick = if (item.output != null) (peekInTab ?: { outputPeek = true }) else null,
                             )
-                            .heightIn(min = 40.dp),
+                            // Where the header itself expands the card, it says whether it is open.
+                            .then(if (openTool == null) Modifier.semantics { stateDescription = expandState } else Modifier)
+                            .heightIn(min = 48.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
@@ -820,7 +850,8 @@ private fun ConversationMessageContent(
                         if (openTool != null)
                             IconButton(
                                 onClick = { expanded = !expanded },
-                                modifier = Modifier.size(40.dp).testTag("toolCardToggle"),
+                                modifier = Modifier.size(48.dp).testTag("toolCardToggle")
+                                    .semantics { stateDescription = expandState },
                             ) {
                                 Icon(toggleIcon, toggleLabel)
                             }
@@ -1030,3 +1061,8 @@ private fun ThinkingStatus(active: Boolean) {
         )
     }
 }
+
+/** What TalkBack says about a row that shows or hides more below it. */
+@Composable
+private fun expandStateDescription(expanded: Boolean): String =
+    stringResource(if (expanded) R.string.remote_chat_a11y_expanded else R.string.remote_chat_a11y_collapsed)
