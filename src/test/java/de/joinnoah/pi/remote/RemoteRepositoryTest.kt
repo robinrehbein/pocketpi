@@ -7861,8 +7861,9 @@ class RemoteRepositoryTest {
         transport: Transport,
         lists: Map<String, List<JsonObject>>,
         hold: (JsonObject) -> Boolean = { false },
+        opened: JsonObject = session(),
     ): MutableList<JsonObject> {
-        configure(transport)
+        configure(transport, opened = opened)
         val held = mutableListOf<JsonObject>()
         val original = transport.response
         transport.response = { request ->
@@ -8096,7 +8097,8 @@ class RemoteRepositoryTest {
                 )
             )
 
-        // Within 30 s of the lists, a session none holds waits for them to age.
+        // Within 30 s of the lists, a session none holds waits for them to age, with no second report.
+        lists["b"] = lists.getValue("b") + updated(session("new", status = "running", projectId = "b"), 200)
         status("new")
         advanceTimeBy(2_000)
         runCurrent()
@@ -8104,9 +8106,6 @@ class RemoteRepositoryTest {
 
         // Started in b, the project active most lately, which is read first and alone.
         advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS)
-        lists["b"] = lists.getValue("b") + updated(session("new", status = "running", projectId = "b"), 200)
-        status("new", revision = 2)
-        advanceTimeBy(2_000)
         runCurrent()
         assertEquals(4, transport.lists())
         assertEquals(2, transport.lists("b"))
@@ -8114,5 +8113,136 @@ class RemoteRepositoryTest {
         assertEquals(listOf("old", "new"), b.sessions.map { it.text("id") })
         assertEquals(SessionCounts(running = 1), b.counts)
         assertEquals(chat, repository.state.value.selection)
+    }
+
+    private fun Transport.status(sessionId: String, value: String = "running", revision: Long = 1) =
+        listener.message(
+            Wire.objectOf(
+                "type" to "event", "sessionId" to sessionId, "revision" to revision,
+                "kind" to "session.status", "status" to value,
+            )
+        )
+
+    @Test
+    fun aChatCreatedInAProjectTheProjectsPageReadShowsInItsListOnTheWayBack() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf("a" to listOf(session("old", projectId = "a")), "b" to listOf(session("other", projectId = "b")))
+        configureProjects(transport, lists, opened = session("new", projectId = "a"))
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        val a = RemoteSelection("host", "a")
+        assertEquals(root, repository.activate(root, ActivationMode.USER_OPEN))
+        runCurrent()
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        assertEquals(1, transport.lists("a"))
+
+        lists["a"] = listOf(session("new", projectId = "a")) + lists.getValue("a")
+        assertEquals(RemoteSelection("host", "a", "new"), repository.createSession("host", "a"))
+        runCurrent()
+        // Back to the project: the Projects page's read of it no longer stands in for one.
+        repository.cancelSelection()
+        assertEquals(a, repository.activate(a))
+        runCurrent()
+        assertEquals(2, transport.lists("a"))
+        assertEquals(listOf("new", "old"), repository.state.value.sessions.map { it.text("id") })
+        assertEquals(
+            listOf("new", "old"),
+            repository.state.value.projectSessions.getValue("a").sessions.map { it.text("id") },
+        )
+    }
+
+    @Test
+    fun anUnknownSessionReadForTheProjectOnScreenShowsInItsList() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf("a" to listOf(session("old", projectId = "a")), "b" to listOf(session("other", projectId = "b")))
+        configureProjects(transport, lists)
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        val a = RemoteSelection("host", "a")
+        assertEquals(root, repository.activate(root, ActivationMode.USER_OPEN))
+        runCurrent()
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        runCurrent()
+
+        // A chat started on the Mac in the project on screen.
+        lists["a"] = lists.getValue("a") + session("started", status = "running", projectId = "a")
+        transport.status("started")
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS + 2_000)
+        runCurrent()
+        assertEquals(2, transport.lists("a"))
+        assertEquals(listOf("old", "started"), repository.state.value.sessions.map { it.text("id") })
+        assertTrue(repository.state.value.sessionsFresh)
+
+        // The cache holds the list on screen, so the next open needs no read and shows it.
+        repository.cancelSelection()
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        runCurrent()
+        assertEquals(2, transport.lists("a"))
+        assertEquals(listOf("old", "started"), repository.state.value.sessions.map { it.text("id") })
+    }
+
+    @Test
+    fun aSessionNoProjectHoldsIsLookedForOnceAWhile() = runTest {
+        val transport = Transport()
+        val lists = mapOf("a" to listOf(session("chat", projectId = "a")), "b" to listOf(session("other", projectId = "b")))
+        configureProjects(transport, lists)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN)
+        runCurrent()
+        val chat = RemoteSelection("host", "a", "chat")
+        assertEquals(chat, repository.activate(chat))
+        runCurrent()
+        assertEquals(2, transport.lists())
+
+        // A subagent child that never registers, say, reports one status after another.
+        transport.status("child")
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS + 2_000)
+        runCurrent()
+        assertEquals(4, transport.lists())
+        assertEquals(2, transport.lists("a"))
+        transport.status("child", value = "idle", revision = 2)
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS + 2_000)
+        runCurrent()
+        transport.status("child", value = "running", revision = 3)
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS + 2_000)
+        runCurrent()
+        assertEquals(4, transport.lists())
+
+        // A while later it is looked for again.
+        advanceTimeBy(MISSING_SESSION_RETRY_MILLIS)
+        transport.status("child", value = "idle", revision = 4)
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS + 2_000)
+        runCurrent()
+        assertEquals(6, transport.lists())
+    }
+
+    @Test
+    fun aProjectNoLongerSharedLeavesTheProjectsPageWithinTheThrottle() = runTest {
+        val transport = Transport()
+        val lists = mutableMapOf(
+            "a" to listOf(session("one", status = "waiting", projectId = "a")),
+            "b" to listOf(session("two", status = "waiting", projectId = "b")),
+        )
+        configureProjects(transport, lists)
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        repository.activate(root, ActivationMode.USER_OPEN)
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        assertEquals(setOf("a", "b"), repository.state.value.projectSessions.keys)
+        assertEquals(2, transport.lists())
+
+        // The resume reads the projects again, within the lists' 30 s: b is gone, a not read again.
+        lists.remove("b")
+        val projectLists = transport.sent.count { it.text("type") == "projects.list" }
+        repository.setForeground(false)
+        advanceTimeBy(RESUME_QUIET_AWAY_MILLIS + 1_000)
+        repository.setForeground(true)
+        runCurrent()
+        assertTrue(transport.sent.count { it.text("type") == "projects.list" } > projectLists)
+        assertEquals(2, transport.lists())
+        assertEquals(listOf("one"), repository.state.value.projectChats.map { it.session.text("id") })
+        assertEquals(setOf("a"), repository.state.value.projectSessions.keys)
     }
 }
