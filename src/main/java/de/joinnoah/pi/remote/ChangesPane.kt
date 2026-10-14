@@ -817,14 +817,20 @@ private fun ChangesFileDiff(
         onFocusChanged { if (it.isFocused) focusedLine = line else if (focusedLine == line) focusedLine = null }
             .clickable(onClickLabel = addLabel) { editing = line }
             .testTag("changesDiffLine")
+    // The session's own file opens in Files at the line as it is now; a subagent's lies elsewhere.
+    val fileOpener = LocalFileOpener.current?.takeIf { !readOnly }
     fun lineMenu(line: DiffLine, index: Int, commentable: Boolean): Modifier =
         Modifier.contextMenu { _ ->
-            diffLineMenuActions(commentable).map { action ->
+            val opening =
+                if (line.kind == DiffKind.HUNK) null
+                else newLineNear(lines, index)?.let { at -> fileOpener?.action(path, LineSelection(at)) as? FileOpenAction.Open }
+            diffLineMenuActions(commentable, openable = opening != null).map { action ->
                 MenuItem(action.label, "diff_${action.name.lowercase()}") {
                     when (action) {
                         DiffLineMenuAction.COMMENT -> editing = line
                         DiffLineMenuAction.COPY_LINE -> copyLine(line.text)
                         DiffLineMenuAction.COPY_HUNK -> copyHunk(diffHunkText(lines, index))
+                        DiffLineMenuAction.OPEN_FILE -> opening?.let { fileOpener?.perform(it) }
                     }
                 }
             }

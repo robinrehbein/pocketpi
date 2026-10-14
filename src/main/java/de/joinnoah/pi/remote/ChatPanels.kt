@@ -128,6 +128,8 @@ internal fun TouchedFilesSheet(files: TouchedFiles, onDismiss: () -> Unit, onOpe
                 onDismiss()
             },
             Modifier.fillMaxWidth().testTag("touchedFilesSheet").navigationBarsPadding(),
+            // Files opens over the chat; the sheet would cover it.
+            onOpenedInFiles = onDismiss,
         )
     }
 }
@@ -146,7 +148,12 @@ internal fun TouchedFilesPane(files: TouchedFiles, onOpen: (itemId: String) -> U
 }
 
 @Composable
-private fun TouchedFilesList(files: TouchedFiles, onOpen: (itemId: String) -> Unit, modifier: Modifier) {
+private fun TouchedFilesList(
+    files: TouchedFiles,
+    onOpen: (itemId: String) -> Unit,
+    modifier: Modifier,
+    onOpenedInFiles: () -> Unit = {},
+) {
     LazyColumn(modifier, contentPadding = PaddingValues(bottom = 16.dp)) {
         item {
             Text(
@@ -180,14 +187,14 @@ private fun TouchedFilesList(files: TouchedFiles, onOpen: (itemId: String) -> Un
                 }
             }
             items(list, key = { "$title-${it.path}" }) { file ->
-                TouchedFileRow(file) { onOpen(file.latestItemId) }
+                TouchedFileRow(file, onOpenedInFiles) { onOpen(file.latestItemId) }
             }
         }
     }
 }
 
 @Composable
-private fun TouchedFileRow(file: TouchedFile, onClick: () -> Unit) {
+private fun TouchedFileRow(file: TouchedFile, onOpenedInFiles: () -> Unit, onClick: () -> Unit) {
     val trimmed = file.path.trimEnd('/')
     val name = trimmed.substringAfterLast('/').ifEmpty { file.path }
     val parent = trimmed.substringBeforeLast('/', missingDelimiterValue = "")
@@ -228,6 +235,8 @@ private fun TouchedFileRow(file: TouchedFile, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
             )
         }
+        // The row jumps to the message; the icon opens the file itself.
+        OpenInFilesButton(file.path, null, onDone = onOpenedInFiles)
     }
 }
 

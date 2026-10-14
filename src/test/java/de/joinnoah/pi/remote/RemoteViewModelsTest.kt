@@ -395,4 +395,85 @@ class RemoteViewModelsTest {
         assertEquals(1, repository.childStops)
         assertEquals(listOf("Go on"), repository.childResumes)
     }
+    // ---- Asking about lines at once ---------------------------------------------------------
+
+    private val askSelection = RemoteSelection("host", "project", "session")
+
+    /** A chat that takes a prompt now: connected, idle, nothing typed, quoted or attached. */
+    private fun askChat(state: RemoteState.() -> RemoteState = { this }): Pair<NavigationFakeRepository, ChatViewModel> {
+        val repository = NavigationFakeRepository().apply { sendsPrompts = true }
+        repository.state.value =
+            RemoteState(selection = askSelection, connected = true, status = "idle", files = FilesState("session", loading = false)).state()
+        return repository to ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "session"), FakeSettingsRepository())
+    }
+
+    @Test
+    fun askNowSendsThePromptAsItIsWhenTheComposerIsEmpty() {
+        val (repository, model) = askChat()
+        assertEquals(PromptHandoff.SENT, model.askNow("Lines\n\nWhy?"))
+        assertEquals(listOf("Lines\n\nWhy?"), repository.sentPrompts)
+    }
+
+    @Test
+    fun askNowPrefillsWhereSendingWouldTakeSomethingAlongOrCannotBeDoneNow() {
+        val quote = MessageQuote("m", "assistant", "earlier")
+        val attachment = LocalAttachment("a".repeat(22), "x.png", "image", "image/png", 1, "0".repeat(64))
+        val question = buildJsonObject { put("id", "q") }
+        val cases: List<Pair<String, RemoteState.() -> RemoteState>> =
+            listOf(
+                "typed" to { copy(draft = "my own words") },
+                "quote" to { copy(quote = quote) },
+                "attachment" to { copy(attachments = listOf(attachment)) },
+                "running" to { copy(status = "running") },
+                "questions" to { copy(questions = listOf(question)) },
+                "offline" to { copy(connected = false) },
+                "sending" to { copy(sending = true) },
+            )
+        for ((name, state) in cases) {
+            val (repository, model) = askChat(state)
+            val draft = repository.state.value.draft
+            assertEquals(name, PromptHandoff.PREFILLED, model.askNow("Why?"))
+            assertEquals(name, emptyList<String>(), repository.sentPrompts)
+            assertEquals(name, 0, repository.prompts)
+            assertEquals(name, prefilledDraft(draft, "Why?"), repository.state.value.draft)
+        }
+    }
+
+    @Test
+    fun aPromptTheRepositoryWouldNotSendStaysInTheComposer() {
+        val (repository, model) = askChat()
+        repository.sendsPrompts = false
+        assertEquals(PromptHandoff.PREFILLED, model.askNow("Why?"))
+        assertEquals(1, repository.prompts)
+        assertEquals("Why?", repository.state.value.draft)
+    }
+
+    @Test
+    fun aPromptTooLargeForTheComposerGoesNowhere() {
+        val (repository, model) = askChat()
+        assertEquals(PromptHandoff.FAILED, model.askNow("x".repeat(128 * 1024 + 1)))
+        assertEquals(0, repository.prompts)
+        assertEquals("", repository.state.value.draft)
+    }
+
+    @Test
+    fun aQuestionSentAtOnceKeepsTheFileBesideTheChatAndClosesItOverTheChat() {
+        var focused = 0
+        val (beside, besideModel) = askChat()
+        assertTrue(filesActions(besideModel, besideChat = { true }) { focused++ }.onAsk("Why?"))
+        assertNotNull(beside.state.value.files)
+        val (over, overModel) = askChat()
+        assertTrue(filesActions(overModel, besideChat = { false }) { focused++ }.onAsk("Why?"))
+        assertNull(over.state.value.files)
+        assertEquals(0, focused)
+        // A prefilled question closes Files and moves to the composer, wherever Files shows.
+        val (typed, typedModel) = askChat { copy(draft = "mine") }
+        assertTrue(filesActions(typedModel, besideChat = { true }) { focused++ }.onAsk("Why?"))
+        assertNull(typed.state.value.files)
+        assertEquals(1, focused)
+        // Nothing fits: Files stays for the user to shorten the range.
+        val (full, fullModel) = askChat()
+        assertFalse(filesActions(fullModel, besideChat = { false }) { focused++ }.onAsk("x".repeat(128 * 1024 + 1)))
+        assertNotNull(full.state.value.files)
+    }
 }

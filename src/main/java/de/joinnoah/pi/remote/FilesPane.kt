@@ -28,16 +28,21 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.WrapText
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -54,9 +59,18 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
@@ -65,6 +79,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -72,6 +87,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -94,6 +110,11 @@ internal class FilesActions(
     val onSelectLines: (LineSelection?) -> Unit,
     /** Puts a quote into the composer. Nothing is sent. False when it did not fit. */
     val onSend: (String) -> Boolean,
+    /**
+     * Sends a question about picked lines to pi at once, or puts it into the composer where that
+     * cannot be done now ([ChatViewModel.askNow]). False when it went nowhere.
+     */
+    val onAsk: (String) -> Boolean = onSend,
     val onStartEditing: () -> Unit = {},
     val onEditorText: (String) -> Unit = {},
     val onSaveEditor: () -> Unit = {},
@@ -137,6 +158,7 @@ internal fun FilesPane(
     var prefillFailed by remember { mutableStateOf(false) }
     LaunchedEffect(state.file?.path, state.path) { prefillFailed = false }
     val send: (String) -> Unit = { prompt -> prefillFailed = !actions.onSend(prompt) }
+    val ask: (String) -> Boolean = { prompt -> actions.onAsk(prompt).also { prefillFailed = !it } }
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
     val codeWrap = rememberCodeWrap()
@@ -172,10 +194,10 @@ internal fun FilesPane(
                                 FolderSideList(state, actions, inset, Modifier.width(FILE_LIST_WIDTH).fillMaxHeight())
                                 VerticalDivider()
                                 Box(Modifier.weight(1f).fillMaxHeight()) {
-                                    key(file.path) { FileView(file, actions, send, inset, onEdit, codeWrap.wrap) }
+                                    key(file.path) { FileView(file, actions, send, ask, inset, onEdit, codeWrap.wrap) }
                                 }
                             }
-                        else -> key(file.path) { FileView(file, actions, send, inset, onEdit, codeWrap.wrap) }
+                        else -> key(file.path) { FileView(file, actions, send, ask, inset, onEdit, codeWrap.wrap) }
                     }
                 }
             }
@@ -468,6 +490,7 @@ private fun FileView(
     file: OpenFile,
     actions: FilesActions,
     send: (String) -> Unit,
+    ask: (String) -> Boolean,
     headerHeight: Dp,
     onEdit: (() -> Unit)? = null,
     wrap: Boolean = false,
@@ -495,14 +518,32 @@ private fun FileView(
     val contentWidth = rememberCodeContentWidth(lines, style)
     val numberWidth = rememberLineNumberWidth(lines.size, style)
     val scroll = rememberScrollState()
+    val listState = rememberLazyListState()
     val selection = file.selection?.takeIf { it.last <= lines.size }
+    // Opened at lines from the chat: once they are loaded, they come into view with a little
+    // context above them. A line picked here later never scrolls the view.
+    val reveal = file.revealLine
+    val revealReady = reveal != null && !file.loading && lines.size >= reveal
+    // Once per read: a rotation or a return to the file keeps where the user scrolled on to.
+    var revealed by rememberSaveable(reveal) { mutableStateOf(false) }
+    LaunchedEffect(file.loading) { if (file.loading) revealed = false }
+    LaunchedEffect(reveal, revealReady) {
+        if (reveal == null || !revealReady || revealed) return@LaunchedEffect
+        val leading = if (file.reopened) 1 else 0
+        listState.scrollToItem((leading + reveal - 1 - REVEAL_CONTEXT_LINES).coerceAtLeast(0))
+        revealed = true
+    }
     val selectionState =
         selection?.let {
             if (it.first == it.last) stringResource(R.string.remote_files_selection_line, it.first)
             else stringResource(R.string.remote_files_selection_lines, it.first, it.last)
         }
     Column(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("filesFile"), contentPadding = PaddingValues(top = headerHeight)) {
+        LazyColumn(
+            Modifier.weight(1f).fillMaxWidth().testTag("filesFile"),
+            state = listState,
+            contentPadding = PaddingValues(top = headerHeight),
+        ) {
             if (file.reopened)
                 item(key = "reopened") {
                     FilesNotice(stringResource(R.string.remote_files_reopened), Modifier.testTag("filesReopened"))
@@ -548,6 +589,9 @@ private fun FileView(
                 onClearSelection = { actions.onSelectLines(null) },
                 onSendFile = { send(filePrompt(context, file, lines, null, language)) },
                 onSendLines = { selection?.let { send(filePrompt(context, file, lines, it, language)) } },
+                onAsk = { question ->
+                    selection?.let { ask(filePrompt(context, file, lines, it, language) + "\n\n" + question.trim()) } ?: false
+                },
                 onEdit = onEdit,
             )
     }
@@ -613,6 +657,7 @@ private fun FileActionBar(
     onClearSelection: () -> Unit,
     onSendFile: () -> Unit,
     onSendLines: () -> Unit,
+    onAsk: (String) -> Boolean = { false },
     onEdit: (() -> Unit)? = null,
 ) {
     HorizontalDivider()
@@ -629,6 +674,8 @@ private fun FileActionBar(
                     Text(stringResource(R.string.remote_files_clear_selection))
                 }
             }
+            // A new range starts a new question.
+            key(selection) { AskAboutLines(onAsk) }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (onEdit != null)
@@ -640,14 +687,75 @@ private fun FileActionBar(
             OutlinedButton(onClick = onSendFile, Modifier.weight(1f).testTag("filesSendFile")) {
                 Text(stringResource(R.string.remote_files_send_file), textAlign = TextAlign.Center)
             }
+            // Asking is the main way on with lines picked; sending them leaves the prompt to write.
             if (canSendLines)
-                Button(
+                OutlinedButton(
                     onClick = onSendLines,
                     enabled = selection != null,
                     modifier = Modifier.weight(1f).testTag("filesSendLines"),
                 ) {
                     Text(stringResource(R.string.remote_files_send_lines), textAlign = TextAlign.Center)
                 }
+        }
+    }
+}
+
+/** Lines kept above a line the chat opened a file at, so it does not stick to the top. */
+private const val REVEAL_CONTEXT_LINES = 3
+
+/**
+ * A question about the picked lines: Enter (or Ctrl+Enter) or the button sends the lines and it
+ * to pi as one prompt. A blank question sends nothing; one [onAsk] could not place stays.
+ */
+@Composable
+private fun AskAboutLines(onAsk: (String) -> Boolean) {
+    var question by rememberSaveable { mutableStateOf("") }
+    val submit = {
+        if (question.isNotBlank() && onAsk(question)) question = ""
+    }
+    val label = stringResource(R.string.remote_open_files_ask_hint)
+    // One compact row, so a phone keeps most of its height for the file.
+    Surface(
+        Modifier.fillMaxWidth().padding(bottom = 4.dp),
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f).padding(start = 12.dp), contentAlignment = Alignment.CenterStart) {
+                // The field says it itself; TalkBack reads the hint once.
+                if (question.isEmpty())
+                    Text(
+                        label,
+                        Modifier.clearAndSetSemantics {},
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                BasicTextField(
+                    value = question,
+                    onValueChange = { question = it },
+                    modifier = Modifier.fillMaxWidth()
+                        .onPreviewKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown && (event.key == Key.Enter || event.key == Key.NumPadEnter) && !event.isShiftPressed) {
+                                submit()
+                                true
+                            } else false
+                        }
+                        // Backspace or Left in an empty field must not leave the file (parentOnLeft).
+                        .onKeyEvent { it.key == Key.Backspace || it.key == Key.DirectionLeft }
+                        .semantics { contentDescription = label }
+                        .testTag("filesAsk"),
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { submit() }),
+                )
+            }
+            // 40dp keeps the row low; Compose still takes touches 48dp around it (minimumTouchTargetSize).
+            IconButton(onClick = submit, enabled = question.isNotBlank(), modifier = Modifier.size(40.dp).testTag("filesAskSend")) {
+                Icon(Icons.AutoMirrored.Filled.Send, stringResource(R.string.remote_open_files_ask_send), Modifier.size(20.dp))
+            }
         }
     }
 }
