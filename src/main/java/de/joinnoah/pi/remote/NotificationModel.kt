@@ -382,3 +382,21 @@ internal fun offerNotificationPermission(
     pairingNotificationStep(sdk, granted, pushConfigured, settings.state.value).also {
         if (it != PairingNotificationStep.NOTHING) settings.markNotificationPromptShown()
     }
+
+/**
+ * Whether the user has answered for push: it is on, it was switched off, or the permission was offered
+ * after a pairing (a denial counts as an answer, see [pairingNotificationStep]).
+ */
+internal val RemoteSettings.notificationsDecided: Boolean
+    get() = pushEnabled || pushOptedOut || notificationPromptShown
+
+/**
+ * Whether the Projects page of one Mac shows the notification card: only while push is configured and
+ * off, the user never decided about it, and this Mac's card was not dismissed with "Not now".
+ */
+internal fun showsNotificationCard(
+    pushConfigured: Boolean,
+    pushEnabled: Boolean,
+    decided: Boolean,
+    dismissed: Boolean,
+): Boolean = pushConfigured && !pushEnabled && !decided && !dismissed

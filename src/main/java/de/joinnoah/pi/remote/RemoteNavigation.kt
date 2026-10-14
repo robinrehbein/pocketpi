@@ -276,7 +276,7 @@ internal class RemoteNavigator(
             if (current != request) return@launch
             // The Mac of a page the user is on is the one a cold launch opens again (see coldStart).
             if (key is RemoteNavKey.Projects || key is RemoteNavKey.Sessions || key is RemoteNavKey.Chat)
-                canonical.routeId?.let { lastRoute?.save(it) }
+                canonical.routeId?.let { lastRoute?.save(it, used = mode == ActivationMode.USER_OPEN) }
             val chat = canonical.keys().lastOrNull() as? RemoteNavKey.Chat
             // The restored chat's own session is gone (offline, or otherwise dropped by the host).
             // Walk the stacked ancestors closest first, actually re-activating each through the
@@ -337,10 +337,10 @@ internal class RemoteNavigator(
      */
     fun coldStart(state: RemoteState): Boolean {
         if (!state.hostsLoaded) return false
+        forgetGoneHosts(state)
         if (stack.singleOrNull() != RemoteNavKey.Hosts) return true
         val routes = state.hosts.map { it.routeId }
         val stored = lastRoute?.load()
-        stored?.takeIf { it !in routes }?.let { lastRoute?.forget(it) }
         val route = coldStartRoute(routes, stored) ?: return true
         replace(RemoteSelection(route))
         activate(RemoteNavKey.Projects(route), ActivationMode.RESTORE)
@@ -350,6 +350,31 @@ internal class RemoteNavigator(
     /** Forgets [routeId] as the Mac a cold launch opens, once its pairing is removed. */
     fun forgetLastRoute(routeId: String) {
         lastRoute?.forget(routeId)
+    }
+
+    /** The paired Macs the list was last checked against, so each new list is checked once. */
+    private var checkedRoutes: List<String>? = null
+
+    /**
+     * Forgets what is kept for Macs whose pairing is gone (see [LastRouteStore.prune]). Only a read list
+     * says so, so nothing happens until [RemoteState.hostsLoaded] is true.
+     */
+    fun forgetGoneHosts(state: RemoteState) {
+        if (!state.hostsLoaded) return
+        val routes = state.hosts.map { it.routeId }
+        if (routes == checkedRoutes) return
+        checkedRoutes = routes
+        lastRoute?.prune(routes)
+    }
+
+    /** When the Mac was last opened, for its host card; null when it never was. */
+    fun lastUsedAt(routeId: String): Long? = lastRoute?.lastUsedAt(routeId)
+
+    /** Whether "Not now" was pressed on the Mac's notification card. */
+    fun notificationCardDismissed(routeId: String): Boolean = lastRoute?.notificationCardDismissed(routeId) ?: false
+
+    fun dismissNotificationCard(routeId: String) {
+        lastRoute?.dismissNotificationCard(routeId)
     }
 
     fun open(key: RemoteNavKey) {
@@ -1212,6 +1237,7 @@ internal fun RemoteNavigation(
         if (notification == null) navigator.restore()
         repository.state.collect { state ->
             navigator.reconcile(state)
+            navigator.forgetGoneHosts(state)
             // A launch with a target (notification, widget, shortcut, share) opens that instead.
             if (coldLaunch && (launchTargeted || navigator.coldStart(state))) coldLaunch = false
         }
@@ -1337,6 +1363,8 @@ internal fun RemoteNavigation(
                         pushSettings.pushEnabled,
                         enablePush,
                         disablePush,
+                        pushSettings.notificationsDecided,
+                        { settings.markNotificationPromptShown() },
                     )
                 }
             }
@@ -1412,6 +1440,8 @@ private fun RemoteNavDisplay(
     pushEnabled: Boolean,
     enablePush: () -> Unit,
     disablePush: () -> Unit,
+    pushDecided: Boolean,
+    onNotificationDenied: () -> Unit,
 ) {
     NavDisplay(
         backStack = stack,
@@ -1427,7 +1457,7 @@ private fun RemoteNavDisplay(
                 entry<RemoteNavKey.Hosts> { key ->
                     val model = viewModel { HostsViewModel(repository) }
                     CenteredPage {
-                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush)
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
                     }
                 }
                 entry<RemoteNavKey.Projects>(metadata = { key -> navKeyMetadata(key) }) { key ->
@@ -1435,7 +1465,7 @@ private fun RemoteNavDisplay(
                     val column = LocalProjectsColumn.current
                     if (column == null)
                         CenteredPage {
-                            RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush)
+                            RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
                         }
                     else {
                         // Keeps the full column's scroll position while the strip stands in for it.
@@ -1446,13 +1476,13 @@ private fun RemoteNavDisplay(
                             }
                         else
                             holder.SaveableStateProvider("column") {
-                                RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush)
+                                RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
                             }
                     }
                 }
                 entry<RemoteNavKey.Sessions>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { SessionsViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
                 }
                 entry<RemoteNavKey.FolderBrowser>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { FolderBrowserViewModel(repository, key) }
@@ -1470,7 +1500,7 @@ private fun RemoteNavDisplay(
                 }
                 entry<RemoteNavKey.Chat>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ChatViewModel(repository, key, settings) }
-                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush)
+                    RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
                 }
                 entry<RemoteNavKey.Settings>(
                     metadata =
@@ -1483,7 +1513,7 @@ private fun RemoteNavDisplay(
                 ) { key ->
                     val model = viewModel { SettingsViewModel(repository, settings) }
                     CenteredPage {
-                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush)
+                        RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush, pushDecided, onNotificationDenied)
                     }
                 }
             },

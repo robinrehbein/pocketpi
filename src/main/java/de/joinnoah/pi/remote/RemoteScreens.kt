@@ -65,6 +65,9 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
@@ -231,6 +234,10 @@ internal fun RemoteScreen(
     pushEnabled: Boolean,
     enablePush: () -> Unit,
     disablePush: () -> Unit = {},
+    /** Whether the user already answered for push (see [RemoteSettings.notificationsDecided]). */
+    pushDecided: Boolean = false,
+    /** Records a denial of the notification permission as the user's answer, so no card offers it again. */
+    onNotificationDenied: () -> Unit = {},
 ) {
     val state by model.state.collectAsStateWithLifecycle()
     // The first list the user came for is on screen: the time to full display that startup
@@ -1316,7 +1323,10 @@ internal fun RemoteScreen(
     val notificationPermission =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             notificationGranted = granted
-            if (!granted) notificationDenied = true
+            if (!granted) {
+                notificationDenied = true
+                onNotificationDenied()
+            }
             if (granted) enablePush()
         }
     fun enableNotifications() {
@@ -1324,6 +1334,14 @@ internal fun RemoteScreen(
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         else enablePush()
     }
+    // "Not now" hides the card on this Mac's Projects page only, and stays until the pairing goes.
+    val cardRouteId = (key as? RemoteNavKey.Projects)?.routeId
+    var notificationCardDismissed by remember(cardRouteId) {
+        mutableStateOf(cardRouteId != null && navigator.notificationCardDismissed(cardRouteId))
+    }
+    // Quick access shows a few chats per group. Each group's "Show all" lifts that for its own group.
+    var runningShowAll by rememberSaveable { mutableStateOf(false) }
+    var recentShowAll by rememberSaveable { mutableStateOf(false) }
     val title =
         stringResource(
             if (settings) R.string.remote_settings
@@ -1992,7 +2010,42 @@ internal fun RemoteScreen(
                     enabled = !state.loading,
                     onClick = { navigator.openFolders(key.routeId) },
                 )
-            if (key is RemoteNavKey.Sessions || key is RemoteNavKey.Hosts) {
+            // An empty session list names its one action beside the list, so its button stands out; disabled, it is
+            // greyed. A list still loading keeps the small button: most projects have sessions, so the button
+            // changes its shape only for a list that turns out empty.
+            val newSessionEnabled = state.connected && !state.loading && !navigator.mutating
+            if (key is RemoteNavKey.Sessions && state.sessions.isEmpty() && !state.loading) {
+                val labelColor =
+                    if (newSessionEnabled) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                FloatingSurface(
+                    shape = RoundedCornerShape(28.dp),
+                    color =
+                        if (newSessionEnabled) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.surfaceContainerHighest,
+                ) {
+                    Row(
+                        Modifier
+                            .testTag("extendedNewSession")
+                            .heightIn(min = 56.dp)
+                            .clickable(
+                                enabled = newSessionEnabled,
+                                role = Role.Button,
+                                onClick = { navigator.createSession(key.routeId, key.projectId) },
+                            )
+                            .padding(horizontal = 20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, tint = labelColor)
+                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                        Text(
+                            stringResource(R.string.remote_new_session),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = labelColor,
+                        )
+                    }
+                }
+            } else if (key is RemoteNavKey.Sessions || key is RemoteNavKey.Hosts) {
                 FloatingSurface(
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.primary,
@@ -2003,9 +2056,7 @@ internal fun RemoteScreen(
                                 navigator.createSession(key.routeId, key.projectId)
                             else scan = true
                         },
-                        enabled =
-                            if (key is RemoteNavKey.Sessions) state.connected && !state.loading && !navigator.mutating
-                            else true,
+                        enabled = if (key is RemoteNavKey.Sessions) newSessionEnabled else true,
                         modifier = Modifier.size(64.dp),
                     ) {
                         Icon(
@@ -2586,6 +2637,7 @@ internal fun RemoteScreen(
                                 HostCard(
                                     host,
                                     connected = state.connected && state.host?.routeId == host.routeId,
+                                    lastUsedAt = navigator.lastUsedAt(host.routeId),
                                     onOpen = { navigator.open(RemoteNavKey.Projects(host.routeId)) },
                                     onRemove = { removing = host },
                                 )
@@ -2596,16 +2648,17 @@ internal fun RemoteScreen(
                             // the running ones. Then the shared projects, then the recent chats. Beside an open
                             // project the chats hide, as before.
                             // Every waiting chat leads, since the heading promises all of them; running and recent
-                            // chats are capped at three each.
-                            val allChats = if (projectSelected) emptyList() else state.projectChats
-                            val waitingChats =
-                                allChats.filter { it.verified && state.connected && it.session.text("status") == "waiting" }
-                            val runningChats =
-                                allChats.filter { it.verified && state.connected && it.session.text("status") == "running" }.take(3)
-                            val recentChats =
-                                allChats.filter {
-                                    !it.verified || !state.connected || it.session.text("status") !in setOf("waiting", "running")
-                                }.take(3)
+                            // chats are capped at three each until their "Show all" (see quickChats).
+                            val quick =
+                                quickChats(
+                                    if (projectSelected) emptyList() else state.projectChats,
+                                    state.connected,
+                                    showRunningAll = runningShowAll,
+                                    showRecentAll = recentShowAll,
+                                )
+                            val waitingChats = quick.waiting
+                            val runningChats = quick.running
+                            val recentChats = quick.recent
                             if (waitingChats.isNotEmpty()) {
                                 item(key = "project_chats_waiting_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_needs_you))
@@ -2621,11 +2674,42 @@ internal fun RemoteScreen(
                                 projectChatRows(runningChats, routeMarks, state.connected, !state.loading) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
+                                // Directly under the group it expands, so it is not far down the page.
+                                if (quick.runningExpandable) item(key = "project_chats_running_show_all") {
+                                    QuickChatsShowAll(
+                                        expanded = runningShowAll,
+                                        tag = "quickChatsShowAllRunning",
+                                        onClick = { runningShowAll = !runningShowAll },
+                                    )
+                                }
                             }
                             if (state.projects.isEmpty()) {
                                 // Only a list read on the live connection says there are no projects.
                                 if (state.loading) item(key = "projects_loading") { ProjectListSkeleton() }
-                                else if (state.connected) item { Text(stringResource(R.string.remote_empty_projects)) }
+                                else if (state.connected) item(key = "projects_empty") {
+                                    val folders = canOpenFolders(state)
+                                    EmptyState(
+                                        icon = Icons.Outlined.Folder,
+                                        title = stringResource(R.string.remote_empty_projects_title),
+                                        body =
+                                            stringResource(
+                                                if (folders) R.string.remote_empty_projects_open_folder
+                                                else R.string.remote_empty_projects,
+                                            ),
+                                        action = {
+                                            if (folders) {
+                                                Button(
+                                                    onClick = { navigator.openFolders(key.routeId) },
+                                                    modifier = Modifier.testTag("emptyOpenFolder"),
+                                                ) {
+                                                    Icon(Icons.Default.FolderOpen, contentDescription = null)
+                                                    Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                                                    Text(stringResource(R.string.remote_folders_open_folder))
+                                                }
+                                            }
+                                        },
+                                    )
+                                }
                                 else item { Text(stringResource(R.string.remote_projects_unread)) }
                             } else {
                                 item(key = "shared_projects_heading") {
@@ -2660,12 +2744,37 @@ internal fun RemoteScreen(
                                 projectChatRows(recentChats, routeMarks, state.connected, !state.loading) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
+                                if (quick.recentExpandable) item(key = "project_chats_recent_show_all") {
+                                    QuickChatsShowAll(
+                                        expanded = recentShowAll,
+                                        tag = "quickChatsShowAllRecent",
+                                        onClick = { recentShowAll = !recentShowAll },
+                                    )
+                                }
                             }
-                            if (pushConfigured && !pushEnabled) item {
+                            if (
+                                showsNotificationCard(
+                                    pushConfigured,
+                                    pushEnabled,
+                                    pushDecided,
+                                    notificationCardDismissed,
+                                )
+                            ) item(key = "notification_card") {
                                 Section(stringResource(R.string.remote_notifications)) {
                                     Text(stringResource(R.string.remote_notification_help))
-                                    Button(onClick = { enableNotifications() }) {
-                                        Text(stringResource(R.string.remote_notification_allow))
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(onClick = { enableNotifications() }) {
+                                            Text(stringResource(R.string.remote_notification_allow))
+                                        }
+                                        TextButton(
+                                            onClick = {
+                                                cardRouteId?.let(navigator::dismissNotificationCard)
+                                                notificationCardDismissed = true
+                                            },
+                                            modifier = Modifier.testTag("notificationNotNow"),
+                                        ) {
+                                            Text(stringResource(R.string.remote_notification_not_now))
+                                        }
                                     }
                                 }
                             }
@@ -2686,7 +2795,27 @@ internal fun RemoteScreen(
                                 }
                             if (state.sessions.isEmpty()) {
                                 if (state.loading) item { SessionListSkeleton() }
-                                else item { Text(stringResource(R.string.remote_empty_sessions)) }
+                                // Only a list read from the Mac, now or before, says there are no sessions.
+                                else if (!state.connected && !state.stale)
+                                    item(key = "sessions_unread") { Text(stringResource(R.string.remote_sessions_unread)) }
+                                else item(key = "sessions_empty") {
+                                    EmptyState(
+                                        icon = Icons.Outlined.ChatBubbleOutline,
+                                        title = stringResource(R.string.remote_empty_sessions_title),
+                                        body = stringResource(R.string.remote_empty_sessions),
+                                        action = {
+                                            Button(
+                                                onClick = { navigator.createSession(key.routeId, key.projectId) },
+                                                enabled = state.connected && !state.loading && !navigator.mutating,
+                                                modifier = Modifier.testTag("emptyNewSession"),
+                                            ) {
+                                                Icon(Icons.Default.Add, contentDescription = null)
+                                                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                                                Text(stringResource(R.string.remote_new_session))
+                                            }
+                                        },
+                                    )
+                                }
                             }
                             else if (visibleSessions.isEmpty() && (state.connected || state.stale) && !state.loading)
                                 item { Text(stringResource(R.string.remote_offline_sessions_hidden)) }
@@ -3818,6 +3947,14 @@ private fun MacOverflow(
                 modifier = Modifier.testTag("macRemove"),
             )
         }
+    }
+}
+
+/** Under a quick-chat group: lifts its three-chat limit, or folds it back. */
+@Composable
+private fun QuickChatsShowAll(expanded: Boolean, tag: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.testTag(tag)) {
+        Text(stringResource(if (expanded) R.string.remote_projects_show_fewer else R.string.remote_projects_show_all))
     }
 }
 
