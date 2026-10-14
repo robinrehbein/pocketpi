@@ -49,6 +49,8 @@ class RemoteRepositoryTest {
         var route: String? = null
         var closes = 0
         var readyOnConnect = true
+        /** Routes whose handshake never completes, as when that Mac is asleep. */
+        var unreachable: Set<String> = emptySet()
         var failureOnConnect: Int? = null
         var response: (JsonObject) -> JsonObject? = { null }
         var failure: (JsonObject) -> String? = { null }
@@ -59,7 +61,7 @@ class RemoteRepositoryTest {
             route = host.routeId
             val failure = failureOnConnect
             if (failure != null) listener.failed(true, failure)
-            else if (readyOnConnect) listener.ready(capabilities)
+            else if (readyOnConnect && host.routeId !in unreachable) listener.ready(capabilities)
         }
 
         var pairing: JsonObject? = null
@@ -3658,6 +3660,47 @@ class RemoteRepositoryTest {
         transport.failure = { request -> "already_resolved".takeIf { request.text("type") == "question.answer" } }
         val error = runCatching { repository.withHealthyConnection("host") { it.request("question.answer") } }.exceptionOrNull()
         assertEquals("already_resolved", (error as RemoteCommandException).code)
+    }
+
+    @Test
+    fun aKnownNotificationForAnUnreachableMacReconnectsTheMacOnScreen() = runTest {
+        val other = host.copy(routeId = "other", name = "Other")
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, hosts = listOf(host, other), projectHint = { _, _ -> "project" })
+        val selection = RemoteSelection("host", "project", "session")
+        repository.activate(selection)
+        runCurrent()
+        val connects = transport.connects
+        transport.unreachable = setOf("other")
+        val opening = async { repository.openNotification("other", "session") }
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS + 1)
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        // A failed open is no selection: the navigator goes back to the screen it left.
+        assertNull(opening.await())
+        // Other was tried once, without a walk that would only time out again, then Host came back.
+        assertEquals(connects + 2, transport.connects)
+        assertEquals("host", transport.route)
+        val state = repository.state.value
+        assertEquals(selection, state.selection)
+        assertTrue(state.connected)
+        assertFalse(state.loading)
+        assertEquals("session", state.session?.text("id"))
+    }
+
+    @Test
+    fun aKnownNotificationOnAColdStartWithTheMacOfflineReturnsNoSelection() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, navigationStorage = SavedNavigation(savedHost()))
+        transport.unreachable = setOf("host")
+        val opening = async { repository.openNotification("host", "session") }
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS + 1)
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        // Not the empty selection the activation started from, which would collapse the saved stack.
+        assertNull(opening.await())
+        assertEquals(1, transport.connects)
+        assertFalse(repository.state.value.loading)
     }
 
     private fun configuredResponse(transport: Transport): (JsonObject) -> JsonObject? = transport.response

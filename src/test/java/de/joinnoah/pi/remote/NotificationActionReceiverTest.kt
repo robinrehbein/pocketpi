@@ -1,6 +1,11 @@
 package de.joinnoah.pi.remote
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
@@ -23,7 +28,7 @@ class NotificationActionReceiverTest {
     }
 
     private fun answerer(
-        live: suspend (String, suspend (RemoteCommands) -> Unit) -> Unit? = { _, _ -> null },
+        live: suspend (String, () -> Unit, suspend (RemoteCommands) -> Unit) -> Unit? = { _, _, _ -> null },
         background: suspend (PairedHost, suspend (RemoteCommands) -> Unit) -> Unit = { _, _ -> error("no fallback expected") },
         pairedHost: suspend (String) -> PairedHost? = { route -> host.takeIf { route == "r" } },
     ) = NotificationAnswerer(pairedHost = pairedHost, live = live, background = background)
@@ -31,7 +36,7 @@ class NotificationActionReceiverTest {
     @Test
     fun aHealthyAppConnectionCarriesTheAnswer() = runTest {
         val socket = Recording()
-        val outcome = answerer(live = { route, block -> if (route == "r") block(socket.commands) else null })
+        val outcome = answerer(live = { route, _, block -> if (route == "r") block(socket.commands) else null })
             .answer("r", "s", "q", answer)
         assertEquals(AnswerOutcome.SENT, outcome)
         assertEquals(
@@ -59,7 +64,7 @@ class NotificationActionReceiverTest {
         val own = Recording()
         val outcome =
             answerer(
-                live = { _, _ ->
+                live = { _, _, _ ->
                     delay(HEALTHY_REQUEST_TIMEOUT_MILLIS)
                     null
                 },
@@ -74,26 +79,69 @@ class NotificationActionReceiverTest {
     }
 
     @Test
-    fun aSlowPairingLoadStaysInsideTheTimeout() = runTest {
+    fun aBlockingPairingLoadStaysInsideTheTimeout() = runTest {
         var tried = false
-        val outcome =
+        // As a Keystore that hangs: the load blocks its thread, and the receiver only awaits it.
+        val keystore = CountDownLatch(1)
+        val io = CoroutineScope(Dispatchers.IO)
+        try {
+            val outcome =
+                answerer(
+                    live = { _, _, _ ->
+                        tried = true
+                        null
+                    },
+                    pairedHost = {
+                        awaitApart(io) {
+                            keystore.await(10, TimeUnit.SECONDS)
+                            host
+                        }
+                    },
+                ).answer("r", "s", "q", answer)
+            assertEquals(AnswerOutcome.FAILED, outcome)
+            assertEquals(ANSWER_TIMEOUT_MILLIS, currentTime)
+            assertTrue("nothing is sent without the pairing", !tried)
+        } finally {
+            keystore.countDown()
+            io.cancel()
+        }
+    }
+
+    @Test
+    fun anAnswerTheAppConnectionMayHaveSentCountsAsSentWhenTheFallbackFindsItAnswered() = runTest {
+        val refused: suspend (PairedHost, suspend (RemoteCommands) -> Unit) -> Unit =
+            { _, block -> block(Recording { throw RemoteCommandException("already_resolved") }.commands) }
+        val afterSend =
             answerer(
-                live = { _, _ ->
-                    tried = true
+                live = { _, sent, _ ->
+                    // The request went out, then its reply did not come in time.
+                    sent()
+                    delay(HEALTHY_REQUEST_TIMEOUT_MILLIS)
                     null
                 },
-                pairedHost = { CompletableDeferred<PairedHost?>().await() },
+                background = refused,
             ).answer("r", "s", "q", answer)
-        assertEquals(AnswerOutcome.FAILED, outcome)
-        assertEquals(ANSWER_TIMEOUT_MILLIS, currentTime)
-        assertTrue("nothing is sent without the pairing", !tried)
+        assertEquals(AnswerOutcome.SENT, afterSend)
+        // Nothing went out on the app's connection: the answer was someone else's.
+        val beforeSend = answerer(live = { _, _, _ -> null }, background = refused).answer("r", "s", "q", answer)
+        assertEquals(AnswerOutcome.ALREADY_RESOLVED, beforeSend)
+        // Another refusal still fails.
+        val invalid =
+            answerer(
+                live = { _, sent, _ ->
+                    sent()
+                    null
+                },
+                background = { _, block -> block(Recording { throw RemoteCommandException("invalid_answer") }.commands) },
+            ).answer("r", "s", "q", answer)
+        assertEquals(AnswerOutcome.FAILED, invalid)
     }
 
     @Test
     fun anUnpairedHostIsNeverAnswered() = runTest {
         var tried = false
         val outcome =
-            answerer(live = { _, _ ->
+            answerer(live = { _, _, _ ->
                 tried = true
                 null
             }).answer("gone", "s", "q", answer)
@@ -122,7 +170,7 @@ class NotificationActionReceiverTest {
         }
         // The app's connection maps the host's refusal the same way, without trying again.
         val refused =
-            answerer(live = { _, block -> block(Recording { throw RemoteCommandException("already_resolved") }.commands) })
+            answerer(live = { _, _, block -> block(Recording { throw RemoteCommandException("already_resolved") }.commands) })
                 .answer("r", "s", "q", answer)
         assertEquals(AnswerOutcome.ALREADY_RESOLVED, refused)
     }

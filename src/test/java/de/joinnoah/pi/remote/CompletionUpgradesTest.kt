@@ -352,6 +352,35 @@ class CompletionUpgradesTest {
         assertEquals(200L, currentTime)
     }
 
+    /** Projects p0 to p3; p1's list read fails, and [holder]'s list holds session `s`. */
+    private fun failingWalk(holder: String?) =
+        RemoteCommands { type, fields ->
+            when (type) {
+                "projects.list" ->
+                    Wire.objectOf("kind" to "projects", "items" to JsonArray((0 until 4).map { Wire.objectOf("id" to "p$it") }))
+                "sessions.list" -> {
+                    val projectId = fields.single { it.first == "projectId" }.second as String
+                    if (projectId == "p1") throw RemoteConnectionException()
+                    val rows = if (projectId == holder) listOf(Wire.objectOf("id" to "s", "title" to "Found")) else emptyList()
+                    Wire.objectOf("kind" to "sessions", "items" to JsonArray(rows))
+                }
+                else -> error(type)
+            }
+        }
+
+    @Test
+    fun aFailedReadWithoutAHitFailsTheLookup() = runTest {
+        // An unknown session would be labelled as such; a broken connection must stay a failure.
+        val failure = runCatching { failingWalk(holder = null).sessionLabel("s", withPreview = false) }.exceptionOrNull()
+        assertTrue(failure.toString(), failure is RemoteConnectionException)
+    }
+
+    @Test
+    fun aHitWinsOverAnotherProjectsFailedRead() = runTest {
+        val label = failingWalk(holder = "p3").sessionLabel("s", withPreview = false)
+        assertEquals(SessionLabel("Found", null, null, projectId = "p3"), label)
+    }
+
     @Test
     fun aKnownNameSkipsTheWalk() = runTest {
         val log = mutableListOf<String>()

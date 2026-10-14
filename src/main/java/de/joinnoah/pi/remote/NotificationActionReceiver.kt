@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import androidx.core.app.RemoteInput
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -92,8 +93,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
     ): AnswerOutcome =
         NotificationAnswerer(
             pairedHost = { pairedHost(context, it) },
-            live = { route, block ->
-                (context as? RemoteApplication)?.repository?.withHealthyConnection(route, block)
+            live = { route, onSent, block ->
+                (context as? RemoteApplication)?.repository?.withHealthyConnection(route, onSent, block)
             },
         ).answer(routeId, sessionId, questionId, answer)
 
@@ -109,18 +110,22 @@ class NotificationActionReceiver : BroadcastReceiver() {
          * awaited, so a Keystore that hangs cannot hold the broadcast past its deadline.
          */
         suspend fun pairedHost(context: Context, routeId: String): PairedHost? =
-            scope
-                .async {
-                    try {
-                        PairingStore(context).load().find { it.routeId == routeId }
-                    } catch (swallowed: Exception) {
-                        Diagnostics.caught("notificationAction.pairedHost", swallowed)
-                        null
-                    }
+            awaitApart(scope) {
+                try {
+                    PairingStore(context).load().find { it.routeId == routeId }
+                } catch (swallowed: Exception) {
+                    Diagnostics.caught("notificationAction.pairedHost", swallowed)
+                    null
                 }
-                .await()
+            }
     }
 }
+
+/**
+ * Runs the blocking [load] on [scope] and only awaits it, so the caller's timeout still ends the
+ * wait while [load] blocks its own thread.
+ */
+internal suspend fun <T> awaitApart(scope: CoroutineScope, load: () -> T): T = scope.async { load() }.await()
 
 // Broadcast receivers get about ten seconds; leave room to post the result.
 internal const val ANSWER_TIMEOUT_MILLIS = 8_500L
@@ -130,12 +135,12 @@ internal const val ANSWER_TIMEOUT_MILLIS = 8_500L
  * connection when it is healthy ([live] returns null otherwise, or once its short timeout passed),
  * else over a short-lived connection of its own. A host error maps to the outcome the notification
  * shows. An answer the app's connection may have sent before its timeout is sent once more on the
- * fallback, which the host then refuses as already answered.
+ * fallback; the host's "already answered" then most likely means this answer, so it counts as sent.
  */
 internal class NotificationAnswerer(
     private val timeoutMillis: Long = ANSWER_TIMEOUT_MILLIS,
     private val pairedHost: suspend (String) -> PairedHost?,
-    private val live: suspend (String, suspend (RemoteCommands) -> Unit) -> Unit?,
+    private val live: suspend (String, () -> Unit, suspend (RemoteCommands) -> Unit) -> Unit?,
     private val background: suspend (PairedHost, suspend (RemoteCommands) -> Unit) -> Unit = { host, block ->
         BackgroundRemoteClient().use(host, block)
     },
@@ -147,7 +152,16 @@ internal class NotificationAnswerer(
                 val host = pairedHost(routeId) ?: return@withTimeoutOrNull false
                 try {
                     val send: suspend (RemoteCommands) -> Unit = { it.answerQuestion(sessionId, questionId, answer) }
-                    live(routeId, send) ?: background(host, send)
+                    // Set from the app's connection, on its own thread.
+                    val sentLive = AtomicBoolean(false)
+                    if (live(routeId, { sentLive.set(true) }, send) == null) {
+                        try {
+                            background(host, send)
+                        } catch (e: RemoteCommandException) {
+                            // The app's connection timed out or dropped after the answer went out.
+                            if (!sentLive.get() || e.code != "already_resolved") throw e
+                        }
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {

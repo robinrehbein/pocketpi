@@ -34,6 +34,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -922,9 +923,11 @@ internal fun RemoteNavigation(
             Box(
                 // While something in the layout has focus (the composer, the search field), the
                 // shortcuts run here, before that field sees the keys.
-                if (shortcuts)
+                (if (shortcuts)
                     Modifier.fillMaxSize().onPreviewKeyEvent { navigator.key(it, activeTwoPane, targets, unhandled = false) }
-                else Modifier.fillMaxSize()
+                else Modifier.fillMaxSize())
+                    // The opening notification covers the screen beneath; TalkBack must not reach it either.
+                    .then(if (navigator.openingNotification != null) Modifier.clearAndSetSemantics {} else Modifier)
             ) {
                 RemoteNavDisplay(
                     stack,

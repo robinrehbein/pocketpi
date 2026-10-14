@@ -204,9 +204,15 @@ interface RemoteRepository {
      * the Mac within [HEALTHY_CONNECTION_MILLIS]; each request on it gives up after
      * [HEALTHY_REQUEST_TIMEOUT_MILLIS]. Returns null when the connection is not known to be healthy,
      * or a request on it timed out or was lost, so the caller opens a connection of its own. A host
-     * error passes through as a [RemoteCommandException]. Any thread may call it.
+     * error passes through as a [RemoteCommandException]. Any thread may call it. [onSent] runs as
+     * each request goes out, so a caller that falls back after a timeout knows the Mac may already
+     * have it.
      */
-    suspend fun <T> withHealthyConnection(routeId: String, block: suspend (RemoteCommands) -> T): T? = null
+    suspend fun <T> withHealthyConnection(
+        routeId: String,
+        onSent: () -> Unit = {},
+        block: suspend (RemoteCommands) -> T,
+    ): T? = null
 
     /**
      * Starts a new session that continues from just before the user message [messageId] of the

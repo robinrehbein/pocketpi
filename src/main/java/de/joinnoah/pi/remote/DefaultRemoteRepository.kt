@@ -2489,6 +2489,7 @@ class DefaultRemoteRepository(
         mode: ActivationMode,
         force: Boolean,
         useCache: Boolean = true,
+        onFailed: (() -> Unit)? = null,
     ): RemoteSelection {
         initialized.await()
         restorePending = false
@@ -2772,6 +2773,7 @@ class DefaultRemoteRepository(
             checkEpoch(epoch)
             // A lost connection already set its own, more specific error, or reconnects quietly.
             if (!connectionDown()) reportError(R.string.remote_request_error)
+            onFailed?.invoke()
             return if (mode == ActivationMode.USER_OPEN && !cacheSelected) previousSelection else state.value.selection
         } finally {
             // What was read alongside and not taken is dropped; its late replies find no request.
@@ -3029,7 +3031,19 @@ class DefaultRemoteRepository(
         // session the app never saw. A stale project (the session is not in it) lands on that
         // project's list or the projects, and the walk still finds the session.
         notificationProject(routeId, sessionId)?.let { projectId ->
-            val opened = activate(RemoteSelection(routeId, projectId, sessionId), ActivationMode.USER_OPEN)
+            reconnectEnabled = true
+            var failed = false
+            val opened =
+                activate(
+                    RemoteSelection(routeId, projectId, sessionId),
+                    ActivationMode.USER_OPEN,
+                    force = false,
+                    onFailed = { failed = true },
+                )
+            // A failed open (the Mac unreachable, a request refused) hands back the selection from
+            // before it, which may be another Mac's: that is no answer to the tap. The walk would
+            // only fail the same way, so the previous screen comes back as when the walk fails.
+            if (failed || opened.routeId != routeId) return restorePrevious(previous, routeId, selectionEpoch)
             val stale =
                 opened == RemoteSelection(routeId) ||
                     (opened == RemoteSelection(routeId, projectId) &&
@@ -3061,6 +3075,15 @@ class DefaultRemoteRepository(
             if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
         }
         if (resolved != null) return activate(resolved, ActivationMode.USER_OPEN)
+        return restorePrevious(previous, routeId, epoch)
+    }
+
+    /**
+     * After a notification's open failed: reconnects the Mac that was on screen before when the
+     * notification was for another one, puts its [previous] state back, and returns null so the
+     * navigator restores its own stack.
+     */
+    private suspend fun restorePrevious(previous: RemoteState, routeId: String, epoch: Long): RemoteSelection? {
         if (epoch == selectionEpoch && previous.host != null && previous.host.routeId != routeId) {
             try {
                 connect(previous.host, epoch)
@@ -5439,6 +5462,7 @@ class DefaultRemoteRepository(
         type: String,
         vararg fields: Pair<String, Any?>,
         timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
+        beforeSend: (() -> Unit)? = null,
     ): JsonObject {
         check(state.value.connected && connectionCompletions.size < 32)
         val id = Wire.random()
@@ -5448,6 +5472,7 @@ class DefaultRemoteRepository(
         val started = Diagnostics.now()
         var outcome = "failed"
         try {
+            beforeSend?.invoke()
             transport.send(payload)
             val result =
                 withTimeoutOrNull(timeoutMillis) { completion.await() }
@@ -5472,6 +5497,7 @@ class DefaultRemoteRepository(
 
     override suspend fun <T> withHealthyConnection(
         routeId: String,
+        onSent: () -> Unit,
         block: suspend (RemoteCommands) -> T,
     ): T? {
         val main = scope.coroutineContext[ContinuationInterceptor] ?: EmptyCoroutineContext
@@ -5491,7 +5517,12 @@ class DefaultRemoteRepository(
                         if (connection != generation || !state.value.connected || activeHost?.routeId != routeId)
                             throw HealthyConnectionGone()
                         try {
-                            connectionRequest(type, *fields, timeoutMillis = HEALTHY_REQUEST_TIMEOUT_MILLIS)
+                            connectionRequest(
+                                type,
+                                *fields,
+                                timeoutMillis = HEALTHY_REQUEST_TIMEOUT_MILLIS,
+                                beforeSend = onSent,
+                            )
                         } catch (e: RemoteRequestException) {
                             // The host answered: its code means the same on any connection.
                             if (e.answered) throw RemoteCommandException(e.code)
