@@ -1,4 +1,4 @@
-# PocketPi – Handover (Stand 2026-10-14, ~16:20 UTC)
+# PocketPi – Handover (Stand 2026-10-14, ~17:35 UTC)
 
 Repo: `robinrehbein/pocketpi`. Regeln stehen in `CLAUDE.md`; dazu:
 - Robin auf Deutsch antworten; Code, Commits und PRs auf Englisch.
@@ -15,21 +15,18 @@ Robin hat erlaubt, selbstständig zu mergen. Melden soll man sich nur bei Proble
 - **Gemerged:**
   - Dependabot #87, #93, #94, #95, #96, #97
   - Lane-PRs #132 (B13), #133 (A16), #134 (B20)
+  - #136 (B21) und #137 (B14), beide mit Fixes nach dem Merge von main, alle CI-Jobs grün
   - Fix #135 (Composer-Emulator-Test) und Dependabot #89 (wearable 20), beide von Robin gemerged
 - **Lane A** (A1–A16) ist komplett gemerged.
-- **`main` ist GRÜN** auf `6f9411e`, das ist der letzte CI-Push-Lauf.
+- `main` steht auf `887d5b4` (Merge von #137). Die CI dafür lief bei der Übergabe noch; die letzte sicher grüne Push-CI war `6f9411e`.
 
 ## Offen / als Nächstes
-1. **PR #136 (B21, `claude/composer-content`)** ist offen, als Draft.
-   - Stand bei der Übergabe: Unit, Lint, Tablet und Minified sind grün; Emulator und Benchmark liefen noch.
-   - Wenn alle Jobs grün sind: Draft aufheben und mit Merge-Commit mergen.
-   - Wenn er rot ist: das Artefakt `pocketpi-emulator` herunterladen, `TEST-*.xml` lesen und die Ursache beheben.
+1. Zuerst die `main`-CI auf `887d5b4` prüfen. Ist sie rot, das zuerst beheben.
 2. **Lane B und Lane C** laufen noch als Workflows in der alten Session. In einer neuen Session laufen sie NICHT weiter.
    - Noch ohne Branch oder PR:
-     - Lane B: B14 page-headers, B15 mac-hub, B16 list-empty-states, B17 theme, B18 onboarding-settings, B19 chat-actions, B24 chat-a11y, B25 copy-sweep.
+     - Lane B: B15 mac-hub, B16 list-empty-states, B17 theme, B18 onboarding-settings, B19 chat-actions, B24 chat-a11y, B25 copy-sweep.
      - Lane C: B22 compact-chrome, B23 markdown.
    - Zuerst prüfen, was inzwischen existiert: `git ls-remote origin 'refs/heads/claude/*'` und die Liste offener PRs.
-   - B14 hat einen unfertigen Snapshot auf `wip/page-headers` (siehe unten).
    - Fehlende Items je Branch: umsetzen, unabhängig reviewen, Checks laufen lassen, als Draft-PR öffnen.
 3. **Merge-Regel für Lane-PRs (verschärft):**
    - Erst mergen, wenn ALLE Jobs grün sind: Unit, Lint, Emulator, Tablet emulator, Minified smoke, Benchmark isolation.
@@ -47,7 +44,8 @@ Robin hat erlaubt, selbstständig zu mergen. Melden soll man sich nur bei Proble
 ## Gerätechecks für Robin (nicht selbst behaupten)
 - **R8:** Pairing, Push + Antwort aus der Benachrichtigung, Widget, Share, App-Sperre, Artefakt öffnen, Übergabe an die Uhr, Play-Pre-Launch-Bericht.
 - **Neue Funktionen:**
-  - Composer: Bild vom Keyboard einfügen, Rich Paste, langes Einfügen als Datei (#136)
+  - Einheitlicher Seitenkopf; Providers und Folders behalten den Chat-Kontext (#137)
+- Composer: Bild vom Keyboard einfügen, Rich Paste, langes Einfügen als Datei (#136)
 - Wearable-Lib 20 (#89): Übergabe an die Uhr erneut prüfen
 - Command Palette und Session-Wechsel (Tab mit Tastatur)
   - Activity Board, angepinnte Sessions, Ungelesen-Marker
@@ -77,8 +75,10 @@ https://claude.ai/artifact/2SDQzjycdQ22cxMpYci2LG
 - `session.status` auch für andere Projekte liefern (aus B12)
 
 ## WIP-Snapshots (von den Lane-Agenten, Stand ~15:50 UTC)
-- `wip/page-headers` = B14 in Arbeit, auf `claude/activity-board` (B13, gemerged) aufgebaut, nicht committet, nicht reviewt.
-- `wip/composer-content`: überholt, B21 ist jetzt PR #136. Den Branch nach dem Merge löschen.
-Weitermachen: `git checkout -b claude/page-headers origin/wip/page-headers`, dann `main` hineinmergen, fertig bauen, reviewen, PR öffnen. B21 genauso.
+- `wip/page-headers`: überholt, B14 ist als #137 gemerged. Löschen.
+- `wip/composer-content`: überholt, B21 ist als #136 gemerged. Löschen.
 Kann es sein, dass die Agenten der alten Session diese Branches inzwischen selbst als `claude/page-headers` bzw. `claude/composer-content` gepusht haben? Das zuerst prüfen; der neuere Stand gewinnt.
 Dieses Handover liegt auch auf dem Branch `wip/handover` (HANDOVER.md).
+
+## Lehre aus diesem Tag
+Stacked Lane-Branches liegen oft 60 bis 100 Commits hinter `main`. Deshalb immer `main` hineinmergen, bevor die CI zählt. Danach sind schon mehrmals echte Fehler aufgetaucht (Layout-Kopf, Composer-Typerkennung). Die Testberichte stehen im Artefakt `pocketpi-emulator` bzw. `pocketpi-unit-tests` (TEST-*.xml). Der Fehler in `PushDeliverySetupTest` dort ist nur ein übersprungener Test (Assumption) und bedeutungslos.
