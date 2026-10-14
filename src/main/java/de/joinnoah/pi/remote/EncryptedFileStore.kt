@@ -59,14 +59,7 @@ class EncryptedFileStore(
             }
             require(bytes.size <= MAX_FILE_BYTES)
             try {
-                val cipher = Cipher.getInstance(TRANSFORMATION)
-                cipher.init(
-                    Cipher.DECRYPT_MODE,
-                    key(alias),
-                    GCMParameterSpec(TAG_BYTES * 8, bytes, 0, IV_BYTES),
-                )
-                cipher.updateAAD(alias.toByteArray())
-                cipher.doFinal(bytes, IV_BYTES, bytes.size - IV_BYTES)
+                withKey { decrypt(bytes) }
             } catch (e: Exception) {
                 val unreadable = unreadable(e) ?: throw e.also { forgetKeyOn(it) }
                 Diagnostics.caught("store.quarantine", e)
@@ -80,7 +73,7 @@ class EncryptedFileStore(
         synchronized(lock) {
             val bytes =
                 try {
-                    encrypt(value)
+                    withKey { encrypt(value) }
                 } catch (e: Exception) {
                     if (unreadable(e) != Unreadable.KEY) throw e.also { forgetKeyOn(it) }
                     // The file is replaced anyway, so a new key lets the write go through.
@@ -106,6 +99,28 @@ class EncryptedFileStore(
         cipher.updateAAD(alias.toByteArray())
         return cipher.iv + cipher.doFinal(value)
     }
+
+    private fun decrypt(bytes: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, key(alias), GCMParameterSpec(TAG_BYTES * 8, bytes, 0, IV_BYTES))
+        cipher.updateAAD(alias.toByteArray())
+        return cipher.doFinal(bytes, IV_BYTES, bytes.size - IV_BYTES)
+    }
+
+    /**
+     * Runs [block], which takes the key of [alias]. A key the Keystore refuses once is asked for
+     * again before anything is deleted: some Keystores refuse while their daemon is not ready yet
+     * (after a boot, say), and one such failure must not destroy the pairings and every attachment
+     * under the alias. A second failure is left to the caller, which quarantines.
+     */
+    private fun <T> withKey(block: () -> T): T =
+        try {
+            block()
+        } catch (e: Exception) {
+            if (unreadable(e) != Unreadable.KEY) throw e
+            forgetCachedKey(alias)
+            block()
+        }
 
     private fun quarantine(dropKey: Boolean) {
         if (dropKey) dropKey(alias)
@@ -158,6 +173,11 @@ class EncryptedFileStore(
 
         private fun key(alias: String): SecretKey =
             synchronized(keyLock) { keys.getOrPut(alias) { loadKey(alias) } }
+
+        /** Forgets the cached key of [alias] only; the next use loads it from the Keystore again. */
+        private fun forgetCachedKey(alias: String) {
+            synchronized(keyLock) { keys.remove(alias) }
+        }
 
         /** Forgets the key of [alias] here and in the Keystore; the next use creates a new one. */
         private fun dropKey(alias: String) {

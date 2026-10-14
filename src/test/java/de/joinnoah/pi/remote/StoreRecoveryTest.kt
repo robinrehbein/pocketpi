@@ -251,6 +251,41 @@ class StoreRecoveryTest {
     }
 
     @Test
+    fun aKeyThatFailsOnceIsLoadedAgainBeforeAnythingIsDeleted() {
+        val store = EncryptedFileStore(context, "a.enc", alias)
+        store.write("a".toByteArray())
+        EncryptedFileStore.forgetCachedKeys()
+        var failed = false
+        EncryptedFileStore.loadKey = {
+            if (!failed) {
+                failed = true
+                throw UnrecoverableKeyException("keystore not ready")
+            }
+            originalLoadKey(it)
+        }
+        assertEquals("a", store.read()!!.decodeToString())
+        assertFalse(store.takeReset())
+        assertTrue(file("a.enc").exists())
+        assertNotNull(storedKey())
+    }
+
+    @Test
+    fun theAppStoresHandOutOneInstancePerFile() {
+        val stores = AppStores(context)
+        assertSame(stores.pairings, stores.pairings)
+        assertSame(stores.pairingFile, stores.pairingFile)
+        assertSame(stores.routes, stores.routes)
+        assertSame(stores.drafts, stores.drafts)
+        assertSame(stores.home, stores.home)
+        assertSame(stores.prompts, stores.prompts)
+        stores.pairings.save(listOf(host))
+        corrupt("paired-hosts.enc")
+        // The reset is reported once, whichever caller loads the shared store first.
+        assertEquals(emptyList<PairedHost>(), stores.pairings.load())
+        assertTrue(stores.pairingFile.takeReset())
+    }
+
+    @Test
     fun aPairedHostNeverPrintsItsSecret() {
         val printed = PairedHost("route", "https://relay.test", "device", "s3cr3t-value", "Mac").toString()
         assertFalse(printed.contains("s3cr3t-value"))
