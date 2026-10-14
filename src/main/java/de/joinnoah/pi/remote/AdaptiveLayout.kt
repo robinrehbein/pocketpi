@@ -85,8 +85,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.input.key.Key
@@ -1291,6 +1293,7 @@ internal fun SessionSearchField(
     focusRequester: FocusRequester,
 ) {
     val focusManager = LocalFocusManager.current
+    var focused by remember { mutableStateOf(false) }
     TextField(
         value = query,
         onValueChange = onQuery,
@@ -1312,6 +1315,11 @@ internal fun SessionSearchField(
         modifier =
             Modifier.fillMaxWidth()
                 .focusRequester(focusRequester)
+                // Without an outline, focus would show only as the caret.
+                .onFocusChanged { focused = it.isFocused }
+                .then(
+                    if (focused) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape) else Modifier
+                )
                 // Down leaves the one-line field for the rows below it, as in a list.
                 .onPreviewKeyEvent { event ->
                     event.key == Key.DirectionDown && event.type == KeyEventType.KeyDown &&
