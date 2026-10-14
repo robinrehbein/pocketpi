@@ -78,6 +78,9 @@ internal object LaunchIntents {
     fun open(context: Context, routeId: String, sessionId: String): PendingIntent =
         pending(context, session(context, routeId, sessionId))
 
+    /** A notification's tap target that opens the app without choosing a session. */
+    fun openApp(context: Context): PendingIntent = pending(context, app(context))
+
     /** A notification's tap target for [target], with its background jobs when it names them. */
     fun open(context: Context, target: NotificationTarget): PendingIntent =
         pending(context, notification(context, target))

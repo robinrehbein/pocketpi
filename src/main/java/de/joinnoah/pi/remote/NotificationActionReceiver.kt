@@ -19,9 +19,16 @@ import kotlinx.serialization.json.jsonObject
  * authenticated connection sends `question.answer`; the whole exchange is bounded well below the
  * broadcast deadline. The notification shows the result: sent, already answered, or failed with an
  * "Open" action.
+ *
+ * It also sends a reply typed into a completion notification ([CompletionReplier]), and drops a
+ * Mac's group summary once the user dismissed the group's last notification.
  */
 class NotificationActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        when (intent.action) {
+            RemoteNotifications.ACTION_REPLY -> return reply(context, intent)
+            RemoteNotifications.ACTION_DISMISSED -> return dismissed(context, intent)
+        }
         if (intent.action != RemoteNotifications.ACTION_ANSWER) return
         val routeId = intent.getStringExtra(RemoteNotifications.EXTRA_ROUTE)
         val sessionId = intent.getStringExtra(RemoteNotifications.EXTRA_TARGET)
@@ -81,6 +88,72 @@ class NotificationActionReceiver : BroadcastReceiver() {
         }
     }
 
+    private fun dismissed(context: Context, intent: Intent) {
+        val routeId = intent.getStringExtra(RemoteNotifications.EXTRA_ROUTE)
+        val sessionId = intent.getStringExtra(RemoteNotifications.EXTRA_TARGET)
+        val id = intent.getIntExtra(RemoteNotifications.EXTRA_NOTIFICATION_ID, -1)
+        if (!isOpaqueId(routeId) || !isOpaqueId(sessionId) || id < 0) return
+        RemoteNotifications.onDismissed(context.applicationContext, routeId!!, sessionId!!, id)
+    }
+
+    /**
+     * Sends a reply to a completion as the session's next prompt. The notification shows the reply
+     * at once while it is being sent, then whether it was sent, failed, or may not have arrived.
+     */
+    private fun reply(context: Context, intent: Intent) {
+        val routeId = intent.getStringExtra(RemoteNotifications.EXTRA_ROUTE)
+        val sessionId = intent.getStringExtra(RemoteNotifications.EXTRA_TARGET)
+        if (!isOpaqueId(routeId) || !isOpaqueId(sessionId)) return
+        val app = context.applicationContext
+        val text =
+            replyText(
+                RemoteInput.getResultsFromIntent(intent)
+                    ?.getCharSequence(RemoteNotifications.REPLY_KEY)
+            )
+        if (text == null) {
+            RemoteNotifications.postEmptyCompletionReply(app, routeId!!, sessionId!!)
+            return
+        }
+        // A late name lookup would put the plain completion, with its Reply, back over the reply.
+        CompletionUpgrades.cancelCompletion(app, routeId!!, sessionId!!)
+        // Read before the reply replaces it, so every later state still shows what it answers.
+        val conversation = RemoteNotifications.conversation(app, routeId, sessionId)
+        RemoteNotifications.postReply(app, routeId, sessionId, conversation, text, sending = true)
+        val pending = goAsync()
+        scope.launch {
+            try {
+                val outcome = replier(app).send(routeId, sessionId, text)
+                RemoteNotifications.postReplyOutcome(app, routeId, sessionId, outcome, conversation, text)
+                if (outcome == ReplyOutcome.SENT)
+                    (app as? RemoteApplication)?.onRepliedInBackground(routeId, sessionId)
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("notificationAction.reply", swallowed)
+                // Never crash after the reply may already be sent; the session shows the truth.
+            } finally {
+                pending.finish()
+            }
+        }
+    }
+
+    private fun replier(app: Context) =
+        CompletionReplier(
+            pairedHost = { pairedHost(app, it) },
+            live = { routeId, block ->
+                (app as? RemoteApplication)?.healthyConnection()?.withHealthyConnection(routeId, block)
+            },
+            background = { host, block -> BackgroundRemoteClient().use(host, block) },
+        )
+
+    /** The paired host of [routeId], or null when it is not paired or the pairings can't be read. */
+    private fun pairedHost(context: Context, routeId: String): PairedHost? =
+        try {
+            PairingStore(context).load().find { it.routeId == routeId }
+                ?.also(RemoteNotifications::rememberHost)
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("notificationAction.pairedHost", swallowed)
+            null
+        }
+
     private suspend fun answer(
         context: Context,
         routeId: String,
@@ -88,13 +161,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
         questionId: String,
         answer: JsonObject,
     ): AnswerOutcome {
-        val host =
-            try {
-                PairingStore(context).load().find { it.routeId == routeId }
-            } catch (swallowed: Exception) {
-                Diagnostics.caught("notificationAction.answer", swallowed)
-                null
-            } ?: return AnswerOutcome.FAILED
+        val host = pairedHost(context, routeId) ?: return AnswerOutcome.FAILED
         var error: Throwable? = null
         val finished =
             withTimeoutOrNull(ANSWER_TIMEOUT_MILLIS) {

@@ -35,13 +35,25 @@ class CompletionUpgradesTest {
         RemoteNotifications.createChannel(context)
     }
 
+    /** The session's notifications; its Mac's group summary has a tag of its own. */
+    private fun sessionNotifications() =
+        manager.activeNotifications.filter { it.tag == RemoteNotifications.tag("r", "s") }
+
+    /** A completion is a conversation with pi; a subagent or job notice is not. */
+    private fun conversation() =
+        NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(
+            sessionNotifications().single().notification
+        )
+
     private fun title() =
-        manager.activeNotifications.single().notification.extras
-            .getCharSequence(NotificationCompat.EXTRA_TITLE).toString()
+        conversation()?.conversationTitle?.toString()
+            ?: sessionNotifications().single().notification.extras
+                .getCharSequence(NotificationCompat.EXTRA_TITLE).toString()
 
     private fun text() =
-        manager.activeNotifications.single().notification.extras
-            .getCharSequence(NotificationCompat.EXTRA_TEXT).toString()
+        conversation()?.messages?.single()?.text?.toString()
+            ?: sessionNotifications().single().notification.extras
+                .getCharSequence(NotificationCompat.EXTRA_TEXT).toString()
 
     /** What [LabelUpgradeWorker] does with a result. */
     private fun apply(result: LabelResult) {
@@ -60,13 +72,8 @@ class CompletionUpgradesTest {
                 .run(host, complete) { true }
         apply(result)
         assertEquals("Fix the login bug finished", title())
-        assertEquals("pocketpi", text())
-        val notification = manager.activeNotifications.single()
-        assertEquals(1, manager.activeNotifications.size)
-        assertEquals(
-            "pocketpi\nAll tests pass now.",
-            notification.notification.extras.getCharSequence(NotificationCompat.EXTRA_BIG_TEXT).toString(),
-        )
+        assertEquals("pocketpi\nAll tests pass now.", text())
+        val notification = sessionNotifications().single()
         // The lock screen still sees nothing about the session.
         assertEquals(
             "pi has finished",
@@ -128,7 +135,7 @@ class CompletionUpgradesTest {
         RemoteNotifications.postAttention(context, payload, (result as LabelResult.Post).label)
         assertEquals("Subagent finished", title())
         assertEquals("Refactor parser · pocketpi", text())
-        assertEquals(1, manager.activeNotifications.size)
+        assertEquals(1, sessionNotifications().size)
     }
 
     @Test

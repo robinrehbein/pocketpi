@@ -198,6 +198,40 @@ class HomeSurfacesShortcutSignatureTest {
         assertEquals(BuildConfig.VERSION_CODE, prefs.getInt(PUBLISHED_SHORTCUTS_VERSION_KEY, 0))
     }
 
+    private fun longLived(shortcut: ShortcutInfo) =
+        ShortcutInfo::class.java.getMethod("isLongLived").invoke(shortcut) as Boolean
+
+    @Test
+    fun notifiedSessionsGetLongLivedShortcutsInOneSetWithinTheLimit() = runBlocking {
+        shadowOf(shortcuts).setMaxShortcutCountPerActivity(6)
+        persist(emptyList())
+        val now = System.currentTimeMillis()
+        val snapshot =
+            HomeSnapshot(
+                paired = true,
+                sessions = (1..5).map { session("s$it", "Session $it") },
+                notified =
+                    listOf(
+                        NotifiedSession("route", "n1", "Asked a question", "Project", now - 1),
+                        // Not named yet: the shortcut still needs a label.
+                        NotifiedSession("route", "n2", at = now - 2),
+                        NotifiedSession("route", "n3", at = now - 3),
+                    ),
+            )
+        surfaces().publishShortcuts(snapshot)
+        val published = shortcuts.dynamicShortcuts.sortedBy { it.rank }
+        assertEquals(6, published.size)
+        assertEquals(
+            listOf("s1", "s2", "s3", "s4", "n1", "n2").map { shortcutId("route", it) },
+            published.map { it.id },
+        )
+        assertTrue(published.all(::longLived))
+        assertTrue(published.all { it.locusId?.id == it.id })
+        assertEquals("Asked a question", published[4].shortLabel)
+        assertEquals("Untitled session", published[5].shortLabel)
+        assertEquals("n2", published[5].intent?.getStringExtra(RemoteNotifications.EXTRA_TARGET))
+    }
+
     @Test
     fun anUpdateReachesTheNonExportedPackageReplacedReceiver() {
         val receivers =

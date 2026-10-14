@@ -96,6 +96,12 @@ internal const val QUIET_RECONNECT_MILLIS = 5_000L
 /** The default wait for a request's reply. */
 internal const val REQUEST_TIMEOUT_MILLIS = 30_000L
 
+/** The app's connection counts as healthy for background work while a frame came this recently. */
+internal const val HEALTHY_INBOUND_MILLIS = 25_000L
+
+/** How long background work waits for a reply over the app's connection. */
+internal const val HEALTHY_REQUEST_TIMEOUT_MILLIS = 4_000L
+
 /** Back this soon, on the same screen and with frames flowing, the app resumes without a request. */
 internal const val RESUME_QUIET_AWAY_MILLIS = 15_000L
 
@@ -254,7 +260,10 @@ class DefaultRemoteRepository(
     private val folderEntries = LinkedHashMap<String, FolderEntry>()
     /** host.event payloads that arrived before their clone.started result, by clone ID. */
     private val earlyCloneEvents = linkedMapOf<String, JsonObject>()
-    /** Folder and clone requests; a selection change does not cancel them, a lost connection does. */
+    /**
+     * Folder, clone and background requests ([withHealthyConnection]); a selection change does not
+     * cancel them, a lost connection does.
+     */
     private val folderCompletions = mutableMapOf<String, CompletableDeferred<JsonObject>>()
     private var openCounter = 0L
     private var providerVersion = 0L
@@ -4781,6 +4790,55 @@ class DefaultRemoteRepository(
         } finally {
             folderCompletions.remove(id)
         }
+    }
+
+    /**
+     * Runs [block] over this connection for work outside the UI, such as a reply from a
+     * notification, when it is connected to [routeId] and a frame arrived within
+     * [HEALTHY_INBOUND_MILLIS]. Otherwise it returns null without sending anything, and the caller
+     * opens a connection of its own. A half-open socket would make that work slower, not faster,
+     * so a quiet one does not count. The requests are independent of the selection, like folder
+     * requests, and wait at most [HEALTHY_REQUEST_TIMEOUT_MILLIS] for their reply.
+     */
+    internal suspend fun <T> withHealthyConnection(
+        routeId: String,
+        block: suspend (MutationCommands) -> T,
+    ): T? {
+        val main = scope.coroutineContext.minusKey(Job)
+        val healthy =
+            withContext(main) {
+                val inbound = lastInboundAt
+                state.value.connected && activeHost?.routeId == routeId && inbound != null &&
+                    now() - inbound in 0 until HEALTHY_INBOUND_MILLIS
+            }
+        if (!healthy) return null
+        return block(
+            object : MutationCommands {
+                override suspend fun request(type: String, vararg fields: Pair<String, Any?>) =
+                    mutate(Wire.random(), type, *fields)
+
+                override suspend fun mutate(
+                    requestId: String,
+                    type: String,
+                    vararg fields: Pair<String, Any?>,
+                ): JsonObject =
+                    withContext(main) {
+                        check(
+                            state.value.connected && activeHost?.routeId == routeId &&
+                                requestId !in folderCompletions && folderCompletions.size < 32
+                        )
+                        val completion = CompletableDeferred<JsonObject>()
+                        folderCompletions[requestId] = completion
+                        try {
+                            transport.send(Wire.objectOf("type" to type, "requestId" to requestId, *fields))
+                            withTimeoutOrNull(HEALTHY_REQUEST_TIMEOUT_MILLIS) { completion.await() }
+                                ?: throw RemoteRequestException.timeout()
+                        } finally {
+                            folderCompletions.remove(requestId)
+                        }
+                    }
+            }
+        )
     }
 
     private fun failFolderRequests() {

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_notification_agent">pi</string>
+    <string name="remote_notification_you">Du</string>
+    <string name="remote_notification_reply_complete_hint">Nachricht an pi</string>
+    <string name="remote_notification_reply_sending">Wird gesendet …</string>
+    <string name="remote_notification_reply_failed_title">Antwort nicht gesendet</string>
+    <string name="remote_notification_reply_failed">Die Antwort hat pi nicht erreicht. Sende sie noch mal oder öffne die Sitzung.</string>
+    <string name="remote_notification_reply_uncertain_title">Antwort vielleicht nicht angekommen</string>
+    <string name="remote_notification_reply_uncertain">Öffne die Sitzung und prüfe, ob pi sie bekommen hat, bevor du sie noch mal sendest.</string>
+    <string name="remote_notification_reply_empty">Die Antwort war leer und wurde nicht gesendet.</string>
+    <string name="remote_notification_review_plan">In der App prüfen</string>
+    <string name="remote_notification_group_mac">Dein Mac</string>
+</resources>
