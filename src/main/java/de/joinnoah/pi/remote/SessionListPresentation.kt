@@ -31,6 +31,10 @@ internal data class SessionListItem(
      * [RemoteState.stale]), not a live one: the row shows it muted and says so.
      */
     val lastKnown: Boolean = false,
+    /** Pinned on this phone (see [SessionMark]); pinned rows list first at the top level. */
+    val pinned: Boolean = false,
+    /** Changed or finished since the user last looked, and not open (see [sessionUnread]). */
+    val unread: Boolean = false,
 )
 
 data class ProjectChatSummary(
@@ -196,8 +200,20 @@ internal fun visibleSessionListItems(
     hideOffline: Boolean,
     collapsedIds: Set<String> = emptySet(),
     stale: Boolean = false,
+    /** The phone's marks of these sessions by session ID; see [sessionMarksById]. */
+    marks: Map<String, SessionMark> = emptyMap(),
+    /** The session the chat on screen shows; it is never unread. */
+    openSessionId: String? = null,
 ): List<SessionListItem> {
-    val items = sessions.map { sessionListItem(it, connected, loading, stale) }
+    val items =
+        sessions.map { session ->
+            val item = sessionListItem(session, connected, loading, stale)
+            val mark = marks[item.id]
+            item.copy(
+                pinned = mark?.pinned == true,
+                unread = sessionUnread(mark, item.updatedAt, open = item.id == openSessionId),
+            )
+        }
     val itemsById = items.associateBy(SessionListItem::id)
 
     fun validParentId(item: SessionListItem): String? {
@@ -223,10 +239,17 @@ internal fun visibleSessionListItems(
     val result = mutableListOf<SessionListItem>()
     fun addVisibleItems(parentId: String?, depth: Int) {
         val siblings = childrenByParentId[parentId].orEmpty()
-        // Top-level sessions waiting for an answer come first; the sort is stable, so the rest
-        // keep their order and subagents stay under their parent.
+        // Pinned sessions come first, then top-level sessions waiting for an answer; the sort is
+        // stable, so the rest keep their order and subagents stay under their parent.
         val ordered =
-            if (parentId == null) siblings.sortedBy { if (it.availability == SessionAvailability.WAITING) 0 else 1 }
+            if (parentId == null)
+                siblings.sortedBy {
+                    when {
+                        it.pinned -> 0
+                        it.availability == SessionAvailability.WAITING -> 1
+                        else -> 2
+                    }
+                }
             else siblings
         ordered.forEach { item ->
             if (isVisible(item)) {
@@ -255,3 +278,8 @@ internal fun canCloseSession(
         connected &&
         !loading &&
         SESSION_CLOSE_CAPABILITY in capabilities
+
+/** The marks of [routeId]'s sessions by session ID, for [visibleSessionListItems]. */
+internal fun sessionMarksById(marks: Map<Pair<String, String>, SessionMark>, routeId: String?): Map<String, SessionMark> =
+    if (routeId == null) emptyMap()
+    else marks.entries.filter { it.key.first == routeId }.associate { it.key.second to it.value }

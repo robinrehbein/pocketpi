@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The one set of status words every surface uses (findings D10/D27): the activity board now, the others move over later. Keys stay; values may change. -->
+    <string name="remote_status_needs_you">Needs you</string>
+    <string name="remote_status_working">Working</string>
+    <string name="remote_status_ready">Ready</string>
+    <string name="remote_status_finished_since_last_look">Finished since last look</string>
+</resources>

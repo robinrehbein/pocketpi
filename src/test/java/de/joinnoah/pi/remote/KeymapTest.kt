@@ -264,4 +264,11 @@ class KeymapTest {
         // None of them is a plain key of the keymap, which would act outside review mode.
         for (key in listOf(Key.N, Key.P, Key.J, Key.K, Key.C)) assertNull(plain(key, KeyContext.COMPOSER))
     }
+
+    @Test
+    fun ctrlShiftAOpensTheActivityBoard() {
+        assertEquals(Shortcut.ACTIVITY, ctrl(Key.A, shift = true, context = KeyContext.GLOBAL))
+        assertEquals(Shortcut.ACTIVITY, ctrl(Key.A, shift = true, context = KeyContext.CHAT))
+        assertEquals(Shortcut.SELECT_ALL_LINES, ctrl(Key.A, context = KeyContext.CODE))
+    }
 }

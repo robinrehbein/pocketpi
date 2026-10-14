@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LaptopMac
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -51,6 +52,10 @@ internal fun SessionListRow(
     selected: Boolean = false,
     /** Opens the chat with its rewind menu on the latest message; null where it cannot fork. */
     onForkLatest: (() -> Unit)? = null,
+    /** Pins or unpins the session on this phone; null where the menu offers no pin entry. */
+    onTogglePin: (() -> Unit)? = null,
+    /** Marks the session read; the menu offers it only on an unread row. */
+    onMarkRead: (() -> Unit)? = null,
 ) {
     fun available(action: SwipeAction): SwipeAction =
         when (action) {
@@ -82,16 +87,28 @@ internal fun SessionListRow(
     val macTuiLabel = stringResource(R.string.remote_mac_tui_session)
     val showActionsLabel = stringResource(R.string.remote_menu_show_actions)
     val copyId = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_session_id))
+    val pinnedLabel = stringResource(R.string.remote_activity_pinned)
+    val unreadLabel = stringResource(R.string.remote_activity_unread)
     // A right-click, the S Pen button, Shift+F10 and a long press all open the same menu, so
     // rename and close stay reachable with swipe actions turned off or a mouse in hand.
     val menuAnchor = rememberMenuAnchor()
     val menuItems = {
-        sessionMenuActions(canRename = onRename != null, canClose = closeAvailable, canFork = onForkLatest != null).map { action ->
+        sessionMenuActions(
+            canRename = onRename != null,
+            canClose = closeAvailable,
+            canFork = onForkLatest != null,
+            canPin = onTogglePin != null,
+            pinned = item.pinned,
+            canMarkRead = onMarkRead != null && item.unread,
+        ).map { action ->
             MenuItem(action.label, "session_${action.name.lowercase()}") {
                 when (action) {
                     SessionMenuAction.OPEN -> onClick()
                     SessionMenuAction.RENAME -> onRename?.invoke()
                     SessionMenuAction.FORK_LATEST -> onForkLatest?.invoke()
+                    SessionMenuAction.PIN,
+                    SessionMenuAction.UNPIN -> onTogglePin?.invoke()
+                    SessionMenuAction.MARK_READ -> onMarkRead?.invoke()
                     SessionMenuAction.CLOSE -> onClose()
                     SessionMenuAction.COPY_ID -> copyId(item.id)
                 }
@@ -111,6 +128,8 @@ internal fun SessionListRow(
             subagentLabel.takeIf { item.parentSessionId != null },
             title,
             macTuiLabel.takeIf { item.liveMacTui },
+            pinnedLabel.takeIf { item.pinned },
+            unreadLabel.takeIf { item.unread },
             item.preview,
             status,
         ).joinToString(", ")
@@ -216,6 +235,19 @@ internal fun SessionListRow(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
+                        if (item.pinned)
+                            Icon(
+                                Icons.Default.PushPin,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        if (item.unread)
+                            Box(
+                                Modifier.size(8.dp)
+                                    .align(Alignment.CenterVertically)
+                                    .background(MaterialTheme.colorScheme.primary, CircleShape)
+                            )
                         if (item.liveMacTui)
                             Icon(
                                 Icons.Default.LaptopMac,

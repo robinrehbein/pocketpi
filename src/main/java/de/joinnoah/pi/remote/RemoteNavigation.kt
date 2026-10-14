@@ -90,6 +90,13 @@ sealed interface RemoteNavKey : NavKey {
      * and is recovered from the host.
      */
     @Serializable data class Providers(val routeId: String) : RemoteNavKey
+
+    /**
+     * The activity board of one host: its sessions that wait, run or finished since they were last
+     * looked at (see [ActivityBoardScreen]). It opens on top of the open project or chat, which stay
+     * beneath it, so the wide layout can show the board where the session list is.
+     */
+    @Serializable data class Activity(val routeId: String) : RemoteNavKey
 }
 
 internal fun RemoteNavKey.selection(): RemoteSelection =
@@ -99,6 +106,7 @@ internal fun RemoteNavKey.selection(): RemoteSelection =
         is RemoteNavKey.Projects -> RemoteSelection(routeId)
         is RemoteNavKey.FolderBrowser -> RemoteSelection(routeId)
         is RemoteNavKey.Providers -> RemoteSelection(routeId)
+        is RemoteNavKey.Activity -> RemoteSelection(routeId)
         is RemoteNavKey.Sessions -> RemoteSelection(routeId, projectId)
         is RemoteNavKey.Chat -> RemoteSelection(routeId, projectId, sessionId)
     }
@@ -522,6 +530,17 @@ internal class RemoteNavigator(
         stack.add(RemoteNavKey.Providers(routeId))
     }
 
+    /**
+     * Opens the activity board of [routeId] on top of the open project, session or chat, which stay
+     * beneath it. Nothing happens for another host or on the Hosts page. A card opens its chat with
+     * [open], which replaces the board.
+     */
+    fun openActivity(routeId: String) {
+        val top = topKey()
+        if (top == RemoteNavKey.Activity(routeId) || top?.selection()?.routeId != routeId) return
+        stack.add(RemoteNavKey.Activity(routeId))
+    }
+
     /** Shows [path] in the open folder browser; the breadcrumb jumps here. */
     fun browseFolder(routeId: String, path: String) {
         if (topKey() == RemoteNavKey.FolderBrowser(routeId)) repository.browseFolder(routeId, path)
@@ -765,6 +784,11 @@ internal class RemoteNavigator(
             }
             Shortcut.HELP -> {
                 if (!repeat) targets.help = if (top is RemoteNavKey.Chat) KeyContext.CHAT else KeyContext.GLOBAL
+                return true
+            }
+            Shortcut.ACTIVITY -> {
+                val route = repository.state.value.selection.routeId ?: return false
+                if (!repeat) openActivity(route)
                 return true
             }
             // Holding the key must not reopen the palette over the one it opened.
@@ -1273,6 +1297,12 @@ private fun RemoteNavDisplay(
                 entry<RemoteNavKey.Providers> { key ->
                     val model = viewModel { ProvidersViewModel(repository, key) }
                     CenteredPage { ProvidersScreen(key, model, navigator) }
+                }
+                entry<RemoteNavKey.Activity>(metadata = { key -> navKeyMetadata(key) }) { key ->
+                    val model = viewModel { ActivityViewModel(repository, key) }
+                    // A column of the wide layout fills its pane; a phone page keeps the centred width.
+                    if (LocalTwoPane.current == null) CenteredPage { ActivityBoardScreen(key, model, navigator) }
+                    else ActivityBoardScreen(key, model, navigator)
                 }
                 entry<RemoteNavKey.Chat>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ChatViewModel(repository, key, settings) }

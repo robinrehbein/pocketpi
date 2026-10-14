@@ -80,6 +80,7 @@ class MainActivity : ComponentActivity() {
             CompositionLocalProvider(
                 LocalPromptPredictions provides app.predictions,
                 LocalAppLockStore provides app.appLock.store,
+                LocalSessionMarks provides app.sessionMarks,
             ) {
                 AppLockGate(
                     locked,

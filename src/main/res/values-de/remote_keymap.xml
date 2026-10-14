@@ -13,6 +13,7 @@
     <string name="remote_keymap_changes">Änderungen</string>
     <string name="remote_keymap_files">Dateien</string>
     <string name="remote_keymap_jobs">Hintergrundjobs</string>
+    <string name="remote_keymap_activity">Aktivitätsübersicht</string>
     <string name="remote_keymap_history">Verlauf</string>
     <string name="remote_keymap_settings">Einstellungen</string>
     <string name="remote_keymap_help">Tastenkürzel</string>

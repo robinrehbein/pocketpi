@@ -641,4 +641,17 @@ class AdaptiveLayoutTest {
         // State saved by an older version has no review mode.
         assertFalse(TwoPaneState.Saver.restore(listOf(true, -1f, -1f, "", false, false, "{}"))!!.reviewing)
     }
+
+    @Test
+    fun theActivityBoardTakesTheListColumnBesideAChatAndTheDetailColumnWithoutOne() {
+        val chat: List<Any?> = RemoteSelection("host", "project", "s1").keys()
+        assertEquals(ColumnPanes(1, 4, 3), columnPanes(chat + RemoteNavKey.Activity("host")))
+        assertEquals(ColumnPanes(1, null, 2), columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.Activity("host"))))
+        // A session list beneath the board gives up its column while the board is open.
+        assertEquals(
+            ColumnPanes(1, null, 3),
+            columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.Sessions("host", "project"), RemoteNavKey.Activity("host"))),
+        )
+        assertNull(columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Activity("host"))))
+    }
 }

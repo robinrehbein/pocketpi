@@ -235,4 +235,16 @@ class PointerMenusTest {
             override val afterContentPadding = after
             override val mainAxisItemSpacing = 0
         }
+
+    @Test
+    fun pinAndMarkReadJoinTheSessionMenuWhenTheyApply() {
+        assertEquals(
+            listOf(SessionMenuAction.OPEN, SessionMenuAction.PIN, SessionMenuAction.COPY_ID),
+            sessionMenuActions(canRename = false, canClose = false, canPin = true),
+        )
+        assertEquals(
+            listOf(SessionMenuAction.OPEN, SessionMenuAction.UNPIN, SessionMenuAction.MARK_READ, SessionMenuAction.COPY_ID),
+            sessionMenuActions(canRename = false, canClose = false, canPin = true, pinned = true, canMarkRead = true),
+        )
+    }
 }
