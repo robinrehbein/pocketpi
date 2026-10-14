@@ -146,3 +146,13 @@ jobs:
           python scripts/release/play_release.py publish \
             --version-code "$VERSION_CODE" \
             --bundle build/outputs/bundle/release/pocketpi-release.aab
+      # A Play edit that fails on a Console declaration (foreground service, data safety and the
+      # like) can only be unblocked by uploading this bundle by hand once.
+      - name: Keep the signed bundle when the Play edit fails
+        if: failure() && steps.version.outputs.code != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pocketpi-release-${{ steps.version.outputs.code }}
+          path: build/outputs/bundle/release/pocketpi-release.aab
+          if-no-files-found: ignore
+          retention-days: 3
