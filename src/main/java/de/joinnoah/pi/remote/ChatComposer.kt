@@ -6,6 +6,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.handwriting.handwritingDetector
+import androidx.compose.foundation.text.handwriting.handwritingHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -586,6 +588,8 @@ internal fun ChatComposer(
                 }
             }
             Row(
+                // Writing with the S Pen anywhere on the row, beside the field too, writes into it.
+                Modifier.handwritingDetector { focusRequester?.let { runCatching { it.requestFocus() } } },
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
@@ -647,6 +651,7 @@ internal fun ChatComposer(
                     modifier =
                         Modifier.weight(1f)
                             .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
+                            .handwritingHandler()
                             .promptPrediction(
                                 prediction,
                                 stringResource(R.string.remote_prediction_use),
@@ -911,4 +916,15 @@ private fun QuestionComposer(
             }
         }
     }
+}
+
+/**
+ * The height in pixels between the end of a list's last item and the bottom of its viewport,
+ * after-padding included; 0 while items lie below the viewport. A list without items is empty
+ * from where its content starts.
+ */
+internal fun emptySpaceBelowList(info: androidx.compose.foundation.lazy.LazyListLayoutInfo): Int {
+    val last = info.visibleItemsInfo.lastOrNull() ?: return info.viewportEndOffset.coerceAtLeast(0)
+    if (last.index != info.totalItemsCount - 1) return 0
+    return (info.viewportEndOffset - (last.offset + last.size)).coerceAtLeast(0)
 }

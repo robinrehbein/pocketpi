@@ -343,6 +343,9 @@ internal class ChatViewModel(
         if (repository.state.value.draft.isBlank()) repository.draft(prompt)
     }
 
+    /** Closes this chat's session on the Mac, as a session row's Close does. */
+    fun closeSession(sessionId: String) = active { repository.closeSession(sessionId) }
+
     /** [exclusive] false keeps the files open beside the changes ([RemoteRepository.openChanges]). */
     fun openChanges(exclusive: Boolean = true) = active { repository.openChanges(exclusive) }
 

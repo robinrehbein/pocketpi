@@ -34,6 +34,8 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -128,6 +130,10 @@ internal fun ProjectStrip(
                         projectId = projectId,
                         selected = projectId == selectedProjectId,
                         onClick = { openProject(navigator, twoPane, key.routeId, projectId) },
+                        onNewSession =
+                            if (state.connected && !state.loading && !navigator.mutating) {
+                                { navigator.createSession(key.routeId, projectId) }
+                            } else null,
                     )
                 }
             }
@@ -138,14 +144,23 @@ internal fun ProjectStrip(
 }
 
 @Composable
-private fun ProjectAvatar(name: String, projectId: String, selected: Boolean, onClick: () -> Unit) {
+private fun ProjectAvatar(
+    name: String,
+    projectId: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onNewSession: (() -> Unit)?,
+) {
     val description = stringResource(R.string.remote_project_strip_open, name)
+    val menu = projectMenu(onClick, onNewSession, onUnshare = null)
     Box(
         // The keyboard's focus ring takes the outer 2 dp, outside the selected ring.
         Modifier.size(52.dp)
             .clip(CircleShape)
             .focusRing(CircleShape)
             .then(rememberRegionChild())
+            .contextMenu { menu() }
+            .pointerHoverIcon(PointerIcon.Hand)
             .selectable(selected = selected, role = Role.Button, onClick = onClick)
             .semantics(mergeDescendants = true) { contentDescription = description }
             .testTag("projectAvatar-$projectId")

@@ -22,6 +22,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.handwriting.handwritingDetector
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -728,10 +729,11 @@ internal fun RemoteScreen(
         state.connected && !state.loading && state.questions.isEmpty() && !state.sending &&
             (state.status == "idle" ||
                 (state.status == "running" && (canSteer(state) || canFollowUp(state))))
-    fun askToFix(messageId: String) {
+    val askFixMessagePrompt = stringResource(R.string.remote_menu_ask_fix_prompt)
+    fun askToFix(messageId: String, prompt: String = askFixPrompt) {
         // The prompt fills only a blank draft, so the repository must first hold what was typed.
         composerDraft?.flush()
-        chatModel?.askToFix(messageId, askFixPrompt)
+        chatModel?.askToFix(messageId, prompt)
         openToolId = null
         composerFocusRequest++
     }
@@ -975,6 +977,13 @@ internal fun RemoteScreen(
             val statusLabel = stringResource(chatStatusLabel(state))
             val statusColor = chatStatusColor(state.status, state.connected)
             val canRename = canRenameSession(state)
+            // The open session's row in the project's list, when that row could close it. The
+            // repository closes only a session of that list, and its entries are complete rows.
+            val closableSession =
+                state.session?.optionalText("id")
+                    ?.let { id -> state.sessions.firstOrNull { it.optionalText("id") == id } }
+                    ?.let { sessionListItem(it, state.connected, state.loading, state.stale) }
+                    ?.takeIf { canCloseSession(it, state.connected, state.loading, state.capabilities) }
             val hasTuiInfo =
                 state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
             val headerColor = floatingHeaderColor()
@@ -995,8 +1004,10 @@ internal fun RemoteScreen(
                         add(ChatAction.SETTINGS)
                     },
                 ).let { if (withHistory) it.withHistory() else it }
+                    .let { if (closableSession != null) it.withClose() else it }
             fun runAction(action: ChatAction) {
-                chatModel?.recordChatAction(action)
+                // Close is never ranked, so its uses need no record.
+                if (action != ChatAction.CLOSE) chatModel?.recordChatAction(action)
                 when (action) {
                     ChatAction.CHANGES -> openInspector(InspectorTab.CHANGES)
                     ChatAction.FILES -> openInspector(InspectorTab.FILES)
@@ -1008,6 +1019,7 @@ internal fun RemoteScreen(
                     ChatAction.SESSION_SETTINGS -> settingsSheetRequested = true
                     ChatAction.SETTINGS -> navigator.settings()
                     ChatAction.HISTORY -> toggleHistory()
+                    ChatAction.CLOSE -> closing = closableSession
                 }
             }
             val actionsControl: @Composable (ChatActionLayout, Boolean) -> Unit = { actionLayout, standaloneHistory ->
@@ -1174,7 +1186,7 @@ internal fun RemoteScreen(
                         tool.state == "error" && tool.outputMessageId != null && acceptsPrompts,
                     onLoadFullOutput = { tool.toolCallId?.let { chatModel?.loadToolOutput(it) } },
                     onCancelFullOutput = { chatModel?.cancelToolOutput() },
-                    onAskToFix = { tool.outputMessageId?.let(::askToFix) },
+                    onAskToFix = { tool.outputMessageId?.let { id -> askToFix(id) } },
                     onQuote = {
                         model.quote(tool.outputMessageId ?: tool.sourceId)
                         closeTool()
@@ -2160,6 +2172,10 @@ internal fun RemoteScreen(
                                     onClick = { openProject(navigator, twoPane, key.routeId, projectId) },
                                     onUnshare = { unsharing = projectId to project.text("name") },
                                     selected = projectsColumn?.let { projectId == it.selectedProjectId },
+                                    onNewSession =
+                                        if (state.connected && !state.loading && !navigator.mutating) {
+                                            { navigator.createSession(key.routeId, projectId) }
+                                        } else null,
                                 )
                             }
                         }
@@ -2337,7 +2353,8 @@ internal fun RemoteScreen(
                                         showTab(InspectorTab.TOOL)
                                     },
                                     onOpenAgent = ::openAgent,
-                                    onAskToFix = if (acceptsPrompts) ::askToFix else null,
+                                    onAskToFix = if (acceptsPrompts) { id -> askToFix(id) } else null,
+                                    onAskToFixMessage = if (acceptsPrompts) { id -> askToFix(id, askFixMessagePrompt) } else null,
                                     highlighted = highlighted,
                                     fork = messageFork?.takeIf { item.id in forkableIds },
                                     images = sentImages,
@@ -2440,6 +2457,22 @@ internal fun RemoteScreen(
                         }
                 }
             }
+        }
+        if (key is RemoteNavKey.Chat && !composerCovered) {
+            // Writing with the S Pen in the empty space between the conversation and the composer
+            // starts a prompt. While that space exists the list ends above it and cannot scroll,
+            // so the area takes nothing from the list.
+            val emptyBelow by remember(listState) { derivedStateOf { emptySpaceBelowList(listState.layoutInfo) } }
+            val handwritingHeight = emptyBelow - composerSize.height
+            if (handwritingHeight > 0)
+                Box(
+                    Modifier.align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(bottom = composerHeight)
+                        .height(with(LocalDensity.current) { handwritingHeight.toDp() })
+                        .testTag("handwritingArea")
+                        .handwritingDetector { runCatching { composerFocus.requestFocus() } }
+                )
         }
         if (key is RemoteNavKey.Chat) {
             Box(
@@ -3048,7 +3081,11 @@ internal fun RemoteScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        (model as? SessionsViewModel)?.close(session.id)
+                        when (model) {
+                            is SessionsViewModel -> model.close(session.id)
+                            is ChatViewModel -> model.closeSession(session.id)
+                            else -> Unit
+                        }
                         closing = null
                     },
                     enabled = canCloseSession(

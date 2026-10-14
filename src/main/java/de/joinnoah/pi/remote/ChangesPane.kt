@@ -422,6 +422,7 @@ private fun ChangesFileTile(
         onRequestPreview = onRequestPreview,
         onPeek = onPeek,
         tag = "changesFile",
+        path = file.path,
         detail = {
             Column {
                 if ('/' in file.path)
@@ -480,6 +481,8 @@ private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesA
         }
     val atLimit = state.comments.size >= MAX_REVIEW_COMMENTS
     var editing by remember { mutableStateOf<DiffLine?>(null) }
+    val copyLine = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_line))
+    val copyHunk = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_hunk))
     val addLabel = stringResource(R.string.remote_changes_comment_add)
     val editLabel = stringResource(R.string.remote_changes_comment_edit)
     // A subagent's file: its changes are not the session's to comment on or act on from here.
@@ -536,16 +539,28 @@ private fun ChangesFileDiff(state: ChangesState, path: String, actions: ChangesA
             else -> {
                 // Rows stay one text line high, below the 48dp touch target, to keep code readable;
                 // an accepted trade-off, as in the tool detail diff.
-                itemsIndexed(lines, contentType = { _, line -> line.kind }) { _, line ->
+                itemsIndexed(lines, contentType = { _, line -> line.kind }) { index, line ->
                     val commentable = line.kind != DiffKind.HUNK && !readOnly
                     Column {
                         DiffRow(
                             line,
                             rowStyle,
                             scroll,
-                            if (commentable)
-                                Modifier.clickable(onClickLabel = addLabel) { editing = line }.testTag("changesDiffLine")
-                            else Modifier,
+                            Modifier.contextMenu { _ ->
+                                diffLineMenuActions(commentable).map { action ->
+                                    MenuItem(action.label, "diff_${action.name.lowercase()}") {
+                                        when (action) {
+                                            DiffLineMenuAction.COMMENT -> editing = line
+                                            DiffLineMenuAction.COPY_LINE -> copyLine(line.text)
+                                            DiffLineMenuAction.COPY_HUNK -> copyHunk(diffHunkText(lines, index))
+                                        }
+                                    }
+                                }
+                            }.then(
+                                if (commentable)
+                                    Modifier.clickable(onClickLabel = addLabel) { editing = line }.testTag("changesDiffLine")
+                                else Modifier
+                            ),
                         )
                         comments[line.oldLine.takeIf { line.newLine == null } to line.newLine]?.let { comment ->
                             Text(

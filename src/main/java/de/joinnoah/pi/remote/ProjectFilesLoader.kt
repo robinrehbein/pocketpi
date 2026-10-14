@@ -152,6 +152,8 @@ internal class ProjectFilesLoader(
                                 content = if (chunk.binary || chunk.tooLarge) null else chunk.content.take(FILE_TILE_PREVIEW_CHARS),
                                 binary = chunk.binary,
                                 tooLarge = chunk.tooLarge,
+                                complete = !chunk.binary && !chunk.tooLarge && chunk.nextOffset == null &&
+                                    chunk.content.length <= FILE_TILE_PREVIEW_CHARS,
                             )
                             write(sessionId) { state ->
                                 if (state.path != folder) state

@@ -18,6 +18,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -76,6 +78,22 @@ internal fun SessionListRow(
     val closeLabel = stringResource(R.string.remote_session_close)
     val renameLabel = stringResource(R.string.remote_rename_session)
     val macTuiLabel = stringResource(R.string.remote_mac_tui_session)
+    val copyId = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_session_id))
+    // A right-click, the S Pen button, Shift+F10 and a long press all open the same menu, so
+    // rename and close stay reachable with swipe actions turned off or a mouse in hand.
+    val menuAnchor = rememberMenuAnchor()
+    val menuItems = {
+        sessionMenuActions(canRename = onRename != null, canClose = closeAvailable).map { action ->
+            MenuItem(action.label, "session_${action.name.lowercase()}") {
+                when (action) {
+                    SessionMenuAction.OPEN -> onClick()
+                    SessionMenuAction.RENAME -> onRename?.invoke()
+                    SessionMenuAction.CLOSE -> onClose()
+                    SessionMenuAction.COPY_ID -> copyId(item.id)
+                }
+            }
+        }
+    }
     val metaLabels =
         listOfNotNull(
             subagentLabel.takeIf { item.parentSessionId != null },
@@ -145,10 +163,13 @@ internal fun SessionListRow(
                         }
                         .focusRing(RoundedCornerShape(16.dp))
                         .then(regionChild)
+                        .contextMenu(menuAnchor, enabled) { menuItems() }
+                        .pointerHoverIcon(PointerIcon.Hand)
                         .combinedClickable(
                             enabled = enabled,
                             role = Role.Button,
                             onClick = onClick,
+                            onLongClick = { menuAnchor.open() },
                         )
                         .padding(
                             start = 4.dp + (item.depth.coerceAtMost(4) * 28).dp,

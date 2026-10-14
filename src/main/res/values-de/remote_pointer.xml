@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_menu_open">Öffnen</string>
+    <string name="remote_menu_copy">Kopieren</string>
+    <string name="remote_menu_copy_markdown">Als Markdown kopieren</string>
+    <string name="remote_menu_copy_session_id">Sitzungs-ID kopieren</string>
+    <string name="remote_menu_edit_retry">Ab hier bearbeiten und wiederholen</string>
+    <string name="remote_menu_ask_fix_prompt">Sieh dir diese Nachricht an, finde den Fehler und behebe ihn.</string>
+    <string name="remote_menu_copy_command">Befehl kopieren</string>
+    <string name="remote_menu_copy_output">Ausgabe kopieren</string>
+    <string name="remote_menu_copy_path">Pfad kopieren</string>
+    <string name="remote_menu_copy_contents">Inhalt kopieren</string>
+    <string name="remote_menu_copy_line">Zeile kopieren</string>
+    <string name="remote_menu_copy_hunk">Diff-Abschnitt kopieren</string>
+    <string name="remote_menu_link_adjacent">Neben PocketPi öffnen</string>
+    <string name="remote_menu_link_full_screen">Im Vollbild öffnen</string>
+    <string name="remote_menu_link_copy">Link kopieren</string>
+    <string name="remote_hover_actions">Aktionen zur Nachricht</string>
+</resources>

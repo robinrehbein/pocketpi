@@ -161,3 +161,25 @@ private fun parseInline(text: String, color: Color, depth: Int, links: Boolean):
         index++
     }
 }
+
+/** The URL of a link that covers the character at [offset] of [text], if any. */
+internal fun linkAt(text: AnnotatedString, offset: Int): String? =
+    if (offset !in text.indices) null
+    else text.getLinkAnnotations(offset, offset + 1).firstNotNullOfOrNull { (it.item as? LinkAnnotation.Url)?.url }
+
+private val plainBulletRegex = Regex("^[-*] ")
+
+/**
+ * [text] as the chat shows it, for "Copy": inline marks dropped, links as their labels, headings
+ * without their #, bullets as • and fenced code as the code alone.
+ */
+internal fun markdownPlainText(text: String): String =
+    markdownSegments(text).joinToString("\n") { segment ->
+        if (segment.code) segment.text
+        else
+            segment.text.lines().joinToString("\n") { line ->
+                val level = line.takeWhile { it == '#' }.length.takeIf { it in 1..6 && line.getOrNull(it) == ' ' }
+                val content = if (level != null) line.drop(level + 1) else line.replace(plainBulletRegex, "• ")
+                parseInline(content, Color.Unspecified, 0, true).text
+            }
+    }
