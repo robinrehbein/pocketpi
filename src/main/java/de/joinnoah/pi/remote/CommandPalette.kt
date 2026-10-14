@@ -270,8 +270,9 @@ internal fun CommandPaletteHost(
     val chat = navigator.topChat
     val mutating = navigator.mutating
     val labels = rememberPaletteLabels()
+    val marks by sessionMarksState()
     val input =
-        remember(state, snapshot, chat != null, mutating) {
+        remember(state, snapshot, chat != null, mutating, marks) {
             PaletteInput(
                 state = state,
                 home = snapshot,
@@ -279,6 +280,7 @@ internal fun CommandPaletteHost(
                 usage = settings.chatActionUsage(),
                 now = System.currentTimeMillis(),
                 mutating = mutating,
+                marks = marks,
             )
         }
     CommandPalette(

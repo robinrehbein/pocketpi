@@ -476,16 +476,18 @@ class TwoPaneNavigationTest {
 
     @Test
     @Config(qualifiers = "w1280dp-h800dp")
-    fun fullScreenPagesStayInACentredColumn() {
+    fun settingsOpensInTheDetailColumnBesideTheProjects() {
         render()
         // The two panes use the whole window.
         compose.onNodeWithTag("pageColumn").assertDoesNotExist()
         compose.onNode(hasContentDescription(label(R.string.remote_settings)) and hasAnyAncestor(hasTestTag("sessionListPane")))
             .performClick()
         compose.waitForIdle()
-        val page = compose.onNodeWithTag("pageColumn")
-        page.assertWidthIsEqualTo(720.dp)
-        assertEquals(280.dp, page.getUnclippedBoundsInRoot().left)
+        // Settings takes the chat's place in the detail column; the projects column stays in view.
+        val page = compose.onNode(hasTestTag("pageColumn") and hasAnyAncestor(hasTestTag("chatPane")))
+        page.assertIsDisplayed()
+        compose.onNodeWithTag("projectsPane").assertIsDisplayed()
+        assertTrue(page.getUnclippedBoundsInRoot().left >= compose.onNodeWithTag("projectsPane").getUnclippedBoundsInRoot().right)
     }
 
     @Test
@@ -754,16 +756,24 @@ class TwoPaneNavigationTest {
                 )
         }
         compose.waitForIdle()
-        assertInInspector("jobAsk")
+        openJobsMenuIfCollapsed()
+        compose.onNodeWithTag("jobAsk").assertIsDisplayed()
         click("inspectorExpand")
         compose.onNodeWithTag("chatStrip").assertIsDisplayed()
+        openJobsMenuIfCollapsed()
         click("jobAsk")
         // The prompt went into the draft, and the chat that holds it shows again beside the jobs.
         assertTrue(repository.state.value.draft, repository.state.value.draft.contains("error: boom"))
         compose.onNodeWithTag("chatStrip").assertDoesNotExist()
         assertChatShown()
         compose.onNodeWithTag("composerField").assertIsFocused()
-        assertInInspector("jobAsk")
+        openJobsMenuIfCollapsed()
+        compose.onNodeWithTag("jobAsk").assertIsDisplayed()
+    }
+
+    /** A narrow job header keeps Ask in its overflow menu; opens that menu when the header has one. */
+    private fun openJobsMenuIfCollapsed() {
+        if (compose.onAllNodesWithTag("jobsMoreActions").fetchSemanticsNodes().isNotEmpty()) click("jobsMoreActions")
     }
 
     // ---- Projects column -----------------------------------------------------------------

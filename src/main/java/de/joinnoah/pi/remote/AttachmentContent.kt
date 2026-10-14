@@ -131,10 +131,10 @@ internal class AttachmentReassembler(
 
 /**
  * Verified image bytes kept in memory only, evicting the least recently used once [capacity] is
- * exceeded. Nothing here is ever written to disk.
+ * exceeded. Nothing here is written to disk; the encrypted copy kept between runs is [MediaDiskCache].
  */
 internal class AttachmentByteCache(private val capacity: Long = 16L * 1024 * 1024) {
-    data class Key(val sessionId: String, val attachmentId: String, val sha256: String)
+    data class Key(val routeId: String, val sessionId: String, val attachmentId: String, val sha256: String)
 
     private val entries = LinkedHashMap<Key, ByteArray>(16, 0.75f, true)
     private var size = 0L
@@ -150,6 +150,19 @@ internal class AttachmentByteCache(private val capacity: Long = 16L * 1024 * 102
         while (size > capacity && iterator.hasNext()) {
             size -= iterator.next().value.size
             iterator.remove()
+        }
+    }
+
+    /** Forgets the bytes of [routeId] only; the other Macs' bytes stay. */
+    @Synchronized
+    fun clearRoute(routeId: String) {
+        val iterator = entries.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (entry.key.routeId == routeId) {
+                size -= entry.value.size
+                iterator.remove()
+            }
         }
     }
 

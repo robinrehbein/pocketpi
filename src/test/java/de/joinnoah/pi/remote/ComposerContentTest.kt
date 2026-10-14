@@ -193,13 +193,13 @@ class ComposerContentTest {
     fun theListenerHandsAKeyboardCommitToTheBatchCallback() {
         val taken = mutableListOf<List<Picked>>()
         val listener = composerContentListener(context) { taken += it }
-        // The resolver knows no such provider, so the type is unknown and the item is a file.
+        // The resolver knows no such provider, so the clip's own type (image/png) decides: a photo.
         val sticker = Uri.parse("content://keyboard/sticker.png")
         val rest = listener.onReceive(
             transfer(ClipData(ClipDescription("sticker", arrayOf("image/png")), ClipData.Item(sticker))),
         )
         assertNull(rest)
-        assertEquals(listOf(listOf(Picked(sticker.toString(), photo = false))), taken)
+        assertEquals(listOf(listOf(Picked(sticker.toString(), photo = true))), taken)
     }
 
     @Test
@@ -321,7 +321,7 @@ class ComposerContentTest {
         show(pastes)
         val sticker = Uri.parse("content://de.joinnoah.pi.test.images/sticker.png")
         assertTrue(commitImageFromKeyboard(sticker, "image/png"))
-        assertEquals(listOf(listOf(Picked(sticker.toString(), photo = false))), pastes.batches)
+        assertEquals(listOf(listOf(Picked(sticker.toString(), photo = true))), pastes.batches)
         assertEquals("", shownText())
     }
 

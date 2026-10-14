@@ -36,6 +36,10 @@ class RemoteApplication : Application() {
     internal lateinit var home: HomeSurfaces
         private set
 
+    /** The phone's pins and read marks of sessions; see [SessionMarksStore]. */
+    internal lateinit var sessionMarks: SessionMarksStore
+        private set
+
     internal lateinit var predictions: PromptPredictions
         private set
 
@@ -86,11 +90,14 @@ class RemoteApplication : Application() {
                 onRecoverySignal = { onPushRecoverySignal() },
                 onUnpaired = ::onUnpaired,
                 projectHint = ::sessionProjectHint,
+                media = stores.media,
             )
         observeRecovery()
         predictions = PromptPredictions(this, scope, stores.pairings)
         home = HomeSurfaces(this, scope, stores.pairings)
         home.observe(repository.state)
+        sessionMarks = SessionMarksStore(this)
+        sessionMarks.observe(repository.state, scope)
         observeOpenedSession()
         RemoteNotifications.createChannel(this)
         RemoteNotifications.deleteSyncChannel(this)
@@ -315,7 +322,16 @@ internal class AppStores(
     val routes by lazy { PairedRouteCache(app) }
 
     /** The pairing file itself; only a push's route check, which fills [routes], reads it directly. */
-    val pairingFile by lazy { PairingStore(app, onReset = { routes.onPairingsReset() }) }
+    val pairingFile by lazy {
+        PairingStore(
+            app,
+            onReset = {
+                routes.onPairingsReset()
+                // Without the pairings no route is known, so no kept image is ever asked for again.
+                media.clear()
+            },
+        )
+    }
 
     /** The pairings, with the route cache and the notifications' host names kept in step. */
     val pairings: PairingStorage by lazy {
@@ -327,6 +343,9 @@ internal class AppStores(
     val navigation by lazy { NavigationSnapshotStore(app) }
 
     val attachments by lazy { AttachmentStore(app) }
+
+    /** Sent and project images kept on disk ([MediaDiskCache]); cleared with the pairings. */
+    val media by lazy { MediaDiskCache(java.io.File(app.noBackupFilesDir, "media-cache")) }
 
     /** The widget's and shortcuts' snapshot ([HomeSurfaces]). */
     val home by lazy { EncryptedFileStore(app, "home-sessions.enc", "pi-remote-home-v1") }

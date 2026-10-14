@@ -33,7 +33,7 @@ class ConversationSentImagesUiTest {
         )
 
     private fun source(read: suspend (String, RemoteAttachment) -> AttachmentReadResult) =
-        SentImageSource("session", connected = true, capabilitiesKnown = true, supported = true, read = read)
+        SentImageSource("route", "session", connected = true, capabilitiesKnown = true, supported = true, read = read)
 
     private fun show(item: ConversationItem.Bubble, images: SentImageSource?) =
         compose.setContent {
@@ -100,7 +100,7 @@ class ConversationSentImagesUiTest {
 
     @Test fun unknownCapabilitiesStayLoadingWithoutARequest() {
         val reads = mutableListOf<String>()
-        show(bubble(image), SentImageSource("session", true, false, false) { _, a -> reads += a.id; AttachmentReadResult.Unsupported })
+        show(bubble(image), SentImageSource("route", "session", true, false, false) { _, a -> reads += a.id; AttachmentReadResult.Unsupported })
         compose.waitForIdle()
         compose.onNodeWithText("Loading image…").assertIsDisplayed()
         assertEquals(emptyList<String>(), reads)
@@ -114,7 +114,7 @@ class ConversationSentImagesUiTest {
         }
         val tag = "conversationAttachmentImage-Thumbnail-${image.id}"
         compose.waitUntil(5_000) { compose.onAllNodesWithTag(tag, true).fetchSemanticsNodes().isNotEmpty() }
-        compose.runOnIdle { current.value = SentImageSource("session", false, true, true, current.value.read) }
+        compose.runOnIdle { current.value = SentImageSource("route", "session", false, true, true, current.value.read) }
         compose.waitForIdle()
         compose.onNodeWithTag(tag, true).assertExists()
         assertEquals(1, calls)

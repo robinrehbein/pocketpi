@@ -193,14 +193,14 @@ class AttachmentContentTest {
     @Test
     fun cacheEvictsTheLeastRecentlyUsedAndSkipsOversizedEntries() {
         val cache = AttachmentByteCache(10)
-        val keys = (1..3).map { AttachmentByteCache.Key("s", "a$it", "h") }
+        val keys = (1..3).map { AttachmentByteCache.Key("r", "s", "a$it", "h") }
         cache[keys[0]] = ByteArray(4)
         cache[keys[1]] = ByteArray(4)
         assertNotNull(cache[keys[0]])
         cache[keys[2]] = ByteArray(4)
         assertNull(cache[keys[1]])
         assertNotNull(cache[keys[0]])
-        cache[AttachmentByteCache.Key("s", "big", "h")] = ByteArray(11)
-        assertNull(cache[AttachmentByteCache.Key("s", "big", "h")])
+        cache[AttachmentByteCache.Key("r", "s", "big", "h")] = ByteArray(11)
+        assertNull(cache[AttachmentByteCache.Key("r", "s", "big", "h")])
     }
 }

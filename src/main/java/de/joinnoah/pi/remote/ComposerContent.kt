@@ -95,13 +95,19 @@ internal fun takeAttachments(
  */
 internal fun composerContentListener(context: Context, attach: (List<Picked>) -> Unit): ReceiveContentListener =
     object : ReceiveContentListener {
-        override fun onReceive(transferableContent: TransferableContent): TransferableContent? =
-            takeAttachments(
+        override fun onReceive(transferableContent: TransferableContent): TransferableContent? {
+            // A provider that does not report its type leaves the clip's own single type, as parts() does.
+            // A text type (text/plain beside the item, text/uri-list from ClipData.newUri) says nothing about it.
+            val description = transferableContent.clipEntry.clipData.description
+            val single = description?.takeIf { it.mimeTypeCount == 1 }?.getMimeType(0)
+                ?.takeIf { !it.startsWith("text/", ignoreCase = true) }
+            return takeAttachments(
                 transferableContent,
-                context.contentResolver::getType,
+                { uri -> context.contentResolver.getType(uri) ?: single },
                 textFiles = transferableContent.source == TransferableContent.Source.DragAndDrop,
                 attach = attach,
             )
+        }
     }
 
 /**

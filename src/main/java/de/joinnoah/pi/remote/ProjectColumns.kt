@@ -21,6 +21,9 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -39,6 +42,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.material.icons.automirrored.filled.LastPage
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -133,6 +137,14 @@ internal fun ProjectStrip(
                 }
             }
         }
+        Spacer(Modifier.height(12.dp))
+        // The activity board opens over the chat; its badge counts the sessions that wait for the user.
+        val marksAll by sessionMarksState()
+        val needsYou =
+            remember(state.sessions, state.projectSessions, state.host, state.selection, state.session, marksAll) {
+                needsYouCount(state, sessionMarksById(marksAll, key.routeId))
+            }
+        ActivityStripButton(needsYou) { navigator.openActivity(key.routeId) }
         Spacer(Modifier.height(26.dp))
         CompositionLocalProvider(LocalFocusRegionChildren provides regionChildren) {
             LazyColumn(
@@ -158,6 +170,25 @@ internal fun ProjectStrip(
         }
         if (!selectedName.isNullOrBlank())
             VerticalLabel(selectedName, Modifier.padding(top = 12.dp).testTag("projectStripLabel"))
+    }
+}
+
+/** The strip's button to the activity board; its badge counts the sessions that wait for the user. */
+@Composable
+internal fun ActivityStripButton(needsYou: Int, onClick: () -> Unit) {
+    val activityLabel = stringResource(R.string.remote_activity_title)
+    val needsYouLabel =
+        if (needsYou > 0) pluralStringResource(R.plurals.remote_activity_needs_you_count, needsYou, needsYou)
+        else null
+    FloatingSurface(modifier = Modifier.testTag("projectStripActivity"), shape = CircleShape) {
+        IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
+            BadgedBox(badge = { if (needsYou > 0) Badge { Text(needsYou.toString()) } }) {
+                Icon(
+                    Icons.Default.Dashboard,
+                    contentDescription = listOfNotNull(activityLabel, needsYouLabel).joinToString(", "),
+                )
+            }
+        }
     }
 }
 
