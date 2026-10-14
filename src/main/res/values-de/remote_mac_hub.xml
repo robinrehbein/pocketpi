@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Die Seite des Macs: Name und Verbindung (RemoteScreens.kt), sein Überlaufmenü und die Verbindungsdetails (MacConnectionDetailsDialog.kt) sowie die Projektmarkierungen (RemoteDesignComponents.kt). -->
+    <string name="remote_mac_menu">Optionen für den Mac</string>
+    <string name="remote_mac_details">Verbindungsdetails</string>
+    <string name="remote_mac_details_status">Status</string>
+    <string name="remote_mac_details_relay">Relay</string>
+    <string name="remote_mac_details_device">Gerät</string>
+    <string name="remote_mac_disconnect">Trennen (Kopplung bleibt)</string>
+    <plurals name="remote_mac_waiting_count">
+        <item quantity="one">%d wartet</item>
+        <item quantity="other">%d warten</item>
+    </plurals>
+    <plurals name="remote_mac_working_count">
+        <item quantity="one">%d arbeitet</item>
+        <item quantity="other">%d arbeiten</item>
+    </plurals>
+</resources>
