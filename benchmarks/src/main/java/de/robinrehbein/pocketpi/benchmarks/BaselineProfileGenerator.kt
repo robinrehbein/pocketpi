@@ -86,10 +86,8 @@ class BaselineProfileGenerator {
         // The launcher intent, so MainActivity's own start is profiled.
         startActivityAndWait()
         waitForProjects()
-        checkNotNull(device.findObject(By.text(PROJECT))).click()
-        check(device.wait(Until.hasObject(By.text(CHAT)), 60_000)) { "The session list did not load. " + device.screenTexts() }
-        checkNotNull(device.findObject(By.text(CHAT))).click()
-        check(device.wait(Until.hasObject(By.text(TAIL)), 60_000)) { "The chat did not open. " + device.screenTexts() }
+        device.tapUntil(PROJECT, By.text(CHAT), "The session list did not load")
+        device.tapUntil(CHAT, By.text(TAIL), "The chat did not open", timeoutMs = 30_000)
         device.waitForIdle(1_000)
         repeat(4) { swipeConversation(towardHistory = true) }
         repeat(4) { swipeConversation(towardHistory = false) }
@@ -99,8 +97,7 @@ class BaselineProfileGenerator {
     /** A cold start shows the Macs or, once it restores the last Mac, its projects directly. */
     private fun MacrobenchmarkScope.waitForProjects() {
         check(device.wait(Until.hasObject(By.text(Pattern.compile("$HOST|$PROJECT"))), 30_000))
-        if (!device.hasObject(By.text(PROJECT))) checkNotNull(device.findObject(By.text(HOST))).click()
-        check(device.wait(Until.hasObject(By.text(PROJECT)), 60_000)) { "The projects did not load. " + device.screenTexts() }
+        if (!device.hasObject(By.text(PROJECT))) device.tapUntil(HOST, By.text(PROJECT), "The projects did not load")
     }
 
     /**

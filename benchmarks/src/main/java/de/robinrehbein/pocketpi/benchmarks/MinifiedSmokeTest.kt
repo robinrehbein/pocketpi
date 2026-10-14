@@ -105,8 +105,7 @@ class MinifiedSmokeTest {
                 "--es android.intent.extra.TEXT minified-smoke-share -n $TARGET/$SHARE"
         )
         check(device.wait(Until.hasObject(By.text(CACHED_CHAT)), 30_000)) { "The share picker did not list the chat. " + device.screenTexts() }
-        checkNotNull(device.findObject(By.text(CACHED_CHAT))).click()
-        check(device.wait(Until.hasObject(By.text(CACHED_TAIL)), 60_000)) { "The picked chat did not open. " + device.screenTexts() }
+        device.tapUntil(CACHED_CHAT, By.text(CACHED_TAIL), "The picked chat did not open", timeoutMs = 30_000)
     }
 
     /**
@@ -154,14 +153,11 @@ class MinifiedSmokeTest {
     private fun launch(command: String = LAUNCH) {
         device.executeShellCommand(command)
         check(device.wait(Until.hasObject(By.text(Pattern.compile("$HOST|$PROJECT"))), 30_000))
-        if (!device.hasObject(By.text(PROJECT))) checkNotNull(device.findObject(By.text(HOST))).click()
-        check(device.wait(Until.hasObject(By.text(PROJECT)), 60_000)) { "The projects did not load. " + device.screenTexts() }
+        if (!device.hasObject(By.text(PROJECT))) device.tapUntil(HOST, By.text(PROJECT), "The projects did not load")
     }
 
     private fun openChat(chat: String, tail: String) {
-        checkNotNull(device.findObject(By.text(PROJECT))).click()
-        check(device.wait(Until.hasObject(By.text(chat)), 60_000)) { "The session list did not load. " + device.screenTexts() }
-        checkNotNull(device.findObject(By.text(chat))).click()
-        check(device.wait(Until.hasObject(By.text(tail)), 60_000)) { "$chat did not open. " + device.screenTexts() }
+        device.tapUntil(PROJECT, By.text(chat), "The session list did not load")
+        device.tapUntil(chat, By.text(tail), "$chat did not open", timeoutMs = 30_000)
     }
 }
