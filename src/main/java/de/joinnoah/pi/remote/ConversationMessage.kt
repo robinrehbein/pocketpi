@@ -9,18 +9,22 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.rememberSelectionState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FormatQuote
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,6 +40,8 @@ import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
@@ -201,6 +207,8 @@ internal fun ConversationMessage(
     onOpenTool: ((ConversationItem.Activity) -> Unit)? = null,
     onOpenAgent: ((ConversationItem.Subagent, Int) -> Unit)? = null,
     onAskToFix: ((messageId: String) -> Unit)? = null,
+    /** Asks pi to fix what a message says; set while the chat takes a prompt. */
+    onAskToFixMessage: ((messageId: String) -> Unit)? = null,
     highlighted: Boolean = false,
     /** Set only for the first bubble of a user message when the chat can be rewound. */
     fork: MessageFork? = null,
@@ -223,6 +231,7 @@ internal fun ConversationMessage(
             onOpenTool,
             onOpenAgent,
             onAskToFix,
+            onAskToFixMessage,
             fork,
             images,
             projectImages,
@@ -243,6 +252,7 @@ private fun ConversationMessageContent(
     onOpenTool: ((ConversationItem.Activity) -> Unit)?,
     onOpenAgent: ((ConversationItem.Subagent, Int) -> Unit)?,
     onAskToFix: ((messageId: String) -> Unit)?,
+    onAskToFixMessage: ((messageId: String) -> Unit)?,
     fork: MessageFork?,
     images: SentImageSource?,
     projectImages: ProjectImageSource?,
@@ -253,6 +263,8 @@ private fun ConversationMessageContent(
     val quoteLabel = stringResource(R.string.remote_quote)
     val forkLabel = stringResource(R.string.remote_fork_action)
     val copyLabel = stringResource(R.string.remote_copy_message)
+    val copyAny = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy))
+    val copyMarkdownLabel = stringResource(R.string.remote_menu_copy_markdown)
     when (item) {
         is ConversationItem.Bubble -> {
             val outgoing = item.role == "user"
@@ -263,144 +275,209 @@ private fun ConversationMessageContent(
             val copyToClipboard = rememberCopyToClipboard(copyLabel)
             var forkMenu by remember(item.id) { mutableStateOf(false) }
             var forkConfirming by remember(item.id) { mutableStateOf<ForkMode?>(null) }
+            // While text is selected in the bubble, a right-click opens the selection's own menu
+            // instead of the bubble's. A click without a drag selects nothing.
+            val selection = rememberSelectionState()
+            val linkTargets = remember { LinkTargets() }
+            val linkMenu = rememberLinkMenu()
+            val hover = remember { MutableInteractionSource() }
+            val menuCopyable = !item.streaming && item.text.isNotBlank()
+            // Every Copy copies what the bubble shows; "Copy as Markdown" is the one raw route.
+            val copyMarkdownOffered = remember(item.text) { markdownPlainText(item.text) != item.text }
+            val messageMenu: (androidx.compose.ui.geometry.Offset?) -> List<MenuItem> = { position ->
+                val url = position?.let(linkTargets::urlAt)
+                when {
+                    selection.selectedTexts.any { it.isNotEmpty() } -> emptyList()
+                    url != null -> linkMenu(url)
+                    else ->
+                        messageMenuActions(item.role, item.text, item.streaming, forkShown, onAskToFixMessage != null)
+                            .map { action ->
+                                MenuItem(
+                                    action.label,
+                                    "message_${action.name.lowercase()}",
+                                    enabled = action != MessageMenuAction.EDIT_RETRY || fork?.ready == true,
+                                ) {
+                                    when (action) {
+                                        MessageMenuAction.QUOTE -> onQuote(item.sourceId)
+                                        MessageMenuAction.COPY -> copyAny(markdownPlainText(item.text))
+                                        MessageMenuAction.COPY_MARKDOWN -> copyAny(item.text)
+                                        MessageMenuAction.FORK -> forkMenu = true
+                                        MessageMenuAction.ASK_TO_FIX -> onAskToFixMessage?.invoke(item.sourceId)
+                                        MessageMenuAction.EDIT_RETRY -> forkConfirming = ForkMode.EDIT
+                                    }
+                                }
+                            }
+                }
+            }
+            val hoverActions =
+                buildList {
+                    if (menuCopyable)
+                        add(HoverAction(Icons.Outlined.ContentCopy, R.string.remote_menu_copy, "copy") {
+                            copyAny(markdownPlainText(item.text))
+                        })
+                    if (canQuote)
+                        add(HoverAction(Icons.Default.FormatQuote, R.string.remote_quote, "quote") { onQuote(item.sourceId) })
+                    if (forkShown)
+                        add(HoverAction(Icons.Filled.Replay, R.string.remote_fork_action, "fork") { forkMenu = true })
+                }
             if (forkMenuRequested)
                 LaunchedEffect(Unit) {
                     if (forkShown) forkMenu = true
                     onForkMenuRequestHandled()
                 }
-            BoxWithConstraints(Modifier.fillMaxWidth()) {
+            // The whole line of the message counts as hovering it, so the pointer can reach the
+            // part of the action row that reaches past a short bubble.
+            BoxWithConstraints(Modifier.fillMaxWidth().hoverActions(hover)) {
                 val width = if (item.text.contains("```")) maxWidth else maxWidth * 0.88f
-                Column(
+                Box(
                     Modifier.align(if (outgoing) Alignment.CenterEnd else Alignment.CenterStart)
                         .widthIn(max = width)
+                        .testTag("messageBubble-${item.id}")
+                        .contextMenu(items = messageMenu)
                 ) {
-                    if (!outgoing)
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Text(
-                                item.author ?: stringResource(R.string.remote_model_unknown),
-                                style = MaterialTheme.typography.labelMedium,
-                                modifier = Modifier.weight(1f, fill = false).padding(start = 8.dp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        if (forkShown)
-                            ForkControl(
-                                item.sourceId,
-                                item.text,
-                                fork,
-                                forkMenu,
-                                { forkMenu = it },
-                                forkConfirming,
-                                { forkConfirming = it },
-                            )
-                        Surface(
-                            modifier = Modifier.weight(1f, fill = false)
-                                .quoteSwipe(canQuote) { onQuote(item.sourceId) }
-                                .semantics {
-                                    customActions = buildList {
-                                        if (canQuote)
-                                            add(
-                                                CustomAccessibilityAction(quoteLabel) {
-                                                    onQuote(item.sourceId)
-                                                    true
-                                                }
-                                            )
-                                        if (canCopy)
-                                            add(
-                                                CustomAccessibilityAction(copyLabel) {
-                                                    copyToClipboard(item.text)
-                                                    true
-                                                }
-                                            )
-                                        if (forkShown)
-                                            add(
-                                                CustomAccessibilityAction(forkLabel) {
-                                                    forkMenu = true
-                                                    true
-                                                }
-                                            )
-                                    }
-                                },
-                            shape = remember(outgoing) { BubbleShape(outgoing) },
-                            color =
-                                if (outgoing) MaterialTheme.colorScheme.primaryContainer
-                                else MaterialTheme.colorScheme.surfaceContainer,
-                        ) {
-                            Column(
-                                Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                    Column {
+                        if (!outgoing)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
                             ) {
-                                    item.quote?.let { QuotePreview(it) }
-                                    // Runs of images go through the preview, other attachments stay in place.
-                                    for (run in attachmentRuns(item.attachments, images != null)) {
-                                        if (images != null && run.first().kind == "image")
-                                            SentImageAttachments(run, images)
-                                        else for (attachment in run) {
-                                            Column(Modifier.padding(vertical = 4.dp)) {
-                                                Text(
-                                                    attachment.name,
-                                                    style = MaterialTheme.typography.labelLarge,
+                                Text(
+                                    item.author ?: stringResource(R.string.remote_model_unknown),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    modifier = Modifier.weight(1f, fill = false).padding(start = 8.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            if (forkShown)
+                                ForkControl(
+                                    item.sourceId,
+                                    item.text,
+                                    fork,
+                                    forkMenu,
+                                    { forkMenu = it },
+                                    forkConfirming,
+                                    { forkConfirming = it },
+                                )
+                            Surface(
+                                modifier = Modifier.weight(1f, fill = false)
+                                    .quoteSwipe(canQuote) { onQuote(item.sourceId) }
+                                    .semantics {
+                                        customActions = buildList {
+                                            if (canQuote)
+                                                add(
+                                                    CustomAccessibilityAction(quoteLabel) {
+                                                        onQuote(item.sourceId)
+                                                        true
+                                                    }
                                                 )
-                                                Text(
-                                                    Formatter.formatShortFileSize(
-                                                        LocalContext.current,
-                                                        attachment.size,
-                                                    ),
-                                                    style = MaterialTheme.typography.labelSmall,
+                                            if (canCopy)
+                                                add(
+                                                    CustomAccessibilityAction(copyLabel) {
+                                                        copyToClipboard(markdownPlainText(item.text))
+                                                        true
+                                                    }
                                                 )
-                                                Text(
-                                                    stringResource(
-                                                        if (
-                                                            attachment.expiresAt <=
-                                                                System.currentTimeMillis()
-                                                        )
-                                                            R.string.remote_attachment_expired
-                                                        else R.string.remote_attachment_expires,
-                                                        java.text.DateFormat.getDateTimeInstance(
-                                                                java.text.DateFormat.SHORT,
-                                                                java.text.DateFormat.SHORT,
+                                            if (canCopy && copyMarkdownOffered)
+                                                add(
+                                                    CustomAccessibilityAction(copyMarkdownLabel) {
+                                                        copyAny(item.text)
+                                                        true
+                                                    }
+                                                )
+                                            if (forkShown)
+                                                add(
+                                                    CustomAccessibilityAction(forkLabel) {
+                                                        forkMenu = true
+                                                        true
+                                                    }
+                                                )
+                                        }
+                                    },
+                                shape = remember(outgoing) { BubbleShape(outgoing) },
+                                color =
+                                    if (outgoing) MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceContainer,
+                            ) {
+                                Column(
+                                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                        item.quote?.let { QuotePreview(it) }
+                                        // Runs of images go through the preview, other attachments stay in place.
+                                        for (run in attachmentRuns(item.attachments, images != null)) {
+                                            if (images != null && run.first().kind == "image")
+                                                SentImageAttachments(run, images)
+                                            else for (attachment in run) {
+                                                Column(Modifier.padding(vertical = 4.dp)) {
+                                                    Text(
+                                                        attachment.name,
+                                                        style = MaterialTheme.typography.labelLarge,
+                                                    )
+                                                    Text(
+                                                        Formatter.formatShortFileSize(
+                                                            LocalContext.current,
+                                                            attachment.size,
+                                                        ),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                    )
+                                                    Text(
+                                                        stringResource(
+                                                            if (
+                                                                attachment.expiresAt <=
+                                                                    System.currentTimeMillis()
                                                             )
-                                                            .format(java.util.Date(attachment.expiresAt)),
-                                                    ),
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                )
+                                                                R.string.remote_attachment_expired
+                                                            else R.string.remote_attachment_expires,
+                                                            java.text.DateFormat.getDateTimeInstance(
+                                                                    java.text.DateFormat.SHORT,
+                                                                    java.text.DateFormat.SHORT,
+                                                                )
+                                                                .format(java.util.Date(attachment.expiresAt)),
+                                                        ),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                    )
+                                                }
                                             }
                                         }
-                                    }
-                                    if (item.text.isNotEmpty())
-                                        // Only the assistant's text may name files to load; a user's text never does.
-                                        CompositionLocalProvider(
-                                            LocalProjectImageSource provides projectImages.takeIf { !outgoing }
-                                        ) { SelectionContainer { MarkdownText(item.text) } }
-                                    if (item.truncated)
-                                        Text(
-                                            stringResource(R.string.remote_truncated),
-                                            style = MaterialTheme.typography.labelSmall,
-                                        )
-                                    if (canCopy && copyButton)
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            IconButton(
-                                                onClick = { copyToClipboard(item.text) },
-                                                modifier = Modifier.size(32.dp).testTag("copyMessage-${item.id}"),
+                                        if (item.text.isNotEmpty())
+                                            // Only the assistant's text may name files to load; a user's text never does.
+                                            CompositionLocalProvider(
+                                                LocalProjectImageSource provides projectImages.takeIf { !outgoing },
+                                                LocalLinkTargets provides linkTargets,
                                             ) {
-                                                Icon(
-                                                    Icons.Outlined.ContentCopy,
-                                                    copyLabel,
-                                                    Modifier.size(16.dp),
-                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                )
+                                                SelectionContainer(selection) {
+                                                    MarkdownText(item.text)
+                                                }
                                             }
-                                            item.timestamp?.let { MessageTimestamp(it, Modifier.weight(1f)) }
-                                        }
-                                    else item.timestamp?.let { MessageTimestamp(it) }
+                                        if (item.truncated)
+                                            Text(
+                                                stringResource(R.string.remote_truncated),
+                                                style = MaterialTheme.typography.labelSmall,
+                                            )
+                                        if (canCopy && copyButton)
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                IconButton(
+                                                    onClick = { copyToClipboard(markdownPlainText(item.text)) },
+                                                    modifier = Modifier.size(32.dp).testTag("copyMessage-${item.id}"),
+                                                ) {
+                                                    Icon(
+                                                        Icons.Outlined.ContentCopy,
+                                                        copyLabel,
+                                                        Modifier.size(16.dp),
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
+                                                item.timestamp?.let { MessageTimestamp(it, Modifier.weight(1f)) }
+                                            }
+                                        else item.timestamp?.let { MessageTimestamp(it) }
+                                }
                             }
                         }
+                        if (!outgoing && item.role == "assistant") item.usage?.let { UsageCaption(it) }
                     }
-                    if (!outgoing && item.role == "assistant") item.usage?.let { UsageCaption(it) }
+                    // Over the bubble's top corner, so showing it never moves the chat.
+                    HoverActionOverlay(hover, hoverActions, growTowardStart = outgoing)
                 }
             }
         }
@@ -443,6 +520,7 @@ private fun ConversationMessageContent(
                                 if (onOpenAgent != null)
                                     Modifier.fillMaxWidth()
                                         .testTag("subagentAgent")
+                                        .pointerHoverIcon(PointerIcon.Hand)
                                         .clickable(onClickLabel = openAgentLabel) { onOpenAgent(item, index) }
                                         .heightIn(min = 40.dp)
                                 else Modifier.fillMaxWidth(),
@@ -520,6 +598,19 @@ private fun ConversationMessageContent(
             val peekInTab = openTool?.takeIf { LocalInspectorViewers.current != null }?.let { open -> { open(item) } }
             val diff = remember(item.arguments, item.details) { toolDiff(item) }
             val summary = item.summary
+            val command = remember(item.name, item.arguments) { toolCommand(item.name, item.arguments) }
+            val toolMenu: (androidx.compose.ui.geometry.Offset?) -> List<MenuItem> = {
+                toolMenuActions(openTool != null, item.output != null, command != null).map { action ->
+                    MenuItem(action.label, "tool_${action.name.lowercase()}") {
+                        when (action) {
+                            ToolMenuAction.OPEN -> openTool?.invoke(item)
+                            ToolMenuAction.PEEK -> peekInTab?.invoke() ?: run { outputPeek = true }
+                            ToolMenuAction.COPY_COMMAND -> command?.let(copyAny)
+                            ToolMenuAction.COPY_OUTPUT -> item.output?.let(copyAny)
+                        }
+                    }
+                }
+            }
             val activityShape = MaterialTheme.shapes.medium
             val activityContainer =
                 if (item.state == "error") MaterialTheme.colorScheme.errorContainer
@@ -527,6 +618,7 @@ private fun ConversationMessageContent(
             Card(
                 Modifier.fillMaxWidth()
                     .testTag("toolCard")
+                    .contextMenu(items = toolMenu)
                     .quoteSwipe(!expanded && !item.output.isNullOrBlank()) {
                         onQuote(item.sourceId)
                     }
@@ -566,6 +658,7 @@ private fun ConversationMessageContent(
                     Row(
                         Modifier.fillMaxWidth()
                             .testTag("toolCardHeader")
+                            .pointerHoverIcon(PointerIcon.Hand)
                             .combinedClickable(
                                 onClickLabel = if (openTool != null) openToolLabel else null,
                                 onClick = {

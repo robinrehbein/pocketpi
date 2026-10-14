@@ -308,17 +308,20 @@ internal fun RemoteApp(
                     medium = RoundedCornerShape(20.dp),
                 ),
         ) {
-            RemoteNavigation(
-                repository,
-                settings,
-                pushConfigured,
-                enablePush,
-                notification,
-                consumeNotification,
-                disablePush,
-                share,
-                consumeShare,
-            )
+            // Right-click and S Pen menus open here, over everything in the window.
+            PointerMenuHost {
+                RemoteNavigation(
+                    repository,
+                    settings,
+                    pushConfigured,
+                    enablePush,
+                    notification,
+                    consumeNotification,
+                    disablePush,
+                    share,
+                    consumeShare,
+                )
+            }
         }
     }
 }

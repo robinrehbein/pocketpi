@@ -55,4 +55,24 @@ class ChatActionPillUiTest {
         compose.onNodeWithTag("chatActionsMore").performClick()
         compose.onNodeWithTag("chatActionMenu_settings").assertDoesNotExist()
     }
+
+    @Test
+    fun closeSessionSitsInTheMoreActions() {
+        val selected = mutableListOf<ChatAction>()
+        compose.setContent {
+            MaterialTheme {
+                ChatActionPill(
+                    ChatActionLayout(shown = listOf(ChatAction.REFRESH, ChatAction.SETTINGS), menu = emptyList()).withClose(),
+                    Color.DarkGray,
+                    selected::add,
+                )
+            }
+        }
+        compose.onNodeWithTag("chatAction_close").assertDoesNotExist()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.onNodeWithTag("chatActionMenu_close")
+            .assertContentDescriptionEquals(compose.activity.getString(R.string.remote_session_close))
+            .performClick()
+        assertEquals(listOf(ChatAction.CLOSE), selected)
+    }
 }

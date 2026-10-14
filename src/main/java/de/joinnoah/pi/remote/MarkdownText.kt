@@ -59,7 +59,7 @@ fun MarkdownText(text: String) {
                         else line.replace(markdownBulletRegex, "• ")
                     if (line.trim() == "---") HorizontalDivider()
                     else if (content.isNotEmpty())
-                        Text(
+                        LinkMenuText(
                             remember(content, linkColor) {
                                 inlineMarkdown(content, linkColor)
                             },
