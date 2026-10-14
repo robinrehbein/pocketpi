@@ -23,9 +23,21 @@ enum class ThemePalette(val stored: String) {
     DYNAMIC("dynamic"),
     ;
 
+    /** Whether a device on [sdk] can draw this palette; wallpaper colours need Android 12. */
+    fun isAvailable(sdk: Int): Boolean = this != DYNAMIC || sdk >= Build.VERSION_CODES.S
+
+    /**
+     * The palette a device on [sdk] actually draws: a stored [DYNAMIC] it cannot draw (for example
+     * after an OS downgrade) shows, and is selected in the picker, as [BRAND].
+     */
+    fun effective(sdk: Int): ThemePalette = if (isAvailable(sdk)) this else BRAND
+
     companion object {
         /** Unknown or missing values read as the default, so a stored value from another version is harmless. */
         fun fromStored(value: String?): ThemePalette = entries.firstOrNull { it.stored == value } ?: BRAND
+
+        /** The palettes the picker offers on [sdk]. */
+        fun available(sdk: Int): List<ThemePalette> = entries.filter { it.isAvailable(sdk) }
     }
 }
 
@@ -134,6 +146,12 @@ class DefaultSettingsRepository(
         )
     override val state = mutable.asStateFlow()
 
+    init {
+        // Re-sync on every start: the system may have dropped the app's night mode (a per-app reset)
+        // while the preference kept it, and the first window frame reads the system's copy.
+        applyNightMode(mutable.value.themeMode)
+    }
+
     override fun setTheme(theme: ThemePalette) {
         preferences.edit().putString("theme", theme.stored).apply()
         mutable.value = mutable.value.copy(theme = theme)
@@ -219,13 +237,15 @@ internal fun parseSwipeAction(stored: String?, default: SwipeAction): SwipeActio
 
 /**
  * Sets the app's night mode in the system, so the values-night window background and the system
- * bars follow the in-app choice from the next cold start on. Only API 31 and later have a per-app
- * night mode; below that the window keeps the system's mode until the next start.
+ * bars follow the in-app choice from the next cold start on. Calling it again with the same mode
+ * changes nothing. Only API 31 and later have a per-app night mode; below that a forced mode can show
+ * the system mode's window colour for the first frame, until Compose draws the app's own background.
  */
 internal fun applyAppNightMode(context: Context, mode: ThemeMode) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
     val nightMode =
         when (mode) {
+            // The platform stores AUTO as "no app override", so the app follows the device setting.
             ThemeMode.SYSTEM -> UiModeManager.MODE_NIGHT_AUTO
             ThemeMode.LIGHT -> UiModeManager.MODE_NIGHT_NO
             ThemeMode.DARK -> UiModeManager.MODE_NIGHT_YES

@@ -38,6 +38,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -2317,7 +2318,11 @@ internal fun RemoteScreen(
                             )
                             val mode = preferences?.themeMode ?: ThemeMode.SYSTEM
                             val dark = mode.isDark(isSystemInDarkTheme())
-                            Text(stringResource(R.string.remote_theme_mode), style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                stringResource(R.string.remote_theme_mode),
+                                Modifier.semantics { heading() },
+                                style = MaterialTheme.typography.labelLarge,
+                            )
                             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                                 ThemeMode.entries.forEachIndexed { index, option ->
                                     SegmentedButton(
@@ -2340,11 +2345,19 @@ internal fun RemoteScreen(
                                     }
                                 }
                             }
-                            Text(stringResource(R.string.remote_theme_palette), style = MaterialTheme.typography.labelLarge)
-                            ThemePalette.entries
+                            Text(
+                                stringResource(R.string.remote_theme_palette),
+                                Modifier.semantics { heading() },
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                            // A stored Dynamic the device cannot draw shows, and is selected, as the brand palette.
+                            val shownPalette = theme.effective(Build.VERSION.SDK_INT)
+                            Column(
+                                Modifier.selectableGroup(),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
                                 // Wallpaper colours need Android 12; without it the choice is not offered at all.
-                                .filter { it != ThemePalette.DYNAMIC || Build.VERSION.SDK_INT >= Build.VERSION_CODES.S }
-                                .forEach { palette ->
+                                ThemePalette.available(Build.VERSION.SDK_INT).forEach { palette ->
                                     PaletteChoice(
                                         label =
                                             stringResource(
@@ -2355,11 +2368,12 @@ internal fun RemoteScreen(
                                                 }
                                             ),
                                         palette = palette,
-                                        selected = theme == palette,
+                                        selected = shownPalette == palette,
                                         dark = dark,
                                         onSelect = { (model as SettingsViewModel).setTheme(palette) },
                                     )
                                 }
+                            }
                         }
                     }
                     item {

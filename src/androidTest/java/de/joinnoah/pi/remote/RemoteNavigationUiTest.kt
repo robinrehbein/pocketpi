@@ -513,6 +513,33 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    fun forcedModeDrivesSystemBarIcons() {
+        val systemDark =
+            compose.activity.resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+        try {
+            for (mode in listOf(ThemeMode.LIGHT, ThemeMode.DARK, ThemeMode.SYSTEM)) {
+                compose.runOnIdle { uiSettings.setThemeMode(mode) }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    val controller =
+                        androidx.core.view.WindowCompat.getInsetsController(
+                            compose.activity.window,
+                            compose.activity.window.decorView,
+                        )
+                    // Light icons on a dark app, whatever the device is set to.
+                    val dark = mode.isDark(systemDark)
+                    assertEquals("Status bar icons for $mode", !dark, controller.isAppearanceLightStatusBars)
+                    assertEquals("Navigation bar icons for $mode", !dark, controller.isAppearanceLightNavigationBars)
+                }
+            }
+        } finally {
+            compose.runOnIdle { uiSettings.setThemeMode(ThemeMode.SYSTEM) }
+        }
+    }
+
+    @Test
     fun chatHeaderUsesFloatingControlsAndAccessibleStatusDot() {
         openChat()
         val longTitle = "A very long session title that must fit beside all the header controls without wrapping"
@@ -1641,9 +1668,9 @@ class RemoteNavigationUiTest {
                     super.getSharedPreferences(preferenceName, mode)
             }
         try {
-            assertFalse(DefaultSettingsRepository(context).state.value.hideOfflineSessions)
-            DefaultSettingsRepository(context).setHideOfflineSessions(true)
-            assertTrue(DefaultSettingsRepository(context).state.value.hideOfflineSessions)
+            assertFalse(DefaultSettingsRepository(context) {}.state.value.hideOfflineSessions)
+            DefaultSettingsRepository(context) {}.setHideOfflineSessions(true)
+            assertTrue(DefaultSettingsRepository(context) {}.state.value.hideOfflineSessions)
         } finally {
             context
                 .getSharedPreferences(preferenceName, android.content.Context.MODE_PRIVATE)
@@ -1697,38 +1724,40 @@ class RemoteNavigationUiTest {
                     super.getSharedPreferences(preferenceName, mode)
             }
         val preferences = context.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
+        // Persistence only: the real night mode call would force the app dark for every later test.
+        val newSettings = { DefaultSettingsRepository(context) {} }
         try {
-            assertEquals(ThinkingDisplay.STATUS, DefaultSettingsRepository(context).state.value.thinkingDisplay)
+            assertEquals(ThinkingDisplay.STATUS, newSettings().state.value.thinkingDisplay)
             preferences.edit().putString("thinking_display", "status").commit()
-            assertEquals(ThinkingDisplay.STATUS, DefaultSettingsRepository(context).state.value.thinkingDisplay)
+            assertEquals(ThinkingDisplay.STATUS, newSettings().state.value.thinkingDisplay)
             preferences.edit().putString("thinking_display", "unknown").commit()
-            assertEquals(ThinkingDisplay.STATUS, DefaultSettingsRepository(context).state.value.thinkingDisplay)
+            assertEquals(ThinkingDisplay.STATUS, newSettings().state.value.thinkingDisplay)
             preferences.edit()
                 .putString("thinking_display", "text")
                 .putBoolean("hide_offline_sessions", true)
                 .commit()
             for (palette in ThemePalette.entries) {
-                DefaultSettingsRepository(context).setTheme(palette)
+                newSettings().setTheme(palette)
                 assertEquals(palette.stored, preferences.getString("theme", null))
-                val restored = DefaultSettingsRepository(context).state.value
+                val restored = newSettings().state.value
                 assertEquals(palette, restored.theme)
                 assertEquals(ThinkingDisplay.TEXT, restored.thinkingDisplay)
                 assertTrue(restored.hideOfflineSessions)
             }
             for (mode in ThemeMode.entries) {
-                DefaultSettingsRepository(context).setThemeMode(mode)
+                newSettings().setThemeMode(mode)
                 assertEquals(mode.stored, preferences.getString("theme_mode", null))
-                assertEquals(mode, DefaultSettingsRepository(context).state.value.themeMode)
+                assertEquals(mode, newSettings().state.value.themeMode)
             }
             for (legacyTheme in listOf("light", "dark")) {
                 preferences.edit().putString("theme", legacyTheme).commit()
-                assertEquals(ThemePalette.BRAND, DefaultSettingsRepository(context).state.value.theme)
+                assertEquals(ThemePalette.BRAND, newSettings().state.value.theme)
             }
-            val repository = DefaultSettingsRepository(context)
-            repository.setTheme(ThemePalette.SYNTHWAVE)
-            repository.setThemeMode(ThemeMode.DARK)
-            repository.setThinkingDisplay(ThinkingDisplay.STATUS)
-            val restored = DefaultSettingsRepository(context).state.value
+            val settings = newSettings()
+            settings.setTheme(ThemePalette.SYNTHWAVE)
+            settings.setThemeMode(ThemeMode.DARK)
+            settings.setThinkingDisplay(ThinkingDisplay.STATUS)
+            val restored = newSettings().state.value
             assertEquals(ThinkingDisplay.STATUS, restored.thinkingDisplay)
             assertEquals(ThemePalette.SYNTHWAVE, restored.theme)
             assertEquals(ThemeMode.DARK, restored.themeMode)

@@ -109,6 +109,7 @@ class SettingsRepositoryTest {
     @Test
     fun nightModeIsAppliedWhenTheModeChanges() {
         val settings = repository()
+        applied.clear()
         settings.setTheme(ThemePalette.SYNTHWAVE)
         assertTrue("A palette change does not touch the night mode", applied.isEmpty())
 
@@ -116,6 +117,35 @@ class SettingsRepositoryTest {
         settings.setThemeMode(ThemeMode.DARK)
         settings.setThemeMode(ThemeMode.SYSTEM)
         assertEquals(listOf(ThemeMode.DARK, ThemeMode.SYSTEM), applied)
+    }
+
+    @Test
+    fun storedNightModeIsHandedToTheSystemOnEveryStart() {
+        repository()
+        assertEquals("Nothing stored follows the device", listOf(ThemeMode.SYSTEM), applied)
+
+        preferences.edit().putString("theme_mode", "dark").commit()
+        applied.clear()
+        repository()
+        assertEquals(listOf(ThemeMode.DARK), applied)
+    }
+
+    @Test
+    fun dynamicPaletteIsOfferedOnlyFromAndroid12() {
+        assertEquals(listOf(ThemePalette.BRAND, ThemePalette.SYNTHWAVE), ThemePalette.available(30))
+        assertEquals(
+            listOf(ThemePalette.BRAND, ThemePalette.SYNTHWAVE, ThemePalette.DYNAMIC),
+            ThemePalette.available(31),
+        )
+        assertFalse(ThemePalette.DYNAMIC.isAvailable(30))
+        assertTrue(ThemePalette.DYNAMIC.isAvailable(31))
+    }
+
+    @Test
+    fun storedDynamicShowsAsTheBrandPaletteBelowAndroid12() {
+        assertEquals(ThemePalette.BRAND, ThemePalette.DYNAMIC.effective(30))
+        assertEquals(ThemePalette.DYNAMIC, ThemePalette.DYNAMIC.effective(31))
+        assertEquals(ThemePalette.SYNTHWAVE, ThemePalette.SYNTHWAVE.effective(30))
     }
 
     @Test

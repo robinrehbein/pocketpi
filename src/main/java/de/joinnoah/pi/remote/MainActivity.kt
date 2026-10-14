@@ -11,7 +11,6 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
@@ -323,15 +322,7 @@ internal fun RemoteApp(
         MaterialTheme(
             colorScheme = colors,
             typography = RemoteTypography,
-            // The one shape scale of the app; components take their corners from here.
-            shapes =
-                Shapes(
-                    extraSmall = RoundedCornerShape(8.dp),
-                    small = RoundedCornerShape(12.dp),
-                    medium = RoundedCornerShape(20.dp),
-                    large = RoundedCornerShape(24.dp),
-                    extraLarge = RoundedCornerShape(28.dp),
-                ),
+            shapes = RemoteShapes,
         ) {
             // Right-click and S Pen menus open here, over everything in the window.
             PointerMenuHost {

@@ -64,6 +64,7 @@ class ShareActivity : ComponentActivity() {
                         appColorScheme(this@ShareActivity, preferences.themeMode.isDark(systemDark), preferences.theme)
                     },
                 typography = RemoteTypography,
+                shapes = RemoteShapes,
             ) {
                 var stage by remember { mutableStateOf<ShareStage>(ShareStage.Loading) }
                 LaunchedEffect(Unit) {
