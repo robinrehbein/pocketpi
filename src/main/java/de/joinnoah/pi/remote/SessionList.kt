@@ -18,6 +18,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -47,6 +49,8 @@ internal fun SessionListRow(
     swipe: Pair<SwipeAction, SwipeAction> = SwipeAction.CLOSE to SwipeAction.RENAME,
     /** The chat beside the list in the two-pane layout shows this session. */
     selected: Boolean = false,
+    /** Opens the chat with its rewind menu on the latest message; null where it cannot fork. */
+    onForkLatest: (() -> Unit)? = null,
 ) {
     fun available(action: SwipeAction): SwipeAction =
         when (action) {
@@ -59,7 +63,7 @@ internal fun SessionListRow(
     val startToEnd = available(swipe.second)
     val title = item.title.ifBlank { stringResource(R.string.remote_new_session) }
     val subagentLabel = stringResource(R.string.remote_subagent)
-    val status =
+    val reported =
         stringResource(
             when (item.availability) {
                 SessionAvailability.IDLE -> R.string.remote_status_idle
@@ -68,11 +72,32 @@ internal fun SessionListRow(
                 SessionAvailability.OFFLINE -> R.string.remote_status_offline
             }
         )
-    val statusColor = sessionStatusColor(item.availability)
+    // A last-known status is shown muted and named as such: nothing on it is live.
+    val status = if (item.lastKnown) stringResource(R.string.remote_status_last_known, reported) else reported
+    val statusColor =
+        if (item.lastKnown) MaterialTheme.colorScheme.outline else sessionStatusColor(item.availability)
     val copyExplanation = stringResource(R.string.remote_history_note)
     val closeLabel = stringResource(R.string.remote_session_close)
     val renameLabel = stringResource(R.string.remote_rename_session)
     val macTuiLabel = stringResource(R.string.remote_mac_tui_session)
+    val showActionsLabel = stringResource(R.string.remote_menu_show_actions)
+    val copyId = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_session_id))
+    // A right-click, the S Pen button, Shift+F10 and a long press all open the same menu, so
+    // rename and close stay reachable with swipe actions turned off or a mouse in hand.
+    val menuAnchor = rememberMenuAnchor()
+    val menuItems = {
+        sessionMenuActions(canRename = onRename != null, canClose = closeAvailable, canFork = onForkLatest != null).map { action ->
+            MenuItem(action.label, "session_${action.name.lowercase()}") {
+                when (action) {
+                    SessionMenuAction.OPEN -> onClick()
+                    SessionMenuAction.RENAME -> onRename?.invoke()
+                    SessionMenuAction.FORK_LATEST -> onForkLatest?.invoke()
+                    SessionMenuAction.CLOSE -> onClose()
+                    SessionMenuAction.COPY_ID -> copyId(item.id)
+                }
+            }
+        }
+    }
     val metaLabels =
         listOfNotNull(
             subagentLabel.takeIf { item.parentSessionId != null },
@@ -142,10 +167,14 @@ internal fun SessionListRow(
                         }
                         .focusRing(RoundedCornerShape(16.dp))
                         .then(regionChild)
+                        .contextMenu(menuAnchor, enabled) { menuItems() }
+                        .pointerHoverIcon(PointerIcon.Hand)
                         .combinedClickable(
                             enabled = enabled,
                             role = Role.Button,
                             onClick = onClick,
+                            onLongClick = { menuAnchor.open() },
+                            onLongClickLabel = showActionsLabel,
                         )
                         .padding(
                             start = 4.dp + (item.depth.coerceAtMost(4) * 28).dp,
@@ -218,7 +247,11 @@ internal fun SessionListRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        SessionStatusLabel(status, item.availability, statusColor)
+                        SessionStatusLabel(
+                            status,
+                            if (item.lastKnown) SessionAvailability.OFFLINE else item.availability,
+                            statusColor,
+                        )
                         if (metaLabels.isNotEmpty())
                             Text(
                                 metaLabels.joinToString(separator = " · ", prefix = "· "),

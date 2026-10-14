@@ -35,6 +35,12 @@ class MainActivity : ComponentActivity() {
     private var notification by mutableStateOf<RemoteNotification?>(null)
     private var delivery = 0L
 
+    /** A share from ShareActivity for the layout; it holds the read grant of the shared files. */
+    private var share by mutableStateOf<PendingShare?>(null)
+
+    /** A share that arrived while locked, held like [AppLock.heldTarget] until the lock is answered. */
+    private var heldShare: ShareRequest? = null
+
     /** Asks for the fingerprint or screen lock (AppLock.kt); a test replaces it before the activity starts. */
     internal var appLockPrompt: AppLockPrompt = DeviceCredentialPrompt(this, ::onAppLockResult)
 
@@ -53,10 +59,14 @@ class MainActivity : ComponentActivity() {
         app.appLock.check()
         if (savedInstanceState == null) handleIntent(intent)
         else {
-            // Restored targets keep the saved prompt state: the user has been asked for them already.
+            // Restored launches keep the saved prompt state: the user has been asked for them already.
+            // The ones handed over before the lock engaged come first; what the lock holds came
+            // later, and the newest launch wins (a held target and a held share never coexist).
             savedInstanceState.target("pending")?.let { open(it, restored = true) }
+            savedInstanceState.share("pendingShare")?.let { receive(it, restored = true) }
             // Held behind the lock when the process died, for example behind the confirm-credential screen.
             savedInstanceState.target("held")?.let { open(it, restored = true) }
+            savedInstanceState.share("heldShare")?.let { receive(it, restored = true) }
         }
         lifecycleScope.launch {
             // Recents would otherwise show the last screen of a locked app.
@@ -82,6 +92,8 @@ class MainActivity : ComponentActivity() {
                         notification,
                         { if (notification == it) notification = null },
                         app::disablePush,
+                        share,
+                        { if (share == it) share = null },
                     )
                 }
             }
@@ -96,10 +108,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // In front again: a run kept live in the background no longer needs the service.
+        LiveRun.onResume()
         if (app.appLock.locked.value && !autoPrompted) {
             autoPrompted = true
             unlock()
         }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Here, not in onStop: the app still counts as in front, and Android 12+ can refuse a
+        // foreground service started later. A resume before onStop stops it again. The lock's own
+        // prompt and a configuration change pause the activity without leaving the app.
+        if (!authenticating && !isChangingConfigurations) LiveRun.onPause(this)
     }
 
     override fun onDestroy() {
@@ -116,6 +138,8 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         notification?.let { outState.putTarget("pending", NotificationTarget(it.routeId, it.sessionId, it.jobs, it.jobId)) }
         app.appLock.heldTarget?.let { outState.putTarget("held", it) }
+        share?.let { outState.putShare("pendingShare", it.request) }
+        heldShare?.let { outState.putShare("heldShare", it) }
         // A BiometricPrompt does not outlive the process, so a restored activity asks again by itself;
         // the confirm-credential screen below API 30 does, and its answer comes back to the new activity.
         outState.putBoolean("appLockPrompted", autoPrompted && !(authenticating && Build.VERSION.SDK_INT >= 30))
@@ -148,14 +172,32 @@ class MainActivity : ComponentActivity() {
     private fun handleIntent(intent: Intent) {
         // Extras count only on the app's own non-exported alias; other apps reach this exported
         // activity too (LaunchIntents).
+        LaunchIntents.share(intent)?.let {
+            receive(it)
+            return
+        }
         val target = LaunchIntents.target(intent) ?: return
         open(target)
+    }
+
+    /** Hands [request] to the layout now, or holds it until the app lock is answered, like a target. */
+    private fun receive(request: ShareRequest, restored: Boolean = false) {
+        app.appLock.check()
+        if (app.appLock.locked.value) {
+            // The newest launch wins, as among held targets.
+            app.appLock.cancel()
+            heldShare = request
+            if (!restored) autoPrompted = false
+            return
+        }
+        share = PendingShare(request, ++delivery)
     }
 
     /** Opens [target] now, or holds it until the app lock is answered; a new held target asks again on resume. */
     private fun open(target: NotificationTarget, restored: Boolean = false) {
         val admitted = app.appLock.admit(target)
         if (admitted == null) {
+            heldShare = null
             if (!restored) autoPrompted = false
             return
         }
@@ -178,12 +220,15 @@ class MainActivity : ComponentActivity() {
         authenticating = false
         if (!verified) {
             app.appLock.cancel()
+            heldShare = null
             // A BiometricPrompt ends without a choice when the app leaves; ask again by itself on return.
             // Below API 30 every answer arrives before onResume, so this would ask again after each cancel.
             if (Build.VERSION.SDK_INT >= 30 && !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) autoPrompted = false
             return
         }
         app.appLock.unlock()?.let { notification = RemoteNotification(it.routeId, it.sessionId, ++delivery, it.jobs, it.jobId) }
+        heldShare?.let { share = PendingShare(it, ++delivery) }
+        heldShare = null
     }
 
     private fun hideFromRecents(hide: Boolean) {
@@ -216,6 +261,8 @@ internal fun RemoteApp(
     notification: RemoteNotification? = null,
     consumeNotification: (RemoteNotification) -> Unit = {},
     disablePush: () -> Unit = {},
+    share: PendingShare? = null,
+    consumeShare: (PendingShare) -> Unit = {},
 ) {
     val preferences by settings.state.collectAsStateWithLifecycle()
     val theme = preferences.theme
@@ -271,15 +318,20 @@ internal fun RemoteApp(
                     medium = RoundedCornerShape(20.dp),
                 ),
         ) {
-            RemoteNavigation(
-                repository,
-                settings,
-                pushConfigured,
-                enablePush,
-                notification,
-                consumeNotification,
-                disablePush,
-            )
+            // Right-click and S Pen menus open here, over everything in the window.
+            PointerMenuHost {
+                RemoteNavigation(
+                    repository,
+                    settings,
+                    pushConfigured,
+                    enablePush,
+                    notification,
+                    consumeNotification,
+                    disablePush,
+                    share,
+                    consumeShare,
+                )
+            }
         }
     }
 }

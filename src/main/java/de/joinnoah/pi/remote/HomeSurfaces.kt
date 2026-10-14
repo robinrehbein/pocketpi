@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import android.content.Context
+import androidx.core.content.LocusIdCompat
 import androidx.core.content.edit
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
@@ -9,11 +10,17 @@ import androidx.glance.appwidget.updateAll
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.transform
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -72,33 +79,41 @@ internal class HomeSurfaces(
             mutable.value
         }
 
-    @OptIn(FlowPreview::class)
     fun observe(state: StateFlow<RemoteState>) {
         scope.launch {
-            state.debounce(750).collect { current ->
-                try {
-                    // Pairing the same Mac again makes it known again.
-                    forgotten.removeAll(current.hosts.map { it.routeId }.toSet())
-                    update { previous ->
-                        val routes =
-                            (if (current.hosts.isNotEmpty()) current.hosts.map { it.routeId }.toSet()
-                            else storedRoutes()) - forgotten
-                        pairedRoutes = routes
-                        closed += closedHomeSessions(previous, current)
-                        mergeHomeSnapshot(
-                            previous,
-                            current,
-                            routes.isNotEmpty(),
-                            routes,
-                            System.currentTimeMillis(),
-                        )
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    // The widget keeps its last content if storage fails.
-                }
+            // The stored snapshot already shows the last rows: let the app's start settle first.
+            delay(HOME_UPDATE_INTERVAL_MS)
+            homeUpdates(state).collect { onState(it) }
+        }
+    }
+
+    /** Folds the app's state into the snapshot, and marks sessions it shows closed. */
+    @androidx.annotation.VisibleForTesting
+    internal suspend fun onState(current: HomeInputs) {
+        try {
+            // Pairing the same Mac again makes it known again.
+            forgotten.removeAll(current.hostRoutes.toSet())
+            update { previous ->
+                val routes =
+                    (if (current.hostRoutes.isNotEmpty()) current.hostRoutes.toSet()
+                    else storedRoutes()) - forgotten
+                pairedRoutes = routes
+                val newlyClosed = closedHomeSessions(previous, current)
+                closed += newlyClosed
+                mergeHomeSnapshot(
+                        previous,
+                        current,
+                        routes.isNotEmpty(),
+                        routes,
+                        System.currentTimeMillis(),
+                    )
+                    // Otherwise its shortcut would come back once [closed] has disabled it.
+                    .withoutNotified(newlyClosed)
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // The widget keeps its last content if storage fails.
         }
     }
 
@@ -108,7 +123,10 @@ internal class HomeSurfaces(
         scope.launch {
             try {
                 update(force = true) { previous ->
-                    previous.copy(sessions = previous.sessions.filter { it.routeId != routeId })
+                    previous.copy(
+                        sessions = previous.sessions.filter { it.routeId != routeId },
+                        notified = previous.notified.filter { it.routeId != routeId },
+                    )
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -116,9 +134,22 @@ internal class HomeSurfaces(
         }
     }
 
+    /**
+     * A completion or question arrived. Its notification is a conversation, so the session keeps
+     * a long-lived shortcut for a while (see [shortcutChoice]).
+     */
     fun onPush(payload: PushPayload) {
         val status = if (payload.event == PushEvent.QUESTION) "waiting" else "idle"
-        launchUpdate { it.withStatus(payload.routeId, payload.sessionId, status) }
+        launchUpdate {
+            val now = System.currentTimeMillis()
+            it.withPush(payload.routeId, payload.sessionId, status, now)
+                .withNotified(payload.routeId, payload.sessionId, now)
+        }
+    }
+
+    /** A notification named its session, which also names the session's shortcut. */
+    fun onNotifiedName(routeId: String, sessionId: String, title: String?, projectName: String?) {
+        launchUpdate { it.withNotifiedName(routeId, sessionId, title, projectName) }
     }
 
     fun onAnswered(routeId: String, sessionId: String) {
@@ -182,6 +213,7 @@ internal class HomeSurfaces(
                 stored.copy(
                     paired = routes.isNotEmpty(),
                     sessions = stored.sessions.filter { it.routeId in routes },
+                    notified = stored.notified.filter { it.routeId in routes },
                 )
         loaded = true
     }
@@ -214,9 +246,10 @@ internal class HomeSurfaces(
     internal suspend fun publishShortcuts(snapshot: HomeSnapshot) =
         shortcutMutex.withLock {
             try {
-                val limit =
-                    minOf(MAX_SHORTCUTS, ShortcutManagerCompat.getMaxShortcutCountPerActivity(context))
-                val chosen = shortcutSessions(snapshot, limit)
+                // One set for the ranked and the notified sessions: setDynamicShortcuts replaces
+                // every dynamic shortcut, so a shortcut pushed on its own would be wiped here.
+                val limit = ShortcutManagerCompat.getMaxShortcutCountPerActivity(context)
+                val chosen = shortcutChoice(snapshot, limit, System.currentTimeMillis(), closed)
                 val chosenIds = chosen.map { shortcutId(it.routeId, it.sessionId) }
                 val existing =
                     ShortcutManagerCompat.getShortcuts(
@@ -226,6 +259,8 @@ internal class HomeSurfaces(
                         )
                         .associate { it.id to it.isEnabled }
                 val routes = pairedRoutes ?: storedRoutes()
+                // Notified sessions count through [chosen] alone: one past its time, or beyond the
+                // limit, has nothing to enable it with.
                 val present = snapshot.sessions.map { shortcutId(it.routeId, it.sessionId) }.toSet()
                 val plan = shortcutPlan(chosenIds, existing, present, closed, routes - forgotten)
                 val localized = RemoteNotifications.localized(context)
@@ -234,7 +269,8 @@ internal class HomeSurfaces(
                         val title = session.title.ifBlank {
                             localized.getString(R.string.remote_widget_untitled)
                         }
-                        ShortcutInfoCompat.Builder(context, shortcutId(session.routeId, session.sessionId))
+                        val id = shortcutId(session.routeId, session.sessionId)
+                        ShortcutInfoCompat.Builder(context, id)
                             .setShortLabel(title.take(24))
                             .setLongLabel(
                                 if (session.projectName.isBlank()) title.take(48)
@@ -243,20 +279,27 @@ internal class HomeSurfaces(
                             .setIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher))
                             .setIntent(LaunchIntents.session(context, session.routeId, session.sessionId))
                             .setRank(rank)
+                            // Long-lived, so the session's notifications show as conversations,
+                            // and the system keeps the shortcut while one of them is showing.
+                            .setLongLived(true)
+                            .setLocusId(LocusIdCompat(id))
+                            // A Direct Share target: the share sheet offers "PocketPi: <session>"
+                            // (the share-target of res/xml/shortcuts.xml, which opens ShareActivity).
+                            .setCategories(setOf(SHARE_TARGET_CATEGORY))
                             .build()
                     }
                 val shortcuts = chosen.mapIndexed { rank, session -> info(session, rank) }
                 if (plan.enable.isNotEmpty()) {
                     ShortcutManagerCompat.enableShortcuts(
                         context,
-                        snapshot.sessions
+                        (chosen + snapshot.sessions)
+                            .distinctBy { it.routeId to it.sessionId }
                             .filter { shortcutId(it.routeId, it.sessionId) in plan.enable }
                             .map { info(it, 0) },
                     )
                 }
                 // Title changes matter; status changes don't, since it isn't shown.
-                val signature =
-                    chosen.map { shortcutSignatureEntry(it.routeId, it.sessionId, it.title, it.projectName) }
+                val signature = shortcutSignature(chosen, snapshot)
                 if (signature != publishedShortcuts || plan.enable.isNotEmpty()) {
                     if (ShortcutManagerCompat.setDynamicShortcuts(context, shortcuts)) {
                         publishedShortcuts = signature
@@ -318,6 +361,49 @@ internal class HomeSurfaces(
         }
 }
 
+/** The longest the widget and the shortcuts trail the app's state, also while pi streams. */
+internal const val HOME_UPDATE_INTERVAL_MS = 750L
+
+/** How often a connected app folds its unchanged state in again, which refreshes the widget's time. */
+internal const val HOME_REFRESH_INTERVAL_MS = 60_000L
+
+/**
+ * What the home surfaces fold in from [state]: a change of [HomeInputs] at once, then at most one
+ * every [intervalMs], always ending with the latest. A debounce on the whole state, which every
+ * streamed delta resets, would hold back a status change until the run is over.
+ *
+ * While the app is connected to the selected host, the same inputs come again every
+ * [refreshIntervalMs], so the widget's "Updated" time follows the host's confirmation about once
+ * a minute instead of stopping at the last change.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+internal fun homeUpdates(
+    state: Flow<RemoteState>,
+    intervalMs: Long = HOME_UPDATE_INTERVAL_MS,
+    refreshIntervalMs: Long = HOME_REFRESH_INTERVAL_MS,
+): Flow<HomeInputs> =
+    flow {
+            var last: Pair<RemoteState, HomeInputs>? = null
+            state.collect { current ->
+                val inputs = homeInputs(current, last)
+                last = current to inputs
+                emit(inputs)
+            }
+        }
+        .distinctUntilChanged()
+        .transformLatest { inputs ->
+            emit(inputs)
+            while (inputs.connectedToSelection) {
+                delay(refreshIntervalMs)
+                emit(inputs)
+            }
+        }
+        .conflate()
+        .transform {
+            emit(it)
+            delay(intervalMs)
+        }
+
 /** The route and session of a [shortcutId]. */
 internal fun shortcutTarget(id: String): Pair<String, String>? {
     if (!id.startsWith("session:")) return null
@@ -327,6 +413,9 @@ internal fun shortcutTarget(id: String): Pair<String, String>? {
     val session = rest.substringAfter(':').takeIf(::isOpaqueId) ?: return null
     return route to session
 }
+
+/** The share-target category of res/xml/shortcuts.xml that session shortcuts carry. */
+internal const val SHARE_TARGET_CATEGORY = "de.joinnoah.pi.remote.category.SHARE_TARGET"
 
 internal const val PUBLISHED_SHORTCUTS_PREFS = "pocket_pi_shortcuts"
 internal const val PUBLISHED_SHORTCUTS_KEY = "signature"

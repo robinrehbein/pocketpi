@@ -32,6 +32,8 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -74,6 +76,10 @@ internal fun FileEntryTile(
     modifier: Modifier = Modifier,
     tag: String = "fileTile:${entry.name}",
     detail: (@Composable () -> Unit)? = null,
+    /** The entry's path in the project; with it the tile has a menu (right-click, Shift+F10). */
+    path: String? = null,
+    /** Puts a reference to the file into the composer; null where the tile cannot. */
+    onSend: (() -> Unit)? = null,
 ) {
     val openable = entry.type == FileEntryType.DIR || entry.type == FileEntryType.FILE
     val kind = stringResource(
@@ -89,6 +95,23 @@ internal fun FileEntryTile(
     val fileSize = if (entry.type == FileEntryType.FILE) entry.size?.let { Formatter.formatShortFileSize(context, it) } else null
     val peekAction = stringResource(R.string.remote_files_peek_action)
     var bounds = IntRect.Zero
+    val copyPath = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_path))
+    val copyContents = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_contents))
+    val contents = preview?.content?.takeIf { preview.complete && entry.type == FileEntryType.FILE }
+    val menu: (androidx.compose.ui.geometry.Offset?) -> List<MenuItem> = {
+        val entryPath = path
+        if (entryPath == null) emptyList()
+        else fileMenuActions(openable, onSend != null, contents != null).map { action ->
+            MenuItem(action.label, "file_${action.name.lowercase()}") {
+                when (action) {
+                    FileMenuAction.OPEN -> onOpen()
+                    FileMenuAction.SEND -> onSend?.invoke()
+                    FileMenuAction.COPY_PATH -> copyPath(entryPath)
+                    FileMenuAction.COPY_CONTENTS -> contents?.let(copyContents)
+                }
+            }
+        }
+    }
     if (entry.type == FileEntryType.FILE) {
         LaunchedEffect(entry.name, preview == null) {
             if (preview == null) onRequestPreview()
@@ -104,9 +127,11 @@ internal fun FileEntryTile(
                 bounds = IntRect(rect.left.roundToInt(), rect.top.roundToInt(), rect.right.roundToInt(), rect.bottom.roundToInt())
             }
             .testTag(tag)
+            .contextMenu(enabled = path != null, items = menu)
             .then(
                 // Right opens the tile as Enter does, where no tile lies to its right.
-                if (openable) Modifier.focusRing(RoundedCornerShape(18.dp)).then(regionChild).openOnRight(focusManager, onOpen).combinedClickable(
+                if (openable) Modifier.focusRing(RoundedCornerShape(18.dp)).then(regionChild).openOnRight(focusManager, onOpen)
+                    .pointerHoverIcon(PointerIcon.Hand).combinedClickable(
                     onClick = onOpen,
                     onLongClickLabel = peekAction,
                     onLongClick = { onPeek(bounds) },

@@ -250,6 +250,7 @@ class LabelUpgradeWorker(context: Context, parameters: WorkerParameters) :
             }
         }
         val host = paired() ?: return Result.success()
+        RemoteNotifications.rememberHost(host)
         val tag = RemoteNotifications.tag(payload.routeId, payload.sessionId)
         val wanted = {
             app.settings.state.value.pushEnabled &&
@@ -283,9 +284,16 @@ class LabelUpgradeWorker(context: Context, parameters: WorkerParameters) :
         // Checked again right before posting: the lookup may have outlived the notification, and
         // a question or newer push may have replaced it in the meantime.
         if (result is LabelResult.Post && wanted()) {
-            if (payload.event == PushEvent.COMPLETE)
+            if (payload.event == PushEvent.COMPLETE) {
+                // In place, so the notification keeps its group, conversation and Reply action.
                 RemoteNotifications.postComplete(context, payload, result.label)
-            else RemoteNotifications.postAttention(context, payload, result.label)
+                app.home.onNotifiedName(
+                    payload.routeId,
+                    payload.sessionId,
+                    result.label.title,
+                    result.label.project,
+                )
+            } else RemoteNotifications.postAttention(context, payload, result.label)
         }
         // The generic notification already offers Open, so a failed lookup is not retried.
         return Result.success()

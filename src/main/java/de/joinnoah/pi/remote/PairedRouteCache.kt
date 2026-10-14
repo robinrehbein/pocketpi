@@ -53,14 +53,16 @@ internal class PairedRouteCache(private val preferences: SharedPreferences) {
 /**
  * [pairings] with [cache] kept in step: every load writes the routes it read, and a save clears
  * the cache first, so a save that fails or a process killed meanwhile leaves no stale routes, only
- * a cache the next push rebuilds.
+ * a cache the next push rebuilds. [onHosts] sees the hosts of every load and save, so notifications
+ * know each Mac's name without a push reading the store.
  */
 internal class RouteCachingPairings(
     private val pairings: PairingStorage,
     private val cache: PairedRouteCache,
+    private val onHosts: (List<PairedHost>) -> Unit = {},
 ) : PairingStorage {
     override fun load(): List<PairedHost> =
-        cache.locked { pairings.load().also { hosts -> cache.write(hosts.map { it.routeId }) } }
+        cache.locked { pairings.load().also { hosts -> cache.write(hosts.map { it.routeId }) } }.also(onHosts)
 
     override fun save(hosts: List<PairedHost>) {
         cache.locked {
@@ -68,5 +70,6 @@ internal class RouteCachingPairings(
             pairings.save(hosts)
             cache.write(hosts.map { it.routeId })
         }
+        onHosts(hosts)
     }
 }

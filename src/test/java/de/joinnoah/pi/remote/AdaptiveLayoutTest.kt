@@ -361,39 +361,171 @@ class AdaptiveLayoutTest {
     fun draggedWidthsSurviveRecreation() {
         val layout = paneLayout(1300.dp, TALL)
         val state = TwoPaneState()
+        state.window = 1300.dp
         state.adopt(layout)
         state.resizeList(layout, 420.dp)
         state.resizeInspector(layout, 500.dp)
         val scope = androidx.compose.runtime.saveable.SaverScope { true }
         val restored = TwoPaneState.Saver.restore(with(TwoPaneState.Saver) { scope.save(state) }!!)!!
+        restored.window = 1300.dp
         // Adopting the same bucket after recreation keeps them.
         restored.adopt(layout)
         assertEquals(420.dp, restored.listWidth(layout))
         assertEquals(500.dp, restored.inspectorWidth(layout))
         // Untouched widths come back as the defaults.
         val fresh = TwoPaneState.Saver.restore(with(TwoPaneState.Saver) { scope.save(TwoPaneState()) }!!)!!
+        fresh.window = 1300.dp
         assertEquals(layout.listWidth, fresh.listWidth(layout))
         assertEquals(layout.inspectorWidth, fresh.inspectorWidth(layout))
     }
 
+    /** What a cold start reads back: the memos through the preferences' text. */
+    private fun restart(state: TwoPaneState, window: Dp): TwoPaneState =
+        TwoPaneState(memos = decodePaneMemos(encodePaneMemos(state.memos))).also { it.window = window }
+
     @Test
-    fun draggedWidthsResetOnlyWhenTheBucketChanges() {
+    fun draggedWidthsSurviveARoundTripThroughAnotherBucketAndARestart() {
+        val wide = paneLayout(1300.dp, TALL)
+        val narrow = paneLayout(900.dp, TALL)
+        val state = TwoPaneState()
+        state.window = 1300.dp
+        state.adopt(wide)
+        state.resizeList(wide, 420.dp)
+        state.resizeInspector(wide, 500.dp)
+        // Bucket B shows its own defaults and keeps A's widths aside.
+        state.window = 900.dp
+        state.adopt(narrow)
+        assertEquals(narrow.listWidth, state.listWidth(narrow))
+        assertEquals(narrow.inspectorWidth, state.inspectorWidth(narrow))
+        // Back in A, they are there again.
+        state.window = 1300.dp
+        state.adopt(wide)
+        assertEquals(420.dp, state.listWidth(wide))
+        assertEquals(500.dp, state.inspectorWidth(wide))
+        // And after a restart, read back from the store.
+        val restarted = restart(state, 1300.dp)
+        restarted.adopt(wide)
+        assertEquals(420.dp, restarted.listWidth(wide))
+        assertEquals(500.dp, restarted.inspectorWidth(wide))
+        assertEquals(narrow.listWidth, restarted.listWidth(narrow))
+    }
+
+    @Test
+    fun aDraggedWidthIsAShareOfTheWindowSoBothLandscapeZoomsUseIt() {
+        val small = paneLayout(1205.dp, 753.dp)
+        val large = paneLayout(1280.dp, 800.dp)
+        assertEquals(small.sizeKey(), large.sizeKey())
+        // The portrait buckets of both zooms share one too, apart from landscape.
+        assertEquals(paneLayout(753.dp, 1205.dp).sizeKey(), paneLayout(800.dp, 1280.dp).sizeKey())
+        assertFalse(paneLayout(753.dp, 1205.dp).sizeKey() == small.sizeKey())
+        val state = TwoPaneState()
+        state.window = 1205.dp
+        state.adopt(small)
+        state.resizeList(small, 482.dp)
+        assertEquals(482.dp, state.listWidth(small))
+        state.window = 1280.dp
+        state.adopt(large)
+        assertEquals(512.dp, state.listWidth(large))
+    }
+
+    @Test
+    fun theResetRemovesTheBucketsEntry() {
         val wide = paneLayout(1300.dp, TALL)
         val state = TwoPaneState()
+        state.window = 1300.dp
         state.adopt(wide)
         state.resizeList(wide, 420.dp)
-        // Another width in the same bucket is the same layout.
-        state.adopt(paneLayout(1500.dp, TALL))
-        assertEquals(420.dp, state.listWidth(wide))
-        // Another bucket shows its own default at once and drops the dragged width.
-        val narrow = paneLayout(900.dp, TALL)
-        assertEquals(narrow.listWidth, state.listWidth(narrow))
-        state.adopt(narrow)
-        state.adopt(wide)
-        assertEquals(wide.listWidth, state.listWidth(wide))
-        state.resizeList(wide, 420.dp)
+        assertTrue(wide.sizeKey() in state.memos)
         state.resizeList(wide, null)
         assertEquals(wide.listWidth, state.listWidth(wide))
+        assertFalse(wide.sizeKey() in state.memos)
+        assertFalse(wide.sizeKey() in restart(state, 1300.dp).memos)
+        // A reset of one pane keeps the other's width.
+        state.resizeList(wide, 420.dp)
+        state.resizeInspector(wide, 500.dp)
+        state.resizeList(wide, null)
+        assertEquals(500.dp, state.inspectorWidth(wide))
+        assertEquals(wide.listWidth, state.listWidth(wide))
+    }
+
+    @Test
+    fun navigationRevealingTheListIsNoChoiceToRemember() {
+        val wide = paneLayout(1300.dp, TALL)
+        val state = TwoPaneState()
+        state.window = 1300.dp
+        state.adopt(wide)
+        state.revealList()
+        assertFalse(wide.sizeKey() in state.memos)
+        // The user hides the list; a project opened brings it back and drops the stored hide.
+        state.listCollapsed = true
+        assertEquals(true, state.memos[wide.sizeKey()]?.listCollapsed)
+        state.resizeList(wide, 420.dp)
+        state.revealList()
+        assertFalse(state.listCollapsed)
+        assertNull(state.memos[wide.sizeKey()]?.listCollapsed)
+        // So the width's reset removes the bucket's entry.
+        state.resizeList(wide, null)
+        assertFalse(wide.sizeKey() in state.memos)
+    }
+
+    @Test
+    fun storedWidthsNeverPushTheChatBelowItsMinimum() {
+        // Widths dragged in the widest window of a bucket come back clamped in its narrowest one.
+        for ((wideWindow, narrowWindow) in listOf(1599 to 960, 959 to 750, 2560 to 1600)) {
+            val wide = paneLayout(wideWindow.dp, TALL)
+            val narrow = paneLayout(narrowWindow.dp, TALL)
+            assertEquals(wide.sizeKey(), narrow.sizeKey())
+            val state = TwoPaneState()
+            state.window = wideWindow.dp
+            state.adopt(wide)
+            state.resizeList(wide, listPaneWidth(10_000.dp, wideWindow.dp - PROJECT_STRIP_RESERVE, wide))
+            state.resizeInspector(wide, INSPECTOR_PANE_MAX_WIDTH)
+            val restarted = restart(state, narrowWindow.dp)
+            restarted.adopt(narrow)
+            val available = narrowWindow.dp - PROJECT_STRIP_RESERVE
+            val list = listPaneWidth(restarted.listWidth(narrow), available, narrow)
+            val chatPane = if (narrow.inspectorBesideList) available - list - 1.dp else available
+            val chat = chatPane - inspectorPaneWidth(restarted.inspectorWidth(narrow), chatPane, narrow.inspectorMinWidth) - 1.dp
+            assertTrue("chat at $narrowWindow is $chat", chat >= CHAT_PANE_MIN_WIDTH)
+            assertTrue("chat beside the list at $narrowWindow", available - list - 1.dp >= CHAT_PANE_MIN_WIDTH)
+        }
+    }
+
+    @Test
+    fun eachBucketRemembersTheListTheUserHid() {
+        val landscape = paneLayout(1280.dp, 800.dp)
+        val portrait = paneLayout(800.dp, 1280.dp)
+        val state = TwoPaneState()
+        state.adopt(landscape)
+        state.listCollapsed = true
+        state.adopt(portrait)
+        // Portrait has no choice of its own yet: the list stays as it is.
+        assertTrue(state.listCollapsed)
+        state.listCollapsed = false
+        state.adopt(landscape)
+        assertTrue(state.listCollapsed)
+        state.adopt(portrait)
+        assertFalse(state.listCollapsed)
+        // A list that only made way for the inspector stays out of its way.
+        state.autoCollapseList()
+        state.adopt(landscape)
+        assertTrue(state.listCollapsed)
+        assertFalse(state.autoCollapsed)
+        // A restart starts with the bucket's choice.
+        val restarted = restart(state, 1280.dp)
+        restarted.adopt(landscape)
+        assertTrue(restarted.listCollapsed)
+        val restartedInPortrait = restart(state, 800.dp)
+        restartedInPortrait.adopt(portrait)
+        assertFalse(restartedInPortrait.listCollapsed)
+    }
+
+    @Test
+    fun unreadableOrOddMemosAreDropped() {
+        assertEquals(emptyMap<String, PaneMemo>(), decodePaneMemos(null))
+        assertEquals(emptyMap<String, PaneMemo>(), decodePaneMemos("not json"))
+        val decoded = decodePaneMemos("""{"a":{"list":1.5,"inspector":0.3},"b":{"list":-1},"c":{"listCollapsed":true,"extra":1}}""")
+        assertEquals(mapOf("a" to PaneMemo(inspector = 0.3f), "c" to PaneMemo(listCollapsed = true)), decoded)
     }
 
     @Test

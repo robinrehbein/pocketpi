@@ -11,6 +11,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
@@ -65,6 +66,32 @@ internal fun ImageViewer(
     mimeType: String,
     source: ProjectImageSource,
     onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        ImageViewerBody(
+            path, sha256, mimeType, source,
+            modifier = Modifier.testTag("imageViewer"),
+            onClose = onDismiss,
+            insets = WindowInsets.statusBars to WindowInsets.navigationBars,
+        )
+    }
+}
+
+/**
+ * The image viewer apart from its dialog, for the dialog and the inspector's tab. [onClose] adds
+ * the close button the dialog needs and [onPopOut] the button that opens the dialog from the tab;
+ * [insets] pad the top and the bottom bar.
+ */
+@Composable
+internal fun ImageViewerBody(
+    path: String,
+    sha256: String,
+    mimeType: String,
+    source: ProjectImageSource,
+    modifier: Modifier = Modifier,
+    onClose: (() -> Unit)? = null,
+    onPopOut: (() -> Unit)? = null,
+    insets: Pair<WindowInsets, WindowInsets> = WindowInsets.safeDrawing to WindowInsets.safeDrawing,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -136,100 +163,105 @@ internal fun ImageViewer(
                 }
         }
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxSize().testTag("imageViewer"), color = Color.Black, contentColor = Color.White) {
-            Box(Modifier.fillMaxSize()) {
-                var scale by remember { mutableFloatStateOf(1f) }
-                var offsetX by remember { mutableFloatStateOf(0f) }
-                var offsetY by remember { mutableFloatStateOf(0f) }
-                var size by remember { mutableStateOf(IntSize.Zero) }
-                Box(
-                    Modifier.fillMaxSize()
-                        .onSizeChanged { size = it }
-                        .pointerInput(Unit) {
-                            detectTransformGestures { _, pan, zoom, _ ->
-                                scale = (scale * zoom).coerceIn(1f, MAX_IMAGE_ZOOM)
-                                offsetX = clampImageOffset(offsetX + pan.x, scale, size.width.toFloat())
-                                offsetY = clampImageOffset(offsetY + pan.y, scale, size.height.toFloat())
-                            }
+    Surface(modifier.fillMaxSize(), color = Color.Black, contentColor = Color.White) {
+        Box(Modifier.fillMaxSize()) {
+            var scale by remember { mutableFloatStateOf(1f) }
+            var offsetX by remember { mutableFloatStateOf(0f) }
+            var offsetY by remember { mutableFloatStateOf(0f) }
+            var size by remember { mutableStateOf(IntSize.Zero) }
+            Box(
+                Modifier.fillMaxSize()
+                    .onSizeChanged { size = it }
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            scale = (scale * zoom).coerceIn(1f, MAX_IMAGE_ZOOM)
+                            offsetX = clampImageOffset(offsetX + pan.x, scale, size.width.toFloat())
+                            offsetY = clampImageOffset(offsetY + pan.y, scale, size.height.toFloat())
                         }
-                        .pointerInput(Unit) {
-                            detectTapGestures(
-                                onDoubleTap = {
-                                    scale = 1f
-                                    offsetX = 0f
-                                    offsetY = 0f
-                                }
-                            )
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    val shown = (decoded as? ViewerImage.Ready)?.bitmap
-                    if (decoded == ViewerImage.Decoding)
-                        CircularProgressIndicator(Modifier.testTag("imageViewerLoading"), color = Color.White)
-                    else if (shown != null)
-                        Image(
-                            bitmap = shown,
-                            contentDescription = fileName,
-                            contentScale = ContentScale.Fit,
-                            modifier =
-                                Modifier.fillMaxSize()
-                                    .graphicsLayer(
-                                        scaleX = scale,
-                                        scaleY = scale,
-                                        translationX = offsetX,
-                                        translationY = offsetY,
-                                    )
-                                    .testTag("imageViewerPicture"),
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                scale = 1f
+                                offsetX = 0f
+                                offsetY = 0f
+                            }
                         )
-                    else if (decoded == ViewerImage.Busy)
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(stringResource(R.string.remote_image_render_busy))
-                            TextButton(onClick = { decodeAttempts++ }, modifier = Modifier.testTag("imageViewerRetry")) {
-                                Text(stringResource(R.string.remote_image_retry))
-                            }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                val shown = (decoded as? ViewerImage.Ready)?.bitmap
+                if (decoded == ViewerImage.Decoding)
+                    CircularProgressIndicator(Modifier.testTag("imageViewerLoading"), color = Color.White)
+                else if (shown != null)
+                    Image(
+                        bitmap = shown,
+                        contentDescription = fileName,
+                        contentScale = ContentScale.Fit,
+                        modifier =
+                            Modifier.fillMaxSize()
+                                .graphicsLayer(
+                                    scaleX = scale,
+                                    scaleY = scale,
+                                    translationX = offsetX,
+                                    translationY = offsetY,
+                                )
+                                .testTag("imageViewerPicture"),
+                    )
+                else if (decoded == ViewerImage.Busy)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(stringResource(R.string.remote_image_render_busy))
+                        TextButton(onClick = { decodeAttempts++ }, modifier = Modifier.testTag("imageViewerRetry")) {
+                            Text(stringResource(R.string.remote_image_retry))
                         }
-                    else Text(stringResource(R.string.remote_image_malformed))
-                }
-                Row(
-                    Modifier.fillMaxWidth().align(Alignment.TopCenter).background(Color.Black.copy(alpha = 0.5f))
-                        .statusBarsPadding().padding(horizontal = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(onClick = onDismiss, modifier = Modifier.testTag("imageViewerClose")) {
+                    }
+                else Text(stringResource(R.string.remote_image_malformed))
+            }
+            Row(
+                Modifier.fillMaxWidth().align(Alignment.TopCenter).background(Color.Black.copy(alpha = 0.5f))
+                    .windowInsetsPadding(insets.first.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                    .padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (onClose != null)
+                    IconButton(onClick = onClose, modifier = Modifier.testTag("imageViewerClose")) {
                         Icon(Icons.Default.Close, stringResource(R.string.remote_image_close))
                     }
-                    Spacer(Modifier.weight(1f))
-                    IconButton(
-                        enabled = !busy,
-                        modifier = Modifier.testTag("imageViewerShare"),
-                        onClick = {
-                            scope.launch {
-                                busy = true
-                                try {
-                                    val latest = fresh() ?: return@launch
-                                    val uri = withContext(Dispatchers.IO) { runCatching { storeProjectImage(context, latest) }.getOrNull() }
-                                    if (uri == null) Toast.makeText(context, saveFailed, Toast.LENGTH_SHORT).show()
-                                    else context.startActivity(imageShareIntent(uri, latest.mimeType, shareTitle))
-                                } finally {
-                                    busy = false
-                                }
+                Spacer(Modifier.weight(1f))
+                IconButton(
+                    enabled = !busy,
+                    modifier = Modifier.testTag("imageViewerShare"),
+                    onClick = {
+                        scope.launch {
+                            busy = true
+                            try {
+                                val latest = fresh() ?: return@launch
+                                val uri = withContext(Dispatchers.IO) { runCatching { storeProjectImage(context, latest) }.getOrNull() }
+                                if (uri == null) Toast.makeText(context, saveFailed, Toast.LENGTH_SHORT).show()
+                                else context.startActivity(imageShareIntent(uri, latest.mimeType, shareTitle))
+                            } finally {
+                                busy = false
                             }
-                        },
-                    ) { Icon(Icons.Default.Share, stringResource(R.string.remote_image_share)) }
-                    IconButton(
-                        enabled = !busy,
-                        modifier = Modifier.testTag("imageViewerSave"),
-                        onClick = { saver.launch(fileName) },
-                    ) { Icon(Icons.Default.Save, stringResource(R.string.remote_image_save)) }
-                }
-                Column(
-                    Modifier.fillMaxWidth().align(Alignment.BottomCenter).background(Color.Black.copy(alpha = 0.5f))
-                        .navigationBarsPadding().padding(12.dp)
-                ) {
-                    Text(fileName, style = MaterialTheme.typography.labelLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(stringResource(R.string.remote_image_caption), style = MaterialTheme.typography.labelSmall)
-                }
+                        }
+                    },
+                ) { Icon(Icons.Default.Share, stringResource(R.string.remote_image_share)) }
+                IconButton(
+                    enabled = !busy,
+                    modifier = Modifier.testTag("imageViewerSave"),
+                    onClick = { saver.launch(fileName) },
+                ) { Icon(Icons.Default.Save, stringResource(R.string.remote_image_save)) }
+                if (onPopOut != null)
+                    IconButton(onClick = onPopOut, modifier = Modifier.testTag("imagePopOut")) {
+                        Icon(Icons.Default.Fullscreen, stringResource(R.string.remote_inspector_pop_out))
+                    }
+            }
+            Column(
+                Modifier.fillMaxWidth().align(Alignment.BottomCenter).background(Color.Black.copy(alpha = 0.5f))
+                    .windowInsetsPadding(insets.second.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
+                    .padding(12.dp)
+            ) {
+                Text(fileName, style = MaterialTheme.typography.labelLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(stringResource(R.string.remote_image_caption), style = MaterialTheme.typography.labelSmall)
             }
         }
     }

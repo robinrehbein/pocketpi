@@ -151,6 +151,37 @@ class SessionArtifactsGalleryUiTest {
     }
 
     @Test
+    fun besideTheChatATapOpensTheInspectorsTabAndTheListIsReported() {
+        val shown = mutableListOf<InspectorViewer>()
+        val listed = mutableListOf<List<SessionArtifact>>()
+        val viewers = InspectorViewers(show = { shown += it }, listed = { listed += it })
+        compose.setContent {
+            MaterialTheme {
+                androidx.compose.runtime.CompositionLocalProvider(LocalInspectorViewers provides viewers) {
+                    SessionArtifactsGallery(
+                        "session", { listOf(html, svg) }, { artifact, _ -> opened(artifact.id, artifact.version) },
+                        formatAge = { "just now" },
+                    )
+                }
+            }
+        }
+        waitFor("artifactCard-$htmlId")
+        assertEquals(kotlin.collections.listOf(html, svg), listed.single())
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("artifactThumbnail", true).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("artifactCard-$htmlId").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("artifactViewer", useUnmergedTree = true).assertDoesNotExist()
+        val page = shown.single() as InspectorViewer.Artifact
+        assertEquals("Quarterly report.html", page.path)
+        assertEquals(ArtifactWatch.Listed(htmlId, 2), page.watch)
+        waitFor("artifactPicture-$svgId")
+        compose.onNodeWithTag("artifactCard-$svgId").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("imageViewer", useUnmergedTree = true).assertDoesNotExist()
+        assertEquals("Company logo.svg", (shown.last() as InspectorViewer.Image).path)
+    }
+
+    @Test
     fun tappingADiagramOpensTheArtifactViewer() {
         show({ listOf(mermaid) })
         waitFor("artifactCard-$mermaidId")

@@ -54,14 +54,19 @@ class RemoteApplication : Application() {
         Thread { runCatching { ImageStorage.clear(cacheDir) } }.start()
         // Opened or shared artifacts are copies of project files too.
         Thread { runCatching { ArtifactStorage.clear(cacheDir) } }.start()
+        // Camera captures the import is done with are deleted then; this catches the rest.
+        Thread { runCatching { PhotoCapture.sweep(cacheDir) } }.start()
         settings = DefaultSettingsRepository(this)
+        LiveRunSettings.preload(this)
         appLock = AppLock(AppLockStore(this), deviceSecure = { deviceSecure(this) })
         val attachments = AttachmentStore(this)
         val importer = AttachmentImporter(this, attachments)
         repository =
             DefaultRemoteRepository(
                 // Pushes check their route in the cache this keeps, without decrypting the store.
-                RouteCachingPairings(PairingStore(this), PairedRouteCache(this)),
+                RouteCachingPairings(PairingStore(this), PairedRouteCache(this)) { hosts ->
+                    hosts.forEach(RemoteNotifications::rememberHost)
+                },
                 DraftStore(this),
                 remoteTransport(this, scope),
                 scope,
@@ -160,6 +165,11 @@ class RemoteApplication : Application() {
     ) {
         home.onAnswered(routeId, sessionId)
         if (isPlanApproval(answer)) predictions.recordPlanApproval(routeId, sessionId)
+    }
+
+    /** A notification reply started the session's next run; called off the main thread. */
+    internal fun onRepliedInBackground(routeId: String, sessionId: String) {
+        home.onAnswered(routeId, sessionId)
     }
 
     /** True unless the host was unpaired in this process or is missing from loaded pairings. */

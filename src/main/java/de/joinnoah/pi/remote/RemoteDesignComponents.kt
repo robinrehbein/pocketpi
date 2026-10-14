@@ -24,6 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -133,6 +135,8 @@ internal fun ProjectRow(
      * projects are a page of their own and nothing can be selected.
      */
     selected: Boolean? = null,
+    /** Starts a session in this project, from the row's menu; null where none can start now. */
+    onNewSession: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val regionChild = rememberRegionChild()
@@ -149,6 +153,8 @@ internal fun ProjectRow(
     // NEEDS_HOST_UPDATE gets its own short label: the swipe only shows an update hint, not the
     // unshare action, so both the revealed background and its TalkBack action must say so.
     val swipeActionLabel = if (unshare == ProjectUnshare.NEEDS_HOST_UPDATE) updateNeededLabel else unshareLabel
+    // The menu offers unsharing too, so it needs no swipe; the update hint stays the swipe's.
+    val menu = projectMenu(onClick, onNewSession, onUnshare.takeIf { unshare == ProjectUnshare.AVAILABLE })
     SnapBackSwipeBox(
         enableStartToEnd = false,
         enableEndToStart = action != null,
@@ -194,6 +200,8 @@ internal fun ProjectRow(
                 }
                 .focusRing(RoundedCornerShape(16.dp))
                 .then(regionChild)
+                .contextMenu { menu() }
+                .pointerHoverIcon(PointerIcon.Hand)
                 .combinedClickable(
                     onClick = onClick,
                     // Only an outdated host needs the long press: it is the one place a swipe
@@ -274,5 +282,18 @@ internal fun SettingsOption(
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         content()
+    }
+}
+
+/** The menu of a project row or avatar: open it, start a session in it, stop sharing it. */
+internal fun projectMenu(onOpen: () -> Unit, onNewSession: (() -> Unit)?, onUnshare: (() -> Unit)?): () -> List<MenuItem> = {
+    projectMenuActions(onNewSession != null, onUnshare != null).map { action ->
+        MenuItem(action.label, "project_${action.name.lowercase()}") {
+            when (action) {
+                ProjectMenuAction.OPEN -> onOpen()
+                ProjectMenuAction.NEW_SESSION -> onNewSession?.invoke()
+                ProjectMenuAction.UNSHARE -> onUnshare?.invoke()
+            }
+        }
     }
 }

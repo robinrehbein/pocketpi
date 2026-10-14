@@ -3,4 +3,6 @@
     <cache-path name="exports" path="exports/" />
     <cache-path name="images" path="images/" />
     <cache-path name="artifacts" path="artifacts/" />
+    <!-- Photos the camera app writes for the composer (PhotoCapture). -->
+    <cache-path name="camera" path="camera/" />
 </paths>

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Menus that a right-click, the S Pen button, Shift+F10 or a long press on a session row
+         opens (PointerMenus.kt). Entries that repeat an existing action reuse its string. -->
+    <string name="remote_menu_open">Open</string>
+    <!-- TalkBack names the long press on a session row that opens its menu. -->
+    <string name="remote_menu_show_actions">Show actions</string>
+    <string name="remote_menu_copy">Copy</string>
+    <string name="remote_menu_copy_markdown">Copy as Markdown</string>
+    <string name="remote_menu_copy_session_id">Copy session ID</string>
+    <!-- Forks the chat at this message of the user and puts its text into the new composer. -->
+    <string name="remote_menu_edit_retry">Edit and retry from here</string>
+    <!-- Prefilled after the quoted message by "Ask pi to fix"; the user can still change it. -->
+    <string name="remote_menu_ask_fix_prompt">Look at this message, find what is wrong and fix it.</string>
+    <string name="remote_menu_copy_command">Copy command</string>
+    <string name="remote_menu_copy_output">Copy output</string>
+    <string name="remote_menu_copy_path">Copy path</string>
+    <string name="remote_menu_copy_contents">Copy contents</string>
+    <string name="remote_menu_copy_line">Copy line</string>
+    <!-- The diff section around a line, from its @@ header to the next one. -->
+    <string name="remote_menu_copy_hunk">Copy hunk</string>
+    <!-- Link menu: the browser opens in the other half of the screen, or in PocketPi's window. -->
+    <string name="remote_menu_link_adjacent">Open next to PocketPi</string>
+    <string name="remote_menu_link_in_window">Open in this window</string>
+    <string name="remote_menu_link_copy">Copy link</string>
+    <!-- The row of actions a hovered message shows (HoverActions.kt). -->
+    <string name="remote_hover_actions">Message actions</string>
+</resources>

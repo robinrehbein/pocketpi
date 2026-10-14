@@ -54,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -156,7 +157,7 @@ internal fun FilesPane(
                 Box(Modifier.weight(1f).fillMaxWidth().parentOnLeft(focusManager, parent)) {
                     val inset = if (prefillFailed) 0.dp else headerHeight
                     val file = state.file
-                    if (file == null) key(state.path) { FolderList(state, actions, inset) }
+                    if (file == null) key(state.path) { FolderList(state, actions, inset, send) }
                     else key(file.path) { FileView(file, actions, send, inset, onEdit = actions.onStartEditing.takeIf { canEdit }) }
                 }
             }
@@ -244,7 +245,8 @@ private fun LazyListScope.loadMore(loading: Boolean, failure: FilesFailure?, onL
 }
 
 @Composable
-private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: Dp) {
+private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: Dp, send: (String) -> Unit) {
+    val resources = LocalResources.current
     val gridState = rememberLazyGridState()
     var peekAnchor by remember { mutableStateOf<IntRect?>(null) }
     LaunchedEffect(state.path, state.listing, state.file) {
@@ -302,7 +304,7 @@ private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: D
                         FileEntryTile(entry, null, { actions.onOpenDir(path) }, {}, { anchor ->
                             peekAnchor = anchor
                             actions.onShowPeek(path, entry.type)
-                        }, tag = "filesEntry:${entry.name}")
+                        }, tag = "filesEntry:${entry.name}", path = path)
                     }
                     if (files.isNotEmpty())
                         item(key = "filesHeading", span = { GridItemSpan(maxLineSpan) }) {
@@ -321,6 +323,11 @@ private fun FolderList(state: FilesState, actions: FilesActions, headerHeight: D
                                 actions.onShowPeek(path, entry.type)
                             },
                             tag = "filesEntry:${entry.name}",
+                            path = path,
+                            onSend =
+                                if (entry.type == FileEntryType.FILE) {
+                                    { send(resources.getString(R.string.remote_files_reference_file, path)) }
+                                } else null,
                         )
                     }
                     if (listing.nextAfter != null)

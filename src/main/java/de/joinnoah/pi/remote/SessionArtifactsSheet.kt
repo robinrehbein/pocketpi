@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,7 +16,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -35,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -193,6 +197,25 @@ internal fun SessionArtifactsSheet(
     }
 }
 
+/** The gallery as an inspector tab beside the chat; an artifact opens in the tab beside it. */
+@Composable
+internal fun SessionArtifactsPane(
+    sessionId: String,
+    list: suspend () -> SessionArtifactListResult,
+    open: suspend (artifact: SessionArtifact, listed: Boolean) -> SessionArtifactOpenResult,
+    onClose: () -> Unit,
+    kept: MutableState<ArtifactGalleryState.Loaded?>? = null,
+) {
+    PaneBackHandler(onBack = onClose)
+    Surface(Modifier.fillMaxSize().testTag("artifactsPane")) {
+        SessionArtifactsGallery(
+            sessionId, list, open,
+            modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
+            kept = kept,
+        )
+    }
+}
+
 /** The sheet's content, apart from the sheet itself. */
 @Composable
 internal fun SessionArtifactsGallery(
@@ -202,13 +225,24 @@ internal fun SessionArtifactsGallery(
     modifier: Modifier = Modifier,
     /** How long ago an artifact changed; injectable so tests do not depend on the clock or locale. */
     formatAge: (updatedAt: Long) -> String = ::relativeAge,
+    /**
+     * Keeps the loaded list beyond this composition: the inspector composes only its active tab,
+     * and a switch back to the gallery shows the list it had instead of asking the Mac again.
+     */
+    kept: MutableState<ArtifactGalleryState.Loaded?>? = null,
 ) {
-    var state by remember { mutableStateOf<ArtifactGalleryState>(ArtifactGalleryState.Loading) }
+    var state by remember { mutableStateOf<ArtifactGalleryState>(kept?.value ?: ArtifactGalleryState.Loading) }
     var reload by remember { mutableIntStateOf(0) }
     val latestList by rememberUpdatedState(list)
+    val viewers = LocalInspectorViewers.current
     LaunchedEffect(reload) {
+        if (reload == 0 && state is ArtifactGalleryState.Loaded) return@LaunchedEffect
         state = ArtifactGalleryState.Loading
         state = latestList().toGalleryState()
+        val loaded = state as? ArtifactGalleryState.Loaded
+        kept?.value = loaded
+        // An artifact open beside the chat learns of its newer versions.
+        loaded?.let { viewers?.listed(it.list.artifacts) }
     }
     Column(modifier.fillMaxWidth().testTag("artifactGallery")) {
         Row(
@@ -319,6 +353,32 @@ private fun ArtifactCard(
             content = loadArtifactCard(sessionId, artifact) { item, listed -> latestOpen(item, listed) }
         }
     }
+    // Beside the chat the artifact opens in the inspector's tab instead of a dialog.
+    val viewers = LocalInspectorViewers.current
+    fun view() {
+        val shown = content
+        if (viewers == null) viewing = true
+        else if (shown is ArtifactCardContent.Text)
+            viewers.show(
+                InspectorViewer.Artifact(
+                    if (shown.type == ArtifactType.MERMAID) ArtifactKind.Mermaid else ArtifactKind.Html,
+                    artifactFileName(artifact.title, shown.type),
+                    artifact.title,
+                    shown.loaded.html,
+                    reload = { (latestOpen(artifact, false) as? SessionArtifactOpenResult.Text)?.loaded?.html },
+                    watch = ArtifactWatch.Listed(artifact.id, artifact.version),
+                )
+            )
+        else if (shown is ArtifactCardContent.Picture)
+            viewers.show(
+                InspectorViewer.Image(
+                    artifactFileName(artifact.title, ArtifactType.SVG),
+                    shown.image.sha256,
+                    shown.image.mimeType,
+                    artifactImageSource(sessionId, artifact) { item, listed -> latestOpen(item, listed) },
+                )
+            )
+    }
     val label = stringResource(R.string.remote_artifacts_open, artifact.title)
     val ready = content.let { it is ArtifactCardContent.Text || it is ArtifactCardContent.Picture }
     val meta =
@@ -334,7 +394,7 @@ private fun ArtifactCard(
             .testTag("artifactCard-${artifact.id}")
             .then(
                 if (ready)
-                    Modifier.clickable(role = Role.Button, onClickLabel = label) { viewing = true }
+                    Modifier.clickable(role = Role.Button, onClickLabel = label, onClick = ::view)
                         .semantics(mergeDescendants = true) {}
                 else Modifier
             ),
