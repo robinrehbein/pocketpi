@@ -4449,30 +4449,46 @@ class DefaultRemoteRepository(
         }
     }
 
-    override fun importAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) {
-        val importer = attachmentImporter ?: return
-        if (
-            selection != state.value.selection ||
-                state.value.loading ||
-                state.value.importingAttachments ||
-                state.value.sending
-        )
-            return
+    override fun importAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) =
+        importAttachments(selection, uris.map { Picked(it, photo) }) {}
+
+    override fun importAttachments(selection: RemoteSelection, batch: List<Picked>, onDone: () -> Unit) {
+        // Every refusal below gives the batch back at once; a started import does so once it ends.
+        var started = false
+        try {
+            startImport(selection, batch, onDone)?.let { job ->
+                started = true
+                importJob = job
+            }
+        } finally {
+            if (!started) onDone()
+        }
+    }
+
+    /** Starts importing [batch] one URI after another, or returns null when it is refused. */
+    private fun startImport(selection: RemoteSelection, batch: List<Picked>, onDone: () -> Unit): Job? {
+        val importer = attachmentImporter ?: return null
+        if (selection != state.value.selection || state.value.loading) return null
+        // A drop or a paste arrives while the + button is disabled: say why nothing is attached.
+        if (state.value.importingAttachments || state.value.sending) {
+            reportError(R.string.remote_attachments_busy)
+            return null
+        }
         if (ATTACHMENTS_CAPABILITY !in state.value.capabilities) {
             reportError(R.string.remote_attachments_unsupported)
-            return
+            return null
         }
-        val key = currentDraftKey() ?: return
-        if (uris.isEmpty()) return
-        if (uris.size + state.value.attachments.size > 5) {
+        val key = currentDraftKey() ?: return null
+        if (batch.isEmpty()) return null
+        if (batch.size + state.value.attachments.size > 5) {
             reportError(R.string.remote_attachment_limits)
-            return
+            return null
         }
         val epoch = selectionEpoch
         update { it.copy(importingAttachments = true) }
-        importJob = scope.launch {
+        val job = scope.launch {
             try {
-                for (uri in uris) {
+                for ((uri, photo) in batch) {
                     attachmentMutex.withLock {
                         val imported = importer(uri, photo)
                         val latest = drafts[key] ?: StoredDraft()
@@ -4517,6 +4533,9 @@ class DefaultRemoteRepository(
                 if (epoch == selectionEpoch) update { it.copy(importingAttachments = false) }
             }
         }
+        // Also when the job is cancelled before it ran: no URI is read after this.
+        job.invokeOnCompletion { onDone() }
+        return job
     }
 
     override fun removeAttachment(id: String) {

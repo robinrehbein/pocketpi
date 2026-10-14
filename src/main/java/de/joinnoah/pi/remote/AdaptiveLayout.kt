@@ -15,6 +15,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.zIndex
@@ -66,8 +67,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -83,8 +85,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.input.key.Key
@@ -230,10 +234,15 @@ internal fun paneLayout(width: Dp, height: Dp): PaneLayout {
     val room = width - PROJECT_STRIP_RESERVE
     if (room < CHAT_PANE_MIN_WIDTH + PANE_DIVIDER_WIDTH + columns.inspectorMinWidth)
         return columns.copy(inspector = InspectorMode.OVERLAY, inspectorWidth = 0.dp, inspectorMinWidth = INSPECTOR_PANE_MIN_WIDTH)
-    val besideList = room - columns.listWidth - PANE_DIVIDER_WIDTH
-    return columns.copy(
-        autoCollapseList = besideList - columns.inspectorWidth - PANE_DIVIDER_WIDTH < COMFORTABLE_CHAT_WIDTH,
-        inspectorBesideList = besideList >= CHAT_PANE_MIN_WIDTH + PANE_DIVIDER_WIDTH + columns.inspectorWidth,
+    return columns.placedIn(room)
+}
+
+/** Where the inspector goes when the list, the chat and it share [room]. */
+private fun PaneLayout.placedIn(room: Dp): PaneLayout {
+    val besideList = room - listWidth - PANE_DIVIDER_WIDTH
+    return copy(
+        autoCollapseList = besideList - inspectorWidth - PANE_DIVIDER_WIDTH < COMFORTABLE_CHAT_WIDTH,
+        inspectorBesideList = besideList >= CHAT_PANE_MIN_WIDTH + PANE_DIVIDER_WIDTH + inspectorWidth,
     )
 }
 
@@ -280,6 +289,21 @@ internal val PROJECT_STRIP_WIDTH = 64.dp
  * against the rest at every level, so it keeps its width when a chat opens.
  */
 internal val PROJECT_STRIP_RESERVE = PROJECT_STRIP_WIDTH + PANE_DIVIDER_WIDTH
+
+/**
+ * [layout] with the full projects column kept beside a chat in a [window] wide window: where the
+ * inspector goes and whether the list makes way for it, decided for the room the column leaves.
+ * Null where the column does not fit: the chat would lose its minimum width beside the narrowest
+ * session list, or the inspector would no longer open beside the chat. The bucket stays the same.
+ */
+internal fun projectsColumnLayout(window: Dp, layout: PaneLayout): PaneLayout? {
+    if (!layout.twoPane) return null
+    val room = window - layout.projectsWidth - PANE_DIVIDER_WIDTH
+    if (room - LIST_PANE_MIN_WIDTH - PANE_DIVIDER_WIDTH < CHAT_PANE_MIN_WIDTH) return null
+    if (layout.inspector == InspectorMode.OVERLAY) return layout
+    if (room < CHAT_PANE_MIN_WIDTH + PANE_DIVIDER_WIDTH + layout.inspectorMinWidth) return null
+    return layout.placedIn(room)
+}
 
 /**
  * The session list's width for [requested] in a [window] wide [layout]: it leaves room for the
@@ -435,6 +459,22 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
             sizedFor?.let { key -> memos = memos + (key to (memos[key] ?: PaneMemo()).copy(listCollapsed = value)) }
         }
 
+    private var projectsWide by mutableStateOf(false)
+
+    /**
+     * The full projects column stays beside a chat instead of shrinking to the strip, where it
+     * fits ([projectsColumnFits]). The user's choice, remembered per bucket like a hidden list.
+     */
+    var projectsExpanded: Boolean
+        get() = projectsWide
+        set(value) {
+            projectsWide = value
+            sizedFor?.let { key ->
+                val memo = (memos[key] ?: PaneMemo()).copy(projectsExpanded = value.takeIf { it })
+                memos = if (memo.empty) memos - key else memos + (key to memo)
+            }
+        }
+
     /**
      * Navigation brings the list back: a project opened, the search or the next project. That is
      * no choice of the user's for the bucket to remember, but a hide it remembers no longer holds.
@@ -500,6 +540,26 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
         memos = if (memo.empty) memos - key else memos + (key to memo)
     }
 
+    /**
+     * The user changed the layout: a dragged width, a hidden list or the full projects column in
+     * some bucket, the list hidden by hand now, the inspector expanded or the projects column kept. A list hidden for the inspector does not count.
+     */
+    val customized: Boolean
+        get() =
+            memos.values.any { it.list != null || it.inspector != null || it.listCollapsed == true || it.projectsExpanded == true } ||
+                (collapsed && !autoCollapsed) || inspectorExpanded || projectsWide
+
+    /**
+     * Back to the defaults in every bucket: the widths, the list the user hid, the expanded
+     * inspector and the projects column kept beside a chat. A list hidden only to make room for the open inspector stays out of its way.
+     */
+    fun resetLayout() {
+        memos = emptyMap()
+        if (!autoCollapsed) collapsed = false
+        inspectorExpanded = false
+        projectsWide = false
+    }
+
     /** The session list's requested width in [layout], before [listPaneWidth] clamps it. */
     fun listWidth(layout: PaneLayout): Dp = share(memos[layout.sizeKey()]?.list) ?: layout.listWidth
 
@@ -529,6 +589,7 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
         val key = layout.sizeKey()
         if (sizedFor == key) return
         sizedFor = key
+        projectsWide = memos[key]?.projectsExpanded ?: false
         val hidden = memos[key]?.listCollapsed ?: return
         if (hidden) {
             collapsed = true
@@ -550,6 +611,7 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
                         it.autoCollapsed,
                         it.inspectorExpanded,
                         encodePaneMemos(it.memos),
+                        it.projectsWide,
                     )
                 },
                 restore = {
@@ -558,6 +620,7 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
                         // State saved by an older version has neither.
                         autoCollapsed = it.getOrNull(4) as? Boolean ?: false
                         inspectorExpanded = it.getOrNull(5) as? Boolean ?: false
+                        projectsWide = it.getOrNull(7) as? Boolean ?: false
                     }
                 },
             )
@@ -706,7 +769,12 @@ private data class ProjectColumnsScene(
         // Registered before the chat's own handlers, so an open tool detail or diff still closes
         // first; without a predictive preview (see previousEntries).
         BackHandler(enabled = collapsed) { state.listCollapsed = false }
-        val strip = detail != null
+        // Beside a chat the column shrinks to the strip, unless the user keeps it and it fits.
+        val fullLayout = projectsColumnLayout(state.window, layout)
+        val keepFull = projects != null && state.projectsExpanded && fullLayout != null
+        // The list and the chat decide against the room the projects column really leaves.
+        val placed = if (keepFull) checkNotNull(fullLayout) else layout
+        val strip = detail != null && !keepFull
         val projectsTarget = if (strip) PROJECT_STRIP_WIDTH else layout.projectsWidth
         val projectsWidth = rememberProjectsWidth(projectsTarget)
         // Back from the sessions or a chat stays in this scene, so Navigation 3 has no other scene
@@ -727,8 +795,14 @@ private data class ProjectColumnsScene(
             if (strip) lerp(projectsWidth.value, layout.projectsWidth, backPreview.value) else projectsWidth.value
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val window by rememberUpdatedState(maxWidth)
-            val reserve = if (projects != null) PROJECT_STRIP_RESERVE else 0.dp
-            val listWidth = listPaneWidth(state.listWidth(layout), maxWidth - reserve, layout)
+            // A kept column reserves its width with or without a chat, so the list keeps its own.
+            val reserve =
+                when {
+                    projects == null -> 0.dp
+                    keepFull -> layout.projectsWidth + PANE_DIVIDER_WIDTH
+                    else -> PROJECT_STRIP_RESERVE
+                }
+            val listWidth = listPaneWidth(state.listWidth(layout), maxWidth - reserve, placed)
             val direction = if (rtl) -1f else 1f
             val slide = with(LocalDensity.current) { COLUMN_SLIDE.toPx() } * direction
             // Slides a column in from the end side and, while it is the top one, moves it with a
@@ -772,7 +846,13 @@ private data class ProjectColumnsScene(
                             // At the target width too, so the content never reflows either.
                             Box(Modifier.width(projectsTarget).fillMaxHeight()) {
                                 CompositionLocalProvider(
-                                    LocalProjectsColumn provides ProjectsColumn(selectedProjectId, strip)
+                                    LocalProjectsColumn provides
+                                        ProjectsColumn(
+                                            selectedProjectId,
+                                            strip,
+                                            canExpand = strip && fullLayout != null,
+                                            canCollapse = detail != null && !strip,
+                                        )
                                 ) {
                                     projects.Content()
                                 }
@@ -818,7 +898,9 @@ private data class ProjectColumnsScene(
                             else ->
                                 key(detail.contentKey) {
                                     Box(Modifier.fillMaxSize().column(detailEnter, top = true)) {
-                                        CompositionLocalProvider(LocalDetailPane provides true) { detail.Content() }
+                                        CompositionLocalProvider(LocalDetailPane provides true, LocalPaneLayout provides placed) {
+                                            detail.Content()
+                                        }
                                     }
                                 }
                         }
@@ -827,9 +909,9 @@ private data class ProjectColumnsScene(
             }
             if (list != null && !collapsed) {
                 // Reads the state on every call: several drag events can arrive between frames.
-                fun currentWidth() = listPaneWidth(state.listWidth(layout), window - reserve, layout)
+                fun currentWidth() = listPaneWidth(state.listWidth(layout), window - reserve, placed)
                 fun resizeTo(width: Dp) =
-                    state.resizeList(layout, listPaneWidth(width, window - reserve, layout))
+                    state.resizeList(layout, listPaneWidth(width, window - reserve, placed))
                 // A drag sets start + distance, so the divider follows the finger again after a clamp.
                 var dragStart by remember { mutableStateOf(0.dp) }
                 PaneResizeHandle(
@@ -1211,18 +1293,33 @@ internal fun SessionSearchField(
     focusRequester: FocusRequester,
 ) {
     val focusManager = LocalFocusManager.current
-    OutlinedTextField(
+    var focused by remember { mutableStateOf(false) }
+    TextField(
         value = query,
         onValueChange = onQuery,
         placeholder = { Text(stringResource(R.string.remote_session_search)) },
         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
         singleLine = true,
         shape = CircleShape,
+        colors =
+            TextFieldDefaults.colors(
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+                disabledIndicatorColor = Color.Transparent,
+            ),
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         keyboardActions = KeyboardActions(onSearch = { onSearch() }),
         modifier =
             Modifier.fillMaxWidth()
                 .focusRequester(focusRequester)
+                // Without an outline, focus would show only as the caret.
+                .onFocusChanged { focused = it.isFocused }
+                .then(
+                    if (focused) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape) else Modifier
+                )
                 // Down leaves the one-line field for the rows below it, as in a list.
                 .onPreviewKeyEvent { event ->
                     event.key == Key.DirectionDown && event.type == KeyEventType.KeyDown &&

@@ -1100,6 +1100,107 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun mixedBatchImportsInOneRunAndIsDoneOnlyAfterEveryUriWasRead() = runTest {
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, localFile()) }
+        val reads = mutableListOf<Pair<String, Boolean>>()
+        val second = CompletableDeferred<Unit>()
+        val repository =
+            repository(transport, attachmentStorage = storage) { uri, photo ->
+                reads += uri to photo
+                if (reads.size == 2) second.await()
+                val bytes = byteArrayOf(reads.size.toByte())
+                val local =
+                    if (photo) localFile(bytes, "C".repeat(22)).copy(kind = "image", name = "shot.jpg", mimeType = "image/jpeg")
+                    else localFile(bytes, "D".repeat(22)).copy(name = "spec.pdf", mimeType = "application/pdf")
+                storage.write(local, bytes)
+                local
+            }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        var done = 0
+        var readsWhenDone = -1
+        repository.importAttachments(
+            repository.state.value.selection,
+            listOf(Picked("content:shot", photo = true), Picked("content:spec.pdf", photo = false)),
+        ) {
+            done++
+            readsWhenDone = reads.size
+        }
+        runCurrent()
+        // The second URI is still being read: the drop's grants must stay.
+        assertEquals(0, done)
+        assertTrue(repository.state.value.importingAttachments)
+        second.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("content:shot" to true, "content:spec.pdf" to false), reads)
+        assertEquals(1, done)
+        assertEquals(2, readsWhenDone)
+        assertEquals(listOf("shot.jpg", "spec.pdf"), repository.state.value.attachments.map { it.name })
+        assertFalse(repository.state.value.importingAttachments)
+    }
+
+    @Test
+    fun batchKeepsTheAttachmentLimitAndRefusesWhileSendingButIsAlwaysDone() = runTest {
+        val local = localFile(byteArrayOf(1))
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, local, prompt = false) }
+        val reads = mutableListOf<String>()
+        val repository =
+            repository(transport, attachmentStorage = storage) { uri, _ ->
+                reads += uri
+                storage.write(local, byteArrayOf(1))
+                local
+            }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val selection = repository.state.value.selection
+        var done = 0
+        repository.importAttachments(selection, (1..6).map { Picked("content:$it", photo = it % 2 == 0) }) { done++ }
+        runCurrent()
+        assertEquals(R.string.remote_attachment_limits, repository.state.value.error)
+        assertTrue(reads.isEmpty())
+        assertEquals(1, done)
+
+        repository.draft("pending")
+        repository.prompt()
+        runCurrent()
+        assertTrue(repository.state.value.sending)
+        repository.importAttachments(selection, listOf(Picked("content:late", photo = true))) { done++ }
+        runCurrent()
+        assertTrue(reads.isEmpty())
+        assertEquals(2, done)
+        // A drop or a paste reaches this while the + button is disabled: it says why.
+        assertEquals(R.string.remote_attachments_busy, repository.state.value.error)
+
+        // Another chat's batch is refused too, and given back as well.
+        repository.importAttachments(selection.copy(sessionId = "other"), listOf(Picked("content:x", false))) { done++ }
+        assertEquals(3, done)
+    }
+
+    @Test
+    fun cancelledBatchIsDoneOnce() = runTest {
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, localFile()) }
+        val gate = CompletableDeferred<Unit>()
+        val repository =
+            repository(transport, attachmentStorage = storage) { _, _ ->
+                gate.await()
+                localFile()
+            }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        var done = 0
+        repository.importAttachments(repository.state.value.selection, listOf(Picked("content:a", false))) { done++ }
+        runCurrent()
+        assertEquals(0, done)
+        repository.cancelAttachmentWork()
+        runCurrent()
+        assertEquals(1, done)
+        assertTrue(repository.state.value.attachments.isEmpty())
+    }
+
+    @Test
     fun sentImageUsesUploadedBytesAfterLocalDraftCleanupWithoutDownload() = runTest {
         val bytes = byteArrayOf(1, 2, 3)
         val local = localFile(bytes).copy(kind = "image", name = "photo.jpg", mimeType = "image/jpeg")
