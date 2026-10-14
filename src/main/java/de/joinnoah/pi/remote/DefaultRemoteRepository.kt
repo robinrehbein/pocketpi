@@ -2051,6 +2051,7 @@ class DefaultRemoteRepository(
                     submittedText = null,
                     submittedQuote = null,
                     submittedAttachments = emptyList(),
+                    submittedDelivery = null,
                     followUps = latest.followUps + PendingFollowUp(id, latest.submittedText, "delivered", delivery),
                 )
                 drafts[key] = confirmed
@@ -4894,6 +4895,7 @@ class DefaultRemoteRepository(
         // A plain prompt is sent through the composer and shown at the chat's tail; the other two
         // keep their draft until the host acknowledges them.
         val plain = !queued && command == null
+        val kind = delivery ?: if (command != null) "command" else "prompt"
         val tapped = Diagnostics.now()
         val id = (if (plain) unconfirmedMutationId(key, current) else null) ?: Wire.random()
         attachmentInFlight.addAll(current.attachments.map { it.id })
@@ -4910,6 +4912,9 @@ class DefaultRemoteRepository(
                 commandDispatches.keys.first()
             )
         }
+        // Set once the host acknowledges the request: a write that fails after that still leaves the
+        // plain prompt confirmed in the chat.
+        var acknowledged = false
         sendJob = scope.launch {
             try {
                 val uploaded =
@@ -4935,6 +4940,7 @@ class DefaultRemoteRepository(
                         submittedText = current.draft,
                         submittedQuote = current.quote,
                         submittedAttachments = current.attachments,
+                        submittedDelivery = kind,
                     )
                 persistNow()
                 checkEpoch(epoch)
@@ -4947,7 +4953,16 @@ class DefaultRemoteRepository(
                         quote = if (plain) journaled.quote else it.quote,
                         attachments = if (plain) journaled.attachments else it.attachments,
                         pendingSend =
-                            if (plain) PendingSend(id, current.draft, current.quote, current.attachments, PendingSendState.SENDING)
+                            if (plain) PendingSend(
+                                id,
+                                current.draft,
+                                current.quote,
+                                current.attachments,
+                                PendingSendState.SENDING,
+                                // The newest message the chat shows now: the host's copy of this
+                                // prompt comes after it, whatever earlier prompt reads the same.
+                                afterMessageId = it.messages.lastOrNull()?.optionalText("id")?.ifEmpty { null },
+                            )
                             else it.pendingSend,
                     )
                 }
@@ -4968,6 +4983,7 @@ class DefaultRemoteRepository(
                         draft = current.draft,
                         requestId = id,
                     )
+                acknowledged = true
                 if (queued) require(acknowledgement.text("kind") == "accepted" &&
                     acknowledgement.text("sessionId") == key.sessionId)
                 if (command != null)
@@ -4985,18 +5001,15 @@ class DefaultRemoteRepository(
                         check(latest.followUps.size < 64)
                         latest.followUps + PendingFollowUp(id, current.draft, receipt ?: "accepted", delivery)
                     } else latest.followUps
+                    // A plain prompt left the composer at the journal, so what is in it now was typed
+                    // or quoted since the send began; none of it is the sent text to bring back.
                     val unchanged = !plain && latest.text == current.draft && latest.quote == current.quote
-                    // A plain prompt left the composer at the journal, so its text is only here when
-                    // typed since. A quote chosen since brings the sent body back with it, as before.
-                    val body =
-                        if (plain) latest.text.ifEmpty { if (latest.quote != null) current.draft else "" }
-                        else latest.text
                     val attachments =
                         if (latest.attachments == current.attachments) emptyList()
                         else latest.attachments
                     drafts[key] =
                         StoredDraft(
-                            text = if (unchanged) "" else body,
+                            text = if (unchanged) "" else latest.text,
                             quote = if (unchanged) null else latest.quote,
                             attachments = attachments,
                             uploads =
@@ -5021,7 +5034,6 @@ class DefaultRemoteRepository(
                         }
                     }
                 }
-                if (plain) confirmPendingSend(key, id, epoch, tapped)
             } catch (_: CancellationException) {} catch (e: Exception) {
                 Diagnostics.caught("repo.sendPrompt.2", e)
                 if (
@@ -5059,6 +5071,7 @@ class DefaultRemoteRepository(
                                 submittedText = null,
                                 submittedQuote = null,
                                 submittedAttachments = emptyList(),
+                                submittedDelivery = null,
                             )
                         persist()
                     }
@@ -5084,9 +5097,13 @@ class DefaultRemoteRepository(
                         update { it.copy(commandNotice = R.string.remote_command_uncertain) }
                 }
             } finally {
-                // Unless the host acknowledged it, a plain prompt is not confirmed: failed, cancelled
-                // by leaving the chat, or still unanswered when the coroutine ends.
-                if (plain) unconfirmPendingSend(key, id, epoch)
+                // The host's acknowledgement confirms a plain prompt whatever the writes after it did.
+                // Without one it is not confirmed: failed, cancelled by leaving the chat, or still
+                // unanswered when the coroutine ends.
+                if (plain) {
+                    if (acknowledged) confirmPendingSend(key, id, tapped)
+                    else unconfirmPendingSend(key, id)
+                }
                 attachmentInFlight.removeAll(current.attachments.map { it.id }.toSet())
                 if (epoch == selectionEpoch)
                     update { it.copy(sending = false, attachmentProgress = null) }
@@ -5103,12 +5120,18 @@ class DefaultRemoteRepository(
     private fun unconfirmedMutationId(key: DraftKey, current: RemoteState): String? {
         val stored = drafts[key] ?: return null
         val mutationId = stored.mutationId ?: return null
+        // A journal of a follow-up, steer or command keeps its request ID for that request; a plain
+        // prompt sent under it would reach the host as a different kind of request.
+        if (stored.submittedDelivery != null && stored.submittedDelivery != "prompt") return null
         return mutationId.takeIf { stored.submittedText == current.draft && stored.submittedQuote == current.quote }
     }
 
-    /** The host acknowledged the plain prompt [id]: the chat keeps it until its timeline has it. */
-    private fun confirmPendingSend(key: DraftKey, id: String, epoch: Long, tapped: Long) {
-        if (epoch != selectionEpoch || currentDraftKey() != key) return
+    /**
+     * The host acknowledged the plain prompt [id]: the chat keeps it until its timeline has it. The
+     * chat shown decides, not the selection epoch: a chat left and opened again keeps its send.
+     */
+    private fun confirmPendingSend(key: DraftKey, id: String, tapped: Long) {
+        if (currentDraftKey() != key) return
         val pending = state.value.pendingSend?.takeIf { it.mutationId == id && it.state == PendingSendState.SENDING }
             ?: return
         update { it.copy(pendingSend = settledSend(pending.copy(state = PendingSendState.CONFIRMED), it.messages)) }
@@ -5117,26 +5140,31 @@ class DefaultRemoteRepository(
 
     /**
      * A plain prompt the host did not confirm: its text goes back into the composer, to send again
-     * with the same mutation ID, and the chat marks the bubble as not confirmed. A send whose
-     * journal was already resolved has nothing to undo.
+     * with the same mutation ID, and the chat marks the bubble as not confirmed. The bubble is
+     * marked even when the journal was already resolved, so it never waits for a confirmation that
+     * cannot come; the composer is only restored from a journal that still holds the send.
      */
-    private fun unconfirmPendingSend(key: DraftKey, id: String, epoch: Long) {
-        val stored = drafts[key]?.takeIf { it.mutationId == id } ?: return
-        val restored = stored.restoringSubmitted()
-        drafts[key] = restored
-        persist()
-        if (epoch != selectionEpoch || currentDraftKey() != key) return
-        update {
-            it.copy(
-                draft = restored.text,
-                quote = restored.quote,
-                attachments = restored.attachments,
-                pendingSend = it.pendingSend?.let { pending ->
-                    if (pending.mutationId == id && pending.state != PendingSendState.CONFIRMED)
-                        pending.copy(state = PendingSendState.NOT_CONFIRMED)
-                    else pending
-                },
-            )
+    private fun unconfirmPendingSend(key: DraftKey, id: String) {
+        val restored = drafts[key]?.takeIf { it.mutationId == id }?.restoringSubmitted()
+        if (restored != null) {
+            drafts[key] = restored
+            persist()
+        }
+        if (currentDraftKey() != key) return
+        update { state ->
+            val pending = state.pendingSend?.let { p ->
+                if (p.mutationId == id && p.state != PendingSendState.CONFIRMED)
+                    p.copy(state = PendingSendState.NOT_CONFIRMED)
+                else p
+            }
+            if (restored == null) state.copy(pendingSend = pending)
+            else
+                state.copy(
+                    draft = restored.text,
+                    quote = restored.quote,
+                    attachments = restored.attachments,
+                    pendingSend = pending,
+                )
         }
     }
 
@@ -7420,10 +7448,11 @@ private data class SendJournal(
     val submittedQuote: MessageQuote?,
     val submittedAttachments: List<LocalAttachment>,
     val followUps: List<PendingFollowUp>,
+    val submittedDelivery: String?,
 )
 
 private fun StoredDraft.journal() =
-    SendJournal(mutationId, submittedText, submittedQuote, submittedAttachments, followUps)
+    SendJournal(mutationId, submittedText, submittedQuote, submittedAttachments, followUps, submittedDelivery)
 
 /** The drafts that hold a send journal; a draft that is only typed in has none, so typing never counts. */
 private fun Map<DraftKey, StoredDraft>.journals(): Map<DraftKey, SendJournal> =
@@ -7446,11 +7475,19 @@ private fun StoredDraft.restoringSubmitted(): StoredDraft {
 
 /**
  * The pending prompt once the timeline may show the host's copy of it: a confirmed prompt leaves
- * the chat when the newest user message reads as it does. Checked on every timeline change, since
- * the acknowledgement and the message can arrive in either order.
+ * the chat when a user message sent after the chat's newest message at the tap reads as it does.
+ * Checked on every timeline change, since the acknowledgement and the message can arrive in either
+ * order. An identical prompt that was already in the chat never settles it.
  */
 private fun settledSend(pending: PendingSend?, messages: List<JsonObject>): PendingSend? {
     if (pending == null || pending.state != PendingSendState.CONFIRMED) return pending
-    val latest = messages.lastOrNull { it.text("role") == "user" } ?: return pending
-    return if (userMessageBody(latest) == pending.text) null else pending
+    val baseline = pending.afterMessageId?.let { id -> messages.indexOfFirst { it.optionalText("id") == id } }
+    // A baseline the timeline no longer holds leaves every message a candidate.
+    val sentSince = messages.drop(if (baseline == null || baseline < 0) 0 else baseline + 1)
+    val wanted = promptKey(pending.text)
+    val arrived = sentSince.any { it.text("role") == "user" && promptKey(userMessageBody(it)) == wanted }
+    return if (arrived) null else pending
 }
+
+/** Prompt text as the host and the phone compare it: line endings and surrounding whitespace aside. */
+private fun promptKey(text: String): String = text.replace("\r\n", "\n").replace('\r', '\n').trim()

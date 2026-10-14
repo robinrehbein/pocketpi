@@ -256,10 +256,12 @@ internal fun messageMenuActions(
     streaming: Boolean,
     forkable: Boolean,
     canAskToFix: Boolean,
+    // A prompt still on its way to the host has no message to quote yet.
+    canQuote: Boolean = true,
 ): List<MessageMenuAction> =
     buildList {
         val hasText = text.isNotBlank()
-        if (hasText) add(MessageMenuAction.QUOTE)
+        if (hasText && canQuote) add(MessageMenuAction.QUOTE)
         val copyable = hasText && !streaming
         if (copyable) add(MessageMenuAction.COPY)
         if (copyable && markdownPlainText(text) != text) add(MessageMenuAction.COPY_MARKDOWN)

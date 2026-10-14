@@ -3924,7 +3924,7 @@ class RemoteRepositoryTest {
     }
 
     @Test
-    fun quoteChangedDuringSendKeepsBothBodyAndNewQuoteOnAcknowledgment() = runTest {
+    fun quoteChangedDuringSendKeepsOnlyTheNewQuoteOnAcknowledgment() = runTest {
         val drafts = Drafts()
         val transport =
             Transport().also {
@@ -3949,8 +3949,10 @@ class RemoteRepositoryTest {
         transport.result(request, Wire.objectOf("kind" to "accepted"))
         runCurrent()
         repository.flush()
-        assertEquals("Follow up", repository.state.value.draft)
+        // The sent text is in the chat already; only the quote chosen since stays in the composer.
+        assertEquals("", repository.state.value.draft)
         assertEquals("b", repository.state.value.quote?.messageId)
+        assertEquals("", drafts.values.getValue(DraftKey("host", "session")).text)
         assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
     }
 
@@ -9113,5 +9115,130 @@ class RemoteRepositoryTest {
         assertTrue(repository.state.value.uncertain)
         assertNull(repository.state.value.pendingSend)
         assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    private fun chatMessage(id: String, role: String, text: String) =
+        Wire.objectOf("id" to id, "role" to role, "text" to text, "state" to "complete")
+
+    /** The chat shows [messages] from its snapshot on, as a host with that timeline sends them. */
+    private fun withTimeline(transport: Transport, vararg messages: JsonObject) {
+        val normal = transport.response
+        transport.response = { request ->
+            val response = normal(request)
+            if (request.text("type") == "session.snapshot" && response != null)
+                JsonObject(response + ("messages" to JsonArray(messages.toList())))
+            else response
+        }
+    }
+
+    private fun acknowledge(transport: Transport) {
+        transport.result(transport.sent.last { it.text("type") == "session.prompt" }, Wire.objectOf("kind" to "accepted"))
+    }
+
+    @Test
+    fun repeatedPromptStaysPendingUntilItsOwnCopyArrives() = runTest {
+        val transport = Transport().also(::configure)
+        // The chat already ends with an identical prompt; that one is not the host's copy of this.
+        withTimeline(transport, chatMessage("u1", "user", "continue"), chatMessage("a1", "assistant", "Done."))
+        val repository = inFlightPrompt(transport, Drafts(), "continue")
+        acknowledge(transport)
+        runCurrent()
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        transport.deliver(userMessage(1, "user-2", "continue"))
+        runCurrent()
+        assertNull(repository.state.value.pendingSend)
+    }
+
+    @Test
+    fun hostCopyWithOtherLineEndingsOrTrailingWhitespaceSettlesThePrompt() = runTest {
+        val transport = Transport().also(::configure)
+        val repository = inFlightPrompt(transport, Drafts(), "Line one\nline two")
+        acknowledge(transport)
+        runCurrent()
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        transport.deliver(userMessage(1, "user-1", "Line one\r\nline two \n"))
+        runCurrent()
+        assertNull(repository.state.value.pendingSend)
+    }
+
+    @Test
+    fun acknowledgedPromptIsConfirmedEvenWhenTheWriteAfterTheAcknowledgementFails() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        val repository = inFlightPrompt(transport, drafts, "Acknowledged")
+        drafts.fail = true
+        acknowledge(transport)
+        runCurrent()
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        transport.deliver(userMessage(1, "user-1", "Acknowledged"))
+        runCurrent()
+        assertNull(repository.state.value.pendingSend)
+    }
+
+    @Test
+    fun quotingDuringTheSendKeepsTheSentTextOutOfTheComposer() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        withTimeline(transport, chatMessage("a1", "assistant", "First answer"))
+        val repository = inFlightPrompt(transport, drafts, "Hello pi")
+        repository.quote("a1")
+        runCurrent()
+        assertNotNull(repository.state.value.quote)
+        acknowledge(transport)
+        runCurrent()
+        // The sent prompt is in the chat, not back in the composer; the new quote stays.
+        assertEquals("", repository.state.value.draft)
+        assertNotNull(repository.state.value.quote)
+        val stored = drafts.values.getValue(DraftKey("host", "session"))
+        assertEquals("", stored.text)
+        assertNotNull(stored.quote)
+        assertNull(stored.mutationId)
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun plainPromptDoesNotReuseTheRequestIdOfAnUnresolvedFollowUp() = runTest {
+        val drafts = Drafts().apply {
+            values = mapOf(
+                DraftKey("host", "session") to
+                    StoredDraft(
+                        text = "Same",
+                        mutationId = "follow-up-id",
+                        submittedText = "Same",
+                        submittedDelivery = "follow_up",
+                    )
+            )
+        }
+        val transport = Transport().also(::configure)
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        assertNotEquals("follow-up-id", request.text("requestId"))
+    }
+
+    @Test
+    fun plainPromptStillReusesTheRequestIdOfAnUnresolvedPrompt() = runTest {
+        val drafts = Drafts().apply {
+            values = mapOf(
+                DraftKey("host", "session") to
+                    StoredDraft(
+                        text = "Same",
+                        mutationId = "prompt-id",
+                        submittedText = "Same",
+                        submittedDelivery = "prompt",
+                    )
+            )
+        }
+        val transport = Transport().also(::configure)
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        assertEquals("prompt-id", request.text("requestId"))
     }
 }

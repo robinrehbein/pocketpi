@@ -81,6 +81,8 @@ enum class PendingSendState {
 /**
  * A plain prompt the chat shows at its tail until the host's timeline has it. It lives in memory
  * for this run only; after a restart the unresolved send is back in the composer instead.
+ * [afterMessageId] is the newest message the chat showed when the prompt was sent: only messages
+ * after it can be the host's copy of this prompt, so an identical earlier prompt never matches.
  */
 data class PendingSend(
     val mutationId: String,
@@ -88,6 +90,7 @@ data class PendingSend(
     val quote: MessageQuote?,
     val attachments: List<LocalAttachment>,
     val state: PendingSendState,
+    val afterMessageId: String? = null,
 )
 
 data class RemoteState(

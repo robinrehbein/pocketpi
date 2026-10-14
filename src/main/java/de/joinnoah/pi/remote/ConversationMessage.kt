@@ -291,7 +291,14 @@ private fun ConversationMessageContent(
                     selection.selectedTexts.any { it.isNotEmpty() } -> emptyList()
                     url != null -> linkMenu(url)
                     else ->
-                        messageMenuActions(item.role, item.text, item.streaming, forkShown, onAskToFixMessage != null)
+                        messageMenuActions(
+                            item.role,
+                            item.text,
+                            item.streaming,
+                            forkShown,
+                            onAskToFixMessage != null,
+                            canQuote = canQuote,
+                        )
                             .map { action ->
                                 MenuItem(
                                     action.label,
