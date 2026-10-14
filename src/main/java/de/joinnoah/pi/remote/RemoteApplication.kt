@@ -16,6 +16,7 @@ import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import okhttp3.OkHttpClient
 
 class RemoteApplication : Application() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -290,6 +291,14 @@ class RemoteApplication : Application() {
         )
     }
 }
+
+/**
+ * The process's one OkHttp client. The relay sockets ([SecureRemoteTransport]'s default and
+ * [BackgroundRemoteClient]'s) and the artifact CDN derive their clients from it with
+ * `newBuilder()`, so they share its dispatcher, connection pool and threads and set only their own
+ * timeouts, ping interval and cache. Built on first use; the wear app uses it too.
+ */
+internal val baseHttpClient: OkHttpClient by lazy { OkHttpClient() }
 
 /** Transports a VPN's network takes over from the networks it runs on. */
 private val VPN_UNDERLYING_TRANSPORTS =

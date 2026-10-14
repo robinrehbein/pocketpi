@@ -52,6 +52,30 @@
   shown yet. Code that reads or changes the draft outside the composer flushes it first or goes
   through it, and `ChatComposerFlushTest` covers each such path. Values handed to message bubbles (such as `MessageFork`)
   stay the same instance while unchanged, so the bubbles skip; `ChatRecompositionTest` checks it.
+- Decode frames off the main thread. The handshake still runs on the transport's scope (main in
+  the app); once a connection is active, `SecureRemoteTransport` decrypts and parses each frame on
+  `Dispatchers.Default.limitedParallelism(1)`, one at a time so frames keep their order, and hands
+  the payload back to the scope. `Listener.inbound()` fires at receipt, before decoding, and stamps
+  the repository's `lastInboundAt`; a socket close waits for the frames still being decoded.
+  `SecureChannel` locks sending and receiving separately, so a send on main never waits for a
+  frame being decrypted; frames queued behind a local close or an unreadable frame are dropped
+  without parsing and without a `CAUGHT` entry.
+  `Wire.decode` compiles its alphabet once and checks the canonical encoding by its padding bits
+  instead of re-encoding; `Wire.parse` bounds the size by the text's length and counts UTF-8 bytes
+  only between `length` and `length * 3`, and the decrypted payload is not measured again.
+  `message.delta` events and upsert coalescing would need the host (noah-monorepo).
+- Write the navigation snapshot on structure changes, not per event. A streamed event keeps the
+  in-memory caches current and marks the snapshot dirty; a dirty snapshot is written within
+  `NAVIGATION_DIRTY_WRITE_MILLIS` (15 s). A selection change, a list read, a chat snapshot, a run
+  starting or ending (running ↔ idle/waiting), a status change of another session and going to
+  the background write as before (the background at once). A process kill while streaming loses
+  at most 15 s of chat tail, which the chat's snapshot replaces on reopen. The stored format stays
+  `version` 1: each host is encoded once, and above 4 MB only the trimmed host is encoded again,
+  with as many messages dropped at once as their sizes say. One file per host, or loading the
+  active host first, would need a format change.
+- One OkHttp client per process (`baseHttpClient`): the foreground and background relay sockets
+  and the artifact CDN derive theirs with `newBuilder()`, sharing its dispatcher, connection pool
+  and threads, each with its own ping interval, timeouts and cache.
 
 Caches bound entry count, not total transcript bytes. Check memory with unusually large tool outputs
 before increasing capacity. The active timeline and network event delivery are not throttled.
@@ -81,6 +105,10 @@ benchmark. Use a release-like/profileable build for measurements; do not change 
    Trace/Perfetto to inspect main-thread work and frame misses. Test theme changes and link clicks.
 6. Inspect heap usage after visiting more than eight large chats; verify old entries are evicted.
 7. Check drafts, attachment cleanup, notifications, push registration and reconnect after cold start.
+
+8. Stream for 20 minutes in the foreground and 20 in the background: compare battery drain and
+   device temperature with the previous release, and check for jank on a Samsung mid-range phone.
+   `PocketPi.nav.save` trace sections should appear at most every 15 s while a chat streams.
 
 Report median and p95 for start/navigation, frame misses during streaming, and peak heap. No numeric
 speedup has been established by the unit tests.

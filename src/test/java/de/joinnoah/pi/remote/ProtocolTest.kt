@@ -72,4 +72,102 @@ class ProtocolTest {
             )
         assertThrows(Exception::class.java) { fresh.open(frame) }
     }
+
+    @Test
+    fun sealDoesNotWaitForAnOpenInProgress() {
+        val f = fixture()
+        val c = f.obj("context")
+        val host = SecureChannel(f.text("secret"), c, false)
+        val device = SecureChannel(f.text("secret"), c)
+        val frame = host.seal(Wire.objectOf("type" to "event"))
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        // A frame whose first read inside open() parks until the test releases it.
+        val held =
+            JsonObject(
+                object : Map<String, JsonElement> by frame {
+                    override val keys: Set<String>
+                        get() {
+                            entered.countDown()
+                            release.await()
+                            return frame.keys
+                        }
+                }
+            )
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(2)
+        try {
+            val opening = executor.submit<JsonObject> { device.open(held) }
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            val sealing = executor.submit<JsonObject> { device.seal(Wire.objectOf("type" to "steer")) }
+            // Returns while open() still holds the receive side.
+            val sealed = sealing.get(5, java.util.concurrent.TimeUnit.SECONDS)
+            assertFalse(opening.isDone)
+            release.countDown()
+            assertEquals("event", opening.get(5, java.util.concurrent.TimeUnit.SECONDS).text("type"))
+            assertEquals("steer", host.open(sealed).text("type"))
+            assertFalse(device.isClosed)
+        } finally {
+            release.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun aFailedOpenClosesTheSendSideToo() {
+        val f = fixture()
+        val c = f.obj("context")
+        val host = SecureChannel(f.text("secret"), c, false)
+        val device = SecureChannel(f.text("secret"), c)
+        val frame = host.seal(Wire.objectOf("type" to "event"))
+        assertThrows(Exception::class.java) { device.open(JsonObject(frame + ("seq" to JsonPrimitive(5)))) }
+        assertTrue(device.isClosed)
+        assertThrows(IllegalStateException::class.java) { device.seal(Wire.objectOf("type" to "steer")) }
+    }
+
+    @Test
+    fun onlyTheCanonicalEncodingDecodes() {
+        val alphabet = ('A'..'Z') + ('a'..'z') + ('0'..'9') + '-' + '_'
+        val lenient = java.util.Base64.getUrlDecoder()
+        // Every last character after every partial group: accepted exactly when re-encoding the
+        // leniently decoded bytes gives the same text back, the check the padding-bit rule replaces.
+        for (prefix in listOf("", "QUJD", "_-9z")) for (tail in listOf("A", "AA", "zz")) for (last in alphabet) {
+            val value = prefix + tail + last
+            if (value.length % 4 == 1) continue
+            val canonical = Wire.encode(lenient.decode(value)) == value
+            val accepted = runCatching { Wire.decode(value) }.isSuccess
+            assertEquals(value, canonical, accepted)
+        }
+        assertArrayEquals(byteArrayOf(1), Wire.decode("AQ", 1))
+        assertThrows(Exception::class.java) { Wire.decode("AR", 1) }
+        assertThrows(Exception::class.java) { Wire.decode("AAB", 2) }
+        assertArrayEquals(byteArrayOf(0, 1), Wire.decode("AAE", 2))
+        val random = java.util.Random(3)
+        for (size in 0..40) {
+            val bytes = ByteArray(size).also(random::nextBytes)
+            assertArrayEquals(bytes, Wire.decode(Wire.encode(bytes), size))
+        }
+    }
+
+    @Test
+    fun theSizeBoundCountsUtf8BytesWithoutEncoding() {
+        val random = java.util.Random(5)
+        val samples = listOf("a", "\u00e4", "\u20ac", "\ud83d\ude00", "\ud83d", "\ude00")
+        repeat(500) {
+            val text = buildString { repeat(random.nextInt(40)) { append(samples[random.nextInt(samples.size)]) } }
+            for (limit in listOf(0, 10, 30, 60, 120)) {
+                assertEquals(text, text.toByteArray().size <= limit, Wire.fitsUtf8(text, limit))
+            }
+        }
+        // Longer than the limit in UTF-16 units: rejected by its length alone.
+        val oversized = Wire.objectOf("text" to "x".repeat(Wire.MAX_FRAME)).toString()
+        assertThrows(IllegalArgumentException::class.java) { Wire.parse(oversized) }
+        // Within the length, but over the limit in bytes.
+        val wide = Wire.objectOf("text" to "\u20ac".repeat(Wire.MAX_FRAME / 3)).toString()
+        assertTrue(wide.length <= Wire.MAX_FRAME)
+        assertThrows(IllegalArgumentException::class.java) { Wire.parse(wide) }
+        // Up to three bytes a unit fits; the bound only counts when it might not.
+        val narrow = Wire.objectOf("text" to "\u00e4".repeat(Wire.MAX_FRAME / 2 - 20)).toString()
+        assertTrue(narrow.length * 3 > Wire.MAX_FRAME)
+        assertEquals("\u00e4".repeat(Wire.MAX_FRAME / 2 - 20), Wire.parse(narrow).text("text"))
+    }
 }
