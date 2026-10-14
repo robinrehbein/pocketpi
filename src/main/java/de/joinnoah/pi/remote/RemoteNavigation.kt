@@ -58,6 +58,8 @@ import androidx.navigation3.ui.NavDisplay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -765,6 +767,11 @@ internal class RemoteNavigator(
                 if (!repeat) targets.help = if (top is RemoteNavKey.Chat) KeyContext.CHAT else KeyContext.GLOBAL
                 return true
             }
+            // Holding the key must not reopen the palette over the one it opened.
+            Shortcut.PALETTE -> {
+                if (!repeat) targets.openPalette(PaletteMode.ALL)
+                return true
+            }
             Shortcut.NEXT_REGION,
             Shortcut.PREVIOUS_REGION -> {
                 if (!repeat) targets.regions.cycle(if (shortcut == Shortcut.NEXT_REGION) 1 else -1)
@@ -967,6 +974,8 @@ internal fun RemoteNavigation(
     disablePush: () -> Unit = {},
     share: PendingShare? = null,
     consumeShare: (PendingShare) -> Unit = {},
+    /** The home snapshot the palette lists the sessions of the other hosts from. */
+    home: StateFlow<HomeSnapshot> = remember { MutableStateFlow(HomeSnapshot()) },
 ) {
     val pushSettings by settings.state.collectAsStateWithLifecycle()
     val stack = rememberNavBackStack(RemoteNavKey.Hosts)
@@ -1148,6 +1157,9 @@ internal fun RemoteNavigation(
             }
             targets.help?.let { context ->
                 ShortcutHelpDialog(context) { targets.help = null }
+            }
+            targets.palette?.let { mode ->
+                CommandPaletteHost(mode, repository, navigator, settings, home, targets, sheet = !layout.twoPane)
             }
             navigator.editorLeave?.let { held ->
                 EditorDiscardDialog(

@@ -67,7 +67,7 @@ private fun ChatAction.shortcut(): Shortcut? =
         ChatAction.CLOSE -> null
     }
 
-private fun ChatAction.label(): Int =
+internal fun ChatAction.label(): Int =
     when (this) {
         ChatAction.CHANGES -> R.string.remote_changes_open
         ChatAction.FILES -> R.string.remote_files_open

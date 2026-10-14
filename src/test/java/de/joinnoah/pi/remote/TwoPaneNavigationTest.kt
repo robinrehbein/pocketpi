@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onFirst
@@ -1522,15 +1523,57 @@ class TwoPaneNavigationTest {
 
     @Test
     @Config(qualifiers = "w900dp-h1200dp")
-    fun ctrlKFocusesTheSessionSearchEvenFromACollapsedList() {
+    fun ctrlFFocusesTheSessionSearchEvenFromACollapsedList() {
         render(hardwareKeyboard = true)
         compose.onNodeWithTag("toggleSessionList").performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("composerField").performClick()
-        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.K) } }
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.F) } }
         compose.waitForIdle()
         compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
         compose.onNodeWithTag("sessionSearch").assertIsFocused()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun ctrlKOpensThePaletteAndEnterOpensTheSessionItFinds() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.K) } }
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").assertIsFocused()
+        compose.onNodeWithTag("paletteField").performTextInput("#second")
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").performKeyInput { pressKey(Key.Enter) }
+        compose.waitForIdle()
+        assertEquals(RemoteSelection("host", "project", "s2"), repository.activations.last().first)
+        compose.onNodeWithTag("paletteField").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun escClosesThePaletteAndLeavesTheChat() {
+        render(hardwareKeyboard = true)
+        compose.onNodeWithTag("composerField").performClick()
+        compose.onNodeWithTag("composerField").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.K) } }
+        compose.waitForIdle()
+        val count = repository.activations.size
+        compose.onNodeWithTag("paletteField").performKeyInput { pressKey(Key.Escape) }
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").assertDoesNotExist()
+        assertEquals(count, repository.activations.size)
+    }
+
+    @Test
+    @Config(qualifiers = "w400dp-h800dp")
+    fun tappingTheChatTitleOpensTheSessionSwitcher() {
+        render()
+        compose.onNodeWithTag("chatTitle").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteField").assertTextEquals("#")
+        compose.onNodeWithTag("paletteField").performTextInput("third")
+        compose.waitForIdle()
+        compose.onNodeWithTag("paletteRow").assertIsDisplayed()
     }
 
     @Test
@@ -1790,9 +1833,9 @@ class TwoPaneNavigationTest {
 
     @Test
     @Config(qualifiers = "w640dp-h800dp-keysexposed-qwerty")
-    fun splitScreenCtrlKOpensTheSessionsAndFocusesTheirSearch() {
+    fun splitScreenCtrlFOpensTheSessionsAndFocusesTheirSearch() {
         render(hardwareKeyboard = true)
-        composerKeys { withKeyDown(Key.CtrlLeft) { pressKey(Key.K) } }
+        composerKeys { withKeyDown(Key.CtrlLeft) { pressKey(Key.F) } }
         compose.onNodeWithTag("composerField").assertDoesNotExist()
         compose.onNodeWithTag("sessionSearch").assertIsFocused()
         compose.onNodeWithTag("sessionSearch").performTextInput("Third")
@@ -2022,7 +2065,7 @@ class TwoPaneNavigationTest {
         compose.onNodeWithTag("keyboardSettings").assertExists()
         compose.onNodeWithTag("enterSendsSwitch").assertExists()
         // Generated from the keymap: Ctrl+N and Ctrl+B are there now, and the chat's own keys.
-        for (keys in listOf("Ctrl+N", "Ctrl+B", "Ctrl+K, Ctrl+F", "Ctrl+.", "F6, Ctrl+Alt+→", "Ctrl+End"))
+        for (keys in listOf("Ctrl+N", "Ctrl+B", "Ctrl+K", "Ctrl+F", "Ctrl+.", "F6, Ctrl+Alt+→", "Ctrl+End"))
             compose.onNode(hasText(keys) and hasAnyAncestor(hasTestTag("keyboardShortcuts"))).assertExists()
         // The help no longer claims the keys need the two-pane layout.
         val help = compose.activity.getString(R.string.remote_keyboard_help, "Ctrl+/")

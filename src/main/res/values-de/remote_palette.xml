@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Die Befehlspalette (CommandPalette.kt): Strg+K, ein Tipp auf den Chat-Titel und ihre Präfixmodi. -->
+    <string name="remote_palette_hint">Suchen oder &gt; Aktionen, / Befehle, # Sitzungen, @ Dateien eingeben</string>
+    <string name="remote_palette_empty">Nichts passt.</string>
+    <string name="remote_palette_project">Projekt</string>
+    <string name="remote_palette_host">Host</string>
+    <string name="remote_palette_model">Modell</string>
+    <string name="remote_palette_thinking">Denktiefe</string>
+    <string name="remote_palette_compact">Kontext komprimieren</string>
+    <string name="remote_palette_switch_session">Sitzung wechseln</string>
+    <string name="remote_keymap_palette">Befehlspalette</string>
+</resources>

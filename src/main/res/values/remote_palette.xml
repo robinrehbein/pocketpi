@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The command palette (CommandPalette.kt): Ctrl+K, a tap on the chat title, and its prefix modes. -->
+    <string name="remote_palette_hint">Search, or type &gt; actions, / commands, # sessions, @ files</string>
+    <string name="remote_palette_empty">Nothing matches.</string>
+    <string name="remote_palette_project">Project</string>
+    <string name="remote_palette_host">Host</string>
+    <string name="remote_palette_model">Model</string>
+    <string name="remote_palette_thinking">Thinking level</string>
+    <string name="remote_palette_compact">Compact the context</string>
+    <string name="remote_palette_switch_session">Switch session</string>
+    <string name="remote_keymap_palette">Command palette</string>
+</resources>

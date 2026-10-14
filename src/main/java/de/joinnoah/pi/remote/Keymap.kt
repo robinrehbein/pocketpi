@@ -39,6 +39,7 @@ internal enum class ShortcutGroup(@StringRes val titleRes: Int) {
  * not [listed] has a key but no action yet, so the shortcut lists leave it out.
  */
 internal enum class Shortcut(val group: ShortcutGroup, val listed: Boolean = true) {
+    PALETTE(ShortcutGroup.NAVIGATION),
     SEARCH(ShortcutGroup.NAVIGATION),
     PREVIOUS_SESSION(ShortcutGroup.NAVIGATION),
     NEXT_SESSION(ShortcutGroup.NAVIGATION),
@@ -103,14 +104,15 @@ internal data class KeyBinding(
 )
 
 /**
- * The whole keymap, in the order a shortcut list shows it. Ctrl+Tab and Ctrl+digits stay free
- * for pinned sessions later; Ctrl+F stays session search until there is a find in the chat. The
+ * The whole keymap, in the order a shortcut list shows it. Ctrl+K opens the command palette, which
+ * also finds sessions of every project; Ctrl+F stays the session list's search. Ctrl+Tab and
+ * Ctrl+digits stay free for pinned sessions later. The
  * Book Cover Keyboard needs Fn for F-keys, so each one also has a Ctrl chord. Ctrl+Down stays
  * the next session, so the chat's end is Ctrl+End only.
  */
 internal val KEYMAP: List<KeyBinding> =
     listOf(
-        KeyBinding(Shortcut.SEARCH, Key.K, ctrl = true, labelRes = R.string.remote_keymap_search),
+        KeyBinding(Shortcut.PALETTE, Key.K, ctrl = true, labelRes = R.string.remote_keymap_palette),
         KeyBinding(Shortcut.SEARCH, Key.F, ctrl = true, labelRes = R.string.remote_keymap_search),
         KeyBinding(Shortcut.NEW_SESSION, Key.N, ctrl = true, labelRes = R.string.remote_keymap_new_session),
         KeyBinding(Shortcut.PREVIOUS_SESSION, Key.DirectionUp, ctrl = true, labelRes = R.string.remote_keymap_previous_session),
@@ -422,6 +424,9 @@ internal class ChatKeyTarget {
     /** Runs a chat shortcut ([KeyContext.CHAT]); false when it does not apply now. */
     var shortcut: (Shortcut) -> Boolean = { false }
 
+    /** Runs a row the command palette chose in this chat, as the chat's own control would. */
+    var perform: (ChatCommand) -> Unit = {}
+
     /** Review mode is on ([TwoPaneState.reviewing]): Esc leaves it first, and [ReviewKey]s act. */
     var reviewing: () -> Boolean = { false }
     var leaveReview: () -> Unit = {}
@@ -562,7 +567,14 @@ internal class ShortcutTargets {
     /** The Ctrl+/ list shows, with the keys of this context; null while it is closed. */
     var help by mutableStateOf<KeyContext?>(null)
 
-    /** Ctrl+K asks the session list to focus its search field; the list handles each request once. */
+    /** The command palette's mode while it is open; null while it is closed. */
+    var palette by mutableStateOf<PaletteMode?>(null)
+
+    fun openPalette(mode: PaletteMode) {
+        palette = mode
+    }
+
+    /** Ctrl+F asks the session list to focus its search field; the list handles each request once. */
     var searchRequests by mutableIntStateOf(0)
     var searchHandled by mutableIntStateOf(0)
 

@@ -416,7 +416,7 @@ internal fun RemoteScreen(
     val sessionSearchFocus = remember { FocusRequester() }
     if (key is RemoteNavKey.Sessions && shortcutTargets != null)
         LaunchedEffect(shortcutTargets.searchRequests) {
-            // Ctrl+K: each request focuses the search field once, also when it expanded the list
+            // Ctrl+F: each request focuses the search field once, also when it expanded the list
             // or opened the phone's search field.
             if (shortcutTargets.searchRequests == shortcutTargets.searchHandled) return@LaunchedEffect
             shortcutTargets.searchHandled = shortcutTargets.searchRequests
@@ -1031,28 +1031,17 @@ internal fun RemoteScreen(
         }
     }
     var modelPickerRequested by remember(key) { mutableStateOf(false) }
+    // The palette's thinking level or advisor, which SessionControls opens like the model picker.
+    var controlRequested by remember(key) { mutableStateOf<SessionControl?>(null) }
     var settingsSheetRequested by remember(key) { mutableStateOf(false) }
     var treeSheetRequested by remember(key) { mutableStateOf(false) }
     // A sheet closed by a lost connection or capability must not reappear by itself after a reconnect.
     val artifactsAvailable = canShowArtifacts(state)
     LaunchedEffect(artifactsAvailable) { if (!artifactsAvailable) artifactsSheetRequested = false }
-    /**
-     * Runs the draft when it names an available [LocalCommand] and clears it; false leaves the draft
-     * for the normal send, which reports unknown or unavailable commands.
-     */
-    fun runLocalCommand(): Boolean {
-        val chat = key as? RemoteNavKey.Chat ?: return false
-        val composer = composerDraft ?: return false
-        // The composer's text can be ahead of the draft this screen last saw.
-        val current = state.copy(draft = composer.text)
-        val invocation =
-            localInvocation(current, availableLocalCommands(current, true, System.currentTimeMillis(), reloading))
-                ?: return false
-        // Keeps the typed `/new` while another create is in flight; the navigator would drop it.
-        if (invocation.command == LocalCommand.NEW && navigator.mutating) return true
-        composer.replace("")
-        when (invocation.command) {
-            LocalCommand.NEW -> navigator.createSession(chat.routeId, chat.projectId)
+    /** Runs the local command [command] with its [argument], as a typed command would. */
+    fun runLocal(command: LocalCommand, argument: String) {
+        when (command) {
+            LocalCommand.NEW -> (key as? RemoteNavKey.Chat)?.let { navigator.createSession(it.routeId, it.projectId) }
             LocalCommand.COMPACT -> model.compactContext()
             LocalCommand.MODEL -> modelPickerRequested = true
             LocalCommand.SETTINGS -> settingsSheetRequested = true
@@ -1067,12 +1056,73 @@ internal fun RemoteScreen(
                 if (artifactsAvailable) openGallery()
                 else showToast(R.string.remote_artifacts_host_outdated)
             LocalCommand.NAME -> {
-                val session = state.session ?: return true
-                if (invocation.argument.isEmpty()) startRename(session.text("id"), session.text("title"))
-                else model.renameSession(session.text("id"), invocation.argument)
+                val session = state.session ?: return
+                if (argument.isEmpty()) startRename(session.text("id"), session.text("title"))
+                else model.renameSession(session.text("id"), argument)
             }
         }
+    }
+
+    /**
+     * Runs the draft when it names an available [LocalCommand] and clears it; false leaves the draft
+     * for the normal send, which reports unknown or unavailable commands.
+     */
+    fun runLocalCommand(): Boolean {
+        if (key !is RemoteNavKey.Chat) return false
+        val composer = composerDraft ?: return false
+        // The composer's text can be ahead of the draft this screen last saw.
+        val current = state.copy(draft = composer.text)
+        val invocation =
+            localInvocation(current, availableLocalCommands(current, true, System.currentTimeMillis(), reloading))
+                ?: return false
+        // Keeps the typed `/new` while another create is in flight; the navigator would drop it.
+        if (invocation.command == LocalCommand.NEW && navigator.mutating) return true
+        composer.replace("")
+        runLocal(invocation.command, invocation.argument)
         return true
+    }
+
+    /** Runs a header action in this chat, as its pill button does. Close is left to the pill's own path. */
+    fun runChatAction(action: ChatAction) {
+        val chat = key as? RemoteNavKey.Chat ?: return
+        // Close is never ranked, so its uses need no record.
+        if (action != ChatAction.CLOSE) chatModel?.recordChatAction(action)
+        when (action) {
+            ChatAction.CHANGES -> openInspector(InspectorTab.CHANGES)
+            ChatAction.FILES -> openInspector(InspectorTab.FILES)
+            ChatAction.JOBS -> openInspector(InspectorTab.JOBS)
+            ChatAction.RENAME ->
+                state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
+            ChatAction.NEW_SESSION -> navigator.createSession(chat.routeId, chat.projectId)
+            ChatAction.REFRESH -> model.refresh()
+            ChatAction.SESSION_SETTINGS -> settingsSheetRequested = true
+            ChatAction.SETTINGS -> navigator.settings()
+            ChatAction.HISTORY -> toggleHistory()
+            ChatAction.CLOSE -> Unit
+        }
+    }
+
+    /** Runs a row the command palette chose in this chat, as the chat's own control or command would. */
+    fun performChatCommand(command: ChatCommand) {
+        when (command) {
+            is ChatCommand.Action -> runChatAction(command.action)
+            is ChatCommand.Control ->
+                when (command.control) {
+                    SessionControl.MODEL -> modelPickerRequested = true
+                    SessionControl.THINKING, SessionControl.ADVISOR -> controlRequested = command.control
+                    SessionControl.COMPACT -> model.compactContext()
+                }
+            is ChatCommand.Local -> runLocal(command.command, "")
+            is ChatCommand.Host ->
+                composerDraft?.let { draft ->
+                    draft.replace(selectCommandName(draft.text, command.command.name))
+                    composerFocusRequest++
+                }
+            is ChatCommand.File -> {
+                openInspector(InspectorTab.FILES)
+                chatModel?.openFilesFile(command.path)
+            }
+        }
     }
     var abortTarget by remember { mutableStateOf<AbortRunTarget?>(null) }
     var disconnecting by rememberSaveable(key) { mutableStateOf(false) }
@@ -1162,21 +1212,8 @@ internal fun RemoteScreen(
                 ).let { if (withHistory) it.withHistory() else it }
                     .let { if (closableSession != null) it.withClose() else it }
             fun runAction(action: ChatAction) {
-                // Close is never ranked, so its uses need no record.
-                if (action != ChatAction.CLOSE) chatModel?.recordChatAction(action)
-                when (action) {
-                    ChatAction.CHANGES -> openInspector(InspectorTab.CHANGES)
-                    ChatAction.FILES -> openInspector(InspectorTab.FILES)
-                    ChatAction.JOBS -> openInspector(InspectorTab.JOBS)
-                    ChatAction.RENAME ->
-                        state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
-                    ChatAction.NEW_SESSION -> navigator.createSession(key.routeId, key.projectId)
-                    ChatAction.REFRESH -> model.refresh()
-                    ChatAction.SESSION_SETTINGS -> settingsSheetRequested = true
-                    ChatAction.SETTINGS -> navigator.settings()
-                    ChatAction.HISTORY -> toggleHistory()
-                    ChatAction.CLOSE -> closing = closableSession
-                }
+                if (action == ChatAction.CLOSE) closing = closableSession
+                else runChatAction(action)
             }
             val actionsControl: @Composable (ChatActionLayout, Boolean) -> Unit = { actionLayout, standaloneHistory ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1248,8 +1285,13 @@ internal fun RemoteScreen(
                                         }
                                         .testTag("chatStatusDot")
                                 )
+                                val switchSession = stringResource(R.string.remote_palette_switch_session)
                                 Row(
-                                    Modifier.padding(end = 8.dp),
+                                    Modifier.padding(end = 8.dp)
+                                        .clickable(role = Role.Button, onClickLabel = switchSession) {
+                                            shortcutTargets?.openPalette(PaletteMode.SESSIONS)
+                                        }
+                                        .testTag("chatTitle"),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Text(
@@ -1682,6 +1724,7 @@ internal fun RemoteScreen(
                 if (conversationFocused) parkFocus() else chatModel?.selectFileLines(null)
             }
             chatKeyTarget.shortcut = ::chatShortcut
+            chatKeyTarget.perform = ::performChatCommand
             chatKeyTarget.reviewing = { twoPane?.reviewing == true }
             chatKeyTarget.leaveReview = { twoPane?.leaveReview() }
             chatKeyTarget.leaveReviewToType = leave@{
@@ -2938,6 +2981,8 @@ internal fun RemoteScreen(
                                 reloading = reloading,
                                 modelPickerRequested = modelPickerRequested,
                                 onModelPickerRequestHandled = { modelPickerRequested = false },
+                                controlRequest = controlRequested,
+                                onControlRequestHandled = { controlRequested = null },
                                 changeSettings = model::changeSettings,
                                 settingsSheetRequested = settingsSheetRequested,
                                 onSettingsSheetRequestHandled = { settingsSheetRequested = false },
