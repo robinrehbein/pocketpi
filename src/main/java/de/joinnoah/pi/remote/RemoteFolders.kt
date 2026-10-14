@@ -30,6 +30,7 @@ internal class RemoteRequestException(
     /** [Kind.HOST_ERROR], except for the `unsupported` code, which is always [Kind.UNSUPPORTED]. */
     val kind: Kind = if (code == UNSUPPORTED_CODE) Kind.UNSUPPORTED else Kind.HOST_ERROR,
     message: String = code,
+    val reason: String? = null,
 ) : IllegalStateException(message) {
     enum class Kind {
         /** The host answered with an error [code]. */

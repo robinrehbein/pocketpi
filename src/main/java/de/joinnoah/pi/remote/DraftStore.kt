@@ -24,12 +24,21 @@ data class StoredDraft(
     val followUps: List<PendingFollowUp> = emptyList(),
     /** Pending review comments of the changes view; an optional key in the stored JSON. */
     val reviewComments: List<ReviewComment> = emptyList(),
+    /**
+     * What kind of send the journal holds: "prompt", "command", "follow_up" or "steer". Only a
+     * plain prompt may reuse the mutation ID of an unresolved journal; null is a journal stored
+     * before this was recorded.
+     */
+    val submittedDelivery: String? = null,
 )
 
 interface DraftStorage {
     fun load(): Map<DraftKey, StoredDraft>
 
     fun save(drafts: Map<DraftKey, StoredDraft>)
+
+    /** True once after a [load] found the stored drafts unreadable and reset them to none. */
+    fun takeReset(): Boolean = false
 }
 
 class DraftStore(
@@ -40,6 +49,8 @@ class DraftStore(
     private val file = EncryptedFileStore(context, name, alias)
 
     override fun load(): Map<DraftKey, StoredDraft> = file.read()?.let(::parseStoredDrafts).orEmpty()
+
+    override fun takeReset() = file.takeReset()
 
     override fun save(drafts: Map<DraftKey, StoredDraft>) {
         require(drafts.values.all { it.text.toByteArray().size <= 128 * 1024 && it.followUps.size <= 64 })
@@ -65,6 +76,7 @@ class DraftStore(
                             "reviewComments" to
                                 value.reviewComments.takeIf { it.isNotEmpty() }
                                     ?.let { comments -> JsonArray(comments.map { it.json() }) },
+                            "submittedDelivery" to value.submittedDelivery,
                         )
                     }
                 )
@@ -118,5 +130,9 @@ internal fun parseStoredDrafts(bytes: ByteArray): Map<DraftKey, StoredDraft> =
                     .orEmpty()
                     .also { require(it.size <= 64 && it.map(PendingFollowUp::requestId).distinct().size == it.size) },
                 storedReviewComments(value["reviewComments"]),
+                submittedDelivery =
+                    value.optionalText("submittedDelivery")?.also {
+                        require(it in setOf("prompt", "command", "follow_up", "steer"))
+                    },
             )
     }

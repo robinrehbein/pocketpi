@@ -70,6 +70,13 @@ internal object SentImageThumbnails {
         cache().put(key, bitmap)
     }
 
+    /** Drops the thumbnails of [routeId]; the other Macs' stay. */
+    @Synchronized
+    fun clearRoute(routeId: String) {
+        val cache = cache ?: return
+        cache.snapshot().keys.filter { it.routeId == routeId }.forEach { cache.remove(it) }
+    }
+
     @Synchronized
     fun clear() {
         cache?.evictAll()
@@ -78,6 +85,7 @@ internal object SentImageThumbnails {
 
 /** What a chat bubble needs to show the images it sent; [read] is [RemoteRepository.readAttachment]. */
 internal class SentImageSource(
+    val routeId: String,
     val sessionId: String,
     val connected: Boolean,
     /** False while the host's capabilities are still unknown after connecting. */
@@ -105,7 +113,7 @@ private suspend fun SentImageSource.state(
             withContext(Dispatchers.Default) { decodeSentImage(result.bytes, maxEdge, cover) }
                 ?.let { bitmap ->
                     if (cover)
-                        SentImageThumbnails[AttachmentByteCache.Key(sessionId, attachment.id, attachment.sha256)] = bitmap
+                        SentImageThumbnails[AttachmentByteCache.Key(routeId, sessionId, attachment.id, attachment.sha256)] = bitmap
                     ConversationAttachmentImageState.Ready(bitmap.asImageBitmap())
                 } ?: ConversationAttachmentImageState.MalformedImage
         AttachmentReadResult.Unsupported -> ConversationAttachmentImageState.UnsupportedHost
@@ -129,7 +137,7 @@ internal fun SentImageAttachments(images: List<RemoteAttachment>, source: SentIm
                 val slot =
                     remember(source.sessionId) {
                         SentImageSlot().also {
-                            SentImageThumbnails[AttachmentByteCache.Key(source.sessionId, attachment.id, attachment.sha256)]
+                            SentImageThumbnails[AttachmentByteCache.Key(source.routeId, source.sessionId, attachment.id, attachment.sha256)]
                                 ?.let { bitmap ->
                                     it.thumbnail = ConversationAttachmentImageState.Ready(bitmap.asImageBitmap())
                                 }

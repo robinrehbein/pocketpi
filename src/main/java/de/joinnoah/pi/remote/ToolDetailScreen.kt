@@ -310,7 +310,8 @@ private fun ToolDetailContent(
 ) {
     val ownDownload = download?.takeIf { item.toolCallId != null && it.toolCallId == item.toolCallId }
     val complete = ownDownload?.takeIf { it.text != null }
-    val output = complete?.text ?: item.output
+    // While the full output loads, the text that has arrived replaces the card's preview.
+    val output = complete?.text ?: ownDownload?.preview?.takeIf { it.isNotEmpty() } ?: item.output
     val style = monoTextStyle()
     val rows = remember(output) { output?.let(::outputRows).orEmpty() }
     val rowTexts = remember(rows) { rows.map { it.text } }

@@ -13,6 +13,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.filters.SdkSuppress
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
 import java.security.KeyStore
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -105,7 +106,7 @@ class AttachmentImportUiTest {
             store.write(first, "secret".toByteArray())
             assertArrayEquals("secret".toByteArray(), store.read(first))
             assertFalse(
-                File(context.noBackupFilesDir, "attachment-${first.id}.enc")
+                File(context.noBackupFilesDir, "attachment-${first.id}.v2")
                     .readBytes()
                     .toString(Charsets.ISO_8859_1)
                     .contains("secret")
@@ -124,7 +125,7 @@ class AttachmentImportUiTest {
             store.cleanup(setOf(first.id))
             assertThrows(IllegalArgumentException::class.java) { store.read(empty) }
             assertEquals("unrelated", unrelated.readText())
-            val encrypted = File(context.noBackupFilesDir, "attachment-${first.id}.enc")
+            val encrypted = File(context.noBackupFilesDir, "attachment-${first.id}.v2")
             val damaged =
                 encrypted.readBytes().also { it[it.lastIndex] = (it.last().toInt() xor 1).toByte() }
             encrypted.writeBytes(damaged)
@@ -247,6 +248,12 @@ class AttachmentImportUiTest {
                 object : AttachmentStorage by store {
                     override fun write(attachment: LocalAttachment, bytes: ByteArray) {
                         store.write(attachment, bytes)
+                        job.cancel()
+                    }
+
+                    // Files are streamed into the store; `by store` would skip the override above.
+                    override fun write(attachment: LocalAttachment, input: InputStream) {
+                        store.write(attachment, input)
                         job.cancel()
                     }
                 }

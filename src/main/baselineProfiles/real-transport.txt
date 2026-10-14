@@ -1,0 +1,26 @@
+# Written by hand, next to the generated src/main/baseline-prof.txt; AGP merges every file in
+# this directory with it.
+#
+# BaselineProfileGenerator runs the benchmark app on the fake relay (src/benchmark), so the
+# generated profile never reaches the real transport that connects every release cold start:
+# release's remoteTransport() factory, SecureRemoteTransport, SecureChannel's encryption, the wire
+# helpers and OkHttp's WebSocket. Keep these rules when the generated file is replaced; see
+# docs/runbooks/macrobenchmarks.md.
+HSPLde/joinnoah/pi/remote/TransportFactoryKt;->**(**)**
+HSPLde/joinnoah/pi/remote/SecureRemoteTransport;->**(**)**
+HSPLde/joinnoah/pi/remote/SecureRemoteTransport$**;->**(**)**
+HSPLde/joinnoah/pi/remote/SecureChannel;->**(**)**
+HSPLde/joinnoah/pi/remote/SecureChannel$**;->**(**)**
+HSPLde/joinnoah/pi/remote/Wire;->**(**)**
+HSPLde/joinnoah/pi/remote/Wire$**;->**(**)**
+HSPLde/joinnoah/pi/remote/ProtocolKt;->**(**)**
+HSPLokhttp3/internal/ws/**;->**(**)**
+Lde/joinnoah/pi/remote/TransportFactoryKt;
+Lde/joinnoah/pi/remote/SecureRemoteTransport;
+Lde/joinnoah/pi/remote/SecureRemoteTransport$**;
+Lde/joinnoah/pi/remote/SecureChannel;
+Lde/joinnoah/pi/remote/SecureChannel$**;
+Lde/joinnoah/pi/remote/Wire;
+Lde/joinnoah/pi/remote/Wire$**;
+Lde/joinnoah/pi/remote/ProtocolKt;
+Lokhttp3/internal/ws/**;
