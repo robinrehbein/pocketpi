@@ -5,9 +5,6 @@
     <string name="remote_hosts">Rechner</string>
     <string name="remote_projects">Projekte</string>
     <string name="remote_projects_quick_chats">Schnellzugriff</string>
-    <string name="remote_projects_waiting">Braucht Antwort</string>
-    <string name="remote_projects_running">Läuft</string>
-    <string name="remote_projects_recent">Zuletzt</string>
     <string name="remote_projects_shared">Geteilte Projekte</string>
     <string name="remote_sessions">Sitzungen</string>
     <string name="remote_chat">Gespräch</string>
@@ -634,4 +631,8 @@
     <string name="remote_jobs_expand">Hintergrundjobs aufklappen</string>
     <string name="remote_jobs_collapse">Hintergrundjobs zuklappen</string>
     <string name="remote_jobs_close">Hintergrundjobs schließen</string>
+    <string name="remote_markdown_task_done">Erledigt</string>
+    <string name="remote_markdown_task_open">Offen</string>
+    <string name="remote_new_session_model_failed">Das gewählte Modell konnte nicht eingestellt werden.</string>
+    <string name="remote_new_session_model_failed_kept">Das gewählte Modell konnte nicht eingestellt werden, deshalb wurde deine erste Nachricht nicht gesendet. Sie wartet im Eingabefeld.</string>
 </resources>

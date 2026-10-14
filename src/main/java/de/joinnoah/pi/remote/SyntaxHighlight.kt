@@ -42,6 +42,19 @@ internal fun languageFor(path: String): SyntaxLanguage? =
         else -> null
     }
 
+/** The language of a chat fence's info string (`kotlin`, `ts`, `yml`, ...), or null to stay plain. */
+internal fun fenceLanguage(tag: String?): SyntaxLanguage? =
+    when (tag?.trim()?.lowercase()) {
+        "kotlin", "kt", "kts" -> SyntaxLanguage.KOTLIN
+        "typescript", "ts", "tsx" -> SyntaxLanguage.TYPESCRIPT
+        "javascript", "js", "jsx", "mjs", "cjs" -> SyntaxLanguage.JAVASCRIPT
+        "swift" -> SyntaxLanguage.SWIFT
+        "json" -> SyntaxLanguage.JSON
+        "yaml", "yml" -> SyntaxLanguage.YAML
+        "markdown", "md" -> SyntaxLanguage.MARKDOWN
+        else -> null
+    }
+
 @Immutable
 internal data class SyntaxColors(
     val keyword: Color,

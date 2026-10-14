@@ -12,8 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -46,9 +44,10 @@ internal fun ToolOutputView(text: String, name: String? = null, arguments: Strin
     val showAll = onPeek ?: { peek = true }
     val latestShowAll by rememberUpdatedState(showAll)
     // Only a long press opens the peek: a tap does nothing here, so the preview offers TalkBack no
-    // click action of its own. The Peek button below is the accessible route.
+    // click action of its own. The Peek button below is the accessible route. As the long press
+    // opens the output, its code blocks do not start a drag.
     Column(Modifier.fillMaxWidth().pointerInput(Unit) { detectTapGestures(onLongPress = { latestShowAll() }) }) {
-        OutputContent(preview, format)
+        OutputContent(preview, format, draggable = false)
         TextButton(onClick = showAll, modifier = Modifier.testTag("toolOutputPeek")) {
             Text(stringResource(R.string.remote_output_peek))
         }
@@ -58,7 +57,8 @@ internal fun ToolOutputView(text: String, name: String? = null, arguments: Strin
 
 @Composable
 internal fun ToolOutputPeek(text: String, name: String?, arguments: String?, onDismiss: () -> Unit) {
-    val clipboard = LocalClipboardManager.current
+    val copyLabel = stringResource(R.string.remote_copy_code)
+    val copy = rememberCopyToClipboard(copyLabel)
     val format = remember(name, arguments, text) { outputFormat(name, arguments, text) }
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = MaterialTheme.shapes.extraLarge) {
@@ -68,8 +68,8 @@ internal fun ToolOutputPeek(text: String, name: String?, arguments: String?, onD
                     SelectionContainer { OutputContent(text, format) }
                 }
                 Row {
-                    TextButton(onClick = { clipboard.setText(AnnotatedString(text)) }) {
-                        Text(stringResource(R.string.remote_copy_code))
+                    TextButton(onClick = { copy(text) }) {
+                        Text(copyLabel)
                     }
                     TextButton(onClick = onDismiss) { Text(stringResource(R.string.remote_output_close)) }
                 }
@@ -79,9 +79,9 @@ internal fun ToolOutputPeek(text: String, name: String?, arguments: String?, onD
 }
 
 @Composable
-private fun OutputContent(text: String, format: OutputFormat) {
+private fun OutputContent(text: String, format: OutputFormat, draggable: Boolean = true) {
     when (format) {
-        OutputFormat.MARKDOWN -> MarkdownText(text)
+        OutputFormat.MARKDOWN -> CompositionLocalProvider(LocalCodeBlockDrag provides draggable) { MarkdownText(text) }
         OutputFormat.TEXT -> Text(text, style = MaterialTheme.typography.bodyMedium)
         OutputFormat.SOURCE -> Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = MaterialTheme.shapes.medium) {
             Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp)) {

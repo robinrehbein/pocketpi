@@ -144,7 +144,7 @@ internal fun ProjectStrip(
             remember(state.sessions, state.projectSessions, state.host, state.selection, state.session, marksAll) {
                 needsYouCount(state, sessionMarksById(marksAll, key.routeId))
             }
-        ActivityStripButton(needsYou) { navigator.openActivity(key.routeId) }
+        ActivityStripButton(needsYou) { navigator.openActivity(key.routeId, twoPane) }
         Spacer(Modifier.height(26.dp))
         CompositionLocalProvider(LocalFocusRegionChildren provides regionChildren) {
             LazyColumn(

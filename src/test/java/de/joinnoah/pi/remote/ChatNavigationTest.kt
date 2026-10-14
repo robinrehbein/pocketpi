@@ -271,7 +271,9 @@ class ChatNavigationTest {
     @Config(qualifiers = "w411dp-h891dp")
     fun theProjectsScreenShowsASkeletonWhileItLoadsAndTheEmptyTextOnlyOnceTheMacAnswered() {
         val repository = NavigationFakeRepository()
-        repository.state.value = RemoteState(hosts = listOf(coldHost), hostsLoaded = true)
+        // Two Macs: a single paired Mac would cold-start on its Projects (see RemoteNavigator.coldStart).
+        val laptop = PairedHost("laptop", "wss://relay.test", "device-2", "secret", "Laptop")
+        repository.state.value = RemoteState(hosts = listOf(coldHost, laptop), hostsLoaded = true)
         // The open of the Mac is still connecting.
         val opened = CompletableDeferred<Unit>()
         repository.activation = { selection, mode ->

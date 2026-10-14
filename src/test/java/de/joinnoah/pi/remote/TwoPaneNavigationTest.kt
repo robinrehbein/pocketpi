@@ -362,6 +362,28 @@ class TwoPaneNavigationTest {
 
     @Test
     @Config(qualifiers = "w900dp-h1200dp")
+    fun theNarrowProjectsColumnRefreshesFromTheMacOverflow() {
+        render()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(hosts = listOf(PairedHost("host", "wss://relay.example", "device", "secret", "Studio")))
+        }
+        compose.waitForIdle()
+        // Back from the chat shows the projects column beside the sessions, as its own Mac's page.
+        back()
+        compose.onNodeWithTag("projectsPane").assertIsDisplayed()
+
+        // The column has no refresh button of its own; its Mac's overflow reloads everything.
+        compose.onAllNodes(hasContentDescription(label(R.string.remote_refresh)) and hasAnyAncestor(hasTestTag("projectsPane")))
+            .assertCountEquals(0)
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macRefresh").performClick()
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(1, repository.refreshes) }
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
     fun deepLinkSelectsTheSessionBesideTheList() {
         render()
         compose.onNodeWithTag("sessionListPane").assertIsDisplayed()
