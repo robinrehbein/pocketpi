@@ -6,9 +6,15 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.mimeTypes
+import androidx.compose.ui.draganddrop.toAndroidDragEvent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -822,6 +828,57 @@ internal fun RemoteScreen(
                 )
             }
             attachmentSelection = null
+        }
+    // Images, files and text dragged onto the chat from another app.
+    var dropHovered by remember(key) { mutableStateOf(false) }
+    val activity = LocalActivity.current
+    val chatDrop =
+        if (chatKey == null || chatModel == null || composerDraft == null) Modifier
+        else {
+            val target =
+                remember(chatModel, composerDraft, activity, chatKeyTarget) {
+                    object : DragAndDropTarget {
+                        override fun onEntered(event: DragAndDropEvent) {
+                            dropHovered = true
+                        }
+
+                        override fun onExited(event: DragAndDropEvent) {
+                            dropHovered = false
+                        }
+
+                        override fun onEnded(event: DragAndDropEvent) {
+                            dropHovered = false
+                        }
+
+                        override fun onDrop(event: DragAndDropEvent): Boolean {
+                            dropHovered = false
+                            val dragEvent = event.toAndroidDragEvent()
+                            val clip = dragEvent.clipData ?: return false
+                            // The URIs stay readable only while the permissions are held: they go
+                            // back once the import read every one.
+                            val permissions = runCatching { activity?.requestDragAndDropPermissions(dragEvent) }.getOrNull()
+                            return acceptChatDrop(
+                                clip.parts(context.contentResolver::getType),
+                                attach = { items, onDone -> chatModel.acceptAttachments(chatKey.selection(), items, onDone) },
+                                insertText = { text ->
+                                    composerDraft.insert(text).also {
+                                        if (it) {
+                                            composerDraft.flush()
+                                            chatKeyTarget.draftEdited()
+                                        }
+                                    }
+                                },
+                                release = { permissions?.release() },
+                            )
+                        }
+                    }
+                }
+            Modifier.dragAndDropTarget(
+                // A drag from PocketPi itself (an image card, a file tile) is meant for another
+                // app: the chat neither covers itself nor takes it.
+                shouldStartDragAndDrop = { acceptsDrop(it.toAndroidDragEvent().localState, it.mimeTypes()) },
+                target = target,
+            )
         }
     // The file the camera app writes, kept across a process restart behind the camera.
     var photoCapture by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1710,7 +1767,7 @@ internal fun RemoteScreen(
     ) { insets ->
         BoxWithConstraints(
             if (key is RemoteNavKey.Chat)
-                Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).imePadding()
+                Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).imePadding().then(chatDrop)
             else Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)
         ) {
         // While the tool detail covers the chat, the chat below must not be reachable by TalkBack.
@@ -2828,6 +2885,7 @@ internal fun RemoteScreen(
                             attachmentSelection = state.selection
                             filePicker.launch(arrayOf("*/*"))
                         },
+                        onPasteAttachments = { items -> chatKey?.let { chatModel?.acceptAttachments(it.selection(), items) {} } },
                         onTakePhoto =
                             if (!hasCamera) null
                             else {
@@ -2858,6 +2916,7 @@ internal fun RemoteScreen(
             if (!panesBeside) toolContent?.invoke()
             }
             }
+            if (dropHovered) DropScrim()
         }
         }
     }

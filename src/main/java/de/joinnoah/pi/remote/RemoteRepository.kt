@@ -174,6 +174,9 @@ data class RemoteState(
     val providerAuth: ProviderAuthState = ProviderAuthState(),
 )
 
+/** One content URI to attach; [photo] imports it as an image (scaled JPEG), otherwise as a file. */
+data class Picked(val uri: String, val photo: Boolean)
+
 interface RemoteRepository {
     val state: StateFlow<RemoteState>
 
@@ -254,6 +257,20 @@ interface RemoteRepository {
     fun quote(messageId: String?)
 
     fun importAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) {}
+
+    /**
+     * Imports a mixed [batch] of images and files into [selection]'s draft in one run, with the
+     * same limits as [importAttachments]. [onDone] runs exactly once, after the import read every
+     * URI or refused the batch, so a caller can then give back the URIs' read grants (a drop's
+     * permissions). This default suits a repository whose single import reads synchronously.
+     */
+    fun importAttachments(selection: RemoteSelection, batch: List<Picked>, onDone: () -> Unit) {
+        try {
+            batch.groupBy { it.photo }.forEach { (photo, items) -> importAttachments(selection, items.map { it.uri }, photo) }
+        } finally {
+            onDone()
+        }
+    }
 
     fun removeAttachment(id: String) {}
 
