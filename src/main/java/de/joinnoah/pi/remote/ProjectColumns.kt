@@ -38,6 +38,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
+import androidx.compose.material.icons.automirrored.filled.LastPage
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -54,7 +55,14 @@ import java.text.Normalizer
  * [selectedProjectId] is the project whose sessions are shown beside it; [strip] says a chat is
  * open, so the column is the narrow strip of project avatars.
  */
-internal data class ProjectsColumn(val selectedProjectId: String?, val strip: Boolean)
+internal data class ProjectsColumn(
+    val selectedProjectId: String?,
+    val strip: Boolean,
+    /** The strip can grow to the full column beside the chat ([TwoPaneState.projectsExpanded]). */
+    val canExpand: Boolean = false,
+    /** The full column stands beside a chat and can shrink to the strip again. */
+    val canCollapse: Boolean = false,
+)
 
 /** The projects column; null on a phone and wherever Projects is a full-screen page. */
 internal val LocalProjectsColumn = staticCompositionLocalOf<ProjectsColumn?> { null }
@@ -82,6 +90,7 @@ internal fun ProjectStrip(
     model: ProjectsViewModel,
     navigator: RemoteNavigator,
     selectedProjectId: String?,
+    canExpand: Boolean = false,
 ) {
     val state by model.state.collectAsStateWithLifecycle()
     val twoPane = LocalTwoPane.current
@@ -113,6 +122,15 @@ internal fun ProjectStrip(
         FloatingSurface(modifier = Modifier.testTag("projectStripBack"), shape = CircleShape) {
             IconButton(onClick = navigator::back, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.remote_back))
+            }
+        }
+        // Keeps the full column beside the chat from now on, where it fits.
+        if (canExpand && twoPane != null) {
+            Spacer(Modifier.height(8.dp))
+            FloatingSurface(modifier = Modifier.testTag("expandProjects"), shape = CircleShape) {
+                IconButton(onClick = { twoPane.projectsExpanded = true }, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.LastPage, stringResource(R.string.remote_projects_expand))
+                }
             }
         }
         Spacer(Modifier.height(26.dp))
