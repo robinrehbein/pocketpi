@@ -10,9 +10,14 @@ import androidx.compose.ui.text.style.TextDecoration
 /**
  * [text] styled, with its links. With [files], a `path:line` the agent wrote (in code or prose)
  * links to the file in Files too, if it has a known source extension or a tool used that path.
+ * Inline code gets [codeBackground] behind it when one is given.
  */
-internal fun inlineMarkdown(text: String, linkColor: Color, files: FileOpener? = null): AnnotatedString =
-    parseInline(text, linkColor, 0, true, files)
+internal fun inlineMarkdown(
+    text: String,
+    linkColor: Color,
+    files: FileOpener? = null,
+    codeBackground: Color = Color.Unspecified,
+): AnnotatedString = parseInline(text, linkColor, 0, true, files, codeBackground)
 
 /** Characters that end a `path:line` in prose; the reference itself never holds them. */
 private const val FILE_REFERENCE_END = "`*[]<>()\"',;"
@@ -83,7 +88,14 @@ private fun codeEnd(text: String, start: Int, run: String): Int {
     return -1
 }
 
-private fun parseInline(text: String, color: Color, depth: Int, links: Boolean, files: FileOpener? = null): AnnotatedString = buildAnnotatedString {
+private fun parseInline(
+    text: String,
+    color: Color,
+    depth: Int,
+    links: Boolean,
+    files: FileOpener? = null,
+    codeBackground: Color = Color.Unspecified,
+): AnnotatedString = buildAnnotatedString {
     if (depth >= 32) { append(text); return@buildAnnotatedString }
     fun link(label: AnnotatedString, url: String) {
         withLink(LinkAnnotation.Url(url)) {
@@ -102,6 +114,8 @@ private fun parseInline(text: String, color: Color, depth: Int, links: Boolean, 
                     color = color,
                     textDecoration = TextDecoration.Underline,
                     fontFamily = if (code) FontFamily.Monospace else null,
+                    // Inline code keeps its background when it is also a file link.
+                    background = if (code) codeBackground else Color.Unspecified,
                 )
             ) { append(label) }
         }
@@ -119,7 +133,7 @@ private fun parseInline(text: String, color: Color, depth: Int, links: Boolean, 
                 val code = text.substring(index + run.length, end)
                 val reference = fileLinks?.let { opener -> fileReference(code.trim(), opener::knows) }
                 if (reference != null) fileLink(code, reference, code = true)
-                else withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(code) }
+                else withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground)) { append(code) }
                 index = end + run.length; continue
             }
             append(run); index += run.length; continue
@@ -131,7 +145,7 @@ private fun parseInline(text: String, color: Color, depth: Int, links: Boolean, 
             if (image != null) {
                 val target = markdownImageTarget(image.destination)
                 val label =
-                    parseInline(image.alt, color, depth + 1, false).takeIf { it.isNotEmpty() }
+                    parseInline(image.alt, color, depth + 1, false, null, codeBackground).takeIf { it.isNotEmpty() }
                         ?: (target as? MarkdownImageTarget.Local)?.path?.substringAfterLast('/')?.let(::AnnotatedString)
                         ?: AnnotatedString("")
                 if (target is MarkdownImageTarget.Remote && links) link(label.takeIf { it.isNotEmpty() } ?: AnnotatedString(target.url), target.url)
@@ -165,7 +179,7 @@ private fun parseInline(text: String, color: Color, depth: Int, links: Boolean, 
                 if (parentheses == 0) {
                     val url = unescapeMarkdown(text.substring(end + 2, close))
                     if ((url.startsWith("https://") || url.startsWith("http://")) && url.none { it.isWhitespace() }) {
-                        link(parseInline(text.substring(index + 1, end), color, depth + 1, false), url)
+                        link(parseInline(text.substring(index + 1, end), color, depth + 1, false, null, codeBackground), url)
                         index = close + 1; continue
                     }
                 }
@@ -180,7 +194,7 @@ private fun parseInline(text: String, color: Color, depth: Int, links: Boolean, 
                     fontWeight = if (delimiter.length >= 2) FontWeight.Bold else null,
                     fontStyle = if (delimiter.length != 2) FontStyle.Italic else null,
                 )
-                withStyle(style) { append(parseInline(text.substring(index + delimiter.length, end), color, depth + 1, links, files)) }
+                withStyle(style) { append(parseInline(text.substring(index + delimiter.length, end), color, depth + 1, links, files, codeBackground)) }
                 index = end + delimiter.length; continue
             }
         }
@@ -216,8 +230,6 @@ internal fun linkAt(text: AnnotatedString, offset: Int): String? =
     if (offset !in text.indices) null
     else text.getLinkAnnotations(offset, offset + 1).firstNotNullOfOrNull { (it.item as? LinkAnnotation.Url)?.url }
 
-private val plainBulletRegex = Regex("^[-*] ")
-
 /**
  * [text] as the chat shows it, for "Copy": inline marks dropped, links as their labels, headings
  * without their #, bullets as •, fenced code as the code alone, table rows as tab-separated
@@ -241,7 +253,10 @@ internal fun markdownPlainText(text: String): String =
     }
 
 private fun plainLine(line: String): String {
-    val level = line.takeWhile { it == '#' }.length.takeIf { it in 1..6 && line.getOrNull(it) == ' ' }
-    val content = if (level != null) line.drop(level + 1) else line.replace(plainBulletRegex, "• ")
+    headingLevel(line)?.let { return parseInline(line.drop(it + 1), Color.Unspecified, 0, true).text }
+    listItem(line)?.let { item ->
+        return "  ".repeat(item.depth) + item.marker + " " + parseInline(item.text, Color.Unspecified, 0, true).text
+    }
+    val content = quoteText(line) ?: line
     return parseInline(content, Color.Unspecified, 0, true).text
 }

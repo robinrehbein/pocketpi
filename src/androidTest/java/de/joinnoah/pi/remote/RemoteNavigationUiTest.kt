@@ -824,7 +824,8 @@ class RemoteNavigationUiTest {
         compose.onNodeWithText("│ A │").assertIsDisplayed()
         compose.onNodeWithText("After art").assertIsDisplayed()
         compose.onNodeWithText("Plain explanation").assertIsDisplayed()
-        compose.onNodeWithText(label(R.string.remote_copy_code)).performClick()
+        // The code block copies through its icon button, named for TalkBack.
+        compose.onNodeWithContentDescription(label(R.string.remote_copy_code)).performClick()
         compose.onNodeWithText("Drawn choice").assertIsNotSelected()
         compose.onNodeWithText("Drawn choice").performClick().assertIsSelected()
     }
