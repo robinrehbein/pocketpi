@@ -80,13 +80,14 @@ sealed interface RemoteNavKey : NavKey {
     @Serializable data object Settings : RemoteNavKey
 
     /**
-     * The folder browser of one host. It sits on top of that host's Projects and keeps the
-     * Projects selection; the browsed path lives in [RemoteState.folders].
+     * The folder browser of one host. It sits on top of that host's open projects, sessions or
+     * chat, which stay beneath it with their selection; the browsed path lives in
+     * [RemoteState.folders].
      */
     @Serializable data class FolderBrowser(val routeId: String) : RemoteNavKey
 
     /**
-     * The providers of one host (`provider.auth.v1`), on top of that host's Projects like
+     * The providers of one host (`provider.auth.v1`), on top of that host's open destination like
      * [FolderBrowser]. Only the route is saved; the login flow lives in [RemoteState.providerAuth]
      * and is recovered from the host.
      */
@@ -155,10 +156,10 @@ internal class RemoteNavigator(
     private fun setStack(
         target: List<RemoteNavKey>,
         keepSettings: Boolean,
-        board: RemoteNavKey.Activity? = null,
+        overlays: List<RemoteNavKey> = emptyList(),
     ) {
         val settings = keepSettings && stack.lastOrNull() == RemoteNavKey.Settings
-        val keys = target + listOfNotNull(board) + if (settings) listOf(RemoteNavKey.Settings) else emptyList()
+        val keys = target + overlays + if (settings) listOf(RemoteNavKey.Settings) else emptyList()
         // Keep equal entries so their ViewModel stores and saved UI state survive.
         val common = stack.zip(keys).takeWhile { (old, new) -> old == new }.size
         while (stack.size > common) stack.removeAt(stack.lastIndex)
@@ -224,16 +225,7 @@ internal class RemoteNavigator(
         keepFolders: Boolean = false,
     ) {
         val keys = selection.keys()
-        // The activity board stays on top of the content it was opened over, across a restore and
-        // a reconcile, while the same host is open. A navigation to a destination closes it.
-        val board = (topKey() as? RemoteNavKey.Activity)?.takeIf { keepActivity && it.routeId == selection.routeId }
-        // The folder browser and the providers stay on top of the host's content across a restore
-        // and a reconcile, so an OAuth return or a reconnect does not close them.
-        val folders = topKey()?.takeIf { it is RemoteNavKey.FolderBrowser || it is RemoteNavKey.Providers }
-        if (keepFolders && folders != null && selection.routeId == folders.selection().routeId) {
-            setStack(keys + folders, keepSettings)
-            return
-        }
+        val overlays = keptOverlays(selection.routeId, keepActivity, keepFolders)
         val chat = keys.lastOrNull() as? RemoteNavKey.Chat
         // A child chat opened on top of its parent keeps the parent beneath it across
         // restores and reconnects.
@@ -241,11 +233,28 @@ internal class RemoteNavigator(
             if (keepStackedChats && chat != null && contentKey() == chat) chatsBeneathTop()
             else emptyList()
         if (chat == null || beneath.isEmpty()) {
-            setStack(keys, keepSettings, board)
+            setStack(keys, keepSettings, overlays)
         } else {
-            setStack(sessionKeys(chat) + stacked(beneath + chat), keepSettings, board)
+            setStack(sessionKeys(chat) + stacked(beneath + chat), keepSettings, overlays)
         }
     }
+
+    /**
+     * The overlays above the content that stay on top of the content of [routeId], bottom first.
+     * The activity board ([keepActivity]) and the folder browser and providers ([keepFolders])
+     * stay across a restore and a reconcile while the same host is open, so an OAuth return or a
+     * reconnect does not close them; a navigation to a destination closes them. Settings is
+     * [setStack]'s own.
+     */
+    private fun keptOverlays(routeId: String?, keepActivity: Boolean, keepFolders: Boolean): List<RemoteNavKey> =
+        stack.takeLastWhile { it.isOverlay() }.mapNotNull { overlay ->
+            when (overlay) {
+                is RemoteNavKey.Activity -> overlay.takeIf { keepActivity && it.routeId == routeId }
+                is RemoteNavKey.FolderBrowser,
+                is RemoteNavKey.Providers -> (overlay as RemoteNavKey).takeIf { keepFolders && it.selection().routeId == routeId }
+                else -> null
+            }
+        }
 
     private fun activate(key: RemoteNavKey, mode: ActivationMode) {
         val current = invalidate()
@@ -262,24 +271,24 @@ internal class RemoteNavigator(
             // the whole stack collapse to the sessions list underneath it.
             if (mode == ActivationMode.RESTORE && chat == null && key is RemoteNavKey.Chat && contentKey() == key) {
                 val ancestors = chatsBeneathTop()
-                val board = topKey() as? RemoteNavKey.Activity
-                val folders = topKey()?.takeIf { it is RemoteNavKey.FolderBrowser || it is RemoteNavKey.Providers }
+                val overlays = keptOverlays(key.routeId, keepActivity = true, keepFolders = true)
                 for (index in ancestors.indices.reversed()) {
                     val candidate = ancestors[index]
                     val restored = repository.activate(candidate.selection(), ActivationMode.RESTORE)
                     if (current != request) return@launch
                     if (restored == candidate.selection()) {
                         setStack(
-                            sessionKeys(candidate) + stacked(ancestors.subList(0, index + 1)) +
-                                listOfNotNull(folders?.takeIf { it.selection().routeId == candidate.routeId }),
+                            sessionKeys(candidate) + stacked(ancestors.subList(0, index + 1)),
                             keepSettings = true,
-                            board = board?.takeIf { it.routeId == candidate.routeId },
+                            overlays = overlays,
                         )
                         return@launch
                     }
                 }
             }
-            replace(canonical, keepActivity = mode == ActivationMode.RESTORE, keepFolders = mode == ActivationMode.RESTORE)
+            // A user's open already closed the overlays (see openNow): any on top now was opened
+            // while this activation ran, on the page it activates, and stays.
+            replace(canonical, keepActivity = true, keepFolders = true)
         }
     }
 
