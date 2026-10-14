@@ -10,6 +10,9 @@ internal class NavigationFakeRepository : RemoteRepository {
         selection
     }
     var notification: RemoteSelection? = null
+    val cachedChats = mutableMapOf<RemoteSelection, ChatPreview>()
+
+    override fun peekCachedChat(selection: RemoteSelection): ChatPreview? = cachedChats[selection]
     var notificationLookup: suspend () -> RemoteSelection? = { notification }
     var answers = 0
     var prompts = 0

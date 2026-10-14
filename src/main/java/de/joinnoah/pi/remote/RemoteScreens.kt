@@ -1172,6 +1172,7 @@ internal fun RemoteScreen(
                     },
                     Modifier.fillMaxSize(),
                     projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
+                    offline = !state.connected,
                 )
             }
         }
@@ -2674,6 +2675,7 @@ internal fun RemoteScreen(
                             open = openArtifact,
                             onDismiss = { artifactsSheetRequested = false },
                         )
+                    ChatPreviewHint(state)
                     ChatComposerNotices(connectionStatusLine(state), state.uncertain)
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(

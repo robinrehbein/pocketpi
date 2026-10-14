@@ -141,6 +141,9 @@ internal sealed interface NotificationAction {
 
     /** Opens the session to answer there, for questions too big for a notification. */
     data object AnswerInApp : NotificationAction
+
+    /** Opens the session to review a plan there, one too long to approve from a notification. */
+    data object ReviewInApp : NotificationAction
 }
 
 internal data class QuestionNotification(
@@ -163,11 +166,21 @@ private fun bounded(text: String?, limit: Int): String? =
 
 private fun cut(text: String?, limit: Int): Boolean = (text?.trim()?.length ?: 0) > limit
 
-/** Answering needs the whole question in view; otherwise the notification only opens the app. */
+/**
+ * Answering needs the whole question in view; otherwise the notification only opens the app. A plan
+ * gets its own action there, so the button never reads like an approval.
+ */
 private fun answerInAppOnly(content: QuestionNotification): QuestionNotification =
     if (content.actions.none { it is NotificationAction.Answer || it == NotificationAction.Reply })
         content
-    else content.copy(actions = listOf(NotificationAction.AnswerInApp))
+    else
+        content.copy(
+            actions =
+                listOf(
+                    if (content.kind == "plan") NotificationAction.ReviewInApp
+                    else NotificationAction.AnswerInApp
+                )
+        )
 
 /** The question a notification is about: the oldest one still pending. */
 internal fun notifiedQuestion(pending: List<JsonObject>): JsonObject? = pending.firstOrNull()
@@ -177,7 +190,9 @@ internal fun notifiedQuestion(pending: List<JsonObject>): JsonObject? = pending.
  *
  * [backgroundAnswers] is false below Android 12 (API 31): there an action cannot require unlocking,
  * so answering from a locked screen would be possible and only in-app answers are offered. Content
- * the notification had to shorten is also answered in the app, never blind.
+ * the notification had to shorten is also answered in the app, never blind. [question] is the full
+ * pending question from `session.snapshot`, never a push body, so a plan is approved from the
+ * notification only when all of it fits there.
  */
 internal fun questionNotification(
     question: JsonObject,
@@ -266,7 +281,8 @@ private fun mapQuestion(question: JsonObject): QuestionNotification? =
                     bounded(question.optionalText("plan"), MAX_NOTIFICATION_TEXT),
                     listOf(
                         NotificationAction.Answer(
-                            ActionLabel.Resource(R.string.remote_notification_approve),
+                            // The app's own words, so approving reads the same everywhere.
+                            ActionLabel.Resource(R.string.remote_plan_approve),
                             Wire.objectOf("kind" to "plan", "action" to "approve"),
                         ),
                         NotificationAction.Open,

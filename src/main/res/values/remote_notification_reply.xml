@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The agent's name as the sender of a conversation notification. -->
+    <string name="remote_notification_agent">pi</string>
+    <!-- The user's own name as the sender of a reply in a conversation notification. -->
+    <string name="remote_notification_you">You</string>
+    <string name="remote_notification_reply_complete_hint">Message to pi</string>
+    <string name="remote_notification_reply_sending">Sending…</string>
+    <string name="remote_notification_reply_failed_title">Reply not sent</string>
+    <string name="remote_notification_reply_failed">The reply didn\'t reach pi. Send it again or open the session.</string>
+    <string name="remote_notification_reply_uncertain_title">Reply may not have been delivered</string>
+    <string name="remote_notification_reply_uncertain">Open the session to check whether pi got it before you send it again.</string>
+    <string name="remote_notification_reply_empty">The reply was empty and was not sent.</string>
+    <!-- Opens a plan in the app when it is too long to approve from the notification. -->
+    <string name="remote_notification_review_plan">Review in app</string>
+    <!-- Title of the notification group of a Mac whose name is not known yet. -->
+    <string name="remote_notification_group_mac">Your Mac</string>
+</resources>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The widget preview's colors: remoteColorScheme's light roles, dark ones in values-night. The
+    watch app compiles these resources too but has no widget.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="UnusedResources">
+    <color name="pocketpi_widget_preview_surface">#FFFFFFFF</color>
+    <color name="pocketpi_widget_preview_on_surface">#FF1A1C21</color>
+    <color name="pocketpi_widget_preview_on_surface_variant">#FF454A55</color>
+    <color name="pocketpi_widget_preview_primary">#FF245DC8</color>
+    <!-- WaitingLight -->
+    <color name="pocketpi_widget_preview_waiting">#FFB45309</color>
+</resources>

@@ -151,6 +151,14 @@ class RemoteApplication : Application() {
         if (isPlanApproval(answer)) predictions.recordPlanApproval(routeId, sessionId)
     }
 
+    /** A notification reply started the session's next run; called off the main thread. */
+    internal fun onRepliedInBackground(routeId: String, sessionId: String) {
+        home.onAnswered(routeId, sessionId)
+    }
+
+    /** The app's own connection, for background work that may use it while it is healthy. */
+    internal fun healthyConnection(): DefaultRemoteRepository? = repository as? DefaultRemoteRepository
+
     /** True unless the host was unpaired in this process or is missing from loaded pairings. */
     internal fun isPaired(routeId: String): Boolean =
         !home.isForgotten(routeId) &&

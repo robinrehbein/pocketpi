@@ -29,6 +29,20 @@ internal fun interface RemoteCommands {
 }
 
 /**
+ * [RemoteCommands] that can also send under a request ID the caller chose: the mutation ID the host
+ * deduplicates a command on, so the same command sent twice under it runs at most once.
+ */
+internal interface MutationCommands : RemoteCommands {
+    suspend fun mutate(requestId: String, type: String, vararg fields: Pair<String, Any?>): JsonObject
+}
+
+/**
+ * A mutation refused before anything was sent, for example because the connection dropped in the
+ * meantime. Unlike other failures it proves the mutation never left, so it may go out elsewhere.
+ */
+internal class MutationNotSentException : IllegalStateException("The mutation was not sent")
+
+/**
  * One short-lived, authenticated connection for work outside the UI, such as reading a pending
  * question for a notification or answering it from a notification action. It is independent of the
  * app's foreground connection: the host accepts several peers per device, and each request carries
@@ -42,7 +56,7 @@ internal class BackgroundRemoteClient(
         SecureRemoteTransport(it, backgroundHttp, diagnosticsName = "background")
     },
 ) {
-    suspend fun <T> use(host: PairedHost, block: suspend (RemoteCommands) -> T): T {
+    suspend fun <T> use(host: PairedHost, block: suspend (MutationCommands) -> T): T {
         // The transport is not thread-safe: it and its listener only ever run on [dispatcher].
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val ready = CompletableDeferred<Unit>()
@@ -88,22 +102,31 @@ internal class BackgroundRemoteClient(
             withContext(dispatcher) { transport.connect(host) }
             ready.await()
             return block(
-                RemoteCommands { type, fields ->
-                    val completion = CompletableDeferred<JsonObject>()
-                    withContext(dispatcher) {
-                        val id = Wire.random()
-                        pending[id] = completion
-                        try {
-                            transport.send(
-                                Wire.objectOf("type" to type, "requestId" to id, *fields)
-                            )
-                        } catch (swallowed: Exception) {
-                            Diagnostics.caught("background.use", swallowed)
-                            pending.remove(id)
-                            completion.completeExceptionally(RemoteConnectionException())
+                object : MutationCommands {
+                    override suspend fun request(type: String, vararg fields: Pair<String, Any?>) =
+                        mutate(Wire.random(), type, *fields)
+
+                    override suspend fun mutate(
+                        requestId: String,
+                        type: String,
+                        vararg fields: Pair<String, Any?>,
+                    ): JsonObject {
+                        val completion = CompletableDeferred<JsonObject>()
+                        withContext(dispatcher) {
+                            check(requestId !in pending)
+                            pending[requestId] = completion
+                            try {
+                                transport.send(
+                                    Wire.objectOf("type" to type, "requestId" to requestId, *fields)
+                                )
+                            } catch (swallowed: Exception) {
+                                Diagnostics.caught("background.use", swallowed)
+                                pending.remove(requestId)
+                                completion.completeExceptionally(RemoteConnectionException())
+                            }
                         }
+                        return completion.await()
                     }
-                    completion.await()
                 }
             )
         } finally {
@@ -182,6 +205,14 @@ private suspend fun RemoteCommands.snapshotMessages(sessionId: String): List<Jso
         require(data.text("kind") == "snapshot" && data.text("sessionId") == sessionId)
         data.array("messages")
     }
+
+/**
+ * Sends [text] as a new prompt to an idle session under [mutationId], which the host deduplicates
+ * on. The acknowledgement only says the host took the prompt, not that the run went well.
+ */
+internal suspend fun MutationCommands.prompt(sessionId: String, text: String, mutationId: String) {
+    mutate(mutationId, "session.prompt", "sessionId" to sessionId, "text" to text)
+}
 
 internal suspend fun RemoteCommands.answerQuestion(
     sessionId: String,

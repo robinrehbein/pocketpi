@@ -51,6 +51,16 @@ data class RemoteSelection(
     val sessionId: String? = null,
 )
 
+/**
+ * What a chat showed when it was last open, read while it opens again: a read-only preview, never
+ * the chat's selection. [messages] may be empty for a session known only from its list row.
+ */
+data class ChatPreview(
+    val session: JsonObject?,
+    val messages: List<JsonObject>,
+    val draft: String,
+)
+
 enum class ActivationMode {
     RESTORE,
     USER_OPEN,
@@ -69,6 +79,11 @@ data class RemoteState(
     val host: PairedHost? = null,
     val selection: RemoteSelection = RemoteSelection(),
     val loading: Boolean = false,
+    /**
+     * A chat destination shows [ChatPreview] content while its open runs: read-only, and only on
+     * that destination's own state, never the repository's.
+     */
+    val preview: Boolean = false,
     val connection: Int = R.string.remote_offline,
     val connected: Boolean = false,
     /**
@@ -92,6 +107,12 @@ data class RemoteState(
     val pairingDeadline: Long? = null,
     val projects: List<JsonObject> = emptyList(),
     val projectChats: List<ProjectChatSummary> = emptyList(),
+    /**
+     * Each project's sessions by project ID, for views across projects: every list the Mac sent
+     * for [host] on this or an earlier connection, kept fresh by live status events. Unlike
+     * [projectChats] it is not cut to the featured few.
+     */
+    val projectSessions: Map<String, ProjectSessions> = emptyMap(),
     val project: JsonObject? = null,
     val sessions: List<JsonObject> = emptyList(),
     /** [sessions] came from a sessions.list on the current connection, not from a cache. */
@@ -183,6 +204,9 @@ interface RemoteRepository {
     suspend fun forkSessionAtNode(source: RemoteSelection, nodeId: String): RemoteSelection = source
 
     fun cancelSelection()
+
+    /** The cached content of the chat [selection] for a preview while it opens, or null. */
+    fun peekCachedChat(selection: RemoteSelection): ChatPreview? = null
 
     suspend fun pair(text: String): RemoteSelection?
 
@@ -276,6 +300,13 @@ interface RemoteRepository {
     fun abortSession(sessionId: String) {}
 
     fun refreshSessions() {}
+
+    /**
+     * Reads the lists on screen again behind what they show, for a pull to refresh: the projects,
+     * and the selected project's sessions or every project's featured chats. Without a connection
+     * it asks for one, as [refresh] does.
+     */
+    fun revalidateLists() {}
 
     fun loadToolOutput(toolCallId: String) {}
 
