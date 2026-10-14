@@ -9,6 +9,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.CollectionInfo
+import androidx.compose.ui.semantics.CollectionItemInfo
+import androidx.compose.ui.semantics.collectionInfo
+import androidx.compose.ui.semantics.collectionItemInfo
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -125,19 +130,31 @@ internal fun markdownBlocks(text: String): List<MarkdownBlock> {
 @Composable
 internal fun MarkdownTable(table: MarkdownBlock.Table) {
     val columns = maxOf(table.header.size, table.rows.maxOfOrNull { it.size } ?: 0)
+    val codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest
+    val rows = listOf(table.header) + table.rows
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         // Keep two columns readable on narrow phones; larger tables scroll as one grid.
         val width = (maxWidth / columns).coerceIn(144.dp, 240.dp)
-        Column(Modifier.horizontalScroll(rememberScrollState())) {
-            (listOf(table.header) + table.rows).forEachIndexed { rowIndex, row ->
+        Column(
+            Modifier.horizontalScroll(rememberScrollState())
+                .semantics { collectionInfo = CollectionInfo(rowCount = rows.size, columnCount = columns) }
+        ) {
+            rows.forEachIndexed { rowIndex, row ->
                 Row(Modifier.height(IntrinsicSize.Min)) {
                     repeat(columns) { column ->
                         Text(
-                            inlineMarkdown(row.getOrElse(column) { "" }, MaterialTheme.colorScheme.primary),
+                            inlineMarkdown(
+                                row.getOrElse(column) { "" },
+                                MaterialTheme.colorScheme.primary,
+                                codeBackground = codeBackground,
+                            ),
                             modifier = Modifier.width(width).fillMaxHeight()
                                 .background(if (rowIndex == 0) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface)
-                                .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
-                                .padding(12.dp),
+                                .border(1.dp, MaterialTheme.colorScheme.outline)
+                                .padding(12.dp)
+                                .semantics {
+                                    collectionItemInfo = CollectionItemInfo(rowIndex, 1, column, 1)
+                                },
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = if (rowIndex == 0) FontWeight.SemiBold else FontWeight.Normal,
                             textAlign = table.alignment.getOrElse(column) { TextAlign.Start },

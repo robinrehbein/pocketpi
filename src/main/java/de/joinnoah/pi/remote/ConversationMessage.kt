@@ -57,6 +57,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import java.text.NumberFormat
@@ -68,14 +69,42 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
+/** The bubble's corner radius and the length of its tail, which sits on the side of the sender. */
+private val BUBBLE_RADIUS = 20.dp
+private val BUBBLE_TAIL = 8.dp
+
+/** Whether [text] has content that wants the wide chat column: a code block, a table or an image. */
+internal fun hasWideContent(text: String): Boolean =
+    markdownSegments(text).any { segment ->
+        segment.code || markdownBlocks(segment.text).any { it is MarkdownBlock.Table || it is MarkdownBlock.Image }
+    }
+
+/**
+ * The widest a chat item grows. Prose stays in the reading column; code, tables, images, tool and
+ * diff cards may take the wide one.
+ */
+internal fun conversationItemWidth(item: ConversationItem): Dp =
+    when (item) {
+        is ConversationItem.Bubble -> if (hasWideContent(item.text)) WIDE_READING_WIDTH else PROSE_READING_WIDTH
+        is ConversationItem.Thinking -> if (hasWideContent(item.text)) WIDE_READING_WIDTH else PROSE_READING_WIDTH
+        is ConversationItem.Activity -> WIDE_READING_WIDTH
+        is ConversationItem.Subagent -> PROSE_READING_WIDTH
+    }
+
+/** One chat item in its reading column, centred and at most [conversationItemWidth] wide. */
+@Composable
+internal fun ConversationItemColumn(item: ConversationItem, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    Box(modifier.readingColumn(remember(item) { conversationItemWidth(item) })) { content() }
+}
+
 private class BubbleShape(private val outgoing: Boolean) : Shape {
     override fun createOutline(
         size: Size,
         layoutDirection: LayoutDirection,
         density: Density,
     ): Outline {
-        val tail = with(density) { 8.dp.toPx() }
-        val radius = with(density) { 20.dp.toPx() }
+        val tail = with(density) { BUBBLE_TAIL.toPx() }
+        val radius = with(density) { BUBBLE_RADIUS.toPx() }
         val body =
             Path().apply {
                 addRoundRect(
@@ -195,7 +224,8 @@ private fun Modifier.jumpHighlight(highlighted: Boolean): Modifier = composed {
                 color = color.copy(alpha = a),
                 topLeft = Offset(stroke / 2, stroke / 2),
                 size = Size(size.width - stroke, size.height - stroke),
-                cornerRadius = CornerRadius(12.dp.toPx()),
+                // The bubble's own radius, so the outline follows its corners.
+                cornerRadius = CornerRadius(BUBBLE_RADIUS.toPx()),
                 style = Stroke(stroke),
             )
         }
@@ -340,7 +370,8 @@ private fun ConversationMessageContent(
             // The whole line of the message counts as hovering it, so the pointer can reach the
             // part of the action row that reaches past a short bubble.
             BoxWithConstraints(Modifier.fillMaxWidth().hoverActions(hover)) {
-                val width = if (item.text.contains("```")) maxWidth else maxWidth * 0.88f
+                val wide = remember(item.text) { hasWideContent(item.text) }
+                val width = if (wide) maxWidth else maxWidth * 0.88f
                 Box(
                     Modifier.align(if (outgoing) Alignment.CenterEnd else Alignment.CenterStart)
                         .widthIn(max = width)
@@ -411,8 +442,14 @@ private fun ConversationMessageContent(
                                     if (outgoing) MaterialTheme.colorScheme.primaryContainer
                                     else MaterialTheme.colorScheme.surfaceContainer,
                             ) {
+                                // The tail takes BUBBLE_TAIL off its side, so the text keeps 16dp from the body on both sides.
                                 Column(
-                                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                    Modifier.padding(
+                                        start = if (outgoing) 16.dp else 16.dp + BUBBLE_TAIL,
+                                        end = if (outgoing) 16.dp + BUBBLE_TAIL else 16.dp,
+                                        top = 12.dp,
+                                        bottom = 12.dp,
+                                    ),
                                     verticalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
                                         item.quote?.let { QuotePreview(it) }
@@ -458,6 +495,9 @@ private fun ConversationMessageContent(
                                                 LocalProjectImageSource provides projectImages.takeIf { !outgoing },
                                                 LocalLinkTargets provides linkTargets,
                                                 LocalFileOpener provides LocalFileOpener.current.takeIf { !outgoing },
+                                                // Links on the outgoing container keep 4.5:1 contrast with its text colour.
+                                                LocalMarkdownLinkColor provides
+                                                    if (outgoing) MaterialTheme.colorScheme.onPrimaryContainer else null,
                                             ) {
                                                 SelectionContainer(selection) {
                                                     MarkdownText(item.text)

@@ -1,107 +1,208 @@
 package de.joinnoah.pi.remote
 
+import android.content.ClipData
+import androidx.compose.foundation.background
+import androidx.compose.foundation.draganddrop.dragAndDropSource
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.draganddrop.DragAndDropTransferData
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+/** The colour of links in the message being drawn. Outgoing bubbles set theirs; others use primary. */
+internal val LocalMarkdownLinkColor = compositionLocalOf<Color?> { null }
+
+/**
+ * Whether a code block drags out as text. A tool card turns it off, because there a long press
+ * opens the output instead of starting a drag.
+ */
+internal val LocalCodeBlockDrag = compositionLocalOf { true }
+
+/** Code blocks longer than this many lines stay plain, so a long streamed block is not re-highlighted each update. */
+private const val MAX_CHAT_HIGHLIGHT_LINES = 1000
+
+/** Nesting step and hanging indent of list items, in sp so they scale with the text beside them. */
+private const val LIST_STEP_SP = 20
 
 @Composable
 fun MarkdownText(text: String) {
-    val linkColor = MaterialTheme.colorScheme.primary
+    val linkColor = LocalMarkdownLinkColor.current ?: MaterialTheme.colorScheme.primary
+    val codeBackground = MaterialTheme.colorScheme.surfaceContainerHighest
     // In a chat, a `path:line` opens the file in Files.
     val files = LocalFileOpener.current
+    val artifactCards = LocalProjectImageSource.current != null
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         remember(text) { markdownSegments(text) }.forEach { segment ->
             val part = segment.text
             if (segment.code) {
                 val code = part.trimEnd()
                 // Only assistant text has a source; a diagram elsewhere stays the code it is.
-                if (segment.isMermaid && LocalProjectImageSource.current != null) MermaidCard(code) { CodeBlock(it) }
-                else CodeBlock(code)
+                if (segment.isMermaid && artifactCards) MermaidCard(code) { CodeBlock(it, segment.language) }
+                else CodeBlock(code, segment.language)
             } else
-                remember(part) { markdownBlocks(part) }.forEach { block ->
-                    if (block is MarkdownBlock.Table) {
-                        MarkdownTable(block)
-                        return@forEach
-                    }
-                    if (block is MarkdownBlock.Image) {
-                        val source = LocalProjectImageSource.current
-                        if (source != null) ProjectImageCard(block.alt, block.path, source)
-                        else Text(
-                            remember(block, linkColor) { inlineMarkdown(markdownImageAltText(block), linkColor) },
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        return@forEach
-                    }
-                    if (block is MarkdownBlock.Artifact) {
-                        val source = LocalProjectImageSource.current
-                        if (source != null) {
-                            ProjectArtifactCard(block.path, source)
-                            return@forEach
-                        }
-                    }
-                    val line = (block as? MarkdownBlock.Artifact)?.line ?: (block as MarkdownBlock.Line).text
-                    val level =
-                        line
-                            .takeWhile { it == '#' }
-                            .length
-                            .takeIf { it in 1..6 && line.getOrNull(it) == ' ' }
-                    val content =
-                        if (level != null) line.drop(level + 1)
-                        else line.replace(markdownBulletRegex, "• ")
-                    if (line.trim() == "---") HorizontalDivider()
-                    else if (content.isNotEmpty())
-                        LinkMenuText(
-                            remember(content, linkColor, files) {
-                                inlineMarkdown(content, linkColor, files)
-                            },
-                            style =
-                                when (level) {
-                                    1 -> MaterialTheme.typography.headlineSmall
-                                    2 -> MaterialTheme.typography.titleLarge
-                                    null -> MaterialTheme.typography.bodyLarge
-                                    else -> MaterialTheme.typography.titleMedium
-                                },
-                            modifier =
-                                if (level != null) Modifier.semantics { heading() } else Modifier,
-                        )
+                remember(part, artifactCards) { markdownRuns(markdownBlocks(part), artifactCards) }.forEach { run ->
+                    MarkdownRunView(run, linkColor, codeBackground, files)
                 }
         }
     }
 }
 
 @Composable
-private fun CodeBlock(code: String) {
-    val clipboard = LocalClipboardManager.current
+private fun MarkdownRunView(run: MarkdownRun, linkColor: Color, codeBackground: Color, files: FileOpener?) {
+    when (run) {
+        is MarkdownRun.Block ->
+            when (val block = run.block) {
+                is MarkdownBlock.Table -> MarkdownTable(block)
+                is MarkdownBlock.Image -> {
+                    val source = LocalProjectImageSource.current
+                    if (source != null) ProjectImageCard(block.alt, block.path, source)
+                    else Text(
+                        remember(block, linkColor) { inlineMarkdown(markdownImageAltText(block), linkColor) },
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
+                is MarkdownBlock.Artifact -> LocalProjectImageSource.current?.let { ProjectArtifactCard(block.path, it) }
+                is MarkdownBlock.Line -> Unit
+            }
+        is MarkdownRun.Heading ->
+            LinkMenuText(
+                remember(run.text, linkColor, files, codeBackground) { inlineMarkdown(run.text, linkColor, files, codeBackground) },
+                style =
+                    when (run.level) {
+                        1 -> MaterialTheme.typography.headlineSmall
+                        2 -> MaterialTheme.typography.titleLarge
+                        else -> MaterialTheme.typography.titleMedium
+                    },
+                modifier = Modifier.widthIn(max = PROSE_READING_WIDTH).semantics { heading() },
+            )
+        MarkdownRun.Rule -> HorizontalDivider()
+        is MarkdownRun.Paragraph ->
+            LinkMenuText(
+                remember(run.lines, linkColor, files, codeBackground) { linesText(run.lines, linkColor, files, codeBackground) },
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.widthIn(max = PROSE_READING_WIDTH),
+            )
+        is MarkdownRun.Items ->
+            LinkMenuText(
+                remember(run.items, linkColor, files, codeBackground) { itemsText(run.items, linkColor, files, codeBackground) },
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.widthIn(max = PROSE_READING_WIDTH),
+            )
+        is MarkdownRun.Quote ->
+            Row(Modifier.widthIn(max = PROSE_READING_WIDTH).height(IntrinsicSize.Min)) {
+                Box(
+                    Modifier.width(3.dp).fillMaxHeight()
+                        .background(MaterialTheme.colorScheme.outline, RoundedCornerShape(2.dp))
+                )
+                Spacer(Modifier.width(12.dp))
+                CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurfaceVariant) {
+                    LinkMenuText(
+                        remember(run.lines, linkColor, files, codeBackground) { linesText(run.lines, linkColor, files, codeBackground) },
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
+            }
+    }
+}
+
+/** [lines] as one text, each line styled on its own and kept on its own line. */
+private fun linesText(lines: List<String>, linkColor: Color, files: FileOpener?, codeBackground: Color): AnnotatedString =
+    buildAnnotatedString {
+        lines.forEachIndexed { index, line ->
+            if (index > 0) append('\n')
+            append(inlineMarkdown(line, linkColor, files, codeBackground))
+        }
+    }
+
+/**
+ * List items as one text. Each item is its own paragraph: a nested item steps in by [LIST_STEP_SP],
+ * and wrapped lines hang under the item's text rather than under its bullet.
+ */
+private fun itemsText(items: List<MarkdownListItem>, linkColor: Color, files: FileOpener?, codeBackground: Color): AnnotatedString =
+    buildAnnotatedString {
+        items.forEachIndexed { index, item ->
+            if (index > 0) append('\n')
+            val nest = (item.depth * LIST_STEP_SP).sp
+            val hang = ((item.depth + 1) * LIST_STEP_SP).sp
+            withStyle(ParagraphStyle(textIndent = TextIndent(firstLine = nest, restLine = hang))) {
+                append(item.marker)
+                append(' ')
+                append(inlineMarkdown(item.text, linkColor, files, codeBackground))
+            }
+        }
+    }
+
+@Composable
+private fun CodeBlock(code: String, language: String? = null) {
+    val copyLabel = stringResource(R.string.remote_copy_code)
+    val copy = rememberCopyToClipboard(copyLabel)
+    val syntax = fenceLanguage(language)
+    val colors = syntaxColors()
+    val styled = remember(code, syntax, colors) {
+        val lines = code.lines()
+        // A line the highlighter would cut stays plain, so what is shown is always the whole code.
+        if (syntax == null || lines.size > MAX_CHAT_HIGHLIGHT_LINES || lines.any { it.length > MAX_HIGHLIGHT_LINE_CHARS })
+            AnnotatedString(code)
+        else
+            buildAnnotatedString {
+                highlightLines(lines, syntax, colors).forEachIndexed { index, line ->
+                    if (index > 0) append('\n')
+                    append(line)
+                }
+            }
+    }
+    val label = language?.trim()?.takeIf { it.isNotEmpty() } ?: stringResource(R.string.remote_code_block)
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth().testTag("codeBlock")
+            // The whole block drags out as plain text, into a note or a message.
+            .then(
+                if (LocalCodeBlockDrag.current) Modifier.dragAndDropSource { _ -> codeDragTransfer(code, label) }
+                else Modifier
+            ),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
         shape = RoundedCornerShape(12.dp),
     ) {
-        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+        Column {
+            Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    label,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                IconButton(onClick = { copy(code) }, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Outlined.ContentCopy, copyLabel, Modifier.size(18.dp))
+                }
+            }
             Text(
-                code,
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                styled,
+                modifier = Modifier.horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
                 fontFamily = FontFamily.Monospace,
                 style = MaterialTheme.typography.bodySmall,
             )
-            TextButton(onClick = { clipboard.setText(AnnotatedString(code)) }) {
-                Text(stringResource(R.string.remote_copy_code))
-            }
         }
     }
 }
 
-private val markdownBulletRegex = Regex("^[-*] ")
+/** What dragging a code block carries: its text, labelled with the language. */
+internal fun codeDragTransfer(code: String, label: String): DragAndDropTransferData =
+    DragAndDropTransferData(ClipData.newPlainText(label, code))
 
 /** What an image block shows where no image loader exists: its description, else the file name. */
 internal fun markdownImageAltText(image: MarkdownBlock.Image): String =

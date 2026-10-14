@@ -14,6 +14,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -151,8 +152,31 @@ internal val TWO_PANE_MIN_HEIGHT = 480.dp
 internal val INSPECTOR_MIN_WIDTH = 1180.dp
 internal val PERSISTENT_INSPECTOR_MIN_WIDTH = 1600.dp
 
-/** Widest a chat bubble column and the composer grow; wider chat panes centre them. */
-internal val MAX_READING_WIDTH = 840.dp
+/**
+ * Widest prose in a chat grows; wider chat panes centre it in a reading column. The composer
+ * follows it. Code, tables, tool cards and images may use [WIDE_READING_WIDTH] instead.
+ */
+internal val PROSE_READING_WIDTH = 700.dp
+
+/** Widest code blocks, tables, tool and diff cards and images grow in a wide chat pane. */
+internal val WIDE_READING_WIDTH = 1120.dp
+
+/**
+ * Centres the column of a chat item, at most [widest] wide, in the list. The item is measured
+ * inside that column and keeps its own alignment there, so the scrollbar lane and the list padding
+ * stay where they are.
+ */
+internal fun Modifier.readingColumn(widest: Dp): Modifier = layout { measurable, constraints ->
+    if (!constraints.hasBoundedWidth) {
+        val placeable = measurable.measure(constraints)
+        return@layout layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+    }
+    val width = minOf(constraints.maxWidth, widest.roundToPx())
+    val placeable = measurable.measure(constraints.copy(minWidth = 0, maxWidth = width))
+    layout(constraints.maxWidth, placeable.height) {
+        placeable.placeRelative((constraints.maxWidth - width) / 2, 0)
+    }
+}
 
 /**
  * Widest a full-screen page (hosts, projects, folders, providers, settings) grows; wider windows
