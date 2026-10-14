@@ -254,6 +254,7 @@ class QuestionUpgradeWorker(context: Context, parameters: WorkerParameters) :
             }
         }
         val host = paired() ?: return Result.success()
+        RemoteNotifications.rememberHost(host)
         val tag = RemoteNotifications.tag(payload.routeId, payload.sessionId)
         val upgrader =
             QuestionUpgrader(

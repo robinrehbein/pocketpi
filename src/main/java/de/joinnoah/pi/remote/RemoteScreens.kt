@@ -22,6 +22,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.handwriting.handwritingDetector
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
@@ -155,6 +157,9 @@ private fun ReconnectCountdown(reconnectAt: Long?, now: () -> Long = System::cur
 private fun reconnectSeconds(reconnectAt: Long, now: () -> Long): Int =
     ((reconnectAt - now() + 999) / 1000).toInt().coerceAtLeast(0)
 
+/** The space between the items of the chat and of the list pages. */
+private val LIST_ITEM_SPACING = 12.dp
+
 /** Keys of the chat list's own rows beside the messages, like "waiting-for-output". */
 internal const val CHAT_SKELETON_KEY = "chat-skeleton"
 internal const val LOAD_OLDER_KEY = "load-older"
@@ -232,13 +237,14 @@ internal fun RemoteScreen(
     var collapsedSessionIds by rememberSaveable(key) { mutableStateOf(arrayListOf<String>()) }
     val collapsedIds = collapsedSessionIds.toSet()
     val visibleSessions =
-        remember(state.sessions, state.connected, state.loading, hideOfflineSessions, collapsedIds) {
+        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
                 state.loading,
-                hideOfflineSessions && state.connected,
+                hidesOfflineSessions(hideOfflineSessions, state.connected, state.stale),
                 collapsedIds,
+                stale = state.stale,
             )
         }
     val listedSessions =
@@ -257,12 +263,13 @@ internal fun RemoteScreen(
             onDispose { shortcutTargets.unregisterRefresh(key, refresh) }
         }
     val sessionCount =
-        remember(state.sessions, state.connected, state.loading, hideOfflineSessions) {
+        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
                 state.loading,
-                hideOfflineSessions && state.connected,
+                hidesOfflineSessions(hideOfflineSessions, state.connected, state.stale),
+                stale = state.stale,
             ).size
         }
     val sessionActive =
@@ -330,9 +337,9 @@ internal fun RemoteScreen(
         }
     val errorCount = remember(conversation) { conversation.count(::isErrorItem) }
     val children =
-        remember(chatKey, state.sessions, state.connected, state.loading) {
+        remember(chatKey, state.sessions, state.connected, state.loading, state.stale) {
             if (chatKey == null) emptyList()
-            else sessionListItems(state.sessions, state.connected, state.loading)
+            else sessionListItems(state.sessions, state.connected, state.loading, state.stale)
         }
     val strip =
         remember(chatKey, conversation, children) {
@@ -415,6 +422,8 @@ internal fun RemoteScreen(
     var composerSize by remember { mutableStateOf(IntSize.Zero) }
     var headerSize by remember { mutableStateOf(IntSize.Zero) }
     val composerHeight = with(LocalDensity.current) { composerSize.height.toDp() }
+    // The conversation list's after-padding: its last item can scroll to just above the composer.
+    val conversationEndPadding = composerHeight + 24.dp
     val headerHeight = with(LocalDensity.current) { headerSize.height.toDp() }
     val listScope = rememberCoroutineScope()
     var autoFollow by rememberSaveable(key) { mutableStateOf(savedViewport?.following ?: true) }
@@ -569,8 +578,26 @@ internal fun RemoteScreen(
     val filesOpen = state.files?.takeIf { it.sessionId == state.selection.sessionId && chatModel != null }
     val jobsOpen =
         state.jobs?.let { (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId } == true
+    // The touched files and the session's artifacts: sheets on a phone, tabs beside the chat.
+    var touchedSheet by rememberSaveable(key) { mutableStateOf(false) }
+    var artifactsSheetRequested by remember(key) { mutableStateOf(false) }
+    // The artifact or image open in the ARTIFACT tab, and the newest versions a gallery listed.
+    val viewerScope = rememberCoroutineScope()
+    val viewerSlot = remember(key) { InspectorViewerSlot(viewerScope) }
+    var listedVersions by remember(key) { mutableStateOf(emptyMap<String, Int>()) }
+    /** The newest change [viewer] can show: the chat's last edit of its file, or its newest listed version. */
+    fun viewerChange(viewer: InspectorViewer?): String? =
+        when (val watch = (viewer as? InspectorViewer.Artifact)?.watch) {
+            is ArtifactWatch.File -> artifactChange(conversation, watch.path)
+            is ArtifactWatch.Listed -> maxOf(watch.version, listedVersions[watch.id] ?: 0).toString()
+            null -> null
+        }
+    val openViewer = viewerSlot.viewer
+    val openViewerChange = remember(openViewer, conversation, listedVersions) { viewerChange(openViewer) }
+    LaunchedEffect(viewerSlot, openViewerChange) { viewerSlot.changed(openViewerChange) }
     // The inspector's tabs beside this chat. What backs each tab decides which exist: the
-    // repository's changes, files and jobs, the open tool and the history (see the reconcile below).
+    // repository's changes, files and jobs, the open tool, the history, the open viewer, the
+    // gallery and the touched files (see the reconcile below).
     var inspectorTabs by rememberSaveable(key, stateSaver = InspectorTabs.Saver) { mutableStateOf(InspectorTabs()) }
     /** Shows [tab] in the inspector and makes room for it; the caller opens what backs it. */
     fun showTab(tab: InspectorTab) {
@@ -593,6 +620,8 @@ internal fun RemoteScreen(
             InspectorTab.FILES -> if (filesOpen == null) chat.openFiles(exclusive = !sideCapable)
             InspectorTab.JOBS -> if (!jobsOpen) chat.openJobs()
             InspectorTab.HISTORY -> historyOpen = true
+            InspectorTab.GALLERY -> artifactsSheetRequested = true
+            InspectorTab.TOUCHED -> touchedSheet = true
             InspectorTab.TOOL, InspectorTab.ARTIFACT -> Unit
         }
     }
@@ -605,7 +634,9 @@ internal fun RemoteScreen(
             InspectorTab.JOBS -> chatModel?.closeJobs()
             InspectorTab.TOOL -> closeTool()
             InspectorTab.HISTORY -> historyOpen = false
-            InspectorTab.ARTIFACT -> Unit
+            InspectorTab.ARTIFACT -> viewerSlot.close()
+            InspectorTab.GALLERY -> artifactsSheetRequested = false
+            InspectorTab.TOUCHED -> touchedSheet = false
         }
     }
     // The panes show beside the chat, or would if the user had not hidden them (Ctrl+\); set
@@ -627,7 +658,24 @@ internal fun RemoteScreen(
     fun toggleHistory() {
         toggleTab(InspectorTab.HISTORY, historyOpen, canOpen = true)
     }
-    var touchedSheet by rememberSaveable(key) { mutableStateOf(false) }
+    /** `/artifacts`: the gallery's tab beside the chat, selected even when open behind another tab; a sheet on a phone. */
+    fun openGallery() {
+        if (sideCapable) openInspector(InspectorTab.GALLERY) else artifactsSheetRequested = true
+    }
+    val showViewer by rememberUpdatedState<(InspectorViewer) -> Unit> { viewer ->
+        viewerSlot.show(viewer, viewerChange(viewer))
+        showTab(InspectorTab.ARTIFACT)
+    }
+    // Where the inspector can go beside the chat, artifacts and images open in its tab.
+    val inspectorViewers =
+        remember(key) {
+            InspectorViewers(
+                show = { showViewer(it) },
+                listed = { artifacts ->
+                    listedVersions = listedVersions + artifacts.associate { it.id to maxOf(it.version, listedVersions[it.id] ?: 0) }
+                },
+            )
+        }
     var childCandidates by remember(key) { mutableStateOf<List<SessionListItem>?>(null) }
     var abortChild by remember(key) { mutableStateOf<SubagentStripEntry?>(null) }
     val composerFocus = remember { FocusRequester() }
@@ -662,6 +710,20 @@ internal fun RemoteScreen(
     val chatFocus = remember { FocusRequester() }
     // Ctrl+Shift+N opens the rewind menu of this bubble once it is on screen.
     var forkMenuRequest by remember(key) { mutableStateOf<String?>(null) }
+    // A session row's "Rewind from the latest message" opened this chat: once it has loaded, the
+    // latest message's rewind menu opens as for Ctrl+Shift+N. A chat with nothing to rewind
+    // simply stays open.
+    if (chatKey != null && navigator.forkLatestRequest == chatKey) {
+        val loaded = !state.loading && state.session?.optionalText("id") == chatKey.sessionId
+        LaunchedEffect(chatKey, loaded) {
+            if (!loaded || !navigator.takeForkLatest(chatKey)) return@LaunchedEffect
+            val latest = shownItems.lastOrNull { it.id in forkableIds }
+            if (messageFork != null && latest != null) {
+                jumpTo(latest.id)
+                forkMenuRequest = latest.id
+            }
+        }
+    }
     val snackbar = remember { SnackbarHostState() }
     val childNotice = stringResource(R.string.remote_insights_child_not_found)
     // An extension's notice (`session.notice`) shows once, in the chat only, which holds the snackbar
@@ -684,10 +746,11 @@ internal fun RemoteScreen(
         state.connected && !state.loading && state.questions.isEmpty() && !state.sending &&
             (state.status == "idle" ||
                 (state.status == "running" && (canSteer(state) || canFollowUp(state))))
-    fun askToFix(messageId: String) {
+    val askFixMessagePrompt = stringResource(R.string.remote_menu_ask_fix_prompt)
+    fun askToFix(messageId: String, prompt: String = askFixPrompt) {
         // The prompt fills only a blank draft, so the repository must first hold what was typed.
         composerDraft?.flush()
-        chatModel?.askToFix(messageId, askFixPrompt)
+        chatModel?.askToFix(messageId, prompt)
         openToolId = null
         composerFocusRequest++
     }
@@ -759,6 +822,55 @@ internal fun RemoteScreen(
             }
             attachmentSelection = null
         }
+    // The file the camera app writes, kept across a process restart behind the camera.
+    var photoCapture by rememberSaveable { mutableStateOf<String?>(null) }
+    val photoScope = rememberCoroutineScope()
+    val camera =
+        rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
+            PhotoCapture.onResult(
+                saved,
+                photoCapture,
+                attachmentSelection,
+                accept = { selection, uris, photo, done -> (model as? ChatViewModel)?.acceptAttachments(selection, uris, photo, done) ?: false },
+                // Not the screen's scope: the import may end after the screen is gone.
+                discard = { uri -> PhotoCapture.discardLater(context, uri) },
+            )
+            photoCapture = null
+            attachmentSelection = null
+        }
+    fun launchCamera() {
+        photoScope.launch {
+            val uri =
+                try {
+                    withContext(Dispatchers.IO) { PhotoCapture.newUri(context) }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    attachmentSelection = null
+                    Toast.makeText(context, R.string.remote_camera_unavailable, Toast.LENGTH_LONG).show()
+                    return@launch
+                }
+            photoCapture = uri.toString()
+            try {
+                camera.launch(uri)
+            } catch (_: android.content.ActivityNotFoundException) {
+                photoCapture = null
+                attachmentSelection = null
+                withContext(Dispatchers.IO) { PhotoCapture.discard(context, uri.toString()) }
+                Toast.makeText(context, R.string.remote_camera_unavailable, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    // The manifest asks for the camera (QR pairing), so the camera app's capture needs it granted.
+    val cameraPermission =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) launchCamera()
+            else {
+                attachmentSelection = null
+                Toast.makeText(context, R.string.remote_camera_permission_needed, Toast.LENGTH_LONG).show()
+            }
+        }
+    val hasCamera = remember(context) { context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY) }
     var scan by rememberSaveable { mutableStateOf(false) }
     var paste by rememberSaveable(key) { mutableStateOf(false) }
     var qrText by remember { mutableStateOf("") }
@@ -832,7 +944,6 @@ internal fun RemoteScreen(
     var modelPickerRequested by remember(key) { mutableStateOf(false) }
     var settingsSheetRequested by remember(key) { mutableStateOf(false) }
     var treeSheetRequested by remember(key) { mutableStateOf(false) }
-    var artifactsSheetRequested by remember(key) { mutableStateOf(false) }
     // A sheet closed by a lost connection or capability must not reappear by itself after a reconnect.
     val artifactsAvailable = canShowArtifacts(state)
     LaunchedEffect(artifactsAvailable) { if (!artifactsAvailable) artifactsSheetRequested = false }
@@ -864,7 +975,7 @@ internal fun RemoteScreen(
                 else if (reloading) showToast(R.string.remote_reload_running)
                 else state.selection.sessionId?.let(::startReload)
             LocalCommand.ARTIFACTS ->
-                if (artifactsAvailable) artifactsSheetRequested = true
+                if (artifactsAvailable) openGallery()
                 else showToast(R.string.remote_artifacts_host_outdated)
             LocalCommand.NAME -> {
                 val session = state.session ?: return true
@@ -932,6 +1043,14 @@ internal fun RemoteScreen(
             val statusLabel = stringResource(chatStatusLabel(state))
             val statusColor = chatStatusColor(state.status, state.connected)
             val canRename = canRenameSession(state)
+            // The open session's row in the project's list, when that row could close it. The
+            // repository closes only a session of that list, and its entries are complete rows.
+            // A refresh does not take Close away for its duration; the confirmation waits for it.
+            val closableSession =
+                state.session?.optionalText("id")
+                    ?.let { id -> state.sessions.firstOrNull { it.optionalText("id") == id } }
+                    ?.let { sessionListItem(it, state.connected, loading = false, state.stale) }
+                    ?.takeIf { canCloseSession(it, state.connected, loading = false, state.capabilities) }
             val hasTuiInfo =
                 state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
             val headerColor = floatingHeaderColor()
@@ -952,8 +1071,10 @@ internal fun RemoteScreen(
                         add(ChatAction.SETTINGS)
                     },
                 ).let { if (withHistory) it.withHistory() else it }
+                    .let { if (closableSession != null) it.withClose() else it }
             fun runAction(action: ChatAction) {
-                chatModel?.recordChatAction(action)
+                // Close is never ranked, so its uses need no record.
+                if (action != ChatAction.CLOSE) chatModel?.recordChatAction(action)
                 when (action) {
                     ChatAction.CHANGES -> openInspector(InspectorTab.CHANGES)
                     ChatAction.FILES -> openInspector(InspectorTab.FILES)
@@ -965,6 +1086,7 @@ internal fun RemoteScreen(
                     ChatAction.SESSION_SETTINGS -> settingsSheetRequested = true
                     ChatAction.SETTINGS -> navigator.settings()
                     ChatAction.HISTORY -> toggleHistory()
+                    ChatAction.CLOSE -> closing = closableSession
                 }
             }
             val actionsControl: @Composable (ChatActionLayout, Boolean) -> Unit = { actionLayout, standaloneHistory ->
@@ -1132,13 +1254,14 @@ internal fun RemoteScreen(
                         tool.state == "error" && tool.outputMessageId != null && acceptsPrompts,
                     onLoadFullOutput = { tool.toolCallId?.let { chatModel?.loadToolOutput(it) } },
                     onCancelFullOutput = { chatModel?.cancelToolOutput() },
-                    onAskToFix = { tool.outputMessageId?.let(::askToFix) },
+                    onAskToFix = { tool.outputMessageId?.let { id -> askToFix(id) } },
                     onQuote = {
                         model.quote(tool.outputMessageId ?: tool.sourceId)
                         closeTool()
                     },
                     onClose = ::closeTool,
                     modifier = Modifier.fillMaxSize(),
+                    popOut = panesBesideNow.value,
                 )
             }
         }
@@ -1181,6 +1304,44 @@ internal fun RemoteScreen(
         if (historyOpen && key is RemoteNavKey.Chat && sideCapable) {
             { ChatHistoryPane(history, onOpen = ::jumpTo, onClose = { historyOpen = false }, initialIndex = historyStart) }
         } else null
+    // Artifacts, images, the gallery and the touched files: dialogs and sheets on a phone.
+    val artifactContent: (@Composable () -> Unit)? =
+        if (chatKey != null && sideCapable && viewerSlot.viewer != null) {
+            { InspectorViewerPane(viewerSlot, onClose = { closeTab(InspectorTab.ARTIFACT) }) }
+        } else null
+    val artifactsSessionId = state.selection.sessionId
+    val artifactsChat = chatModel
+    val listArtifacts: (suspend () -> SessionArtifactListResult)? =
+        if (artifactsSessionId != null && artifactsChat != null) ({ artifactsChat.listSessionArtifacts(artifactsSessionId) })
+        else null
+    val openArtifact: suspend (SessionArtifact, Boolean) -> SessionArtifactOpenResult = { artifact, listed ->
+        // The listed version is pinned to the listed digest; a reload takes the latest.
+        checkNotNull(artifactsChat).openSessionArtifact(
+            checkNotNull(artifactsSessionId), artifact.id,
+            if (listed) artifact.version else null,
+            artifact.type,
+            if (listed) artifact.sha256 else null,
+        )
+    }
+    val artifactsShown =
+        artifactsSheetRequested && chatKey != null && listArtifacts != null && artifactsSessionId != null && canShowArtifacts(state)
+    // The gallery tab's list while the tab stays open; it loads again once the tab reopens.
+    val keptGallery = remember(key, artifactsSessionId) { mutableStateOf<ArtifactGalleryState.Loaded?>(null) }
+    LaunchedEffect(artifactsShown) { if (!artifactsShown) keptGallery.value = null }
+    val galleryContent: (@Composable () -> Unit)? =
+        if (artifactsShown && sideCapable) {
+            {
+                SessionArtifactsPane(
+                    artifactsSessionId, listArtifacts, openArtifact,
+                    onClose = { closeTab(InspectorTab.GALLERY) },
+                    kept = keptGallery,
+                )
+            }
+        } else null
+    val touchedContent: (@Composable () -> Unit)? =
+        if (touchedSheet && chatKey != null && sideCapable) {
+            { TouchedFilesPane(touched, onOpen = ::jumpTo, onClose = { closeTab(InspectorTab.TOUCHED) }) }
+        } else null
     fun tabContent(tab: InspectorTab): (@Composable () -> Unit)? =
         when (tab) {
             InspectorTab.CHANGES -> changesContent
@@ -1188,7 +1349,9 @@ internal fun RemoteScreen(
             InspectorTab.JOBS -> jobsContent
             InspectorTab.TOOL -> toolContent
             InspectorTab.HISTORY -> historyContent
-            InspectorTab.ARTIFACT -> null
+            InspectorTab.ARTIFACT -> artifactContent
+            InspectorTab.GALLERY -> galleryContent
+            InspectorTab.TOUCHED -> touchedContent
         }
     // A tab whose pane closed elsewhere (its own close button, a reconnect, another session)
     // goes, and one that opened elsewhere (a notification, the jobs chip) joins.
@@ -1199,6 +1362,9 @@ internal fun RemoteScreen(
             if (jobsContent != null) add(InspectorTab.JOBS)
             if (toolContent != null) add(InspectorTab.TOOL)
             if (historyOpen && sideCapable) add(InspectorTab.HISTORY)
+            if (galleryContent != null) add(InspectorTab.GALLERY)
+            if (artifactContent != null) add(InspectorTab.ARTIFACT)
+            if (touchedContent != null) add(InspectorTab.TOUCHED)
         }
     val tabs = remember(inspectorTabs, availableTabs) { inspectorTabs.reconcile(availableTabs) }
     val persistentInspector = paneLayout.inspector == InspectorMode.PERSISTENT
@@ -1422,6 +1588,7 @@ internal fun RemoteScreen(
     CompositionLocalProvider(
         LocalChatKeyTarget provides chatKeyTarget.takeIf { chatKey != null },
         LocalFocusRegionChildren provides regionChildren,
+        LocalInspectorViewers provides inspectorViewers.takeIf { chatKey != null && sideCapable },
     ) {
     InspectorRow(
         shown = inspectorShown,
@@ -1574,20 +1741,33 @@ internal fun RemoteScreen(
                     start = 20.dp + readingInset,
                     // Constant, so nothing rewraps while scrolling; the scrollbar lives in this lane.
                     end = CHAT_SCROLLBAR_LANE + laneInset,
-                    top = headerHeight + if (key is RemoteNavKey.Chat) 16.dp else 48.dp,
+                    // A list page's connection chip brings the header's height itself (see
+                    // connectionStatusItem); with the spacing after it the page title starts where
+                    // it would at headerHeight + 48dp.
+                    top =
+                        if (key is RemoteNavKey.Chat) headerHeight + 16.dp
+                        else 48.dp - LIST_ITEM_SPACING,
                     bottom =
                         if (
                             key is RemoteNavKey.Sessions || key is RemoteNavKey.Hosts ||
                                 (key is RemoteNavKey.Projects && canOpenFolders(state))
                         ) 112.dp
-                        else if (key is RemoteNavKey.Chat) composerHeight + 24.dp
+                        else if (key is RemoteNavKey.Chat) conversationEndPadding
                         else 24.dp,
                 ),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(LIST_ITEM_SPACING),
         ) {
             // Every item emitted before the conversation counts here, so a jump can turn an index
             // in shownItems into a list index.
             var leading = 0
+            // The chat shows the connection beside its composer instead. Beside an open chat or a
+            // project's sessions, that pane speaks for the connection (as with the error card
+            // below); the item stays, empty, so the indices after it do not move.
+            if (key !is RemoteNavKey.Chat)
+                connectionStatusItem(
+                    connectionStatusLine(state).takeIf { listPane?.selectedSessionId == null && !projectSelected },
+                    headerHeight,
+                )
             if (key !is RemoteNavKey.Chat)
                 item(key = "page-title") {
                     Row(
@@ -1695,7 +1875,7 @@ internal fun RemoteScreen(
                 !projectSelected
             ) {
                 leading++
-                item {
+                item(key = "error-card") {
                     Card(
                         modifier = Modifier.fillMaxWidth().testTag("errorCard"),
                         colors =
@@ -2001,29 +2181,6 @@ internal fun RemoteScreen(
                     if (diagnosticsOpen) DiagnosticsDialog(onDismiss = { diagnosticsOpen = false })
                 }
             } else {
-                if (
-                    (state.host != null || state.connection != R.string.remote_offline) &&
-                        !(state.connected &&
-                            (key is RemoteNavKey.Sessions || key is RemoteNavKey.Chat))
-                ) {
-                    leading++
-                    item {
-                        Text(
-                            stringResource(state.connection),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                }
-                if (state.uncertain) {
-                    leading++
-                    item {
-                        Text(
-                            stringResource(R.string.remote_draft_uncertain),
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
                 when (key) {
                     RemoteNavKey.Settings -> Unit
                     is RemoteNavKey.FolderBrowser -> Unit
@@ -2083,6 +2240,10 @@ internal fun RemoteScreen(
                                     onClick = { openProject(navigator, twoPane, key.routeId, projectId) },
                                     onUnshare = { unsharing = projectId to project.text("name") },
                                     selected = projectsColumn?.let { projectId == it.selectedProjectId },
+                                    onNewSession =
+                                        if (state.connected && !state.loading && !navigator.mutating) {
+                                            { navigator.createSession(key.routeId, projectId) }
+                                        } else null,
                                 )
                             }
                         }
@@ -2167,7 +2328,7 @@ internal fun RemoteScreen(
                             if (state.loading) item { SessionListSkeleton() }
                             else item { Text(stringResource(R.string.remote_empty_sessions)) }
                         }
-                        else if (visibleSessions.isEmpty() && state.connected && !state.loading)
+                        else if (visibleSessions.isEmpty() && (state.connected || state.stale) && !state.loading)
                             item { Text(stringResource(R.string.remote_offline_sessions_hidden)) }
                         else if (listedSessions.isEmpty() && visibleSessions.isNotEmpty())
                             item { Text(stringResource(R.string.remote_session_search_empty)) }
@@ -2204,6 +2365,14 @@ internal fun RemoteScreen(
                                         }
                                     } else null,
                                 onClose = { closing = session },
+                                onForkLatest =
+                                    if (
+                                        state.connected && !state.loading && !navigator.mutating &&
+                                            SESSION_FORK_CAPABILITY in state.capabilities &&
+                                            session.parentSessionId == null
+                                    ) {
+                                        { navigator.openAndForkLatest(RemoteNavKey.Chat(key.routeId, key.projectId, session.id)) }
+                                    } else null,
                                 swipe =
                                     (sessionPreferences?.swipeEndToStart ?: SwipeAction.CLOSE) to
                                         (sessionPreferences?.swipeStartToEnd ?: SwipeAction.RENAME),
@@ -2260,7 +2429,8 @@ internal fun RemoteScreen(
                                         showTab(InspectorTab.TOOL)
                                     },
                                     onOpenAgent = ::openAgent,
-                                    onAskToFix = if (acceptsPrompts) ::askToFix else null,
+                                    onAskToFix = if (acceptsPrompts) { id -> askToFix(id) } else null,
+                                    onAskToFixMessage = if (acceptsPrompts) { id -> askToFix(id, askFixMessagePrompt) } else null,
                                     highlighted = highlighted,
                                     fork = messageFork?.takeIf { item.id in forkableIds },
                                     images = sentImages,
@@ -2363,6 +2533,22 @@ internal fun RemoteScreen(
                         }
                 }
             }
+        }
+        if (key is RemoteNavKey.Chat && !composerCovered) {
+            // Writing with the S Pen in the empty space between the conversation and the composer
+            // starts a prompt. The area lies above the list's after-padding, so it exists only
+            // while the items end above where a list scrolled to its end would stop; such a list
+            // cannot scroll, and the area takes no fling or wheel scroll from it.
+            val emptyBelow by remember(listState) { derivedStateOf { emptySpaceBelowList(listState.layoutInfo) } }
+            if (emptyBelow > 0)
+                Box(
+                    Modifier.align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(bottom = conversationEndPadding)
+                        .height(with(LocalDensity.current) { emptyBelow.toDp() })
+                        .testTag("handwritingArea")
+                        .handwritingDetector { runCatching { composerFocus.requestFocus() } }
+                )
         }
         if (key is RemoteNavKey.Chat) {
             Box(
@@ -2475,7 +2661,10 @@ internal fun RemoteScreen(
                             TouchedFilesSummary(touched, touchedLines) {
                                 when (touchedFilesTarget(canViewChanges(state) && state.connected, touched.changed.isNotEmpty())) {
                                     TouchedFilesTarget.CHANGES -> openInspector(InspectorTab.CHANGES)
-                                    TouchedFilesTarget.SHEET -> touchedSheet = true
+                                    TouchedFilesTarget.SHEET -> {
+                                        touchedSheet = true
+                                        if (sideCapable) showTab(InspectorTab.TOUCHED)
+                                    }
                                 }
                             }
                             ErrorFilterChip(errorCount, onlyErrorsShown) {
@@ -2528,23 +2717,16 @@ internal fun RemoteScreen(
                             onDismiss = { treeSheetRequested = false },
                             forkBlocked = navigator.mutating,
                         )
-                    if (artifactsSheetRequested && chatKey != null && treeSessionId != null && treeChat != null &&
-                        canShowArtifacts(state))
+                    // Beside the chat the gallery is a tab of the inspector.
+                    if (artifactsShown && !panesBeside)
                         SessionArtifactsSheet(
-                            sessionId = treeSessionId,
-                            list = { treeChat.listSessionArtifacts(treeSessionId) },
-                            open = { artifact, listed ->
-                                // The listed version is pinned to the listed digest; a reload takes the latest.
-                                treeChat.openSessionArtifact(
-                                    treeSessionId, artifact.id,
-                                    if (listed) artifact.version else null,
-                                    artifact.type,
-                                    if (listed) artifact.sha256 else null,
-                                )
-                            },
+                            sessionId = artifactsSessionId,
+                            list = listArtifacts,
+                            open = openArtifact,
                             onDismiss = { artifactsSheetRequested = false },
                         )
                     ChatPreviewHint(state)
+                    ChatComposerNotices(connectionStatusLine(state), state.uncertain)
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,
@@ -2593,7 +2775,7 @@ internal fun RemoteScreen(
                                         // Like a sent command, a command draft does not stay in the composer.
                                         if (composer.text.trimStart().startsWith("/")) composer.replace("")
                                         if (command == LocalCommand.TREE) treeSheetRequested = true
-                                        else if (artifactsAvailable) artifactsSheetRequested = true
+                                        else if (artifactsAvailable) openGallery()
                                         else showToast(R.string.remote_artifacts_host_outdated)
                                     }
                                     // A terminal session only explains itself; nothing to send.
@@ -2631,6 +2813,16 @@ internal fun RemoteScreen(
                             attachmentSelection = state.selection
                             filePicker.launch(arrayOf("*/*"))
                         },
+                        onTakePhoto =
+                            if (!hasCamera) null
+                            else {
+                                {
+                                    attachmentSelection = state.selection
+                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+                                        launchCamera()
+                                    else cameraPermission.launch(Manifest.permission.CAMERA)
+                                }
+                            },
                         focusRequester = composerFocus,
                         hardwareKeyboard = hardwareKeyboard,
                         enterSends = chatPreferences?.enterSends ?: true,
@@ -2689,8 +2881,13 @@ internal fun RemoteScreen(
                 }
             },
         )
-    if (touchedSheet && key is RemoteNavKey.Chat)
+    if (touchedSheet && key is RemoteNavKey.Chat && !panesBeside)
         TouchedFilesSheet(touched, onDismiss = { touchedSheet = false }, onOpen = ::jumpTo)
+    // The open viewer popped out of its tab, or where its pane would cover the chat.
+    if (chatKey != null && viewerSlot.viewer != null && (viewerSlot.poppedOut || !panesBeside))
+        InspectorViewerDialog(viewerSlot) {
+            if (panesBeside) viewerSlot.poppedOut = false else closeTab(InspectorTab.ARTIFACT)
+        }
     if (historyOpen && key is RemoteNavKey.Chat && !panesBeside)
         ChatHistorySheet(history, onDismiss = { historyOpen = false }, onOpen = ::jumpTo, initialIndex = historyStart)
     childCandidates?.let { candidates ->
@@ -2971,7 +3168,11 @@ internal fun RemoteScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        (model as? SessionsViewModel)?.close(session.id)
+                        when (model) {
+                            is SessionsViewModel -> model.close(session.id)
+                            is ChatViewModel -> model.closeSession(session.id)
+                            else -> Unit
+                        }
                         closing = null
                     },
                     enabled = canCloseSession(
@@ -3233,3 +3434,38 @@ internal fun chatStatusLabel(state: RemoteState): Int =
         state.status == "idle" -> R.string.remote_status_idle
         else -> R.string.remote_status_unknown
     }
+
+/**
+ * Shown above the app while a share from another app waits for its session: tapping a session or
+ * New session in a project sends it there ([RemoteNavigator.sharePick]).
+ */
+@Composable
+internal fun SharePickBanner(onCancel: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier.fillMaxWidth().testTag("sharePickBanner"),
+    ) {
+        Row(
+            Modifier
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
+            // Announced when it appears, so TalkBack users learn what a tap on a session does now.
+            Column(Modifier.weight(1f).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }) {
+                Text(
+                    stringResource(R.string.remote_share_pick_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.semantics { heading() },
+                )
+                Text(stringResource(R.string.remote_share_pick_help), style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = onCancel, modifier = Modifier.testTag("sharePickCancel")) {
+                Text(stringResource(R.string.remote_cancel))
+            }
+        }
+    }
+}

@@ -202,16 +202,19 @@ interface RemoteRepository {
     /**
      * Runs [block] over the app's own connection when it is connected to [routeId] and heard from
      * the Mac within [HEALTHY_CONNECTION_MILLIS]; each request on it gives up after
-     * [HEALTHY_REQUEST_TIMEOUT_MILLIS]. Returns null when the connection is not known to be healthy,
-     * or a request on it timed out or was lost, so the caller opens a connection of its own. A host
-     * error passes through as a [RemoteCommandException]. Any thread may call it. [onSent] runs as
-     * each request goes out, so a caller that falls back after a timeout knows the Mac may already
-     * have it.
+     * [HEALTHY_REQUEST_TIMEOUT_MILLIS]. Returns null without running [block] when the connection is
+     * not known to be healthy, so the caller opens a connection of its own. A host error passes
+     * through as a [RemoteCommandException]. A plain [RemoteCommands.request] that was not sent,
+     * timed out or was lost also ends the call with null; a [MutationCommands.mutate] under the
+     * caller's mutation ID instead throws [MutationNotSentException] when nothing was sent, and the
+     * timeout or loss otherwise, so the caller decides whether to send it again. Any thread may
+     * call it. [onSent] runs as each request goes out, so a caller that falls back after a timeout
+     * knows the Mac may already have it.
      */
     suspend fun <T> withHealthyConnection(
         routeId: String,
         onSent: () -> Unit = {},
-        block: suspend (RemoteCommands) -> T,
+        block: suspend (MutationCommands) -> T,
     ): T? = null
 
     /**

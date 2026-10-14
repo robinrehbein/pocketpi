@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.scan
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -276,6 +278,7 @@ internal class ChatViewModel(
         val selection: RemoteSelection,
         val uris: List<String>,
         val photo: Boolean,
+        val done: (() -> Unit)? = null,
     )
 
     private val pendingPicker = MutableStateFlow<PickerResult?>(null)
@@ -287,6 +290,7 @@ internal class ChatViewModel(
                     if (result != null && !state.loading && state.selection == result.selection) {
                         pendingPicker.value = null
                         repository.importAttachments(result.selection, result.uris, result.photo)
+                        result.done?.let(::afterImport)
                     }
                 }
         }
@@ -356,6 +360,9 @@ internal class ChatViewModel(
         repository.quote(messageId)
         if (repository.state.value.draft.isBlank()) repository.draft(prompt)
     }
+
+    /** Closes this chat's session on the Mac, as a session row's Close does. */
+    fun closeSession(sessionId: String) = active { repository.closeSession(sessionId) }
 
     /** [exclusive] false keeps the files open beside the changes ([RemoteRepository.openChanges]). */
     fun openChanges(exclusive: Boolean = true) = active { repository.openChanges(exclusive) }
@@ -457,9 +464,25 @@ internal class ChatViewModel(
         return true
     }
 
-    fun acceptAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean) {
-        if (selection != key.selection() || uris.isEmpty() || cleared) return
-        pendingPicker.value = PickerResult(selection, uris, photo)
+    /**
+     * Imports [uris] into this chat's draft once it can take them, and reports whether it took
+     * them. [done] runs once the import no longer reads them: it ended, was refused, or the
+     * result was replaced by a newer one before it started.
+     */
+    fun acceptAttachments(selection: RemoteSelection, uris: List<String>, photo: Boolean, done: (() -> Unit)? = null): Boolean {
+        if (selection != key.selection() || uris.isEmpty() || cleared) return false
+        pendingPicker.getAndUpdate { PickerResult(selection, uris, photo, done) }?.done?.invoke()
+        return true
+    }
+
+    /** Runs [done] when the import [acceptAttachments] just started has ended, or at once when none started. */
+    private fun afterImport(done: () -> Unit) {
+        if (!repository.state.value.importingAttachments) return done()
+        // Left for the next sweep (PhotoCapture) when the chat closes first.
+        viewModelScope.launch {
+            repository.state.first { !it.importingAttachments }
+            done()
+        }
     }
 }
 

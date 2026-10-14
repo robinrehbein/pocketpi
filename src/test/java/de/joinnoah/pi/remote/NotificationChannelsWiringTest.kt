@@ -26,7 +26,9 @@ class NotificationChannelsWiringTest {
         RemoteNotifications.createChannel(context)
     }
 
-    private fun channelOfOnlyNotification() = manager.activeNotifications.single().notification.channelId
+    /** The session's only notification; its Mac's group summary has a tag of its own. */
+    private fun channelOfOnlyNotification() =
+        manager.activeNotifications.single { it.tag == RemoteNotifications.tag("r", "s") }.notification.channelId
 
     @Test
     fun firebaseDisplaysItsOwnMessagesOnTheUpdatesChannel() {

@@ -1,14 +1,16 @@
 package de.joinnoah.pi.remote
 
 import android.app.PendingIntent
+import android.content.ClipData
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 
 /**
- * Builds every intent PocketPi hands out to open itself (notifications, the widget and launcher
- * shortcuts) and decides which session a launch of MainActivity may open.
+ * Builds every intent PocketPi hands out to open itself (notifications, the widget, launcher
+ * shortcuts and the share sheet's hand-off) and decides which session a launch of MainActivity may
+ * open.
  *
  * MainActivity is exported for the launcher and the watch handoff, so any app can start it with any
  * extras. The app's own intents therefore go to [ALIAS], a non-exported activity-alias of it: only
@@ -70,6 +72,84 @@ internal object LaunchIntents {
             .apply { target.jobId?.let { putExtra(RemoteNotifications.EXTRA_JOB, it) } }
     }
 
+    /** The action of [share]'s hand-off from ShareActivity; only the alias honours it. */
+    const val ACTION_SHARE = "de.joinnoah.pi.remote.action.SHARE"
+    private const val EXTRA_SHARE_IMAGES = "de.joinnoah.pi.remote.extra.SHARE_IMAGES"
+    private const val EXTRA_SHARE_TARGET = "de.joinnoah.pi.remote.extra.SHARE_TARGET"
+    private const val EXTRA_SHARE_ROUTE = "de.joinnoah.pi.remote.extra.SHARE_ROUTE"
+    private const val EXTRA_SHARE_PROJECT = "de.joinnoah.pi.remote.extra.SHARE_PROJECT"
+    private const val EXTRA_SHARE_SESSION = "de.joinnoah.pi.remote.extra.SHARE_SESSION"
+
+    /**
+     * Hands a checked share ([ShareIntake]) from ShareActivity to MainActivity. The files travel
+     * as ClipData with a read grant, so MainActivity holds the grant once ShareActivity is gone.
+     * NEW_TASK, since ShareActivity runs in the sending app's task: the app opens in its own.
+     */
+    fun share(context: Context, request: ShareRequest): Intent {
+        val content = request.content
+        val intent =
+            alias(context)
+                .setAction(ACTION_SHARE)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .putExtra(EXTRA_SHARE_IMAGES, content.files.map { it.image }.toBooleanArray())
+        content.text?.let { intent.putExtra(Intent.EXTRA_TEXT, it) }
+        content.files.firstOrNull()?.let { first ->
+            val clip = ClipData.newRawUri("", first.uri)
+            content.files.drop(1).forEach { clip.addItem(ClipData.Item(it.uri)) }
+            intent.clipData = clip
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        when (val target = request.target) {
+            is ShareTarget.Session ->
+                intent
+                    .putExtra(EXTRA_SHARE_TARGET, "session")
+                    .putExtra(EXTRA_SHARE_ROUTE, target.routeId)
+                    .putExtra(EXTRA_SHARE_PROJECT, target.projectId)
+                    .putExtra(EXTRA_SHARE_SESSION, target.sessionId)
+            is ShareTarget.NewSession ->
+                intent
+                    .putExtra(EXTRA_SHARE_TARGET, "new")
+                    .putExtra(EXTRA_SHARE_ROUTE, target.routeId)
+                    .putExtra(EXTRA_SHARE_PROJECT, target.projectId)
+            ShareTarget.Pick -> intent.putExtra(EXTRA_SHARE_TARGET, "pick")
+        }
+        return intent
+    }
+
+    /**
+     * The share a launch of MainActivity hands over, or null. Only [share]'s intent on the alias
+     * counts; other apps reach PocketPi's share sheet through ShareActivity, which checks what
+     * they send. The values are checked again all the same.
+     */
+    fun share(intent: Intent): ShareRequest? {
+        if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return null
+        if (intent.component?.className != ALIAS || intent.action != ACTION_SHARE) return null
+        val images = intent.getBooleanArrayExtra(EXTRA_SHARE_IMAGES) ?: return null
+        val clip = intent.clipData
+        val uris = (0 until (clip?.itemCount ?: 0)).mapNotNull { clip?.getItemAt(it)?.uri }
+        if (uris.size != images.size || uris.size > ShareIntake.MAX_FILES || uris.any { it.scheme != "content" }) return null
+        val text =
+            intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() && it.toByteArray().size <= ShareIntake.MAX_TEXT_BYTES }
+        val content = SharedContent(text, uris.mapIndexed { index, uri -> SharedFile(uri, images[index]) })
+        if (content.empty) return null
+        // Nullable on purpose: the strict push-id check for routes and sessions, the looser one for projects.
+        val route = intent.getStringExtra(EXTRA_SHARE_ROUTE).takeIf(::isOpaqueId)
+        val project = intent.getStringExtra(EXTRA_SHARE_PROJECT)?.takeIf { isOpaqueId(it) }
+        val target =
+            when (intent.getStringExtra(EXTRA_SHARE_TARGET)) {
+                "session" ->
+                    ShareTarget.Session(
+                        route ?: return null,
+                        project,
+                        intent.getStringExtra(EXTRA_SHARE_SESSION).takeIf(::isOpaqueId) ?: return null,
+                    )
+                "new" -> ShareTarget.NewSession(route ?: return null, project ?: return null)
+                "pick" -> ShareTarget.Pick
+                else -> return null
+            }
+        return ShareRequest(content, target)
+    }
+
     /** Opens the app without choosing a session. */
     fun app(context: Context): Intent =
         alias(context).setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -77,6 +157,9 @@ internal object LaunchIntents {
     /** A notification's tap target for [session]. */
     fun open(context: Context, routeId: String, sessionId: String): PendingIntent =
         pending(context, session(context, routeId, sessionId))
+
+    /** A notification's tap target that opens the app without choosing a session. */
+    fun openApp(context: Context): PendingIntent = pending(context, app(context))
 
     /** A notification's tap target for [target], with its background jobs when it names them. */
     fun open(context: Context, target: NotificationTarget): PendingIntent =

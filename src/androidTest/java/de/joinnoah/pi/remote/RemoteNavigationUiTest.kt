@@ -1084,6 +1084,62 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    fun reconnectingAndUncertainNoticesStayAboveTheComposerWhileScrolledUp() {
+        repositoryFactory = { activity ->
+            UiRemoteRepository(isolatedDrafts(activity)).apply {
+                messagesForSession = { longConversation() }
+            }
+        }
+        compose.runOnIdle { repository.messagesForSession = { longConversation() } }
+        openChat()
+        enterReadingPosition()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(
+                    connected = false,
+                    stale = true,
+                    connection = R.string.remote_reconnecting,
+                    uncertain = true,
+                )
+        }
+        compose.waitForIdle()
+        // The chat stays where the reader left it; the notices sit right above the field.
+        compose.onNodeWithText("Scroll message 06").assertIsDisplayed()
+        val field = compose.onNode(hasSetTextAction()).fetchSemanticsNode().boundsInRoot
+        for (text in listOf(label(R.string.remote_reconnecting), label(R.string.remote_draft_uncertain))) {
+            val notice =
+                compose.onNode(hasText(text) and hasAnyAncestor(hasTestTag("floatingComposer")))
+                    .assertIsDisplayed()
+                    .fetchSemanticsNode()
+                    .boundsInRoot
+            assertTrue("'$text' ends at ${notice.bottom}, below the field at ${field.top}", notice.bottom <= field.top)
+        }
+    }
+
+    @Test
+    fun listPagesLeadWithTheKeyedConnectionChip() {
+        compose.onNodeWithText("Test computer").performClick()
+        compose.waitForIdle()
+        fun assertChipLeads() {
+            val indexForKey =
+                compose.onAllNodes(hasScrollToKeyAction()).fetchSemanticsNodes()
+                    .map { it.config[SemanticsProperties.IndexForKey] }
+                    .single { it("page-title") >= 0 }
+            assertEquals(0, indexForKey(CONNECTION_STATUS_KEY))
+            assertEquals(1, indexForKey("page-title"))
+        }
+        assertChipLeads()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(connected = false, stale = true, connection = R.string.remote_reconnecting)
+        }
+        compose.waitForIdle()
+        compose.onNode(hasTestTag("connectionStatusChip") and hasText(label(R.string.remote_reconnecting)))
+            .assertIsDisplayed()
+        assertChipLeads()
+    }
+
+    @Test
     fun returningToChatRestoresAnchorAfterHistoryIsPrepended() {
         repositoryFactory = { activity ->
             UiRemoteRepository(isolatedDrafts(activity)).apply {

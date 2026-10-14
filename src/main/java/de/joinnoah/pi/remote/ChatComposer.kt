@@ -6,6 +6,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.handwriting.handwritingDetector
+import androidx.compose.foundation.text.handwriting.handwritingHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -266,6 +268,8 @@ internal fun ChatComposer(
     onCancelAttachments: () -> Unit = {},
     onPickPhotos: () -> Unit = {},
     onPickFiles: () -> Unit = {},
+    /** Takes a photo for the draft; null where there is no camera. */
+    onTakePhoto: (() -> Unit)? = null,
     voiceEngine: VoiceRecognitionEngine? = null,
     voicePermissionGrantedOverride: Boolean? = null,
     focusRequester: FocusRequester? = null,
@@ -586,6 +590,8 @@ internal fun ChatComposer(
                 }
             }
             Row(
+                // Writing with the S Pen anywhere on the row, beside the field too, writes into it.
+                Modifier.handwritingDetector { focusRequester?.let { runCatching { it.requestFocus() } } },
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
@@ -619,6 +625,15 @@ internal fun ChatComposer(
                                     onPickFiles()
                                 },
                             )
+                            if (onTakePhoto != null)
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.remote_take_photo)) },
+                                    onClick = {
+                                        addMenu = false
+                                        onTakePhoto()
+                                    },
+                                    modifier = Modifier.testTag("takePhoto"),
+                                )
                         }
                     }
                 TextField(
@@ -647,6 +662,7 @@ internal fun ChatComposer(
                     modifier =
                         Modifier.weight(1f)
                             .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
+                            .handwritingHandler()
                             .promptPrediction(
                                 prediction,
                                 stringResource(R.string.remote_prediction_use),
@@ -911,4 +927,17 @@ private fun QuestionComposer(
             }
         }
     }
+}
+
+/**
+ * The height in pixels between the end of a list's last item and the start of its after-padding,
+ * which is where the last item stops when the list is scrolled to its end; 0 while items reach
+ * that far, so above 0 the list cannot scroll. A list without items is empty from where its
+ * content starts.
+ */
+internal fun emptySpaceBelowList(info: androidx.compose.foundation.lazy.LazyListLayoutInfo): Int {
+    val contentEnd = info.viewportEndOffset - info.afterContentPadding
+    val last = info.visibleItemsInfo.lastOrNull() ?: return contentEnd.coerceAtLeast(0)
+    if (last.index != info.totalItemsCount - 1) return 0
+    return (contentEnd - (last.offset + last.size)).coerceAtLeast(0)
 }
