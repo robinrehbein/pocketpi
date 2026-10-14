@@ -15,6 +15,8 @@ import androidx.compose.foundation.text.handwriting.handwritingHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloseFullscreen
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -48,10 +50,12 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.constrainWidth
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.offset
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import kotlin.math.floor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -63,7 +67,7 @@ import kotlinx.coroutines.flow.collectLatest
 internal const val COMPOSER_DRAFT_DEBOUNCE_MILLIS = 300L
 
 /** The largest draft the repository keeps, in UTF-8 bytes; longer edits are refused as before. */
-private const val MAX_DRAFT_BYTES = 128 * 1024
+internal const val MAX_DRAFT_BYTES = 128 * 1024
 
 /**
  * The composer's text while the user types. A keystroke changes only this state, so it recomposes
@@ -382,6 +386,16 @@ internal fun ChatComposer(
     onDraftFor: (RemoteSelection, String) -> Unit = { _, text -> onDraft(text) },
     /** The text being typed; the chat hoists it so its own draft changes can flush it first. */
     draft: ComposerDraft = rememberComposerDraft(state.selection, state.draft, !state.loading, onDraftFor),
+    /**
+     * The height of the chat area the composer sits in, read lazily so its changes while the keyboard
+     * animates stay out of composition. It sizes the field (see [composerLineLimit]) and caps the
+     * extras above it (see [composerExtrasLimit]); null keeps the classic six lines.
+     */
+    chatHeight: (() -> Dp?)? = null,
+    /** The large editor is open, see [onEditorExpanded]. */
+    editorExpanded: Boolean = false,
+    /** Offers the "Expand editor" control when set; it toggles the large editor. */
+    onEditorExpanded: ((Boolean) -> Unit)? = null,
 ) {
     // Everything below reads the text on screen, which runs ahead of the repository's draft
     // while the user types.
@@ -390,7 +404,15 @@ internal fun ChatComposer(
     val state = remember(repositoryState, draft.text) { repositoryState.copy(draft = draft.text) }
     // A send reads the repository's draft, so it first gets exactly the text on screen.
     // A send also drops a held long paste: the offer is for text that is not sent.
-    val flushed: (() -> Unit) -> () -> Unit = { action -> { draft.flush(force = true); draft.clearLongPaste(); action() } }
+    // The large editor closes with the send, so the next message starts in the ordinary field.
+    val flushed: (() -> Unit) -> () -> Unit = { action ->
+        {
+            draft.flush(force = true)
+            draft.clearLongPaste()
+            onEditorExpanded?.invoke(false)
+            action()
+        }
+    }
     @Suppress("NAME_SHADOWING") val onSend = flushed(onSend)
     @Suppress("NAME_SHADOWING") val onFollowUp = flushed(onFollowUp)
     @Suppress("NAME_SHADOWING") val onSteer = flushed(onSteer)
@@ -615,37 +637,25 @@ internal fun ChatComposer(
         }
         LaunchedEffect(keyTarget, running) { if (!running) keyTarget.stopHint = false }
     }
+    // The chat area's height as the extras and the field read it: through state reads that sit in the
+    // layout phase or behind derivedStateOf, so a keyboard animation does not recompose the composer.
+    val heightOf by rememberUpdatedState(chatHeight)
+    val lineLimit by remember(editorExpanded) { derivedStateOf { composerLineLimit(heightOf?.invoke(), editorExpanded) } }
+    // The large editor takes half the chat area at least, so its text has room before it scrolls.
+    val editorMinHeight: (() -> Dp)? =
+        if (editorExpanded && chatHeight != null) ({ (heightOf?.invoke() ?: 0.dp) * 0.5f }) else null
+    // The variable extras above the field (quote, attachments, suggestions) take at most 40% of the chat
+    // area, the field keeps the rest. The large editor keeps the limit too: it takes half the area
+    // itself, and uncapped extras would push it and Send past the top. Stop, the send mode and the
+    // long-paste offer stay outside, so they never sit behind a scroll.
+    val extrasCapped = chatHeight != null
+    // The control to expand the editor appears once the draft has grown past a line or two: a short or
+    // empty draft gets no row of its own, so a phone keeps its height until the field needs more.
+    val longDraft = draft.text.length > EXPAND_OFFER_CHARS || '\n' in draft.text
+    val hasExtras = state.quote != null || state.attachments.isNotEmpty() ||
+        state.importingAttachments || state.attachmentProgress != null
     FloatingSurface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            state.quote?.let { QuotePreview(it, Modifier.fillMaxWidth(), onRemoveQuote) }
-            if (state.attachments.isNotEmpty()) {
-                AttachmentPreviewStrip(state.attachments, onRemoveAttachment)
-            }
-            if (state.importingAttachments || state.attachmentProgress != null)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            stringResource(
-                                if (state.importingAttachments) R.string.remote_attachment_importing
-                                else R.string.remote_attachment_uploading
-                            ),
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                        if (state.attachmentProgress == null)
-                            LinearProgressIndicator(Modifier.fillMaxWidth())
-                        else
-                            LinearProgressIndicator(
-                                progress = { state.attachmentProgress },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                    }
-                    IconButton(onClick = onCancelAttachments) {
-                        Icon(
-                            Icons.Default.Close,
-                            stringResource(R.string.remote_cancel_attachment_work),
-                        )
-                    }
-                }
             Column(
                 Modifier.fillMaxWidth()
                     // Let horizontally scrolling controls reach the surface edge, rather than
@@ -659,15 +669,61 @@ internal fun ChatComposer(
                             placeable.placeRelative(-inset, 0)
                         }
                     }
-                    .heightIn(
-                        max = if (state.questions.any { it.text("kind") == "questionnaire" }) 360.dp
-                        else 180.dp
-                    )
-                    .verticalScroll(rememberScrollState())
-                    .animateContentSize(),
+                    .then(
+                        if (extrasCapped)
+                            Modifier.maxHeightOf { (heightOf?.invoke() ?: Dp.Infinity).let(::composerExtrasLimit) }
+                                .verticalScroll(rememberScrollState())
+                        else Modifier
+                    ),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
-                content = suggestions,
-            )
+            ) {
+                if (hasExtras)
+                    Column(
+                        Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        state.quote?.let { QuotePreview(it, Modifier.fillMaxWidth(), onRemoveQuote) }
+                        if (state.attachments.isNotEmpty()) {
+                            AttachmentPreviewStrip(state.attachments, onRemoveAttachment)
+                        }
+                        if (state.importingAttachments || state.attachmentProgress != null)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        stringResource(
+                                            if (state.importingAttachments) R.string.remote_attachment_importing
+                                            else R.string.remote_attachment_uploading
+                                        ),
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                    if (state.attachmentProgress == null)
+                                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                                    else
+                                        LinearProgressIndicator(
+                                            progress = { state.attachmentProgress },
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                }
+                                IconButton(onClick = onCancelAttachments) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        stringResource(R.string.remote_cancel_attachment_work),
+                                    )
+                                }
+                            }
+                    }
+                Column(
+                    Modifier.fillMaxWidth()
+                        .heightIn(
+                            max = if (state.questions.any { it.text("kind") == "questionnaire" }) 360.dp
+                            else 180.dp
+                        )
+                        .verticalScroll(rememberScrollState())
+                        .animateContentSize(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    content = suggestions,
+                )
+            }
             VoiceInputStatus(voiceInput, state)
             if (keyTarget?.stopHint == true) EscapeStopHint()
             if (childControls && (childResume || childStatus != null))
@@ -757,6 +813,21 @@ internal fun ChatComposer(
                         },
                 )
             }
+            if (onEditorExpanded != null && (editorExpanded || longDraft))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(
+                        onClick = { onEditorExpanded(!editorExpanded) },
+                        modifier = Modifier.testTag("expandEditor"),
+                    ) {
+                        Icon(
+                            if (editorExpanded) Icons.Default.CloseFullscreen else Icons.Default.OpenInFull,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(stringResource(if (editorExpanded) R.string.remote_editor_collapse else R.string.remote_editor_expand))
+                    }
+                }
             Row(
                 // Writing with the S Pen anywhere on the row, beside the field too, writes into it.
                 Modifier.handwritingDetector { focusRequester?.let { runCatching { it.requestFocus() } } },
@@ -926,8 +997,9 @@ internal fun ChatComposer(
                                     }
                                 }
                             }
-                            .testTag("composerField"),
-                    lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
+                            .testTag("composerField")
+                            .then(if (editorMinHeight != null) Modifier.minHeightOf(editorMinHeight) else Modifier),
+                    lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = lineLimit),
                     keyboardOptions =
                         KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     shape = MaterialTheme.shapes.large,
@@ -972,6 +1044,25 @@ internal fun ChatComposer(
         }
     }
 }
+
+/**
+ * The field's line limit: one line per 120dp of the chat area, between 3 and 14 lines. Without a
+ * known height it keeps the six lines the field always had. The large editor takes the most.
+ */
+internal fun composerLineLimit(height: Dp?, expanded: Boolean): Int =
+    when {
+        expanded -> COMPOSER_MAX_LINES
+        height == null -> 6
+        else -> floor(height.value / 120f).toInt().coerceIn(COMPOSER_MIN_LINES, COMPOSER_MAX_LINES)
+    }
+
+/** The most the extras above the field may take of the chat area: 40%. */
+internal fun composerExtrasLimit(height: Dp): Dp = height * 0.4f
+
+/** A draft longer than this, or with a line break, is offered the large editor. */
+private const val EXPAND_OFFER_CHARS = 80
+private const val COMPOSER_MIN_LINES = 3
+private const val COMPOSER_MAX_LINES = 14
 
 /** The draft can be sent now; the same rule the primary button follows. */
 internal fun canSendDraft(state: RemoteState): Boolean =
@@ -1149,4 +1240,21 @@ internal fun emptySpaceBelowList(info: androidx.compose.foundation.lazy.LazyList
     val last = info.visibleItemsInfo.lastOrNull() ?: return contentEnd.coerceAtLeast(0)
     if (last.index != info.totalItemsCount - 1) return 0
     return (contentEnd - (last.offset + last.size)).coerceAtLeast(0)
+}
+
+/** At most [limit]'s height, read when the layout runs: a changing limit relays out without recomposing. */
+private fun Modifier.maxHeightOf(limit: () -> Dp): Modifier = layout { measurable, constraints ->
+    val cap = limit()
+    val bounded =
+        if (cap.value.isFinite()) constraints.copy(maxHeight = cap.roundToPx().coerceIn(constraints.minHeight, constraints.maxHeight))
+        else constraints
+    val placeable = measurable.measure(bounded)
+    layout(placeable.width, placeable.height) { placeable.placeRelative(0, 0) }
+}
+
+/** At least [min]'s height (as far as the constraints allow), read when the layout runs. */
+private fun Modifier.minHeightOf(min: () -> Dp): Modifier = layout { measurable, constraints ->
+    val floor = min().roundToPx().coerceIn(constraints.minHeight, constraints.maxHeight)
+    val placeable = measurable.measure(constraints.copy(minHeight = floor))
+    layout(placeable.width, placeable.height) { placeable.placeRelative(0, 0) }
 }

@@ -6,7 +6,7 @@
     <string name="remote_empty_sessions_title">Noch keine Sitzungen</string>
     <string name="remote_projects_show_all">Alle anzeigen</string>
     <string name="remote_projects_show_fewer">Weniger anzeigen</string>
-    <string name="remote_host_last_used">Zuletzt genutzt %1$s</string>
+    <string name="remote_host_last_used">Zuletzt genutzt am %1$s</string>
     <plurals name="remote_host_last_used_minutes">
         <item quantity="one">Zuletzt genutzt vor %d Minute</item>
         <item quantity="other">Zuletzt genutzt vor %d Minuten</item>
@@ -22,4 +22,5 @@
     <string name="remote_host_last_used_just_now">Zuletzt genutzt gerade eben</string>
     <string name="remote_host_tap_to_connect">Tippen zum Verbinden</string>
     <string name="remote_notification_not_now">Nicht jetzt</string>
+    <string name="remote_sessions_unread">Sitzungen erscheinen, sobald dein Mac erreichbar ist.</string>
 </resources>

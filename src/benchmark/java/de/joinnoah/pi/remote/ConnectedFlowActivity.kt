@@ -44,6 +44,12 @@ internal const val EXTRA_COMMAND = "command"
 internal const val EXTRA_STREAM_INTERVAL = "streamIntervalMs"
 
 /**
+ * The longest a prepare pass runs before it reports failure; below the 120 s the benchmarks wait
+ * for its status, so they read why it failed instead of timing out.
+ */
+private const val PREPARE_TIMEOUT_MILLIS = 90_000L
+
+/**
  * Benchmark-only entry to the normal app UI on the fake relay. It hosts [RemoteApp] with the
  * application's own repository and settings, exactly as MainActivity does, and adds three extras:
  *
@@ -70,6 +76,9 @@ class ConnectedFlowActivity : ComponentActivity() {
         get() = application as RemoteApplication
 
     private var prepared by mutableStateOf<Boolean?>(null)
+
+    /** Why the prepare pass failed, shown under its status for the benchmarks' error messages. */
+    private var failure by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -187,31 +196,53 @@ class ConnectedFlowActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Runs the prepare pass described above. It always ends within [PREPARE_TIMEOUT_MILLIS], so a
+     * pass that stalls reports `connected-flow-failed` with [failure] (what it was still waiting
+     * for) instead of leaving the benchmarks to time out on `connected-flow-preparing`.
+     */
     private suspend fun prepare(): Boolean {
         val relay = checkNotNull(ConnectedFlowRelay.transport)
         val repository = app.repository
         // Always LAN: the stored state then does not depend on the profile under test.
         relay.profile = "lan"
+        var stage = "visit"
+        var waitingFor: String? = null
         return try {
             val fixture = relay.fixture()
-            if (!ConnectedFlowPreparation.visit(repository, fixture, System.currentTimeMillis())) return false
             // The quick-chat refresh the visit started rewrites the navigation snapshot one
             // second after each reply. Wait until the snapshot on disk is the final one.
             val store = NavigationSnapshotStore(applicationContext)
             suspend fun settled(): Boolean {
-                if (relay.inFlight.value != 0) return false
+                if (relay.inFlight.value != 0) {
+                    waitingFor = "${relay.inFlight.value} requests in flight"
+                    return false
+                }
                 val stored = withContext(Dispatchers.IO) {
                     runCatching { store.load()[fixture.routeId] }.getOrNull()
                 }
-                return ConnectedFlowPreparation.settled(fixture, repository.state.value, stored)
+                waitingFor = ConnectedFlowPreparation.unsettled(fixture, repository.state.value, stored)
+                return waitingFor == null
             }
-            withTimeoutOrNull(60_000) {
+            val done = withTimeoutOrNull(PREPARE_TIMEOUT_MILLIS) {
+                if (!ConnectedFlowPreparation.visit(repository, fixture, System.currentTimeMillis())) {
+                    failure = "visit ended on ${repository.state.value.selection}"
+                    return@withTimeoutOrNull false
+                }
+                stage = "settle"
                 while (!settled()) delay(100)
                 true
-            } ?: false
+            }
+            if (done == null) {
+                val state = repository.state.value
+                failure = "timed out in $stage; " +
+                    (waitingFor ?: "selection ${state.selection}, connected ${state.connected}, loading ${state.loading}")
+            }
+            done == true
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            failure = "$stage failed: $error"
             false
         }
     }
@@ -235,6 +266,7 @@ class ConnectedFlowActivity : ComponentActivity() {
                     ),
                     modifier = Modifier.semantics { contentDescription = "connected-flow-$status" },
                 )
+                failure?.let { Text(it, Modifier.align(Alignment.BottomStart)) }
             }
         }
     }

@@ -36,6 +36,17 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
+/** Below this height, with the keyboard up, the chat's rows merge and its header and composer shrink. */
+internal val COMPACT_CHROME_HEIGHT = 520.dp
+
+/**
+ * Whether the chat's rows merge and its header and composer compact: always on a phone (the phone
+ * layout, [phone]), and on any window while the keyboard is up and [height] is under
+ * [COMPACT_CHROME_HEIGHT]. A wider window with no keyboard, such as a Book Cover, keeps the rows apart.
+ */
+internal fun compactChrome(phone: Boolean, imeVisible: Boolean, height: Dp): Boolean =
+    phone || (imeVisible && height < COMPACT_CHROME_HEIGHT)
+
 @Composable
 private fun LoadingControlPill(width: Dp) {
     Surface(
@@ -75,6 +86,11 @@ internal fun SessionControls(
     onSettingsSheetRequestHandled: () -> Unit = {},
     /** False while Esc closed the slash suggestions; the next edit brings them back. */
     slashSuggestions: Boolean = true,
+    /**
+     * The chat's insights chips, merged into the controls' row before the controls when the chat is
+     * compact (see [compactChrome]); null keeps the insights in their own row.
+     */
+    leadingChips: (@Composable RowScope.() -> Unit)? = null,
     /** Opens the host's providers from the model and advisor pickers; shown when the host manages them. */
     onManageProviders: (() -> Unit)? = null,
 ) {
@@ -207,11 +223,14 @@ internal fun SessionControls(
             (sessionAdvisor == null && state.advisorLoading)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
+            // A merged row holds the insights chips too, so it keeps their tag.
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = 8.dp)
+                .then(if (leadingChips != null) Modifier.testTag("chatInsights") else Modifier),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            leadingChips?.invoke(this)
             if (loadingConfiguration) {
                 LoadingControlPill(160.dp)
                 LoadingControlPill(96.dp)
@@ -551,49 +570,52 @@ internal fun SessionControls(
                 }
             if (state.configurationLoading || state.configurationChanging)
                 LinearProgressIndicator(Modifier.fillMaxWidth())
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp).navigationBarsPadding()) {
-                if (picker == "model") {
-                    items(confirmed?.models ?: emptyList(), key = { it.provider + ":" + it.id }) {
-                        model ->
-                        val chosen =
-                            confirmed?.model?.let {
-                                it.provider == model.provider && it.id == model.id
-                            } == true
-                        PickerRow(
-                            chosen = chosen,
-                            enabled = canChange,
-                            onSelect = { selectModel(model.provider, model.id) },
-                        ) {
-                            Column {
-                                Text(model.name)
-                                Text(
-                                    model.provider + " · " + model.id,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
+            // The navigation bar pads the list and the providers row under it together.
+            Column(Modifier.navigationBarsPadding()) {
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
+                    if (picker == "model") {
+                        items(confirmed?.models ?: emptyList(), key = { it.provider + ":" + it.id }) {
+                            model ->
+                            val chosen =
+                                confirmed?.model?.let {
+                                    it.provider == model.provider && it.id == model.id
+                                } == true
+                            PickerRow(
+                                chosen = chosen,
+                                enabled = canChange,
+                                onSelect = { selectModel(model.provider, model.id) },
+                            ) {
+                                Column {
+                                    Text(model.name)
+                                    Text(
+                                        model.provider + " · " + model.id,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
                             }
                         }
-                    }
-                    if (confirmed?.modelsTruncated == true)
-                        item {
-                            Text(
-                                stringResource(R.string.remote_catalog_truncated),
-                                Modifier.padding(24.dp),
-                            )
+                        if (confirmed?.modelsTruncated == true)
+                            item {
+                                Text(
+                                    stringResource(R.string.remote_catalog_truncated),
+                                    Modifier.padding(24.dp),
+                                )
+                            }
+                    } else
+                        items(confirmed?.thinkingLevels ?: emptyList()) { level ->
+                            PickerRow(
+                                chosen = confirmed?.thinkingLevel == level,
+                                enabled = canChange,
+                                onSelect = { selectThinking(level) },
+                            ) {
+                                Text(thinkingLevelLabel(level))
+                            }
                         }
-                } else
-                    items(confirmed?.thinkingLevels ?: emptyList()) { level ->
-                        PickerRow(
-                            chosen = confirmed?.thinkingLevel == level,
-                            enabled = canChange,
-                            onSelect = { selectThinking(level) },
-                        ) {
-                            Text(thinkingLevelLabel(level))
-                        }
-                    }
+                }
+                // A model the host lacks is signed in to on the providers page; the thinking picker has none.
+                if (picker == "model")
+                    manageProviders?.let { manage -> ManageProvidersRow { closePicker(); manage() } }
             }
-            // A model the host lacks is signed in to on the providers page; the thinking picker has none.
-            if (picker == "model")
-                manageProviders?.let { manage -> ManageProvidersRow { closePicker(); manage() } }
         }
 }
 

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compact chrome when the chat has little height: the status action, the editor and the new-session sheet. -->
+    <string name="remote_chat_status">Status</string>
+    <string name="remote_chat_actions_more_status">More actions, status updates</string>
+    <string name="remote_editor_expand">Expand editor</string>
+    <string name="remote_editor_collapse">Collapse editor</string>
+    <string name="remote_new_session_project">In %1$s</string>
+    <string name="remote_new_session_model">Model</string>
+    <string name="remote_new_session_model_default">Default model</string>
+    <string name="remote_new_session_prompt">First message (optional)</string>
+    <string name="remote_new_session_start">Start session</string>
+    <string name="remote_new_session_start_send">Start and send</string>
+    <string name="remote_new_session_prompt_command">Commands starting with / only work inside a session.</string>
+    <string name="remote_new_session_prompt_long">This message is too long to send.</string>
+</resources>

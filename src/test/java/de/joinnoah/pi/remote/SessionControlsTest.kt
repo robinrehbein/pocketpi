@@ -4,6 +4,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -441,5 +442,29 @@ class SessionControlsTest {
         assertEquals(listOf(LocalCommand.NEW), filteredLocal)
         assertEquals(listOf("news"), filteredRemote.map { it.name })
         assertEquals("/name  x", selectCommandName("/na  x", "name"))
+    }
+
+    @Test
+    fun compactChromeMergesOnPhonesAndOnShortKeyboardWindowsOnly() {
+        // The phone bucket merges its rows, keyboard or not.
+        assertTrue(compactChrome(phone = true, imeVisible = false, height = 800.dp))
+        // A window with the keyboard up and little height left: the chat body is measured after the IME padding.
+        assertTrue(compactChrome(phone = false, imeVisible = true, height = 400.dp))
+        assertFalse(compactChrome(phone = false, imeVisible = true, height = COMPACT_CHROME_HEIGHT))
+        // A Book Cover or a tablet without a keyboard keeps the two rows, however short.
+        assertFalse(compactChrome(phone = false, imeVisible = false, height = 400.dp))
+        assertFalse(compactChrome(phone = false, imeVisible = true, height = 800.dp))
+    }
+
+    @Test
+    fun insightChipsKeepTheirOrderExceptMergedWhereAttentionComesFirst() {
+        assertEquals(
+            listOf(InsightChip.TOUCHED, InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS),
+            insightChipOrder(compact = false),
+        )
+        assertEquals(
+            listOf(InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS, InsightChip.TOUCHED),
+            insightChipOrder(compact = true),
+        )
     }
 }

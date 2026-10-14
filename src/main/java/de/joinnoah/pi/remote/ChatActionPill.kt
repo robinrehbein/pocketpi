@@ -17,8 +17,11 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
@@ -49,6 +52,7 @@ private fun ChatAction.icon(): ImageVector =
         ChatAction.NEW_SESSION -> Icons.Default.Add
         ChatAction.SESSION_SETTINGS -> Icons.Outlined.Tune
         ChatAction.HISTORY -> Icons.AutoMirrored.Filled.List
+        ChatAction.STATUS -> Icons.Outlined.Info
         ChatAction.CLOSE -> Icons.Default.DeleteOutline
     }
 
@@ -64,6 +68,7 @@ private fun ChatAction.shortcut(): Shortcut? =
         ChatAction.NEW_SESSION -> Shortcut.NEW_SESSION
         ChatAction.SESSION_SETTINGS -> null
         ChatAction.HISTORY -> Shortcut.HISTORY
+        ChatAction.STATUS -> null
         ChatAction.CLOSE -> null
     }
 
@@ -78,12 +83,19 @@ internal fun ChatAction.label(): Int =
         ChatAction.NEW_SESSION -> R.string.remote_new_session
         ChatAction.SESSION_SETTINGS -> R.string.remote_session_settings_title
         ChatAction.HISTORY -> R.string.remote_chat_history
+        ChatAction.STATUS -> R.string.remote_chat_status
         ChatAction.CLOSE -> R.string.remote_session_close
     }
 
 /** The chat header pill: the most used actions as buttons, the rest behind a chevron. */
 @Composable
-internal fun ChatActionPill(layout: ChatActionLayout, color: Color, onAction: (ChatAction) -> Unit) {
+internal fun ChatActionPill(
+    layout: ChatActionLayout,
+    color: Color,
+    onAction: (ChatAction) -> Unit,
+    /** A dot on the menu button: the menu holds an entry that has news, such as the status banners. */
+    badge: Boolean = false,
+) {
     FloatingSurface(shape = CircleShape, color = color) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             for (action in layout.shown)
@@ -99,13 +111,21 @@ internal fun ChatActionPill(layout: ChatActionLayout, color: Color, onAction: (C
                 var open by remember { mutableStateOf(false) }
                 Box {
                     val moreLabel =
-                        stringResource(if (open) R.string.remote_chat_actions_close else R.string.remote_chat_actions_more)
+                        stringResource(
+                            when {
+                                open -> R.string.remote_chat_actions_close
+                                badge -> R.string.remote_chat_actions_more_status
+                                else -> R.string.remote_chat_actions_more
+                            }
+                        )
                     ShortcutTooltip(moreLabel) {
                         IconButton(
                             onClick = { open = !open },
                             modifier = Modifier.size(48.dp).testTag("chatActionsMore"),
                         ) {
-                            Icon(if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore, moreLabel)
+                            if (badge && !open)
+                                BadgedBox(badge = { Badge() }) { Icon(Icons.Default.ExpandMore, moreLabel) }
+                            else Icon(if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore, moreLabel)
                         }
                     }
                     if (open) {

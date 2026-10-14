@@ -2094,8 +2094,18 @@ class RemoteNavigationUiTest {
                     compaction = SessionCompaction("threshold", System.currentTimeMillis())
                 )
         }
+        // A compact chat (always, on a phone) keeps the banner out of the conversation: a one-line
+        // status chip says what runs, the header menu offers Status while it shows, and the banner
+        // is in the sheet that opens.
+        compose.onNodeWithTag("compactionBanner").assertDoesNotExist()
+        // The chip merges its label into itself, as a button does.
+        compose.onNode(hasTestTag("chatStatusChip") and hasText(label(R.string.remote_panel_compacting)))
+            .assertIsDisplayed()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.onNodeWithTag("chatActionMenu_status").performClick()
         compose.onNodeWithTag("compactionBanner").assertIsDisplayed()
-        compose.onNodeWithText(label(R.string.remote_panel_compacting)).assertIsDisplayed()
+        compose.onNode(hasText(label(R.string.remote_panel_compacting)) and hasAnyAncestor(hasTestTag("compactionBanner")))
+            .assertIsDisplayed()
         compose.runOnIdle {
             repository.state.value = repository.state.value.copy(compaction = null)
         }

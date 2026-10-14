@@ -22,4 +22,5 @@
     <string name="remote_host_last_used_just_now">Last used just now</string>
     <string name="remote_host_tap_to_connect">Tap to connect</string>
     <string name="remote_notification_not_now">Not now</string>
+    <string name="remote_sessions_unread">Sessions appear once your Mac is reachable.</string>
 </resources>

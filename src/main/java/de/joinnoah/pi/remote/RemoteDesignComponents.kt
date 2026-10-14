@@ -53,15 +53,16 @@ internal fun HostCard(
     onOpen: () -> Unit,
     onRemove: () -> Unit,
 ) {
-    // The minutes of "Last used" move on, so the clock is read again each minute during the first hour.
-    // Otherwise a card that stays composed would keep "just now" until it recomposes.
+    // "Last used" moves on, so the clock is read again: each minute during the first hour, then each hour.
+    // Otherwise a card that stays composed would keep "just now" or "2 hours ago" until it recomposes.
     val now by
         produceState(System.currentTimeMillis(), lastUsedAt) {
-            if (lastUsedAt != null && System.currentTimeMillis() - lastUsedAt < DateUtils.HOUR_IN_MILLIS)
-                repeat(MINUTES_PER_HOUR) {
-                    delay(DateUtils.MINUTE_IN_MILLIS)
-                    value = System.currentTimeMillis()
-                }
+            if (lastUsedAt == null) return@produceState
+            while (true) {
+                val young = System.currentTimeMillis() - lastUsedAt < DateUtils.HOUR_IN_MILLIS
+                delay(if (young) DateUtils.MINUTE_IN_MILLIS else DateUtils.HOUR_IN_MILLIS)
+                value = System.currentTimeMillis()
+            }
         }
     // The relay is in the Mac's connection details; the card says what the user can do with the Mac.
     val context = LocalContext.current

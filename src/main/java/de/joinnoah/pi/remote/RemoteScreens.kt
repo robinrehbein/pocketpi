@@ -4,6 +4,7 @@ import android.Manifest
 import android.animation.ValueAnimator
 import android.content.pm.PackageManager
 import android.os.Build
+import android.view.accessibility.AccessibilityManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
@@ -24,6 +25,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -40,7 +42,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
+import androidx.annotation.StringRes
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
@@ -77,6 +81,10 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.KeyEventType
@@ -90,6 +98,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -212,6 +222,10 @@ private val RETRYABLE_ERRORS =
         R.string.remote_device_paused,
     )
 
+/** A Projects or Sessions page has stopped loading and shows a list the Mac confirmed or the cache. */
+private fun listSettled(state: RemoteState): Boolean =
+    !state.loading && (state.connected || state.hostsLoaded)
+
 @Composable
 internal fun RemoteScreen(
     key: RemoteNavKey,
@@ -232,8 +246,15 @@ internal fun RemoteScreen(
     when (key) {
         RemoteNavKey.Hosts -> ReportDrawnWhen { state.hostsLoaded || state.hostsUnreadable || state.hosts.isNotEmpty() }
         // Offline or asleep, a Mac never confirms its lists: the cached page, settled, is what shows.
-        is RemoteNavKey.Projects, is RemoteNavKey.Sessions -> ReportDrawnWhen {
-            if (state.connected) !state.loading else state.hostsLoaded && !state.loading
+        // Only once this page's own route (and project) is selected: on a cold start the state
+        // is settled and empty before the activation of the last Mac has even begun.
+        is RemoteNavKey.Projects -> ReportDrawnWhen {
+            state.selection.routeId == key.routeId && listSettled(state)
+        }
+        is RemoteNavKey.Sessions -> ReportDrawnWhen {
+            state.selection.routeId == key.routeId &&
+                state.selection.projectId == key.projectId &&
+                listSettled(state)
         }
         else -> Unit
     }
@@ -275,7 +296,7 @@ internal fun RemoteScreen(
     // The selection names the chat beside the list; the screen's state strips the chat's session.
     val shownSessionId = state.selection.sessionId
     val visibleSessions =
-        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds, routeMarks) {
+        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds, routeMarks, shownSessionId) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
@@ -487,6 +508,43 @@ internal fun RemoteScreen(
     // The conversation list's after-padding: its last item can scroll to just above the composer.
     val conversationEndPadding = composerHeight + 24.dp
     val headerHeight = with(LocalDensity.current) { headerSize.height.toDp() }
+    // The chat area's height, measured by the chat body below. Only derived values and layout-phase
+    // reads depend on it, so a keyboard animation does not recompose this scope every frame.
+    var chatHeight by remember { mutableStateOf<Dp?>(null) }
+    val density = LocalDensity.current
+    val chatHeightOf: () -> Dp? = remember { { chatHeight } }
+    val isChat = key is RemoteNavKey.Chat
+    val wideLayout = paneLayout.twoPane
+    val imeInsets = WindowInsets.ime
+    // The keyboard is up while its insets have a height; the same as WindowInsets.isImeVisible.
+    val compactState = remember(isChat, wideLayout, density, imeInsets) {
+        derivedStateOf {
+            isChat && compactChrome(!wideLayout, imeInsets.getBottom(density) > 0, chatHeight ?: Dp.Infinity)
+        }
+    }
+    val compact by compactState
+    // Dragging the list down hides the compact header and dragging it up brings it back; see
+    // [headerHiddenAfterScroll]. Only the user's own scrolling counts, never auto-follow, a jump or a
+    // restored position, and TalkBack keeps the header, whose actions it could no longer reach.
+    var headerHidden by remember(key) { mutableStateOf(false) }
+    val touchExploring = rememberTouchExploring()
+    // Keyed on compactState too: a new layout or keyboard state makes a new one, which the old
+    // connection would no longer read.
+    val headerScroll = remember(listState, compactState) {
+        HeaderHideConnection(
+            position = { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset },
+            active = { compactState.value && !touchExploring.value },
+            hidden = { headerHidden },
+            setHidden = { headerHidden = it },
+        )
+    }
+    LaunchedEffect(compact, touchExploring.value) { if (!compact || touchExploring.value) headerHidden = false }
+    // Hidden, the header also leaves the status bar's area, where it would still show through.
+    val headerTopInset = WindowInsets.safeDrawing.getTop(density)
+    val headerLift by animateIntAsState(
+        if (compact && headerHidden) -(headerSize.height + headerTopInset) else 0,
+        label = "headerLift",
+    )
     val listScope = rememberCoroutineScope()
     var autoFollow by rememberSaveable(key) { mutableStateOf(savedViewport?.following ?: true) }
     // The chat counts as read once it shows its end; a newer update after that is unread again.
@@ -1047,6 +1105,26 @@ internal fun RemoteScreen(
         renameDraft = TextFieldValue(title, TextRange(title.length))
     }
     var exportState by remember(key) { mutableStateOf<ExportState?>(null) }
+    // Compact chrome: the banners' sheet, the large editor and the new-session sheet.
+    var statusSheet by remember(key) { mutableStateOf(false) }
+    var editorExpanded by rememberSaveable(key) { mutableStateOf(false) }
+    var newSessionOpen by rememberSaveable(key) { mutableStateOf(false) }
+    val bannersShown = compactionVisible(state.compaction, compactionNow) || exportState != null
+    // The status sheet shows the banners only; it goes when they do, and does not return for the next ones.
+    LaunchedEffect(bannersShown) { if (!bannersShown) statusSheet = false }
+    // Compact, a one-line chip leads the controls' row while a banner waits in the status sheet; a
+    // failed export shows in the header itself, which a failure brings back.
+    val statusChipLine: Int? =
+        when {
+            !compact -> null
+            compactionVisible(state.compaction, compactionNow) -> R.string.remote_panel_compacting
+            exportState == ExportState.Exporting -> R.string.remote_export_running
+            exportState is ExportState.Done -> R.string.remote_export_done
+            else -> null
+        }
+    LaunchedEffect(exportState is ExportState.Failed) { if (exportState is ExportState.Failed) headerHidden = false }
+    // The large editor is a compact-chrome control: it closes with the compact rules, not when they return.
+    LaunchedEffect(compact) { if (!compact) editorExpanded = false }
     val exportScope = rememberCoroutineScope()
     val exportChooserTitle = stringResource(R.string.remote_export_chooser)
     fun shareExport(uri: String) {
@@ -1113,7 +1191,7 @@ internal fun RemoteScreen(
     /** Runs the local command [command] with its [argument], as a typed command would. */
     fun runLocal(command: LocalCommand, argument: String) {
         when (command) {
-            LocalCommand.NEW -> (key as? RemoteNavKey.Chat)?.let { navigator.createSession(it.routeId, it.projectId) }
+            LocalCommand.NEW -> if (key is RemoteNavKey.Chat && !navigator.mutating) newSessionOpen = true
             LocalCommand.COMPACT -> model.compactContext()
             LocalCommand.MODEL -> modelPickerRequested = true
             LocalCommand.SETTINGS -> settingsSheetRequested = true
@@ -1165,7 +1243,8 @@ internal fun RemoteScreen(
             ChatAction.JOBS -> openInspector(InspectorTab.JOBS)
             ChatAction.RENAME ->
                 state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
-            ChatAction.NEW_SESSION -> navigator.createSession(chat.routeId, chat.projectId)
+            ChatAction.NEW_SESSION -> newSessionOpen = true
+            ChatAction.STATUS -> statusSheet = true
             ChatAction.REFRESH -> model.refresh()
             ChatAction.SESSION_SETTINGS -> settingsSheetRequested = true
             ChatAction.SETTINGS -> navigator.settings()
@@ -1327,14 +1406,15 @@ internal fun RemoteScreen(
                             Icon(Icons.AutoMirrored.Filled.List, stringResource(R.string.remote_chat_history))
                         }
                     }
-                    ChatActionPill(actionLayout, headerColor, ::runAction)
+                    ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, onAction = ::runAction)
                 }
             }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val narrow = maxWidth < 360.dp
                 // A phone's title keeps its room: History then joins the pill or its menu.
                 val standaloneHistory = maxWidth >= HISTORY_BUTTON_MIN_HEADER
-                val actionLayout = actionLayout(!standaloneHistory)
+                // Compact, the banners' entry joins the menu while they show; see the status sheet.
+                val actionLayout = actionLayout(!standaloneHistory).let { if (compact) it.withStatus(bannersShown) else it }
                 val actionsWidth =
                     48.dp * (actionLayout.shown.size + if (actionLayout.menu.isEmpty()) 0 else 1) +
                         if (standaloneHistory) 56.dp else 0.dp
@@ -1433,11 +1513,13 @@ internal fun RemoteScreen(
                             actionsControl(actionLayout, standaloneHistory)
                         }
                     }
-                    if (compactionVisible(state.compaction, compactionNow))
+                    // Compact, the banners wait in the pill's menu, see the status sheet.
+                    if (!compact && compactionVisible(state.compaction, compactionNow))
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             CompactionBanner(state.compaction, compactionNow)
                         }
-                    if (exportState != null)
+                    // A failed export always shows here: a failure must not wait behind a menu.
+                    if (exportState != null && (!compact || exportState is ExportState.Failed))
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             ExportStatus(exportState, ::shareExport) {
                                 if (exportState is ExportState.Done)
@@ -1929,10 +2011,11 @@ internal fun RemoteScreen(
                     enabled = !state.loading,
                     onClick = { navigator.openFolders(key.routeId) },
                 )
-            // An empty session list names its one action beside the list, so its button stands out. It keeps this
-            // shape while the list loads, so the button does not jump when the list arrives; disabled, it is greyed.
+            // An empty session list names its one action beside the list, so its button stands out; disabled, it is
+            // greyed. A list still loading keeps the small button: most projects have sessions, so the button
+            // changes its shape only for a list that turns out empty.
             val newSessionEnabled = state.connected && !state.loading && !navigator.mutating
-            if (key is RemoteNavKey.Sessions && state.sessions.isEmpty()) {
+            if (key is RemoteNavKey.Sessions && state.sessions.isEmpty() && !state.loading) {
                 val labelColor =
                     if (newSessionEnabled) MaterialTheme.colorScheme.onPrimary
                     else MaterialTheme.colorScheme.onSurfaceVariant
@@ -2017,7 +2100,7 @@ internal fun RemoteScreen(
                             // overflow in the header, so the list keeps the full height.
                             is RemoteNavKey.Projects -> {
                                 OutlinedButton(
-                                    onClick = { navigator.openActivity(key.routeId) },
+                                    onClick = { navigator.openActivity(key.routeId, twoPane) },
                                     enabled = state.host != null,
                                     modifier = Modifier.fillMaxWidth().testTag("activityButton"),
                                 ) {
@@ -2031,7 +2114,9 @@ internal fun RemoteScreen(
     ) { insets ->
         BoxWithConstraints(
             if (key is RemoteNavKey.Chat)
-                Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).imePadding().then(chatDrop)
+                Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).imePadding()
+                    .onSizeChanged { chatHeight = with(density) { it.height.toDp() } }
+                    .then(chatDrop)
             else Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)
         ) {
         // While the tool detail covers the chat, the chat below must not be reachable by TalkBack.
@@ -2057,6 +2142,7 @@ internal fun RemoteScreen(
             LazyColumn(
                 if (key is RemoteNavKey.Chat)
                     Modifier.fillMaxSize().testTag("conversationList").then(underlay)
+                        .nestedScroll(headerScroll)
                         .onFocusChanged { conversationFocused = it.hasFocus }
                 else Modifier.fillMaxSize().then(listRegion),
                 state = listState,
@@ -2637,7 +2723,6 @@ internal fun RemoteScreen(
                                             if (folders) {
                                                 Button(
                                                     onClick = { navigator.openFolders(key.routeId) },
-                                                    enabled = !state.loading,
                                                     modifier = Modifier.testTag("emptyOpenFolder"),
                                                 ) {
                                                     Icon(Icons.Default.FolderOpen, contentDescription = null)
@@ -2678,14 +2763,6 @@ internal fun RemoteScreen(
                             if (recentChats.isNotEmpty()) {
                                 item(key = "project_chats_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_projects_quick_chats))
-                                }
-                                item(key = "project_chats_group_recent") {
-                                    Text(
-                                        stringResource(R.string.remote_projects_recent),
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(top = 12.dp),
-                                    )
                                 }
                                 projectChatRows(recentChats, routeMarks, state.connected, !state.loading) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
@@ -2741,6 +2818,9 @@ internal fun RemoteScreen(
                                 }
                             if (state.sessions.isEmpty()) {
                                 if (state.loading) item { SessionListSkeleton() }
+                                // Only a list read from the Mac, now or before, says there are no sessions.
+                                else if (!state.connected && !state.stale)
+                                    item(key = "sessions_unread") { Text(stringResource(R.string.remote_sessions_unread)) }
                                 else item(key = "sessions_empty") {
                                     EmptyState(
                                         icon = Icons.Outlined.ChatBubbleOutline,
@@ -3025,7 +3105,9 @@ internal fun RemoteScreen(
             Box(
                 Modifier.align(Alignment.TopCenter).fillMaxWidth()
                     .onSizeChanged { headerSize = it }
-                    .then(underlay),
+                    .offset { IntOffset(0, headerLift) }
+                    .then(underlay)
+                    .testTag("chatHeader"),
             ) {
                 chatHeader()
             }
@@ -3121,54 +3203,72 @@ internal fun RemoteScreen(
                             }
                         }
                     }
-                    if (touched.total > 0 || errorCount > 0 || onlyErrorsShown || strip.entries.isNotEmpty() ||
-                        statusJobs != null
-                    )
+                    val insightsShown =
+                        touched.total > 0 || errorCount > 0 || onlyErrorsShown || strip.entries.isNotEmpty() ||
+                            statusJobs != null
+                    // The chips sit in their own row, or merged into the controls' row while the chat is compact.
+                    val chipOrder = insightChipOrder(compact)
+                    val insightChips: @Composable RowScope.() -> Unit = {
+                        for (chip in chipOrder)
+                            when (chip) {
+                                InsightChip.ERRORS ->
+                                    ErrorFilterChip(errorCount, onlyErrorsShown) {
+                                        onlyErrorsShown = !onlyErrorsShown
+                                        if (onlyErrorsShown) autoFollow = false
+                                        else if (chatKey != null && viewportPositions != null) {
+                                            savedViewport = viewportPositions[chatKey]
+                                            viewportRestorePending = savedViewport?.following == false
+                                            autoFollow = savedViewport?.following ?: false
+                                        }
+                                    }
+                                InsightChip.JOBS ->
+                                    statusJobs?.let { jobs ->
+                                        key(jobs.sessionId) {
+                                            val chat = checkNotNull(chatModel)
+                                            val openJobs by rememberUpdatedState { openInspector(InspectorTab.JOBS) }
+                                            BackgroundJobsChip(jobs, remember(chat) {
+                                                JobsActions(
+                                                    chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs,
+                                                    chat::stopJob,
+                                                    onOpenList = { openJobs() },
+                                                )
+                                            })
+                                        }
+                                    }
+                                InsightChip.SUBAGENTS ->
+                                    SubagentStrip(
+                                        strip,
+                                        canAbort = { entry ->
+                                            entry.sessionId?.let { canAbortSubagent(state, it) } == true
+                                        },
+                                        onOpen = { entry ->
+                                            entry.sessionId?.takeIf { entry.openable }?.let(::openChildSession)
+                                        },
+                                        onAbort = { entry -> if (entry.sessionId != null) abortChild = entry },
+                                        sessionId = chatKey?.sessionId,
+                                    )
+                                InsightChip.TOUCHED ->
+                                    TouchedFilesSummary(touched, touchedLines) {
+                                        val target = touchedFilesTarget(
+                                            canViewChanges(state) && state.connected,
+                                            touched.changed.isNotEmpty(),
+                                        )
+                                        when (target) {
+                                            TouchedFilesTarget.CHANGES -> openInspector(InspectorTab.CHANGES)
+                                            TouchedFilesTarget.SHEET -> {
+                                                touchedSheet = true
+                                                if (sideCapable) showTab(InspectorTab.TOUCHED)
+                                            }
+                                        }
+                                    }
+                            }
+                    }
+                    if (insightsShown && !compact)
                         Row(
                             Modifier.fillMaxWidth().testTag("chatInsights").horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            TouchedFilesSummary(touched, touchedLines) {
-                                when (touchedFilesTarget(canViewChanges(state) && state.connected, touched.changed.isNotEmpty())) {
-                                    TouchedFilesTarget.CHANGES -> openInspector(InspectorTab.CHANGES)
-                                    TouchedFilesTarget.SHEET -> {
-                                        touchedSheet = true
-                                        if (sideCapable) showTab(InspectorTab.TOUCHED)
-                                    }
-                                }
-                            }
-                            ErrorFilterChip(errorCount, onlyErrorsShown) {
-                                onlyErrorsShown = !onlyErrorsShown
-                                if (onlyErrorsShown) autoFollow = false
-                                else if (chatKey != null && viewportPositions != null) {
-                                    savedViewport = viewportPositions[chatKey]
-                                    viewportRestorePending = savedViewport?.following == false
-                                    autoFollow = savedViewport?.following ?: false
-                                }
-                            }
-                            statusJobs?.let { jobs ->
-                                key(jobs.sessionId) {
-                                    val chat = checkNotNull(chatModel)
-                                    val openJobs by rememberUpdatedState { openInspector(InspectorTab.JOBS) }
-                                    BackgroundJobsChip(jobs, remember(chat) {
-                                        JobsActions(
-                                            chat::refreshJobs, chat::openJob, chat::closeJob, chat::closeJobs, chat::stopJob,
-                                            onOpenList = { openJobs() },
-                                        )
-                                    })
-                                }
-                            }
-                            SubagentStrip(
-                                strip,
-                                canAbort = { entry ->
-                                    entry.sessionId?.let { canAbortSubagent(state, it) } == true
-                                },
-                                onOpen = { entry -> entry.sessionId?.takeIf { entry.openable }?.let(::openChildSession) },
-                                onAbort = { entry -> if (entry.sessionId != null) abortChild = entry },
-                                sessionId = chatKey?.sessionId,
-                            )
-                        }
+                        ) { insightChips() }
                     val treeSessionId = state.selection.sessionId
                     val treeChat = model as? ChatViewModel
                     if (treeSheetRequested && chatKey != null && treeSessionId != null && treeChat != null)
@@ -3197,6 +3297,38 @@ internal fun RemoteScreen(
                             onDismiss = { artifactsSheetRequested = false },
                         )
                     FollowUpStatus(state, model::dismissFollowUp)
+                    if (statusSheet && bannersShown)
+                        ModalBottomSheet(onDismissRequest = { statusSheet = false }) {
+                            Column(
+                                Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    stringResource(R.string.remote_chat_status),
+                                    Modifier.semantics { heading() },
+                                    style = MaterialTheme.typography.titleLarge,
+                                )
+                                if (compactionVisible(state.compaction, compactionNow))
+                                    CompactionBanner(state.compaction, compactionNow)
+                                if (exportState != null)
+                                    ExportStatus(exportState, ::shareExport) {
+                                        if (exportState is ExportState.Done)
+                                            exportScope.launch(Dispatchers.IO) { ExportStorage.clear(context.cacheDir) }
+                                        exportState = null
+                                    }
+                            }
+                        }
+                    if (newSessionOpen && chatKey != null)
+                        NewSessionSheet(
+                            projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
+                            models = state.configuration?.models.orEmpty(),
+                            onStart = { choice ->
+                                newSessionOpen = false
+                                navigator.startSession(chatKey.routeId, chatKey.projectId, choice)
+                            },
+                            onDismiss = { newSessionOpen = false },
+                            busy = navigator.mutating,
+                        )
                     ChatPreviewHint(state)
                     ChatComposerNotices(connectionStatusLine(state), state.uncertain)
                     val composer = checkNotNull(composerDraft)
@@ -3270,6 +3402,17 @@ internal fun RemoteScreen(
                                 settingsSheetRequested = settingsSheetRequested,
                                 onSettingsSheetRequestHandled = { settingsSheetRequested = false },
                                 slashSuggestions = !composer.suggestionsClosed,
+                                leadingChips =
+                                    if (compact && (insightsShown || statusChipLine != null)) {
+                                        {
+                                            statusChipLine?.let { line ->
+                                                ChatStatusChip(line, running = line != R.string.remote_export_done) {
+                                                    statusSheet = true
+                                                }
+                                            }
+                                            if (insightsShown) insightChips()
+                                        }
+                                    } else null,
                                 onManageProviders = state.selection.routeId?.let { route -> { navigator.openProviders(route) } },
                             )
                         },
@@ -3305,6 +3448,9 @@ internal fun RemoteScreen(
                         focusRequester = composerFocus,
                         hardwareKeyboard = hardwareKeyboard,
                         enterSends = chatPreferences?.enterSends ?: true,
+                        chatHeight = chatHeightOf,
+                        editorExpanded = compact && editorExpanded,
+                        onEditorExpanded = if (compact) ({ expanded -> editorExpanded = expanded }) else null,
                     )
                 }
             }
@@ -3582,8 +3728,8 @@ internal fun RemoteScreen(
                 TextButton(
                     onClick = {
                         disconnecting = false
-                        // Disconnect keeps the pairing, but a cold launch should not reconnect to the Mac the
-                        // user just let go of: the next launch opens the hosts list (or the only Mac).
+                        // Disconnect keeps the pairing; a cold launch no longer prefers this Mac. With
+                        // several Macs it opens the hosts list; a lone paired Mac still opens itself.
                         projectsPage?.routeId?.let(navigator::forgetLastRoute)
                         navigator.disconnect()
                     },
@@ -4122,5 +4268,94 @@ private fun LayoutSettingsSection(twoPane: TwoPaneState) {
             Spacer(Modifier.width(ButtonDefaults.IconSpacing))
             Text(stringResource(R.string.remote_layout_reset))
         }
+    }
+}
+
+/**
+ * Whether the compact header is hidden after the list's first visible item moved from [previous] to
+ * [current] (an item index and its offset): moving down hides it, moving up or being at the top
+ * shows it again, and no movement keeps [hidden].
+ */
+internal fun headerHiddenAfterScroll(hidden: Boolean, previous: Pair<Int, Int>, current: Pair<Int, Int>): Boolean {
+    if (current.first == 0 && current.second == 0) return false
+    val down = current.first > previous.first || (current.first == previous.first && current.second > previous.second)
+    val up = current.first < previous.first || (current.first == previous.first && current.second < previous.second)
+    return when {
+        down -> true
+        up -> false
+        else -> hidden
+    }
+}
+
+/**
+ * The compact chat's status in one line, at the start of the controls' row while a banner waits in
+ * the status sheet: what runs ([running] spins) or what is done. A tap opens the sheet; the line is
+ * read out as it changes.
+ */
+@Composable
+private fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () -> Unit) {
+    AssistChip(
+        onClick = onClick,
+        label = { Text(stringResource(line), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+        leadingIcon = {
+            if (running && ValueAnimator.areAnimatorsEnabled())
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            else Icon(Icons.Outlined.Info, contentDescription = null, modifier = Modifier.size(18.dp))
+        },
+        modifier = Modifier.testTag("chatStatusChip").semantics { liveRegion = LiveRegionMode.Polite },
+    )
+}
+
+/** Whether TalkBack or another touch-exploration service is on; follows the setting while shown. */
+@Composable
+private fun rememberTouchExploring(): State<Boolean> {
+    val context = LocalContext.current
+    val manager = remember(context) { context.getSystemService(AccessibilityManager::class.java) }
+    val exploring = remember(manager) { mutableStateOf(manager?.isTouchExplorationEnabled == true) }
+    DisposableEffect(manager) {
+        val listener = AccessibilityManager.TouchExplorationStateChangeListener { exploring.value = it }
+        manager?.addTouchExplorationStateChangeListener(listener)
+        exploring.value = manager?.isTouchExplorationEnabled == true
+        onDispose { manager?.removeTouchExplorationStateChangeListener(listener) }
+    }
+    return exploring
+}
+
+/** The chips of the chat's insights row. */
+internal enum class InsightChip { TOUCHED, ERRORS, JOBS, SUBAGENTS }
+
+/**
+ * The order of the insights chips: the touched files first in their own row, as they always were.
+ * Merged into the controls' row, the chips that need attention (errors, jobs, subagents) come first
+ * and the touched files after them, ahead of the controls.
+ */
+internal fun insightChipOrder(compact: Boolean): List<InsightChip> =
+    if (compact) listOf(InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS, InsightChip.TOUCHED)
+    else listOf(InsightChip.TOUCHED, InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS)
+
+/**
+ * Hides the compact header while the user drags the list down and shows it again on a drag up or at
+ * the top. Only [NestedScrollSource.UserInput] hides it: auto-follow while pi streams, jumps and a
+ * restored position scroll the list without the user, and the header stays as it is. [position] is the
+ * list's first visible item and offset.
+ */
+internal class HeaderHideConnection(
+    private val position: () -> Pair<Int, Int>,
+    private val active: () -> Boolean,
+    private val hidden: () -> Boolean,
+    private val setHidden: (Boolean) -> Unit,
+) : NestedScrollConnection {
+    private var before = 0 to 0
+
+    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+        before = position()
+        return Offset.Zero
+    }
+
+    override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+        val current = position()
+        if (current == 0 to 0) setHidden(false)
+        else if (source == NestedScrollSource.UserInput && active()) setHidden(headerHiddenAfterScroll(hidden(), before, current))
+        return Offset.Zero
     }
 }
