@@ -4699,18 +4699,19 @@ class DefaultRemoteRepository(
         var uploaded = 0L
         return values.map { local ->
             checkEpoch(epoch)
-            val bytes = attachmentMutex.withLock {
-                withContext(io) {
-                    storage.read(local).also {
-                        require(
-                            it.size.toLong() == local.size &&
-                                AttachmentImportRules.sha256(it) == local.sha256
-                        )
-                    }
+            // Checked before anything is sent, as the whole file always was. The file is read once in
+            // pieces to digest it, so no copy of it is held in memory.
+            val verified =
+                attachmentMutex.withLock {
+                    withContext(io) { storage.open(local).use { AttachmentImportRules.digest(it) } }
                 }
+            require(verified.size == local.size && verified.sha256 == local.sha256) {
+                "Attachment changed before it was sent"
             }
             val previous = drafts[key]?.uploads?.find { it.localId == local.id }
             val confirmed = previous?.attachment
+            // Only an image's bytes are kept for the sent prompt; any other file is only streamed.
+            var imageBytes: ByteArray? = null
             val remote = if (
                 previous?.projectId == projectId &&
                     confirmed != null &&
@@ -4719,103 +4720,124 @@ class DefaultRemoteRepository(
             ) {
                 uploaded += local.size
                 update { it.copy(attachmentProgress = uploaded.toFloat() / total) }
+                if (local.kind == "image") {
+                    imageBytes = attachmentMutex.withLock { withContext(io) { storage.read(local) } }
+                }
                 confirmed
             } else {
-                if (previous != null) {
-                    cancelUpload(key, previous.remoteId, epoch)
+                // Opened before anything is sent, so a file that cannot be read starts no upload.
+                val input = attachmentMutex.withLock { withContext(io) { storage.open(local) } }
+                input.use { stream ->
+                    if (previous != null) {
+                        cancelUpload(key, previous.remoteId, epoch)
+                        drafts[key] =
+                            (drafts[key] ?: StoredDraft()).let {
+                                it.copy(
+                                    uploads =
+                                        it.uploads.filterNot { upload -> upload.localId == local.id }
+                                )
+                            }
+                        persistNow()
+                    }
+                    val begin =
+                        request(
+                            "session.attachments.begin",
+                            epoch,
+                            "sessionId" to key.sessionId,
+                            "attachment" to local.descriptor(),
+                        )
+                    require(
+                        begin.text("kind") == "attachment.upload" &&
+                            begin.text("sessionId") == key.sessionId &&
+                            begin.long("offset") == 0L
+                    )
+                    val remoteId = begin.text("attachmentId")
+                    require(AttachmentImportRules.validId(remoteId))
+                    val upload = AttachmentUpload(local.id, remoteId, projectId)
+                    drafts[key] =
+                        (drafts[key] ?: StoredDraft()).let { it.copy(uploads = it.uploads + upload) }
+                    persistNow()
+                    val digest = java.security.MessageDigest.getInstance("SHA-256")
+                    val buffer = ByteArray(64 * 1024)
+                    val collected =
+                        if (local.kind == "image") java.io.ByteArrayOutputStream(local.size.toInt())
+                        else null
+                    var offset = 0L
+                    while (offset < local.size) {
+                        delay(200)
+                        checkEpoch(epoch)
+                        val length = minOf(buffer.size.toLong(), local.size - offset).toInt()
+                        val read =
+                            withContext(io) { AttachmentImportRules.readInto(stream, buffer, length) }
+                        require(read == length) { "Attachment changed while it was sent" }
+                        digest.update(buffer, 0, length)
+                        collected?.write(buffer, 0, length)
+                        val end = offset + length
+                        val chunk =
+                            java.util.Base64.getUrlEncoder()
+                                .withoutPadding()
+                                .encodeToString(buffer.copyOf(length))
+                        val result =
+                            request(
+                                "session.attachments.chunk",
+                                epoch,
+                                "sessionId" to key.sessionId,
+                                "attachmentId" to remoteId,
+                                "offset" to offset.toInt(),
+                                "data" to chunk,
+                            )
+                        require(
+                            result.text("kind") == "attachment.upload" &&
+                                result.text("sessionId") == key.sessionId &&
+                                result.text("attachmentId") == remoteId &&
+                                result.long("offset") == end
+                        )
+                        offset = end
+                        update { it.copy(attachmentProgress = (uploaded + offset).toFloat() / total) }
+                    }
+                    // The bytes must end where the attachment ends and match its digest before the commit.
+                    require(withContext(io) { stream.read() } < 0)
+                    require(AttachmentImportRules.hex(digest.digest()) == local.sha256)
+                    imageBytes = collected?.toByteArray()
+                    val result =
+                        request(
+                            "session.attachments.commit",
+                            epoch,
+                            "sessionId" to key.sessionId,
+                            "attachmentId" to remoteId,
+                        )
+                    require(
+                        result.text("kind") == "attachment" && result.text("sessionId") == key.sessionId
+                    )
+                    val attachment = remoteAttachment(result.obj("attachment"))
+                    require(
+                        attachment.id == remoteId &&
+                            attachment.sha256 == local.sha256 &&
+                            attachment.size == local.size &&
+                            attachment.name == local.name &&
+                            attachment.kind == local.kind &&
+                            attachment.mimeType == local.mimeType
+                    )
                     drafts[key] =
                         (drafts[key] ?: StoredDraft()).let {
                             it.copy(
                                 uploads =
-                                    it.uploads.filterNot { upload -> upload.localId == local.id }
+                                    it.uploads.map { entry ->
+                                        if (entry.localId == local.id)
+                                            upload.copy(attachment = attachment)
+                                        else entry
+                                    }
                             )
                         }
                     persistNow()
+                    uploaded += local.size
+                    attachment
                 }
-                val begin =
-                    request(
-                        "session.attachments.begin",
-                        epoch,
-                        "sessionId" to key.sessionId,
-                        "attachment" to local.descriptor(),
-                    )
-                require(
-                    begin.text("kind") == "attachment.upload" &&
-                        begin.text("sessionId") == key.sessionId &&
-                        begin.long("offset") == 0L
-                )
-                val remoteId = begin.text("attachmentId")
-                require(AttachmentImportRules.validId(remoteId))
-                val upload = AttachmentUpload(local.id, remoteId, projectId)
-                drafts[key] =
-                    (drafts[key] ?: StoredDraft()).let { it.copy(uploads = it.uploads + upload) }
-                persistNow()
-                var offset = 0
-                while (offset < bytes.size) {
-                    delay(200)
-                    checkEpoch(epoch)
-                    val end = minOf(offset + 64 * 1024, bytes.size)
-                    val chunk =
-                        java.util.Base64.getUrlEncoder()
-                            .withoutPadding()
-                            .encodeToString(bytes.copyOfRange(offset, end))
-                    val result =
-                        request(
-                            "session.attachments.chunk",
-                            epoch,
-                            "sessionId" to key.sessionId,
-                            "attachmentId" to remoteId,
-                            "offset" to offset,
-                            "data" to chunk,
-                        )
-                    require(
-                        result.text("kind") == "attachment.upload" &&
-                            result.text("sessionId") == key.sessionId &&
-                            result.text("attachmentId") == remoteId &&
-                            result.long("offset") == end.toLong()
-                    )
-                    offset = end
-                    update { it.copy(attachmentProgress = (uploaded + offset).toFloat() / total) }
-                }
-                val result =
-                    request(
-                        "session.attachments.commit",
-                        epoch,
-                        "sessionId" to key.sessionId,
-                        "attachmentId" to remoteId,
-                    )
-                require(
-                    result.text("kind") == "attachment" && result.text("sessionId") == key.sessionId
-                )
-                val attachment = remoteAttachment(result.obj("attachment"))
-                require(
-                    attachment.id == remoteId &&
-                        attachment.sha256 == local.sha256 &&
-                        attachment.size == local.size &&
-                        attachment.name == local.name &&
-                        attachment.kind == local.kind &&
-                        attachment.mimeType == local.mimeType
-                )
-                drafts[key] =
-                    (drafts[key] ?: StoredDraft()).let {
-                        it.copy(
-                            uploads =
-                                it.uploads.map { entry ->
-                                    if (entry.localId == local.id)
-                                        upload.copy(attachment = attachment)
-                                    else entry
-                                }
-                        )
-                    }
-                persistNow()
-                uploaded += local.size
-                attachment
             }
-            // The upload already read and verified these exact bytes. Keep them under the
-            // server ID before the prompt can appear in the conversation; draft cleanup may
-            // delete the local file as soon as sending succeeds.
-            if (remote.kind == "image") {
-                attachmentBytes[AttachmentByteCache.Key(key.sessionId, remote.id, remote.sha256)] = bytes
+            // The image bytes are kept under the server ID before the prompt can appear in the
+            // conversation; draft cleanup may delete the local file as soon as sending succeeds.
+            imageBytes?.let {
+                attachmentBytes[AttachmentByteCache.Key(key.sessionId, remote.id, remote.sha256)] = it
             }
             remote
         }
