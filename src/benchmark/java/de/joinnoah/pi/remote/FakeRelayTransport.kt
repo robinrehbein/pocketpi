@@ -174,14 +174,18 @@ internal class FakeRelayTransport(
      * relay delivers host frames in order, but here a `session.snapshot` answered at revision R
      * can reach the repository after events R+1 and later. Flow benchmarks that stream should
      * start the stream only once the chat's snapshot is in.
+     *
+     * [intervalMs] replaces the script's chunk interval; MinifiedSmokeTest slows the stream down
+     * so the run outlasts a trip to the background.
      */
-    fun stream(sessionId: String): Job {
+    fun stream(sessionId: String, intervalMs: Long? = null): Job {
         streaming?.cancel()
         val epoch = generation
         return scope.launch {
             val fixture = fixture()
             if (connected == null || fixture.session(sessionId) == null) return@launch
             val script = fixture.stream
+            val interval = intervalMs ?: script.intervalMs
             val id = "$sessionId-stream-${now()}"
             suspend fun event(kind: String, vararg fields: Pair<String, Any?>) {
                 if (epoch != generation) throw CancellationException("Connection closed")
@@ -191,7 +195,7 @@ internal class FakeRelayTransport(
                 if (chunks.isEmpty()) return
                 var text = ""
                 for (index in chunks) {
-                    delay(script.intervalMs)
+                    delay(interval)
                     text += script.chunk(index)
                     event("message.upsert", "message" to message(messageId, "assistant", text, "streaming"))
                 }
@@ -202,7 +206,7 @@ internal class FakeRelayTransport(
             // The template turn's edit tool call and its result, as the agent edits a file.
             val tool = withContext(host) { fixture.turn(id, "stream").filter { "parts" in it || it.text("role") == "tool" } }
             for (message in tool) {
-                delay(script.intervalMs)
+                delay(interval)
                 event("message.upsert", "message" to message)
             }
             answer("$id-answer-1", script.toolAt until script.chunks)

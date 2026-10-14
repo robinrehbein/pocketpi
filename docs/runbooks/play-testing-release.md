@@ -157,6 +157,11 @@ gh run view <run-id> --repo robinrehbein/pocketpi --log-failed
 - If upload or commit fails, inspect both tracks before retrying. The script deletes an
   uncommitted edit; it cannot undo a committed release. A failure during post-commit verification
   may mean that both tracks already contain the code.
+- If only the deobfuscation upload fails, the release does not need it: AGP already puts the
+  mapping into the AAB (`BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map`), and
+  Play deobfuscates from that. Retry once; if it fails again, drop `--mapping` from the publish
+  step for that release rather than holding it, and upload `mapping.txt` by hand in Play Console
+  (App bundle explorer, Downloads) afterwards if the reports lack readable traces.
 - If a release build crashes where debug builds do not (a `ClassNotFoundException`,
   `NoSuchMethodException` or serialization error naming an obfuscated class), R8 removed or
   renamed something reached by reflection. Play's crash report shows the readable stack trace

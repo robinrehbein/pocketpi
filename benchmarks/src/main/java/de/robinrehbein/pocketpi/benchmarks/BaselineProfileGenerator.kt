@@ -40,8 +40,11 @@ private fun isReleaseRule(rule: String): Boolean = !BENCHMARK_ONLY.containsMatch
  * Generates src/main/baseline-prof.txt: cold start through the launcher activity to the
  * projects, the session list, opening a 48-turn chat and scrolling it both ways, all on the
  * fake relay, so the connected screens and the repository behind them are profiled too.
- * The benchmark build is shrunk like release but not obfuscated (benchmark-rules.pro), so the
- * rules carry source names and R8 maps them onto release. See docs/runbooks/macrobenchmarks.md.
+ * Run it against the app's benchmarkProfile build (the benchmark app without R8), so the rules name
+ * classes and methods as the source does and R8 maps them onto release; on the shrunk benchmark
+ * build they would name merged and inlined code. Needs API 33+. The real transport, which the fake
+ * relay replaces, has hand-written rules in src/main/baselineProfiles. See
+ * docs/runbooks/macrobenchmarks.md.
  */
 @RunWith(AndroidJUnit4::class)
 class BaselineProfileGenerator {

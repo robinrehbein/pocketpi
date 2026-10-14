@@ -2,8 +2,9 @@
 # proguard-rules.pro).
 #
 # R8 still shrinks and optimizes, so macrobenchmarks measure what release ships, but it keeps the
-# original names. That keeps Perfetto traces readable and lets BaselineProfileGenerator write a
-# profile in source names, which R8 then maps onto the obfuscated release build.
+# original names, so Perfetto traces and smoke-test failures stay readable. BaselineProfileGenerator
+# does not run on this build: names after R8's merging and inlining would be wrong in a profile.
+# It uses the benchmarkProfile build type, which has no R8 at all.
 -dontobfuscate
 
 # The fake relay and the connected-flow harness from src/benchmark stay whole classes, so R8

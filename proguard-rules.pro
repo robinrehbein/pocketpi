@@ -27,6 +27,12 @@
 -keep class de.joinnoah.pi.remote.PackageReplacedReceiver { <init>(); }
 -keep class de.joinnoah.pi.remote.PocketPiWidgetReceiver { <init>(); }
 
+# Glance stores the GlanceAppWidget's class name per widget in its DataStore, and updateAll() and
+# getGlanceIds() look the widgets up by that name. Merged or renamed, PocketPiWidget would get a
+# new name in each release, and the redraw PackageReplacedReceiver asks for after an update would
+# find no widget.
+-keep class de.joinnoah.pi.remote.PocketPiWidget { <init>(); }
+
 # WorkManager stores the worker's class name in its database and creates it reflectively, so a
 # job enqueued by one version must find the same name in the next.
 -keep class de.joinnoah.pi.remote.** extends androidx.work.ListenableWorker {

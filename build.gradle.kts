@@ -178,6 +178,32 @@ android {
                 buildConfigField("String", "PI_REMOTE_FIREBASE_$key", "\"\"")
             }
         }
+        create("benchmarkProfile") {
+            // Only for BaselineProfileGenerator: the benchmark app without R8. A profile names
+            // classes and methods, and R8 reads src/main/baseline-prof.txt as names from before R8
+            // when it rewrites the profile for release. Recorded on the shrunk benchmark APK, it
+            // would name merged and inlined code instead. Timing keeps using the benchmark build.
+            initWith(getByName("benchmark"))
+            isMinifyEnabled = false
+            isShrinkResources = false
+            applicationIdSuffix = ".benchmark"
+            signingConfig = signingConfigs.getByName("debug")
+            isDebuggable = false
+            matchingFallbacks += listOf("benchmark", "release")
+            for (key in listOf("API_KEY", "APP_ID", "PROJECT_ID", "GCM_SENDER_ID")) {
+                buildConfigField("String", "PI_REMOTE_FIREBASE_$key", "\"\"")
+            }
+        }
+    }
+    sourceSets {
+        // The profile build is the benchmark build in every other respect: the same fixture
+        // activities, fake relay, manifest additions and fixture assets.
+        getByName("benchmarkProfile") {
+            kotlin.directories.add("src/benchmark/java")
+            res.directories.add("src/benchmark/res")
+            assets.directories.add("src/benchmark/assets")
+            manifest.srcFile("src/benchmark/AndroidManifest.xml")
+        }
     }
     bundle { language { enableSplit = false } }
     lint {

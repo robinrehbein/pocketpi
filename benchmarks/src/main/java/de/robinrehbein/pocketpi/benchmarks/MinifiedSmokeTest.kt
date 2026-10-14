@@ -16,6 +16,7 @@ private const val TARGET = "de.robinrehbein.pocketpi.benchmark"
 private const val CONNECTED_FLOW = "de.joinnoah.pi.remote.ConnectedFlowActivity"
 private const val MAIN = "de.joinnoah.pi.remote.MainActivity"
 private const val SHARE = "de.joinnoah.pi.remote.ShareActivity"
+private const val LIVE_RUN = "de.joinnoah.pi.remote.LiveRunService"
 
 /** The launcher icon's intent; a second start brings the existing task back instead. */
 private const val LAUNCH = "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n $TARGET/$MAIN"
@@ -31,8 +32,9 @@ private const val UNCACHED_TAIL = "CONNECTED_FLOW_UNCACHED_TAIL"
 /**
  * Smoke checks of the R8-shrunk benchmark APK, driven from outside like a user: the paths where a
  * missing keep rule shows only at runtime (the wire's JSON, the saved back stack's serializers, the
- * share target and the InternalLaunch alias). Not a measurement; an emulator is fine:
- * docs/runbooks/macrobenchmarks.md.
+ * share target and the InternalLaunch alias, the live-run foreground service). Not a measurement;
+ * an emulator is fine, and CI runs it: docs/runbooks/macrobenchmarks.md. Each test clears the
+ * benchmark app's data first.
  */
 @RunWith(AndroidJUnit4::class)
 class MinifiedSmokeTest {
@@ -102,8 +104,42 @@ class MinifiedSmokeTest {
         check(device.wait(Until.hasObject(By.text(CACHED_TAIL)), 60_000)) { "The picked chat did not open" }
     }
 
-    private fun launch() {
-        device.executeShellCommand(LAUNCH)
+    /**
+     * A session that runs while the app goes to the background starts LiveRunService as a
+     * foreground service. ConnectedFlowActivity hands the pause to LiveRun as MainActivity does,
+     * and its `stream` command makes the fake relay report the open chat as running; the slowed
+     * stream keeps it running for about a minute.
+     */
+    @Test
+    fun runningSessionStaysLiveInBackground() {
+        // Without it the service still runs, but Android hides its notification.
+        device.executeShellCommand("pm grant $TARGET android.permission.POST_NOTIFICATIONS")
+        launch("am start -n $TARGET/$CONNECTED_FLOW")
+        openChat(UNCACHED_CHAT, UNCACHED_TAIL)
+        check(device.wait(Until.hasObject(By.desc("connected-flow-chat-settled")), 60_000)) { "The chat did not settle" }
+        device.executeShellCommand(
+            "am start --activity-single-top -n $TARGET/$CONNECTED_FLOW --es command stream --el streamIntervalMs 500"
+        )
+        // session.status arrives at once; give the repository a moment to publish it.
+        Thread.sleep(2_000)
+        device.pressHome()
+        val deadline = System.currentTimeMillis() + 15_000
+        while (!liveRunInForeground()) {
+            check(System.currentTimeMillis() < deadline) {
+                "LiveRunService did not run in the foreground:\n" + device.executeShellCommand("dumpsys activity services $TARGET")
+            }
+            Thread.sleep(250)
+        }
+    }
+
+    private fun liveRunInForeground(): Boolean {
+        val dump = device.executeShellCommand("dumpsys activity services $TARGET")
+        val record = dump.substringAfter(LIVE_RUN, missingDelimiterValue = "")
+        return record.isNotEmpty() && "isForeground=true" in record.substringBefore("* ServiceRecord")
+    }
+
+    private fun launch(command: String = LAUNCH) {
+        device.executeShellCommand(command)
         check(device.wait(Until.hasObject(By.text(Pattern.compile("$HOST|$PROJECT"))), 30_000))
         if (!device.hasObject(By.text(PROJECT))) checkNotNull(device.findObject(By.text(HOST))).click()
         check(device.wait(Until.hasObject(By.text(PROJECT)), 60_000)) { "The projects did not load" }
