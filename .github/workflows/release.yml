@@ -128,6 +128,9 @@ jobs:
           bundle='build/outputs/bundle/release/pocketpi-release.aab'
           test -s "$bundle"
           python scripts/release/verify_bundle.py "$bundle"
+          test -s build/outputs/mapping/release/mapping.txt || {
+            echo 'R8 wrote no mapping.txt for the release bundle'; exit 1;
+          }
       - id: publish_auth
         name: Refresh the Play API access token
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -145,7 +148,8 @@ jobs:
           set -euo pipefail
           python scripts/release/play_release.py publish \
             --version-code "$VERSION_CODE" \
-            --bundle build/outputs/bundle/release/pocketpi-release.aab
+            --bundle build/outputs/bundle/release/pocketpi-release.aab \
+            --mapping build/outputs/mapping/release/mapping.txt
       # A Play edit that fails on a Console declaration (foreground service, data safety and the
       # like) can only be unblocked by uploading this bundle by hand once.
       - name: Keep the signed bundle when the Play edit fails
