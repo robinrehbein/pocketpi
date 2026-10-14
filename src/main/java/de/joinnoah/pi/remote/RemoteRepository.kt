@@ -25,7 +25,8 @@ enum class ToolOutputFailure {
 
 /**
  * Progress of the one full tool output download for the selected session. [text] is non-null
- * only once every chunk arrived; [failure] is set when the download stopped early.
+ * only once every chunk arrived; [failure] is set when the download stopped early. While it runs,
+ * [preview] is the text of the chunks that arrived so far, so the output reads as it loads.
  */
 data class ToolOutputDownload(
     val toolCallId: String,
@@ -35,6 +36,7 @@ data class ToolOutputDownload(
     val truncated: Boolean,
     val isError: Boolean,
     val failure: ToolOutputFailure?,
+    val preview: String? = null,
 )
 
 internal fun canFollowUp(state: RemoteState): Boolean =
