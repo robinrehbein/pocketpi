@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -21,6 +22,12 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.rightClick
+import androidx.compose.ui.test.performMouseInput
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
@@ -59,6 +66,7 @@ class ChangesPaneTest {
     private class Recorder {
         val prefills = mutableListOf<String>()
         val reviews = mutableListOf<String>()
+        val comments = mutableListOf<ReviewComment>()
         val opened = mutableListOf<String?>()
         var saveResult = true
         var prefillResult = true
@@ -187,7 +195,9 @@ class ChangesPaneTest {
         assertTrue("lazy list composed $composed rows", composed in 1..200)
 
         compose.onNodeWithTag("changesDiff").performScrollToNode(hasTestTag("changesDiffLine"))
+        // A click picks the line; the comment opens from its gutter button.
         compose.onAllNodesWithTag("changesDiffLine").onFirst().performClick()
+        compose.onAllNodesWithTag("changesGutterComment").onFirst().performClick()
         compose.onNodeWithTag("changesCommentField").performTextInput("Why this line?")
         compose.onNodeWithTag("changesCommentSave").performClick()
         compose.onNodeWithText("Why this line?").assertExists()
@@ -207,6 +217,34 @@ class ChangesPaneTest {
             recorder.reviews,
         )
         assertTrue(recorder.prefills.isEmpty())
+    }
+
+    @Test
+    fun ctrlAAndCtrlCCopyThePickedDiffLinesWithoutTheirPrefixes() {
+        val recorder = Recorder()
+        render(
+            ChangesState(
+                "s",
+                loading = false,
+                status = status,
+                file = "big.kt",
+                diff = GitDiff("big.kt", snapshot, "@@ -1,2 +1,3 @@\n ctx\n-old\n+new\n+more\n", binary = false, truncated = false),
+            ),
+            recorder,
+        )
+        // A click picks the line and gives the pane the keyboard.
+        compose.onAllNodesWithTag("changesDiffLine").onFirst().performClick()
+        compose.onNodeWithTag("changesDiff").performKeyInput {
+            keyDown(Key.CtrlLeft)
+            pressKey(Key.A)
+            pressKey(Key.C)
+            keyUp(Key.CtrlLeft)
+        }
+        compose.waitForIdle()
+        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+        val copied = clipboard.primaryClip?.getItemAt(0)?.text?.toString().orEmpty()
+        assertTrue("the context, removed and added lines are all in: $copied", copied.lines().containsAll(listOf("ctx", "old", "new", "more")))
+        assertTrue("no line keeps a diff marker: $copied", copied.lines().none { it.startsWith("+") || it.startsWith("-") })
     }
 
     @Test
@@ -255,7 +293,9 @@ class ChangesPaneTest {
             ),
             recorder,
         )
+        // A click picks the line; the comment opens from its gutter button.
         compose.onAllNodesWithTag("changesDiffLine").onFirst().performClick()
+        compose.onAllNodesWithTag("changesGutterComment").onFirst().performClick()
         compose.onNodeWithTag("changesCommentField").performTextInput("Note")
         compose.onNodeWithTag("changesCommentSave").performClick()
         compose.onNodeWithTag("changesCommentError").assertExists()
@@ -339,11 +379,12 @@ class ChangesPaneTest {
         compose.onNodeWithTag("changesList").performScrollToNode(hasText("new.kt"))
         compose.onNodeWithText("new.kt").performClick()
         assertEquals(listOf("child" to "lib/new.kt"), opened)
-        // Its diff carries no quick actions and takes no comments.
+        // Its diff carries no quick actions and takes no comments; its lines can still be picked and copied.
         state = loaded.copy(file = "lib/new.kt", fileSession = "child", diff = GitDiff("lib/new.kt", "child-snapshot", "@@ -0,0 +1 @@\n+x\n", false, false))
         compose.onNodeWithTag("changesSubagentFile").assertExists()
         compose.onNodeWithTag("changesActionRevert").assertDoesNotExist()
-        compose.onNodeWithTag("changesDiffLine").assertDoesNotExist()
+        compose.onAllNodesWithTag("changesDiffLine").onFirst().performClick()
+        compose.onNodeWithTag("changesGutterComment").assertDoesNotExist()
     }
 
     @Test
@@ -448,11 +489,13 @@ class ChangesPaneTest {
         twoPane: TwoPaneState? = null,
         keys: ChatKeyTarget? = null,
         projectName: String? = null,
+        menus: Boolean = false,
     ) {
         var state by mutableStateOf(initial)
         compose.setContent {
             MaterialTheme {
                 androidx.compose.runtime.CompositionLocalProvider(LocalTwoPane provides twoPane, LocalChatKeyTarget provides keys) {
+                  val pane: @androidx.compose.runtime.Composable () -> Unit = {
                     ChangesPane(
                         state,
                         ChangesActions(
@@ -463,13 +506,15 @@ class ChangesPaneTest {
                                 recorder.opened += path
                                 state = state.copy(file = path, diff = path?.let { GitDiff(it, snapshot, reviewPatch, false, false) })
                             },
-                            onSetComment = { true },
+                            onSetComment = { recorder.comments += it; true },
                             onRemoveComment = {},
                             onUseReview = { recorder.reviews += it; recorder.prefillResult },
                             onPrefill = { recorder.prefills += it; recorder.prefillResult },
                         ),
                         projectName = projectName,
                     )
+                  }
+                  if (menus) PointerMenuHost(pane) else pane()
                 }
             }
         }
@@ -669,5 +714,143 @@ class ChangesPaneTest {
         renderInLayout(reviewState().copy(comments = listOf(comment)), recorder, twoPane, keys)
         compose.runOnIdle { keys.reviewKey(ReviewKey.USE_REVIEW) }
         assertEquals(listOf(reviewPrompt(context, listOf(comment), reviewStatus.devBase)), recorder.reviews)
+    }
+
+    // ---- Select, copy, zoom and comment ----------------------------------------------------------
+
+    private fun clipboardText() =
+        context.getSystemService(android.content.ClipboardManager::class.java).primaryClip?.getItemAt(0)?.text?.toString().orEmpty()
+
+    private fun ctrl(press: Key): androidx.compose.ui.test.SemanticsNodeInteraction.() -> Unit = {
+        performKeyInput {
+            keyDown(Key.CtrlLeft)
+            pressKey(press)
+            keyUp(Key.CtrlLeft)
+        }
+    }
+
+    private fun fontSizeOf(text: String): Float {
+        val results = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        compose.onAllNodesWithText(text, useUnmergedTree = true).onFirst()
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(results) }
+        return results.first().layoutInput.style.fontSize.value
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1000dp")
+    fun aClickPicksTheLineAndCThenCommentsOnThatLine() {
+        val recorder = Recorder()
+        val twoPane = TwoPaneState().apply { enterReview() }
+        val keys = ChatKeyTarget().apply { reviewing = { twoPane.reviewing } }
+        renderInLayout(reviewState(), recorder, twoPane, keys)
+        // Rows: keep, old, new, then the second hunk's x and y; the click takes the second hunk's y.
+        compose.onAllNodesWithTag("changesDiffLine")[4].performClick()
+        compose.runOnIdle { assertTrue(keys.reviewKey(ReviewKey.COMMENT)) }
+        compose.onNodeWithTag("changesCommentField").performTextInput("Second hunk")
+        compose.onNodeWithTag("changesCommentSave").performClick()
+        assertEquals(listOf(9), recorder.comments.map { it.newLine })
+        assertEquals(listOf("y"), recorder.comments.map { it.quoted })
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1000dp")
+    fun theDiffMenuCommentsAndCopiesThePickedLinesWithTheirPrefixes() {
+        val recorder = Recorder()
+        renderInLayout(reviewState(), recorder, menus = true)
+        val rows = compose.onAllNodesWithTag("changesDiffLine")
+        rows[1].performClick()
+        // Shift on a line number extends the pick from its anchor to that line.
+        val newNumber = compose.onAllNodesWithTag("changesGutter:4", useUnmergedTree = true).onFirst()
+        newNumber.performKeyInput { keyDown(Key.ShiftLeft) }
+        newNumber.performMouseInput { click() }
+        newNumber.performKeyInput { keyUp(Key.ShiftLeft) }
+        rows[2].performMouseInput { rightClick() }
+        compose.onNodeWithTag("menu_diff_copy_with_prefix").performClick()
+        assertEquals("-old\n+new", clipboardText())
+        // Ctrl+C without a prefix, from the pane.
+        compose.onNodeWithTag("changesDiff").performKeyInput {
+            keyDown(Key.CtrlLeft)
+            pressKey(Key.C)
+            keyUp(Key.CtrlLeft)
+        }
+        assertEquals("old\nnew", clipboardText())
+        rows[2].performMouseInput { rightClick() }
+        compose.onNodeWithTag("menu_diff_comment").performClick()
+        compose.onNodeWithTag("changesCommentField").assertExists()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1000dp")
+    fun ctrlPlusMinusAndAPinchZoomTheDiffAndNotFiles() {
+        CodeZoom.reset()
+        renderInLayout(reviewState(), Recorder())
+        val before = fontSizeOf("keep")
+        compose.onAllNodesWithTag("changesDiffLine").onFirst().performClick()
+        compose.onNodeWithTag("changesDiff").apply(ctrl(Key.Equals))
+        compose.waitForIdle()
+        assertEquals(CodeZoom.STEP, CodeZoom.scale(CodeZoom.CHANGES), 0.001f)
+        assertEquals(1f, CodeZoom.scale(CodeZoom.FILES), 0f)
+        assertTrue("the code text grew", fontSizeOf("keep") > before)
+        // A pinch changes the same value.
+        compose.onNodeWithTag("changesDiff").performTouchInput {
+            down(0, androidx.compose.ui.geometry.Offset(100f, 200f))
+            down(1, androidx.compose.ui.geometry.Offset(140f, 200f))
+            move()
+            moveTo(0, androidx.compose.ui.geometry.Offset(60f, 200f))
+            moveTo(1, androidx.compose.ui.geometry.Offset(180f, 200f))
+            move()
+            up(0)
+            up(1)
+        }
+        compose.waitForIdle()
+        assertTrue("the pinch zoomed the same value", CodeZoom.scale(CodeZoom.CHANGES) > CodeZoom.STEP)
+        assertEquals(1f, CodeZoom.scale(CodeZoom.FILES), 0f)
+        CodeZoom.reset()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1000dp")
+    fun aPickedRowOffersTheCommentToAScreenReaderAndOnlySelectableRowsSayWhetherTheyAreSelected() {
+        renderInLayout(reviewState(), Recorder())
+        val row = compose.onAllNodesWithTag("changesDiffLine")[1]
+        row.performClick()
+        val config = row.fetchSemanticsNode().config
+        assertEquals(true, config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Selected))
+        val actions = config.getOrNull(androidx.compose.ui.semantics.SemanticsActions.CustomActions).orEmpty()
+        assertEquals(listOf(context.getString(R.string.remote_changes_comment_add)), actions.map { it.label })
+    }
+
+    @Test
+    fun aDiffThatCannotPickLinesSaysNothingAboutSelection() {
+        compose.setContent { MaterialTheme { DiffView(listOf(DiffLine(DiffKind.CONTEXT, "code", 1, 1))) } }
+        compose.onAllNodes(androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.Selected))
+            .assertCountEquals(0)
+    }
+
+    @Test
+    @Config(qualifiers = "w1400dp-h900dp")
+    fun aSplitReviewCommentsFromTheButtonOnThePickedCell() {
+        val recorder = Recorder()
+        val twoPane = TwoPaneState().apply { enterReview() }
+        renderInLayout(reviewState(), recorder, twoPane)
+        compose.onAllNodesWithTag("changesSplitRow").assertCountEquals(5)
+        compose.onNodeWithTag("changesGutterComment").assertDoesNotExist()
+        // A tap picks the cell and brings its comment button, with no keyboard or mouse.
+        compose.onAllNodesWithTag("changesDiffLine")[1].performClick()
+        compose.onAllNodesWithTag("changesGutterComment").onFirst().performClick()
+        compose.onNodeWithTag("changesCommentField").performTextInput("Split")
+        compose.onNodeWithTag("changesCommentSave").performClick()
+        assertEquals(1, recorder.comments.size)
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1000dp")
+    fun aShiftClickOnTheCodeTextOfARowSelectsTextAndNeverCrashes() {
+        renderInLayout(reviewState(), Recorder())
+        compose.onAllNodesWithTag("changesDiff").onFirst().performKeyInput { keyDown(Key.ShiftLeft) }
+        compose.onAllNodesWithText("keep", useUnmergedTree = true).onFirst().performMouseInput { click() }
+        compose.onAllNodesWithTag("changesDiff").onFirst().performKeyInput { keyUp(Key.ShiftLeft) }
+        compose.waitForIdle()
+        compose.onAllNodesWithTag("changesDiffLine").onFirst().assertExists()
     }
 }

@@ -1,0 +1,4 @@
+<resources>
+    <string name="remote_storage_pairings_reset">Die gespeicherten Kopplungen konnten nicht gelesen werden und wurden entfernt. Kopple deinen Mac erneut.</string>
+    <string name="remote_storage_drafts_reset">Die gespeicherten Entwürfe konnten nicht gelesen werden und wurden entfernt.</string>
+</resources>

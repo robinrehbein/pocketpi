@@ -15,6 +15,10 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.click
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.test.rightClick
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
@@ -37,6 +41,8 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.fail
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Rule
@@ -389,6 +395,35 @@ class FilesPaneUiTest {
     }
 
     @Test
+    fun shiftClickExtendsTheRangeAndCtrlCCopiesTheLines() {
+        val content = (1..8).joinToString("") { "line $it\n" }
+        render(FilesState("s", loading = false, listing = root, file = OpenFile("src/a.kt", loading = false, content = content)))
+        compose.onNodeWithTag("filesLine:2").performClick()
+        compose.onNodeWithTag("filesLine:5").performKeyInput { keyDown(androidx.compose.ui.input.key.Key.ShiftLeft) }
+        compose.onNodeWithTag("filesLine:5").performMouseInput { click() }
+        compose.onNodeWithTag("filesLine:5").performKeyInput { keyUp(androidx.compose.ui.input.key.Key.ShiftLeft) }
+        compose.waitForIdle()
+        assertEquals(label(R.string.remote_files_selection_lines, 2, 5), stateOf("filesLine:3"))
+        // The tap gave the lines the keyboard, so Ctrl+C copies the picked ones, without numbers.
+        compose.onNodeWithTag("filesFile").performKeyInput {
+            keyDown(androidx.compose.ui.input.key.Key.CtrlLeft)
+            pressKey(androidx.compose.ui.input.key.Key.C)
+            keyUp(androidx.compose.ui.input.key.Key.CtrlLeft)
+        }
+        compose.waitForIdle()
+        val clipboard = compose.activity.getSystemService(android.content.ClipboardManager::class.java)
+        assertEquals("line 2\nline 3\nline 4\nline 5", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+        // Ctrl+A picks every line.
+        compose.onNodeWithTag("filesFile").performKeyInput {
+            keyDown(androidx.compose.ui.input.key.Key.CtrlLeft)
+            pressKey(androidx.compose.ui.input.key.Key.A)
+            keyUp(androidx.compose.ui.input.key.Key.CtrlLeft)
+        }
+        compose.waitForIdle()
+        assertEquals(label(R.string.remote_files_selection_lines, 1, 8), stateOf("filesLine:3"))
+    }
+
+    @Test
     fun askAboutSelectionSendsTheLinesAndTheQuestionAsOnePrompt() {
         val content = (1..8).joinToString("") { "line $it\n" }
         render(FilesState("s", loading = false, listing = root, file = OpenFile("src/a.kt", loading = false, content = content)))
@@ -679,5 +714,102 @@ class FilesPaneUiTest {
         compose.onNodeWithTag("filesWrap").assertIsOn()
         compose.onNodeWithTag("filesWrap").performClick()
         assertEquals(false, PaneLayoutStore(compose.activity).loadWrapLines())
+    }
+
+    private fun fontSizeOf(text: String): Float {
+        val results = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        compose.onNodeWithText(text, useUnmergedTree = true)
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(results) }
+        return results.first().layoutInput.style.fontSize.value
+    }
+
+    @Test
+    fun ctrlPlusAndMinusZoomTheFilesCodeFromTheFirstKeyAndNotTheChangesDiff() {
+        CodeZoom.reset()
+        val content = (1..8).joinToString("") { "line $it\n" }
+        render(FilesState("s", loading = false, listing = root, file = OpenFile("src/a.kt", loading = false, content = content)))
+        val before = fontSizeOf("line 3")
+        // The file that opened has the keyboard: no click first.
+        compose.onNodeWithTag("filesFile").performKeyInput {
+            keyDown(androidx.compose.ui.input.key.Key.CtrlLeft)
+            pressKey(androidx.compose.ui.input.key.Key.Equals)
+            keyUp(androidx.compose.ui.input.key.Key.CtrlLeft)
+        }
+        compose.waitForIdle()
+        assertEquals(CodeZoom.STEP, CodeZoom.scale(CodeZoom.FILES), 0.001f)
+        assertEquals(1f, CodeZoom.scale(CodeZoom.CHANGES), 0f)
+        assertTrue("the code text grew", fontSizeOf("line 3") > before)
+        compose.onNodeWithTag("filesFile").performKeyInput {
+            keyDown(androidx.compose.ui.input.key.Key.CtrlLeft)
+            pressKey(androidx.compose.ui.input.key.Key.Minus)
+            keyUp(androidx.compose.ui.input.key.Key.CtrlLeft)
+        }
+        compose.waitForIdle()
+        assertEquals(1f, CodeZoom.scale(CodeZoom.FILES), 0.001f)
+        CodeZoom.reset()
+    }
+
+    @Test
+    fun aMouseDragOverTheNumbersStartsAtTheLineItBeganOnAlsoWithARangeAlreadyPicked() {
+        val content = (1..12).joinToString("") { "line $it\n" }
+        render(FilesState("s", loading = false, listing = root, file = OpenFile("src/a.kt", loading = false, content = content)))
+        compose.onNodeWithTag("filesLine:1").performClick()
+        compose.onNodeWithTag("filesLine:2").performClick()
+        assertEquals(label(R.string.remote_files_selection_lines, 1, 2), stateOf("filesLine:1"))
+        // Line 4 down to line 6: the old range is gone, and the anchor is line 4.
+        val from = compose.onNodeWithTag("filesLine:4").fetchSemanticsNode().boundsInRoot.center.y
+        val to = compose.onNodeWithTag("filesLine:6").fetchSemanticsNode().boundsInRoot.center.y
+        compose.onNodeWithTag("filesLine:4").performMouseInput {
+            moveTo(center)
+            press()
+            moveTo(center + androidx.compose.ui.geometry.Offset(0f, to - from))
+            release()
+        }
+        compose.waitForIdle()
+        assertEquals(label(R.string.remote_files_selection_lines, 4, 6), stateOf("filesLine:5"))
+    }
+
+    @Test
+    fun aRightClickOnALineNumberLeavesThePickedRangeAlone() {
+        val content = (1..8).joinToString("") { "line $it\n" }
+        render(FilesState("s", loading = false, listing = root, file = OpenFile("src/a.kt", loading = false, content = content)))
+        compose.onNodeWithTag("filesLine:2").performClick()
+        compose.onNodeWithTag("filesLine:5").performClick()
+        compose.onNodeWithTag("filesLine:3").performMouseInput { rightClick() }
+        compose.waitForIdle()
+        assertEquals(label(R.string.remote_files_selection_lines, 2, 5), stateOf("filesLine:3"))
+    }
+
+    @Test
+    fun aClickOnTheCodeGivesTheLinesTheKeyboardForCtrlA() {
+        val content = (1..8).joinToString("") { "line $it\n" }
+        render(
+            FilesState("s", loading = false, listing = root, file = OpenFile("src/a.kt", loading = false, content = content)),
+            besideChat = true,
+        )
+        // The keyboard sits beside the lines, as in the chat; a click on the code takes it.
+        compose.onNodeWithTag("chatButton").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus)
+        compose.onNodeWithText("line 4").performMouseInput { click() }
+        compose.onNodeWithTag("filesFile").performKeyInput {
+            keyDown(androidx.compose.ui.input.key.Key.CtrlLeft)
+            pressKey(androidx.compose.ui.input.key.Key.A)
+            keyUp(androidx.compose.ui.input.key.Key.CtrlLeft)
+        }
+        compose.waitForIdle()
+        assertEquals(label(R.string.remote_files_selection_lines, 1, 8), stateOf("filesLine:3"))
+    }
+
+    @Test
+    fun draggedLinesCarryTheirTextForOtherAppsAndTheirPromptForTheChat() {
+        val transfer = codeLinesTransfer("a.kt", "one\ntwo", "Lines 1-2 of a.kt:\n> one\n> two")
+        assertEquals("one\ntwo", transfer.clipData.getItemAt(0).text.toString())
+        val drag = transfer.localState as CodeLinesDrag
+        assertTrue(acceptsDrop(drag, setOf("text/plain")))
+        // The chat takes the prompt, not the bare text; another app's text drop stays as it is.
+        val inserted = mutableListOf<String>()
+        val parts = listOf(ClipPart(null, null, "one\ntwo"))
+        assertTrue(acceptChatDrop(parts, { _, _ -> fail() }, { inserted += it; true }, localState = drag) {})
+        assertTrue(acceptChatDrop(parts, { _, _ -> fail() }, { inserted += it; true }, localState = null) {})
+        assertEquals(listOf(drag.prompt, "one\ntwo"), inserted)
     }
 }

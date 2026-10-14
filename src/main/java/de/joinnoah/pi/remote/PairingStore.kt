@@ -19,6 +19,10 @@ data class PairedHost(
             "name" to name,
         )
 
+    /** Leaves [secret] out, so a host that ends up in a log or a crash report does not leak it. */
+    override fun toString() =
+        "PairedHost(routeId=$routeId, relay=$relay, deviceId=$deviceId, secret=<redacted>, name=$name)"
+
     companion object {
         fun from(value: JsonObject) =
             PairedHost(
@@ -35,14 +39,22 @@ interface PairingStorage {
     fun load(): List<PairedHost>
 
     fun save(hosts: List<PairedHost>)
+
+    /**
+     * True once after a [load] found the stored pairings unreadable and reset them to none (see
+     * [EncryptedFileStore]), so the user is told to pair again.
+     */
+    fun takeReset(): Boolean = false
 }
 
 class PairingStore(
     context: Context,
     name: String = "paired-hosts.enc",
     alias: String = "pi-remote-pairings-v1",
+    /** Runs when an unreadable store is reset, before its file is deleted. */
+    onReset: () -> Unit = {},
 ) : PairingStorage {
-    private val file = EncryptedFileStore(context, name, alias)
+    private val file = EncryptedFileStore(context, name, alias, onReset)
 
     override fun load(): List<PairedHost> =
         file
@@ -56,4 +68,6 @@ class PairingStore(
 
     override fun save(hosts: List<PairedHost>) =
         file.write(JsonArray(hosts.map { it.json() }).toString().toByteArray())
+
+    override fun takeReset() = file.takeReset()
 }

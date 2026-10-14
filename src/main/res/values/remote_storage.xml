@@ -1,0 +1,5 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <string name="remote_storage_pairings_reset">Saved pairings could not be read and were removed. Pair your Mac again.</string>
+    <string name="remote_storage_drafts_reset">Saved drafts could not be read and were removed.</string>
+</resources>
