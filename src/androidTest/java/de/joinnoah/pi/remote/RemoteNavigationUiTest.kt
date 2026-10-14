@@ -1700,6 +1700,7 @@ class RemoteNavigationUiTest {
 
         // Mode and palette are two pickers: each shows one selection and changes only its own setting.
         compose.onNodeWithTag("themeMode-dark").performScrollTo().performClick().assertIsSelected()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
         compose.runOnIdle { assertEquals(ThemeMode.DARK, uiSettings.state.value.themeMode) }
         compose.onNodeWithTag("themeMode-system").assertIsNotSelected()
         compose.onNodeWithTag("themePalette-synthwave").performScrollTo().performClick().assertIsSelected()
@@ -1749,9 +1750,13 @@ class RemoteNavigationUiTest {
                 assertEquals(mode.stored, preferences.getString("theme_mode", null))
                 assertEquals(mode, newSettings().state.value.themeMode)
             }
-            for (legacyTheme in listOf("light", "dark")) {
-                preferences.edit().putString("theme", legacyTheme).commit()
-                assertEquals(ThemePalette.BRAND, newSettings().state.value.theme)
+            // A forced mode that older builds stored as the palette moves to the mode, once.
+            for ((legacyTheme, mode) in mapOf("light" to ThemeMode.LIGHT, "dark" to ThemeMode.DARK)) {
+                preferences.edit().remove("theme_mode").putString("theme", legacyTheme).commit()
+                val migrated = newSettings().state.value
+                assertEquals(ThemePalette.BRAND, migrated.theme)
+                assertEquals(mode, migrated.themeMode)
+                assertEquals(mode.stored, preferences.getString("theme_mode", null))
             }
             val settings = newSettings()
             settings.setTheme(ThemePalette.SYNTHWAVE)

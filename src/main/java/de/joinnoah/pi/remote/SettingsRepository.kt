@@ -2,7 +2,9 @@ package de.joinnoah.pi.remote
 
 import android.app.UiModeManager
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.Build
+import androidx.core.content.edit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -128,7 +130,8 @@ class DefaultSettingsRepository(
     /** Tells the system which night mode the app wants (API 31+); a test replaces it. */
     private val applyNightMode: (ThemeMode) -> Unit = { mode -> applyAppNightMode(context, mode) },
 ) : SettingsRepository {
-    private val preferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    private val preferences =
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE).also(::migrateLegacyThemeMode)
     private val mutable =
         MutableStateFlow(
             RemoteSettings(
@@ -234,6 +237,25 @@ class DefaultSettingsRepository(
 
 internal fun parseSwipeAction(stored: String?, default: SwipeAction): SwipeAction =
     SwipeAction.entries.firstOrNull { it.name == stored } ?: default
+
+/**
+ * Moves a forced light or dark choice that older builds stored under `theme` into `theme_mode`, and
+ * resets `theme` to the brand palette, so the user keeps their mode. Runs only while `theme_mode` is
+ * unset; the write-back makes it a one-time step.
+ */
+internal fun migrateLegacyThemeMode(preferences: SharedPreferences) {
+    if (preferences.contains("theme_mode")) return
+    val mode =
+        when (preferences.getString("theme", null)) {
+            "light" -> ThemeMode.LIGHT
+            "dark" -> ThemeMode.DARK
+            else -> return
+        }
+    preferences.edit {
+        putString("theme_mode", mode.stored)
+        putString("theme", ThemePalette.BRAND.stored)
+    }
+}
 
 /**
  * Sets the app's night mode in the system, so the values-night window background and the system
