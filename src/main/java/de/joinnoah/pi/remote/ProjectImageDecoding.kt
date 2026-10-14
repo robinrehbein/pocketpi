@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import android.content.ComponentCallbacks2
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.util.LruCache
@@ -256,13 +257,24 @@ internal suspend fun decodeProjectImage(image: ProjectImageResult.Loaded, maxEdg
 internal object ProjectImageBitmaps {
     data class Key(val sessionId: String, val path: String, val sha256: String, val edge: Int)
 
-    private const val CAPACITY_BYTES = 48 * 1024 * 1024
+    /** The most the cache holds, on a device with a large heap; [BitmapCaches] sizes it for others. */
+    const val MAX_BYTES = 48 * 1024 * 1024
     private var cache: LruCache<Key, Bitmap>? = null
+
+    @get:Synchronized
+    var capacityBytes = MAX_BYTES
+        private set
+
+    @Synchronized
+    fun resize(bytes: Int) {
+        capacityBytes = bytes
+        cache?.resize(bytes)
+    }
 
     @Synchronized
     private fun cache() =
         cache
-            ?: object : LruCache<Key, Bitmap>(CAPACITY_BYTES) {
+            ?: object : LruCache<Key, Bitmap>(capacityBytes) {
                     override fun sizeOf(key: Key, value: Bitmap) = value.byteCount
                 }
                 .also { cache = it }
@@ -285,3 +297,34 @@ internal object ProjectImageBitmaps {
         cache?.evictAll()
     }
 }
+
+/**
+ * Sizes the app's memory-only bitmap caches ([ProjectImageBitmaps], [ArtifactThumbnails]) to the
+ * device's heap and empties them when the app leaves the screen, so a phone with a small heap or
+ * low memory does not kill the app over pictures it can decode again.
+ */
+internal object BitmapCaches {
+    /** Sizes the caches for a heap of [memoryClassMb] (`ActivityManager.memoryClass`). */
+    fun configure(memoryClassMb: Int) {
+        ProjectImageBitmaps.resize(bitmapCacheBytes(memoryClassMb, PROJECT_IMAGE_SHARE, ProjectImageBitmaps.MAX_BYTES))
+        ArtifactThumbnails.resize(bitmapCacheBytes(memoryClassMb, THUMBNAIL_SHARE, ArtifactThumbnails.MAX_BYTES))
+    }
+
+    /** Called from `onTrimMemory`: once the UI is hidden, decoded pictures are not worth keeping. */
+    fun trim(level: Int) {
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+            ProjectImageBitmaps.clear()
+            ArtifactThumbnails.clear()
+        }
+    }
+
+    /** One eighth of the heap for agent images, as Android suggests for a bitmap cache. */
+    private const val PROJECT_IMAGE_SHARE = 8
+
+    /** One thirty-second for thumbnails, which are small and few. */
+    private const val THUMBNAIL_SHARE = 32
+}
+
+/** The heap of [memoryClassMb] divided by [share], at least 1 MB and at most [maxBytes]. */
+internal fun bitmapCacheBytes(memoryClassMb: Int, share: Int, maxBytes: Int): Int =
+    (memoryClassMb.toLong() * 1024 * 1024 / share).coerceIn(1024L * 1024, maxBytes.toLong()).toInt()

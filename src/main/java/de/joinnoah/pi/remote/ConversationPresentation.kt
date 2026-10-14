@@ -21,6 +21,8 @@ internal sealed interface ConversationItem {
         val usage: MessageUsage? = null,
         /** True while the host is still producing this message; its text is not complete yet. */
         val streaming: Boolean = false,
+        /** Set only on the pending prompt at the chat's tail; its label shows below the bubble. */
+        val pendingState: PendingSendState? = null,
     ) : ConversationItem
 
     data class Thinking(
@@ -291,6 +293,36 @@ internal fun quoteFromMessage(message: JsonObject): MessageQuote? {
             messageAuthor(message)?.let { boundedUtf8(it, 256) },
         )
         .takeIf { QuoteCodec.parse(it.json()) != null }
+}
+
+/**
+ * The text of a user message as its bubbles show it: the body after the quote and attachment
+ * envelopes, one line per text part. [PendingSend] matches the host's copy of a prompt by it.
+ */
+internal fun userMessageBody(message: JsonObject): String {
+    fun body(encoded: String) = QuoteCodec.decode(AttachmentCodec.decode(encoded).body).body
+    val parts = message.parts().filter { it.optionalText("type") == "text" }
+    return if (message.parts().isEmpty()) body(message.text("text"))
+    else parts.joinToString("\n") { body(it.text("text")) }
+}
+
+/**
+ * The chat's tail bubble for a plain prompt that the timeline does not show yet. Attachment names
+ * stand in for the text of an attachments-only prompt, so the bubble is never empty.
+ */
+internal fun pendingSendItem(pending: PendingSend): ConversationItem.Bubble {
+    val id = "pending-${pending.mutationId}"
+    return ConversationItem.Bubble(
+        id = id,
+        sourceId = id,
+        role = "user",
+        author = null,
+        text = pending.text.ifEmpty { pending.attachments.joinToString("\n") { it.name } },
+        quote = pending.quote,
+        truncated = false,
+        timestamp = null,
+        pendingState = pending.state,
+    )
 }
 
 /** What the items of one message read from the message itself to pair it with the others. */

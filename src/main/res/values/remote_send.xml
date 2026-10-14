@@ -1,0 +1,5 @@
+<resources>
+    <!-- Under a prompt the chat shows before the Mac's timeline has it. -->
+    <string name="remote_prompt_sending">Sending…</string>
+    <string name="remote_prompt_not_confirmed">Not confirmed</string>
+</resources>

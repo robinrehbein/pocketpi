@@ -243,7 +243,7 @@ class LabelUpgradeWorker(context: Context, parameters: WorkerParameters) :
         val app = context as? RemoteApplication ?: return Result.success()
         val paired = {
             try {
-                PairingStore(context).load().find { it.routeId == payload.routeId }
+                app.stores.pairings.load().find { it.routeId == payload.routeId }
             } catch (swallowed: Exception) {
                 Diagnostics.caught("completion.doWork", swallowed)
                 null

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,6 +37,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.WrapText
@@ -56,15 +58,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
@@ -499,6 +508,12 @@ private fun FileView(
     val lines = remember(file.content) { fileLines(file.content) }
     val language = remember(file.path) { languageFor(file.path) }
     val colors = syntaxColors()
+    val zoom = CodeZoom.scale(CodeZoom.FILES)
+    val copyLines = rememberCopyToClipboard(stringResource(R.string.remote_code_copy_label))
+    val focus = remember { FocusRequester() }
+    var paneFocused by remember { mutableStateOf(false) }
+    // Where a drag over the number cells began; the drag reads it, not a selection composition may lag behind.
+    var dragFrom by remember { mutableIntStateOf(1) }
     val plain = remember(lines) { lines.map { AnnotatedString(it.take(MAX_CODE_LINE_CHARS)) } }
     // One highlighter per version of the file: a later page only styles the lines it adds. While
     // it works, the lines styled before stay styled and only the new ones show plain.
@@ -514,12 +529,36 @@ private fun FileView(
             ?.takeIf { (owner, styled) -> owner === highlighter && styled.size <= lines.size }
             ?.let { (_, styled) -> if (styled.size == lines.size) styled else styled + plain.subList(styled.size, plain.size) }
             ?: plain
-    val style = monoTextStyle()
+    val style = monoTextStyle(zoom)
     val contentWidth = rememberCodeContentWidth(lines, style)
     val numberWidth = rememberLineNumberWidth(lines.size, style)
     val scroll = rememberScrollState()
     val listState = rememberLazyListState()
+    val gutterRows = remember(listState) { GutterRows(listState) }
+    SideEffect {
+        val leading = if (file.reopened) 1 else 0
+        gutterRows.lineOfItem = { item -> (item - leading + 1).takeIf { it in 1..shown.size } }
+    }
     val selection = file.selection?.takeIf { it.last <= lines.size }
+    // A file that opens gives the keyboard its lines, so Ctrl+= and Ctrl+A work before any click.
+    LaunchedEffect(file.path) { if (!paneFocused) runCatching { focus.requestFocus() } }
+    // Ctrl+A picks every line, Ctrl+C copies the picked ones, Ctrl+= and Ctrl+- zoom the text.
+    val onCodeKey: (KeyEvent) -> Boolean = { event ->
+        if (event.type != KeyEventType.KeyDown) false
+        else when (resolveCodeShortcut(event)) {
+            Shortcut.SELECT_ALL_LINES -> allLines(lines.size)?.let { actions.onSelectLines(it); true } ?: false
+            Shortcut.COPY_LINES -> selection?.let { copyLines(selectedFileText(lines, it)); true } ?: false
+            Shortcut.ZOOM_IN -> { CodeZoom.step(CodeZoom.FILES, inward = true); true }
+            Shortcut.ZOOM_OUT -> { CodeZoom.step(CodeZoom.FILES, inward = false); true }
+            else -> false
+        }
+    }
+    val dragLines: suspend () -> DragPayload? = {
+        file.selection?.takeIf { lines.isNotEmpty() && !file.binary }?.let { picked ->
+            val prompt = withContext(Dispatchers.Default) { filePrompt(context, file, lines, picked, language) }
+            DragPayload(codeLinesTransfer(file.path.substringAfterLast('/'), selectedFileText(lines, picked), prompt))
+        }
+    }
     // Opened at lines from the chat: once they are loaded, they come into view with a little
     // context above them. A line picked here later never scrolls the view.
     val reveal = file.revealLine
@@ -540,7 +579,15 @@ private fun FileView(
         }
     Column(Modifier.fillMaxSize()) {
         LazyColumn(
-            Modifier.weight(1f).fillMaxWidth().testTag("filesFile"),
+            Modifier.weight(1f).fillMaxWidth().testTag("filesFile")
+                .onPlaced { gutterRows.coordinates = it }
+                .focusRequester(focus)
+                .onFocusChanged { paneFocused = it.hasFocus }
+                .focusable()
+                // After the rows: an in-row text selection copies its own text first.
+                .onKeyEvent(onCodeKey)
+                .takeFocusOnPress(focus, { paneFocused })
+                .codeZoomGestures(CodeZoom.FILES),
             state = listState,
             contentPadding = PaddingValues(top = headerHeight),
         ) {
@@ -567,16 +614,33 @@ private fun FileView(
                     // least 48dp wide, so it stays easy to hit sideways.
                     itemsIndexed(shown, contentType = { _, _ -> "line" }) { index, text ->
                         val number = index + 1
+                        // The number cell picks lines: a tap as before, a Shift-tap or a drag extends the range.
+                        val gutter =
+                            Modifier.codeGutter(
+                                line = number,
+                                rows = gutterRows,
+                                tapLabel = lineTapLabel(context, file.selection.tapAction(number), number),
+                                onTap = { extend ->
+                                    if (!paneFocused) focus.requestFocus()
+                                    actions.onSelectLines(if (extend) file.selection.extendTo(number) else file.selection.tap(number))
+                                },
+                                onStart = { line, extend ->
+                                    if (!paneFocused) focus.requestFocus()
+                                    dragFrom = dragAnchor(file.selection, line, extend)
+                                    actions.onSelectLines(dragRange(dragFrom, line))
+                                },
+                                onDrag = { line -> actions.onSelectLines(dragRange(dragFrom, line)) },
+                            )
                         FileLineRow(
                             number,
                             text,
                             selection != null && number in selection.first..selection.last,
                             FileRowStyle(style, numberWidth, contentWidth),
                             scroll,
-                            lineTapLabel(context, file.selection.tapAction(number), number),
+                            gutter,
                             selectionState,
                             wrap,
-                        ) { actions.onSelectLines(file.selection.tap(number)) }
+                        )
                     }
                     if (file.nextOffset != null) loadMore(file.moreLoading, file.moreFailure, actions.onLoadMore)
                 }
@@ -586,6 +650,8 @@ private fun FileView(
             FileActionBar(
                 selection = selection?.takeIf { lines.isNotEmpty() && !file.binary },
                 canSendLines = lines.isNotEmpty() && !file.binary,
+                dragLines = dragLines,
+                dragKey = listOf(file.path, file.version, file.content.hashCode()),
                 onClearSelection = { actions.onSelectLines(null) },
                 onSendFile = { send(filePrompt(context, file, lines, null, language)) },
                 onSendLines = { selection?.let { send(filePrompt(context, file, lines, it, language)) } },
@@ -613,16 +679,17 @@ private fun FileLineRow(
     selected: Boolean,
     rowStyle: FileRowStyle,
     scroll: ScrollState,
-    tapLabel: String,
+    // What the number cell does with a press, such as picking lines (see [codeGutter]).
+    modifier: Modifier,
     selectionState: String?,
     wrap: Boolean,
-    onTapNumber: () -> Unit,
 ) {
     val background = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Unspecified
     Row(Modifier.fillMaxWidth().background(background).testTag(if (selected) "filesLineSelected" else "filesLineRow")) {
+        // The number is no text to select: a tap on it picks lines.
         Text(
             number.toString(),
-            Modifier.clickable(onClickLabel = tapLabel, onClick = onTapNumber)
+            Modifier.then(modifier)
                 .semantics {
                     this.selected = selected
                     if (selectionState != null) stateDescription = selectionState
@@ -636,16 +703,19 @@ private fun FileLineRow(
             softWrap = false,
             maxLines = 1,
         )
+        // The code is selectable within its own row, so a selection never runs into the next line.
         // Wrapped, a long line breaks within the pane instead of scrolling sideways.
-        Box(Modifier.weight(1f).then(if (wrap) Modifier else Modifier.horizontalScroll(scroll))) {
-            Text(
-                text,
-                (if (wrap) Modifier else Modifier.width(rowStyle.contentWidth)).padding(start = 4.dp),
-                style = rowStyle.text,
-                softWrap = wrap,
-                maxLines = if (wrap) Int.MAX_VALUE else 1,
-                overflow = TextOverflow.Clip,
-            )
+        SelectionContainer(Modifier.weight(1f)) {
+            Box(if (wrap) Modifier else Modifier.horizontalScroll(scroll)) {
+                Text(
+                    text,
+                    (if (wrap) Modifier else Modifier.width(rowStyle.contentWidth)).padding(start = 4.dp),
+                    style = rowStyle.text,
+                    softWrap = wrap,
+                    maxLines = if (wrap) Int.MAX_VALUE else 1,
+                    overflow = TextOverflow.Clip,
+                )
+            }
         }
     }
 }
@@ -659,6 +729,9 @@ private fun FileActionBar(
     onSendLines: () -> Unit,
     onAsk: (String) -> Boolean = { false },
     onEdit: (() -> Unit)? = null,
+    dragLines: (suspend () -> DragPayload?)? = null,
+    // What the dragged text was cut from: another file, version or text must not reuse a prepared drag.
+    dragKey: Any? = null,
 ) {
     HorizontalDivider()
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -667,7 +740,9 @@ private fun FileActionBar(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     pluralStringResource(R.plurals.remote_files_selected_lines, count, count),
-                    Modifier.weight(1f).testTag("filesSelection"),
+                    Modifier.weight(1f)
+                        .dragOut(key = listOf(selection, dragKey), enabled = dragLines != null, prepare = dragLines ?: { null })
+                        .testTag("filesSelection"),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 TextButton(onClick = onClearSelection, modifier = Modifier.testTag("filesClearSelection")) {
