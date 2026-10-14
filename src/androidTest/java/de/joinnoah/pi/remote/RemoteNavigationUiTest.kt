@@ -2052,6 +2052,11 @@ class RemoteNavigationUiTest {
                     compaction = SessionCompaction("threshold", System.currentTimeMillis())
                 )
         }
+        // A compact chat (always, on a phone) keeps the banner out of the conversation: the header
+        // menu offers Status while it shows, and the banner is in the sheet that opens.
+        compose.onNodeWithTag("compactionBanner").assertDoesNotExist()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        compose.onNodeWithTag("chatActionMenu_status").performClick()
         compose.onNodeWithTag("compactionBanner").assertIsDisplayed()
         compose.onNodeWithText(label(R.string.remote_panel_compacting)).assertIsDisplayed()
         compose.runOnIdle {
