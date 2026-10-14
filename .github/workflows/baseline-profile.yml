@@ -144,4 +144,5 @@ jobs:
             out/generator/
             out/generated/
             benchmarks/build/reports/
+            benchmarks/build/outputs/androidTest-results/
           if-no-files-found: ignore

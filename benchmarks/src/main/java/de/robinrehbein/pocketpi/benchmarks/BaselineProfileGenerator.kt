@@ -75,7 +75,7 @@ class BaselineProfileGenerator {
         check(device.wait(Until.hasObject(By.desc(Pattern.compile("connected-flow-(prepared|failed)"))), 120_000)) {
             "Preparing the fixture Mac timed out"
         }
-        check(device.hasObject(By.desc("connected-flow-prepared"))) { "Preparing the fixture Mac failed" }
+        check(device.hasObject(By.desc("connected-flow-prepared"))) { "Preparing the fixture Mac failed. " + device.screenTexts() }
         device.executeShellCommand("am force-stop $TARGET")
     }
 
@@ -87,9 +87,9 @@ class BaselineProfileGenerator {
         startActivityAndWait()
         waitForProjects()
         checkNotNull(device.findObject(By.text(PROJECT))).click()
-        check(device.wait(Until.hasObject(By.text(CHAT)), 60_000)) { "The session list did not load" }
+        check(device.wait(Until.hasObject(By.text(CHAT)), 60_000)) { "The session list did not load. " + device.screenTexts() }
         checkNotNull(device.findObject(By.text(CHAT))).click()
-        check(device.wait(Until.hasObject(By.text(TAIL)), 60_000)) { "The chat did not open" }
+        check(device.wait(Until.hasObject(By.text(TAIL)), 60_000)) { "The chat did not open. " + device.screenTexts() }
         device.waitForIdle(1_000)
         repeat(4) { swipeConversation(towardHistory = true) }
         repeat(4) { swipeConversation(towardHistory = false) }
@@ -100,7 +100,7 @@ class BaselineProfileGenerator {
     private fun MacrobenchmarkScope.waitForProjects() {
         check(device.wait(Until.hasObject(By.text(Pattern.compile("$HOST|$PROJECT"))), 30_000))
         if (!device.hasObject(By.text(PROJECT))) checkNotNull(device.findObject(By.text(HOST))).click()
-        check(device.wait(Until.hasObject(By.text(PROJECT)), 60_000)) { "The projects did not load" }
+        check(device.wait(Until.hasObject(By.text(PROJECT)), 60_000)) { "The projects did not load. " + device.screenTexts() }
     }
 
     /**

@@ -51,7 +51,7 @@ class MinifiedSmokeTest {
         check(device.wait(Until.hasObject(By.desc(Pattern.compile("connected-flow-(prepared|failed)"))), 120_000)) {
             "Preparing the fixture Mac timed out"
         }
-        check(device.hasObject(By.desc("connected-flow-prepared"))) { "Preparing the fixture Mac failed" }
+        check(device.hasObject(By.desc("connected-flow-prepared"))) { "Preparing the fixture Mac failed. " + device.screenTexts() }
         device.executeShellCommand("am force-stop $TARGET")
     }
 
@@ -78,15 +78,20 @@ class MinifiedSmokeTest {
         openChat(UNCACHED_CHAT, UNCACHED_TAIL)
         device.pressHome()
         device.waitForIdle(1_000)
-        device.executeShellCommand("am kill $TARGET")
-        val deadline = System.currentTimeMillis() + 10_000
+        // am kill only stops a cached process. Right after Home the app is still the previous
+        // app, which Android keeps; another app in between makes it cached.
+        device.executeShellCommand("am start -a android.settings.SETTINGS")
+        device.waitForIdle(2_000)
+        device.pressHome()
+        val deadline = System.currentTimeMillis() + 20_000
         while (device.executeShellCommand("pidof $TARGET").isNotBlank()) {
-            check(System.currentTimeMillis() < deadline) { "The app's process is still alive" }
-            Thread.sleep(200)
+            check(System.currentTimeMillis() < deadline) { "The app's process is still alive. " + device.screenTexts() }
+            device.executeShellCommand("am kill $TARGET")
+            Thread.sleep(500)
         }
         // Brings the task back with its saved instance state, as the launcher icon does.
         device.executeShellCommand(LAUNCH)
-        check(device.wait(Until.hasObject(By.text(UNCACHED_TAIL)), 60_000)) { "The restored chat did not show" }
+        check(device.wait(Until.hasObject(By.text(UNCACHED_TAIL)), 60_000)) { "The restored chat did not show. " + device.screenTexts() }
     }
 
     /**
@@ -99,9 +104,9 @@ class MinifiedSmokeTest {
             "am start -a android.intent.action.SEND -t text/plain " +
                 "--es android.intent.extra.TEXT minified-smoke-share -n $TARGET/$SHARE"
         )
-        check(device.wait(Until.hasObject(By.text(CACHED_CHAT)), 30_000)) { "The share picker did not list the chat" }
+        check(device.wait(Until.hasObject(By.text(CACHED_CHAT)), 30_000)) { "The share picker did not list the chat. " + device.screenTexts() }
         checkNotNull(device.findObject(By.text(CACHED_CHAT))).click()
-        check(device.wait(Until.hasObject(By.text(CACHED_TAIL)), 60_000)) { "The picked chat did not open" }
+        check(device.wait(Until.hasObject(By.text(CACHED_TAIL)), 60_000)) { "The picked chat did not open. " + device.screenTexts() }
     }
 
     /**
@@ -116,19 +121,27 @@ class MinifiedSmokeTest {
         device.executeShellCommand("pm grant $TARGET android.permission.POST_NOTIFICATIONS")
         launch("am start -n $TARGET/$CONNECTED_FLOW")
         openChat(UNCACHED_CHAT, UNCACHED_TAIL)
-        check(device.wait(Until.hasObject(By.desc("connected-flow-chat-settled")), 60_000)) { "The chat did not settle" }
+        // The snapshot is in once the tail shows; give the repository a moment to settle.
+        Thread.sleep(3_000)
         device.executeShellCommand(
             "am start --activity-single-top -n $TARGET/$CONNECTED_FLOW --es command stream --el streamIntervalMs 500"
         )
-        // session.status arrives at once; give the repository a moment to publish it.
-        Thread.sleep(2_000)
-        device.pressHome()
-        val deadline = System.currentTimeMillis() + 15_000
-        while (!liveRunInForeground()) {
-            check(System.currentTimeMillis() < deadline) {
-                "LiveRunService did not run in the foreground:\n" + device.executeShellCommand("dumpsys activity services $TARGET")
+        // The stream runs about a minute. A pause that lands before session.status reached the
+        // state starts nothing, so the app comes back and leaves again, at most three times.
+        var started = false
+        for (attempt in 1..3) {
+            Thread.sleep(2_000)
+            device.pressHome()
+            val deadline = System.currentTimeMillis() + 8_000
+            while (!started && System.currentTimeMillis() < deadline) {
+                started = liveRunInForeground()
+                if (!started) Thread.sleep(250)
             }
-            Thread.sleep(250)
+            if (started) break
+            device.executeShellCommand("am start --activity-single-top -n $TARGET/$CONNECTED_FLOW")
+        }
+        check(started) {
+            "LiveRunService did not run in the foreground:\n" + device.executeShellCommand("dumpsys activity services $TARGET")
         }
     }
 
@@ -142,13 +155,13 @@ class MinifiedSmokeTest {
         device.executeShellCommand(command)
         check(device.wait(Until.hasObject(By.text(Pattern.compile("$HOST|$PROJECT"))), 30_000))
         if (!device.hasObject(By.text(PROJECT))) checkNotNull(device.findObject(By.text(HOST))).click()
-        check(device.wait(Until.hasObject(By.text(PROJECT)), 60_000)) { "The projects did not load" }
+        check(device.wait(Until.hasObject(By.text(PROJECT)), 60_000)) { "The projects did not load. " + device.screenTexts() }
     }
 
     private fun openChat(chat: String, tail: String) {
         checkNotNull(device.findObject(By.text(PROJECT))).click()
-        check(device.wait(Until.hasObject(By.text(chat)), 60_000)) { "The session list did not load" }
+        check(device.wait(Until.hasObject(By.text(chat)), 60_000)) { "The session list did not load. " + device.screenTexts() }
         checkNotNull(device.findObject(By.text(chat))).click()
-        check(device.wait(Until.hasObject(By.text(tail)), 60_000)) { "$chat did not open" }
+        check(device.wait(Until.hasObject(By.text(tail)), 60_000)) { "$chat did not open. " + device.screenTexts() }
     }
 }
