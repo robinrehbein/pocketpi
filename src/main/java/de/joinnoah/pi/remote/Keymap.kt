@@ -152,6 +152,7 @@ internal val KEYMAP: List<KeyBinding> =
         KeyBinding(Shortcut.ZOOM_IN, Key.Equals, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
         KeyBinding(Shortcut.ZOOM_IN, Key.Equals, ctrl = true, shift = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
         KeyBinding(Shortcut.ZOOM_IN, Key.Plus, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
+        KeyBinding(Shortcut.ZOOM_IN, Key.Plus, ctrl = true, shift = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
         KeyBinding(Shortcut.ZOOM_IN, Key.NumPadAdd, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_in),
         KeyBinding(Shortcut.ZOOM_OUT, Key.Minus, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_out),
         KeyBinding(Shortcut.ZOOM_OUT, Key.NumPadSubtract, ctrl = true, context = KeyContext.CODE, labelRes = R.string.remote_code_zoom_out),

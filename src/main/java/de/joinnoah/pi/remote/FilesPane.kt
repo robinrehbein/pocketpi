@@ -58,6 +58,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -66,6 +68,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
@@ -506,8 +510,10 @@ private fun FileView(
     val colors = syntaxColors()
     val zoom = CodeZoom.scale(CodeZoom.FILES)
     val copyLines = rememberCopyToClipboard(stringResource(R.string.remote_code_copy_label))
-    val gutterRows = remember { GutterRows() }
     val focus = remember { FocusRequester() }
+    var paneFocused by remember { mutableStateOf(false) }
+    // Where a drag over the number cells began; the drag reads it, not a selection composition may lag behind.
+    var dragFrom by remember { mutableIntStateOf(1) }
     val plain = remember(lines) { lines.map { AnnotatedString(it.take(MAX_CODE_LINE_CHARS)) } }
     // One highlighter per version of the file: a later page only styles the lines it adds. While
     // it works, the lines styled before stay styled and only the new ones show plain.
@@ -528,7 +534,14 @@ private fun FileView(
     val numberWidth = rememberLineNumberWidth(lines.size, style)
     val scroll = rememberScrollState()
     val listState = rememberLazyListState()
+    val gutterRows = remember(listState) { GutterRows(listState) }
+    SideEffect {
+        val leading = if (file.reopened) 1 else 0
+        gutterRows.lineOfItem = { item -> (item - leading + 1).takeIf { it in 1..shown.size } }
+    }
     val selection = file.selection?.takeIf { it.last <= lines.size }
+    // A file that opens gives the keyboard its lines, so Ctrl+= and Ctrl+A work before any click.
+    LaunchedEffect(file.path) { if (!paneFocused) runCatching { focus.requestFocus() } }
     // Ctrl+A picks every line, Ctrl+C copies the picked ones, Ctrl+= and Ctrl+- zoom the text.
     val onCodeKey: (KeyEvent) -> Boolean = { event ->
         if (event.type != KeyEventType.KeyDown) false
@@ -567,9 +580,13 @@ private fun FileView(
     Column(Modifier.fillMaxSize()) {
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth().testTag("filesFile")
+                .onPlaced { gutterRows.coordinates = it }
                 .focusRequester(focus)
+                .onFocusChanged { paneFocused = it.hasFocus }
                 .focusable()
-                .onPreviewKeyEvent(onCodeKey)
+                // After the rows: an in-row text selection copies its own text first.
+                .onKeyEvent(onCodeKey)
+                .takeFocusOnPress(focus, { paneFocused })
                 .codeZoomGestures(CodeZoom.FILES),
             state = listState,
             contentPadding = PaddingValues(top = headerHeight),
@@ -604,14 +621,15 @@ private fun FileView(
                                 rows = gutterRows,
                                 tapLabel = lineTapLabel(context, file.selection.tapAction(number), number),
                                 onTap = { extend ->
-                                    focus.requestFocus()
+                                    if (!paneFocused) focus.requestFocus()
                                     actions.onSelectLines(if (extend) file.selection.extendTo(number) else file.selection.tap(number))
                                 },
-                                onStart = { line ->
-                                    focus.requestFocus()
-                                    actions.onSelectLines(LineSelection(line))
+                                onStart = { line, extend ->
+                                    if (!paneFocused) focus.requestFocus()
+                                    dragFrom = dragAnchor(file.selection, line, extend)
+                                    actions.onSelectLines(dragRange(dragFrom, line))
                                 },
-                                onDrag = { line -> actions.onSelectLines(file.selection.extendTo(line)) },
+                                onDrag = { line -> actions.onSelectLines(dragRange(dragFrom, line)) },
                             )
                         FileLineRow(
                             number,
@@ -633,6 +651,7 @@ private fun FileView(
                 selection = selection?.takeIf { lines.isNotEmpty() && !file.binary },
                 canSendLines = lines.isNotEmpty() && !file.binary,
                 dragLines = dragLines,
+                dragKey = listOf(file.path, file.version, file.content.hashCode()),
                 onClearSelection = { actions.onSelectLines(null) },
                 onSendFile = { send(filePrompt(context, file, lines, null, language)) },
                 onSendLines = { selection?.let { send(filePrompt(context, file, lines, it, language)) } },
@@ -711,6 +730,8 @@ private fun FileActionBar(
     onAsk: (String) -> Boolean = { false },
     onEdit: (() -> Unit)? = null,
     dragLines: (suspend () -> DragPayload?)? = null,
+    // What the dragged text was cut from: another file, version or text must not reuse a prepared drag.
+    dragKey: Any? = null,
 ) {
     HorizontalDivider()
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -720,7 +741,7 @@ private fun FileActionBar(
                 Text(
                     pluralStringResource(R.plurals.remote_files_selected_lines, count, count),
                     Modifier.weight(1f)
-                        .dragOut(key = selection, enabled = dragLines != null, prepare = dragLines ?: { null })
+                        .dragOut(key = listOf(selection, dragKey), enabled = dragLines != null, prepare = dragLines ?: { null })
                         .testTag("filesSelection"),
                     style = MaterialTheme.typography.bodyMedium,
                 )

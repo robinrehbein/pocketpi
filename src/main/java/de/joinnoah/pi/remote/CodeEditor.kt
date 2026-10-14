@@ -346,7 +346,7 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
     LaunchedEffect(findOpen) { if (findOpen) findFocus.requestFocus() }
     LaunchedEffect(editor.saving) { if (editor.saving) conflictDismissed = false }
 
-    val style = monoTextStyle()
+    val style = monoTextStyle(CodeZoom.scale(CodeZoom.FILES))
     val numberWidth = rememberLineNumberWidth(lineCount, style)
     val gutterWidth = maxOf(numberWidth, 32.dp) + 16.dp
     val maxWidth = with(LocalDensity.current) { MAX_CODE_CONTENT_WIDTH_PX.toDp() }

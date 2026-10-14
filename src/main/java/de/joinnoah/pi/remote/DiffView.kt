@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LocalContentColor
@@ -191,7 +192,7 @@ internal fun DiffRow(
             .fillMaxWidth()
             .then(if (container != null) Modifier.background(container) else Modifier)
             .then(if (picked) Modifier.background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f)) else Modifier)
-            .semantics(mergeDescendants = true) { this.selected = picked },
+            .semantics(mergeDescendants = true) { if (selectable) this.selected = picked },
     ) {
         leading?.invoke()
         if (rowStyle.numbered) {
@@ -207,13 +208,16 @@ internal fun DiffRow(
 /** The '+', '-' or ' ' [prefix] and the text of [line]; [wrap] breaks long lines instead of scrolling sideways. */
 @Composable
 internal fun RowScope.DiffLineText(line: DiffLine, prefix: String, content: Color, rowStyle: DiffRowStyle, scroll: ScrollState, wrap: Boolean) {
-    Text(
-        prefix,
-        Modifier.width(rowStyle.charWidth + 8.dp).padding(start = 4.dp),
-        color = content,
-        style = rowStyle.text,
-        maxLines = 1,
-    )
+    // The marker is no part of the code: a text selection over the row never takes it along.
+    DisableSelection {
+        Text(
+            prefix,
+            Modifier.width(rowStyle.charWidth + 8.dp).padding(start = 4.dp),
+            color = content,
+            style = rowStyle.text,
+            maxLines = 1,
+        )
+    }
     Box(Modifier.weight(1f).then(if (wrap) Modifier else Modifier.horizontalScroll(scroll))) {
         Text(
             line.text.take(MAX_CODE_LINE_CHARS),

@@ -16,6 +16,10 @@ import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.focus.onFocusChanged
@@ -781,9 +785,12 @@ private fun ChangesFileDiff(
     val editLabel = stringResource(R.string.remote_changes_comment_edit)
     val pickLabel = stringResource(R.string.remote_changes_diff_pick)
     // The picked lines, by their 1-based index into [lines]. A new patch starts with none.
-    var picked by remember(path, base, diff?.patch) { mutableStateOf<LineSelection?>(null) }
-    val gutterRows = remember { GutterRows() }
+    var picked by rememberSaveable(path, base, diff?.patch, stateSaver = LineSelectionSaver) { mutableStateOf<LineSelection?>(null) }
+    val gutterRows = remember(listState) { GutterRows(listState) }
     val focus = remember { FocusRequester() }
+    var paneFocused by remember { mutableStateOf(false) }
+    // Where a drag over the number cells began; the drag reads it, not a pick composition may lag behind.
+    var dragFrom by remember { mutableIntStateOf(1) }
     // Ctrl+A picks every line, Ctrl+C copies the picked ones without their prefixes, Ctrl+= and Ctrl+- zoom.
     val onCodeKey: (KeyEvent) -> Boolean = { event ->
         if (event.type != KeyEventType.KeyDown) false
@@ -824,12 +831,18 @@ private fun ChangesFileDiff(
             val first = (listState.firstVisibleItemIndex - leading).coerceIn(0, maxOf(rowCount - 1, 0))
             // The first changed line from the hunk in view on, else the first line that takes one.
             val start = splitRows?.getOrNull(first)?.let { it.old ?: it.new } ?: first
+            // The picked line comes first: a click picks it, and the keyboard follows what the user chose.
+            val pickedLine = picked?.let { range -> (range.first..range.last).asSequence().mapNotNull { lines.getOrNull(it - 1) }.firstOrNull { it.kind != DiffKind.HUNK } }
             val target =
-                focusedLine
+                pickedLine
+                    ?: focusedLine
                     ?: (start until lines.size).asSequence().map(lines::get).firstOrNull { it.kind == DiffKind.ADDED || it.kind == DiffKind.REMOVED }
                     ?: lines.firstOrNull { it.kind != DiffKind.HUNK }
             target?.let { editing = it } != null
         }
+    }
+    SideEffect {
+        gutterRows.lineOfItem = { item -> (item - leading).takeIf { it in lines.indices && lines[it].kind != DiffKind.HUNK }?.plus(1) }
     }
     DisposableEffect(keys) {
         onDispose {
@@ -843,8 +856,15 @@ private fun ChangesFileDiff(
     }
     fun Modifier.pickable(line: DiffLine, number: Int): Modifier =
         onFocusChanged { if (it.isFocused) focusedLine = line else if (focusedLine == line) focusedLine = null }
-            .clickable(onClickLabel = pickLabel) { focus.requestFocus(); pickLine(number) }
+            .clickable(onClickLabel = pickLabel) {
+                // The row keeps the keyboard it has; the list takes it only when nothing in it has.
+                if (!paneFocused) focus.requestFocus()
+                pickLine(number)
+            }
             .testTag("changesDiffLine")
+    // A screen reader lists the comment next to the pick, as the gutter button does for the eye.
+    fun Modifier.commentAction(line: DiffLine, commentable: Boolean): Modifier =
+        if (!commentable) this else semantics { customActions = listOf(CustomAccessibilityAction(addLabel) { editing = line; true }) }
     // The session's own file opens in Files at the line as it is now; a subagent's lies elsewhere.
     val fileOpener = LocalFileOpener.current?.takeIf { !readOnly }
     fun lineMenu(line: DiffLine, index: Int, commentable: Boolean): Modifier =
@@ -883,9 +903,13 @@ private fun ChangesFileDiff(
     LazyColumn(
         Modifier.fillMaxSize()
             .testTag("changesDiff")
+            .onPlaced { gutterRows.coordinates = it }
             .focusRequester(focus)
+            .onFocusChanged { paneFocused = it.hasFocus }
             .focusable()
-            .onPreviewKeyEvent(onCodeKey)
+            // After the rows: an in-row text selection copies its own text first.
+            .onKeyEvent(onCodeKey)
+            .takeFocusOnPress(focus, { paneFocused })
             .codeZoomGestures(CodeZoom.CHANGES),
         state = listState,
         contentPadding = PaddingValues(top = headerHeight),
@@ -954,6 +978,13 @@ private fun ChangesFileDiff(
                             lineMenu(line, index, commentable)
                                 .then(if (line.kind != DiffKind.HUNK) Modifier.pickable(line, number) else Modifier)
                                 .then(if (pickedHere) Modifier.background(pickColor) else Modifier)
+                                .commentAction(line, commentable)
+                        },
+                        // Touch has no menu key here: the picked cell carries the gutter's comment button.
+                        leading = { line, index ->
+                            val number = index + 1
+                            if (line.kind != DiffKind.HUNK && !readOnly && picked?.let { number in it.first..it.last } == true)
+                                GutterCommentButton(true, addLabel) { editing = line }
                         },
                     ) { LineComment(it) }
                 }
@@ -977,26 +1008,33 @@ private fun ChangesFileDiff(
                                 rows = gutterRows,
                                 tapLabel = pickLabel,
                                 onTap = { extend ->
-                                    focus.requestFocus()
+                                    if (!paneFocused) focus.requestFocus()
                                     if (extend) picked = picked.extendTo(number) else pickLine(number)
                                 },
-                                onStart = { start ->
-                                    focus.requestFocus()
-                                    picked = LineSelection(start)
+                                onStart = { start, extend ->
+                                    if (!paneFocused) focus.requestFocus()
+                                    dragFrom = dragAnchor(picked, start, extend)
+                                    picked = dragRange(dragFrom, start)
                                 },
-                                onDrag = { end -> picked = picked.extendTo(end) },
-                            )
+                                onDrag = { end -> picked = dragRange(dragFrom, end) },
+                                // The row is the focus stop and Enter on it picks; two more stops per row would crowd the Tab order.
+                                focusable = false,
+                            ).testTag("changesGutter:$number")
                     val comment: @Composable () -> Unit = { GutterCommentButton(hovered || pickedHere, addLabel) { editing = line } }
                     Column {
                         DiffRow(
                             line,
                             rowStyle,
                             scroll,
-                            hover.then(lineMenu(line, index, commentable)).then(if (line.kind != DiffKind.HUNK) Modifier.pickable(line, number) else Modifier),
+                            hover
+                                .then(lineMenu(line, index, commentable))
+                                .then(if (line.kind != DiffKind.HUNK) Modifier.pickable(line, number) else Modifier)
+                                .commentAction(line, commentable),
                             wrap,
                             selected = pickedHere,
                             selectable = true,
-                            leading = if (commentable) comment else null,
+                            // Every row of a session's diff keeps the button's width, so the code lines up under a hunk header too.
+                            leading = if (commentable) comment else if (!readOnly) ({ GutterCommentSpace() }) else null,
                             gutter = gutter,
                         )
                         LineComment(line)

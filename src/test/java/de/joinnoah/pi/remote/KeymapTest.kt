@@ -187,6 +187,7 @@ class KeymapTest {
         assertEquals(Shortcut.COPY_LINES, ctrl(Key.C, context = KeyContext.CODE))
         assertEquals(Shortcut.ZOOM_IN, ctrl(Key.Equals, context = KeyContext.CODE))
         assertEquals(Shortcut.ZOOM_IN, ctrl(Key.Plus, context = KeyContext.CODE))
+        assertEquals(Shortcut.ZOOM_IN, ctrl(Key.Plus, shift = true, context = KeyContext.CODE))
         assertEquals(Shortcut.ZOOM_OUT, ctrl(Key.Minus, context = KeyContext.CODE))
         // The chat and the composer keep Ctrl+A and Ctrl+C for their own text.
         assertNull(ctrl(Key.A, context = KeyContext.CHAT))

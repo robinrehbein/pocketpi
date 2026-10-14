@@ -1,6 +1,8 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
@@ -17,7 +19,6 @@ import androidx.compose.material.icons.automirrored.filled.Comment
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
@@ -26,17 +27,29 @@ import android.content.ClipData
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draganddrop.DragAndDropTransferData
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.isBackPressed
 import androidx.compose.ui.input.pointer.isCtrlPressed
+import androidx.compose.ui.input.pointer.isForwardPressed
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.isTertiaryPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed as isKeyShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerButtons
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
@@ -96,10 +109,11 @@ internal fun Modifier.codeZoomGestures(pane: String): Modifier =
         }
     }
     .pointerInput(pane) {
-        // Ctrl with a scroll: a trackpad pinch, or the wheel. A scroll up (negative y) zooms in.
+        // Ctrl with a scroll: a trackpad pinch, or the wheel. A scroll up (negative y) zooms in. The
+        // Initial pass and the consumed event keep the list below from scrolling with the same event.
         awaitPointerEventScope {
             while (true) {
-                val event = awaitPointerEvent()
+                val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.first()
                 if (event.type == PointerEventType.Scroll && event.keyboardModifiers.isCtrlPressed && change.scrollDelta.y != 0f) {
                     CodeZoom.zoom(pane, (1f - change.scrollDelta.y * 0.05f).coerceIn(0.5f, 2f))
@@ -109,23 +123,30 @@ internal fun Modifier.codeZoomGestures(pane: String): Modifier =
         }
     }
 
-/** Where each shown row's gutter sits in the window, so a drag over the gutters knows the line under the pointer. */
-internal class GutterRows {
-    private val places = HashMap<Int, Rect>()
-
-    fun place(line: Int, bounds: Rect) {
-        places[line] = bounds
-    }
-
-    fun remove(line: Int) {
-        places.remove(line)
-    }
-
-    /** The window place of [line]'s gutter, or null when that row is not shown. */
-    fun placeOf(line: Int): Rect? = places[line]
+/**
+ * Finds the line under a pointer for a drag over the gutters, from the list's own layout: only a
+ * drag asks, so scrolling pays nothing. [lineOfItem] maps a list item's index to the line it shows,
+ * or null for an item that is no pickable line (a notice, a divider); the pane keeps it current.
+ */
+internal class GutterRows(private val state: LazyListState) {
+    /** The list's place in the window; the pane sets it with `onPlaced`. */
+    var coordinates: LayoutCoordinates? = null
+    var lineOfItem: (Int) -> Int? = { it + 1 }
 
     /** The shown line under the window height [y]; past the shown rows, the nearest one. */
-    fun lineAt(y: Float): Int? = lineAtY(places, y)
+    fun lineAt(y: Float): Int? {
+        val top = coordinates?.takeIf { it.isAttached }?.localToWindow(Offset.Zero)?.y ?: return null
+        val places = HashMap<Int, Rect>()
+        val info = state.layoutInfo
+        // Item offsets count from where the content padding ends; the viewport starts that far above.
+        val contentTop = top - info.viewportStartOffset
+        for (item in info.visibleItemsInfo) {
+            val line = lineOfItem(item.index) ?: continue
+            val itemTop = contentTop + item.offset
+            places[line] = Rect(0f, itemTop, 1f, itemTop + item.size)
+        }
+        return lineAtY(places, y)
+    }
 }
 
 /**
@@ -138,12 +159,23 @@ internal fun lineAtY(places: Map<Int, Rect>, y: Float): Int? {
     return places.minByOrNull { (_, rect) -> if (y < rect.top) rect.top - y else y - rect.bottom }?.key
 }
 
+/** The cell's place in the window, kept for the drag. */
+private class CellPlace {
+    var coordinates: LayoutCoordinates? = null
+}
+
+/** A press of the primary button, a finger or a stylus tip; a secondary, middle, back or forward button is not. */
+private fun PointerButtons.isPrimaryPress(): Boolean =
+    !isSecondaryPressed && !isTertiaryPressed && !isBackPressed && !isForwardPressed
+
 /**
  * The gutter of one code row, the line number cell. A tap calls [onTap] with whether Shift was
  * held, and a Shift-tap extends the range. A press that moves beyond touch slop starts a range
- * with [onStart] and calls [onDrag] for every line the pointer crosses: a mouse or a stylus does
- * so at once, a finger after a long press. A finger that scrolls leaves the press alone.
- * [tapLabel] names the tap for accessibility services.
+ * with [onStart] (the line, and whether Shift extends the range already picked) and calls [onDrag]
+ * for every line the pointer crosses: a mouse or a stylus does so at once, a finger after a long
+ * press. A finger that scrolls leaves the press alone, and so does a press that is not of the
+ * primary button, or that a context menu took. [tapLabel] names the tap for accessibility
+ * services. The cell takes keyboard focus when [focusable], and Enter or Space taps then.
  */
 @Composable
 internal fun Modifier.codeGutter(
@@ -151,22 +183,35 @@ internal fun Modifier.codeGutter(
     rows: GutterRows,
     tapLabel: String,
     onTap: (extend: Boolean) -> Unit,
-    onStart: (Int) -> Unit,
+    onStart: (line: Int, extend: Boolean) -> Unit,
     onDrag: (Int) -> Unit,
+    focusable: Boolean = true,
 ): Modifier {
     val tap by rememberUpdatedState(onTap)
     val start by rememberUpdatedState(onStart)
     val drag by rememberUpdatedState(onDrag)
-    DisposableEffect(line, rows) { onDispose { rows.remove(line) } }
-    return onGloballyPositioned { rows.place(line, it.boundsInRoot()) }
+    val place = remember { CellPlace() }
+    return this
         .semantics { onClick(label = tapLabel) { tap(false); true } }
+        .then(
+            if (!focusable) Modifier
+            else
+                Modifier.focusable().onKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown && event.key in SELECT_KEYS) {
+                        tap(event.isKeyShiftPressed)
+                        true
+                    } else false
+                }
+        )
+        .onPlaced { place.coordinates = it }
         .pointerInput(line, rows) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
+                if (down.isConsumed || !currentEvent.buttons.isPrimaryPress()) return@awaitEachGesture
                 val shift = currentEvent.keyboardModifiers.isShiftPressed
                 fun dragTo(change: PointerInputChange) {
-                    val origin = rows.placeOf(line)?.topLeft ?: Offset.Zero
-                    rows.lineAt((origin + change.position).y)?.let { drag(it) }
+                    val cell = place.coordinates?.takeIf { it.isAttached } ?: return
+                    rows.lineAt(cell.localToWindow(change.position).y)?.let { drag(it) }
                 }
                 if (shift || down.type != PointerType.Touch) {
                     // A mouse, a stylus or Shift: a tap until the press moves, a drag after.
@@ -180,14 +225,14 @@ internal fun Modifier.codeGutter(
                         }
                         if (!dragging && (change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
                             dragging = true
-                            if (!shift) start(line)
+                            start(line, shift)
                         }
                         if (dragging) dragTo(change)
                     }
                 } else {
                     val longPress = awaitLongPressOrCancellation(down.id)
                     if (longPress != null) {
-                        start(line)
+                        start(line, false)
                         while (true) {
                             val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
                             change.consume()
@@ -204,6 +249,36 @@ internal fun Modifier.codeGutter(
             }
         }
 }
+
+private val SELECT_KEYS = setOf(Key.Enter, Key.NumPadEnter, Key.Spacebar, Key.DirectionCenter)
+
+/**
+ * The range a drag over the gutter makes: from [anchor], the line it started at or the start of the
+ * range it extends, to [line]. The pane keeps the anchor itself, so a drag never reads a selection
+ * that composition has not caught up with.
+ */
+internal fun dragRange(anchor: Int, line: Int): LineSelection = LineSelection(anchor, line)
+
+/** The anchor of a drag that starts at [line]: the start of the [selection] when [extend], else [line]. */
+internal fun dragAnchor(selection: LineSelection?, line: Int, extend: Boolean): Int =
+    if (extend) selection?.anchor ?: line else line
+
+/**
+ * Gives [focus] the keyboard when a press lands in the list and nothing in it [hasFocus] yet, so
+ * Ctrl+= and Ctrl+A work after a click on the code too. The press passes on untouched.
+ */
+internal fun Modifier.takeFocusOnPress(
+    focus: FocusRequester,
+    hasFocus: () -> Boolean,
+): Modifier =
+    pointerInput(focus) {
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                if (event.type == PointerEventType.Press && !hasFocus()) runCatching { focus.requestFocus() }
+            }
+        }
+    }
 
 /** The shown row's hover state: the modifier that reports it, and whether a pointer is over the row now. */
 @Composable
@@ -238,6 +313,10 @@ internal fun GutterCommentButton(shown: Boolean, label: String, onClick: () -> U
     }
 }
 
+/** The width a hidden [GutterCommentButton] keeps, for a row that has none but sits among rows that do. */
+@Composable
+internal fun GutterCommentSpace() = Spacer(Modifier.width(GUTTER_BUTTON_WIDTH))
+
 private val GUTTER_BUTTON_WIDTH = 24.dp
 
 /**
@@ -245,6 +324,18 @@ private val GUTTER_BUTTON_WIDTH = 24.dp
  * selection's first line, to [line]. Without a selection the range starts at [line].
  */
 internal fun LineSelection?.extendTo(line: Int): LineSelection = this?.copy(end = line) ?: LineSelection(line)
+
+/** Keeps picked lines across a rotation: nothing picked is an empty list. */
+internal val LineSelectionSaver: androidx.compose.runtime.saveable.Saver<LineSelection?, Any> =
+    androidx.compose.runtime.saveable.Saver(
+        save = { picked -> if (picked == null) emptyList<Int>() else listOf(picked.anchor, picked.end ?: NO_END) },
+        restore = { saved ->
+            val numbers = (saved as? List<*>)?.filterIsInstance<Int>().orEmpty()
+            if (numbers.size == 2) LineSelection(numbers[0], numbers[1].takeIf { it != NO_END }) else null
+        },
+    )
+
+private const val NO_END = -1
 
 /** Every line of a file of [count] lines, or null for an empty one. */
 internal fun allLines(count: Int): LineSelection? = if (count > 0) LineSelection(1, count) else null
