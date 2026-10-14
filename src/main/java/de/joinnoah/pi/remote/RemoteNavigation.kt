@@ -170,15 +170,21 @@ internal class RemoteNavigator(
         stack.lastOrNull { it != RemoteNavKey.Settings } as? RemoteNavKey
 
     /**
-     * The destination beneath the overlays: Settings and the activity board sit on top of the
-     * open project or chat without being part of the selection.
+     * The pages that open on top of the open project, session or chat without being part of its
+     * selection: the activity board, Settings, and the folder browser and providers of a host.
      */
-    private fun contentKey(): RemoteNavKey? =
-        stack.lastOrNull { it != RemoteNavKey.Settings && it !is RemoteNavKey.Activity } as? RemoteNavKey
+    private fun NavKey.isOverlay(): Boolean =
+        this == RemoteNavKey.Settings ||
+            this is RemoteNavKey.Activity ||
+            this is RemoteNavKey.FolderBrowser ||
+            this is RemoteNavKey.Providers
+
+    /** The destination beneath the overlays, which the selection stays on. */
+    private fun contentKey(): RemoteNavKey? = stack.lastOrNull { !it.isOverlay() } as? RemoteNavKey
 
     /** Chat entries stacked directly beneath the top chat in the same project, oldest first. */
     private fun chatsBeneathTop(): List<RemoteNavKey.Chat> {
-        val entries = stack.filter { it != RemoteNavKey.Settings && it !is RemoteNavKey.Activity }
+        val entries = stack.filter { !it.isOverlay() }
         val top = entries.lastOrNull() as? RemoteNavKey.Chat ?: return emptyList()
         return entries
             .dropLast(1)
@@ -202,14 +208,16 @@ internal class RemoteNavigator(
         keepSettings: Boolean = true,
         keepStackedChats: Boolean = true,
         keepActivity: Boolean = false,
+        keepFolders: Boolean = false,
     ) {
         val keys = selection.keys()
         // The activity board stays on top of the content it was opened over, across a restore and
         // a reconcile, while the same host is open. A navigation to a destination closes it.
         val board = (topKey() as? RemoteNavKey.Activity)?.takeIf { keepActivity && it.routeId == selection.routeId }
-        // The folder browser shares the Projects selection, so it survives a restore on top of it.
+        // The folder browser and the providers stay on top of the host's content across a restore
+        // and a reconcile, so an OAuth return or a reconnect does not close them.
         val folders = topKey()?.takeIf { it is RemoteNavKey.FolderBrowser || it is RemoteNavKey.Providers }
-        if (folders != null && selection == folders.selection()) {
+        if (keepFolders && folders != null && selection.routeId == folders.selection().routeId) {
             setStack(keys + folders, keepSettings)
             return
         }
@@ -242,13 +250,15 @@ internal class RemoteNavigator(
             if (mode == ActivationMode.RESTORE && chat == null && key is RemoteNavKey.Chat && contentKey() == key) {
                 val ancestors = chatsBeneathTop()
                 val board = topKey() as? RemoteNavKey.Activity
+                val folders = topKey()?.takeIf { it is RemoteNavKey.FolderBrowser || it is RemoteNavKey.Providers }
                 for (index in ancestors.indices.reversed()) {
                     val candidate = ancestors[index]
                     val restored = repository.activate(candidate.selection(), ActivationMode.RESTORE)
                     if (current != request) return@launch
                     if (restored == candidate.selection()) {
                         setStack(
-                            sessionKeys(candidate) + stacked(ancestors.subList(0, index + 1)),
+                            sessionKeys(candidate) + stacked(ancestors.subList(0, index + 1)) +
+                                listOfNotNull(folders?.takeIf { it.selection().routeId == candidate.routeId }),
                             keepSettings = true,
                             board = board?.takeIf { it.routeId == candidate.routeId },
                         )
@@ -256,7 +266,7 @@ internal class RemoteNavigator(
                     }
                 }
             }
-            replace(canonical, keepActivity = mode == ActivationMode.RESTORE)
+            replace(canonical, keepActivity = mode == ActivationMode.RESTORE, keepFolders = mode == ActivationMode.RESTORE)
         }
     }
 
@@ -270,7 +280,7 @@ internal class RemoteNavigator(
         val keys = current.selection().keys()
         val validated = state.selection.keys()
         if (validated.size < keys.size && keys.take(validated.size) == validated) {
-            replace(state.selection, keepActivity = true)
+            replace(state.selection, keepActivity = true, keepFolders = true)
         }
     }
 
@@ -510,44 +520,46 @@ internal class RemoteNavigator(
     }
 
     /**
-     * Makes the host's Projects the top destination for a page that opens on top of it. Beside
-     * the projects column the user may be in a project's sessions or chat: those close first,
-     * so Back from the page lands on the projects. False when [routeId] is not the open host.
+     * Pushes [page], a folder browser or the providers of [routeId], on top of the open project,
+     * session or chat of that host. Those stay beneath it, so Back returns to them, and their
+     * selection is not touched. False when no destination of [routeId] is open, Settings is on top
+     * or [page] is open already.
      */
-    private fun projectsOnTop(routeId: String): Boolean {
-        val top = topKey()
-        if (top == RemoteNavKey.Projects(routeId)) return true
-        val routeOpen =
-            (top is RemoteNavKey.Sessions && top.routeId == routeId) ||
-                (top is RemoteNavKey.Chat && top.routeId == routeId)
-        if (!routeOpen) return false
-        setStack(RemoteSelection(routeId).keys(), keepSettings = false)
-        val current = invalidate()
-        activation = scope.launch {
-            val canonical = repository.activate(RemoteSelection(routeId), ActivationMode.RESTORE)
-            if (current != request) return@launch
-            // A restore that failed on this host hands back the session it came from; the page
-            // stays open over the projects instead of closing for the chat. A lost host still wins.
-            if (canonical.routeId != routeId) replace(canonical)
-        }
+    private fun pushOverHost(routeId: String, page: RemoteNavKey): Boolean {
+        if (stack.lastOrNull() == RemoteNavKey.Settings) return false
+        val top = topKey() ?: return false
+        if (top is RemoteNavKey.FolderBrowser || top is RemoteNavKey.Providers) return false
+        if (top.selection().routeId != routeId) return false
+        stack.add(page)
         return true
     }
 
-    /** Opens the folder browser at the browse root, on top of the host's Projects. */
+    /** Opens the folder browser at the browse root, on top of the host's open destination. */
     fun openFolders(routeId: String) {
-        if (!projectsOnTop(routeId)) return
+        if (!pushOverHost(routeId, RemoteNavKey.FolderBrowser(routeId))) return
         repository.cancelFolderTrust()
         repository.dismissFolderNotice()
         repository.browseFolder(routeId, "")
-        stack.add(RemoteNavKey.FolderBrowser(routeId))
     }
 
-    /** Opens the providers of [routeId] on top of the host's Projects. */
+    /**
+     * Leaves the folder browser of [routeId] in one step, whatever folder it shows: the page beneath
+     * it comes back, the open chat or project with it.
+     */
+    fun closeFolders(routeId: String) {
+        val index = stack.indexOf(RemoteNavKey.FolderBrowser(routeId))
+        if (index < 0) return
+        repository.cancelFolderTrust()
+        repository.dismissFolderNotice()
+        while (stack.size > index) stack.removeAt(stack.lastIndex)
+        activate(stack.last() as RemoteNavKey, ActivationMode.RESTORE)
+    }
+
+    /** Opens the providers of [routeId] on top of the host's open destination. */
     fun openProviders(routeId: String) {
-        if (!projectsOnTop(routeId)) return
+        if (!pushOverHost(routeId, RemoteNavKey.Providers(routeId))) return
         repository.dismissProviderNotice()
         repository.browseProviders(routeId)
-        stack.add(RemoteNavKey.Providers(routeId))
     }
 
     /**
@@ -1318,11 +1330,11 @@ private fun RemoteNavDisplay(
                     val model = viewModel { SessionsViewModel(repository, key, settings) }
                     RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush)
                 }
-                entry<RemoteNavKey.FolderBrowser> { key ->
+                entry<RemoteNavKey.FolderBrowser>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { FolderBrowserViewModel(repository, key) }
                     CenteredPage { FolderBrowserScreen(key, model, navigator) }
                 }
-                entry<RemoteNavKey.Providers> { key ->
+                entry<RemoteNavKey.Providers>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ProvidersViewModel(repository, key) }
                     CenteredPage { ProvidersScreen(key, model, navigator) }
                 }
@@ -1337,11 +1349,13 @@ private fun RemoteNavDisplay(
                     RemoteScreen(key, model, navigator, pushConfigured, pushEnabled, enablePush, disablePush)
                 }
                 entry<RemoteNavKey.Settings>(
-                    metadata = metadata {
-                        put(NavDisplay.TransitionKey) { settingsTransition() }
-                        put(NavDisplay.PopTransitionKey) { settingsTransition() }
-                        put(NavDisplay.PredictivePopTransitionKey) { settingsTransition() }
-                    },
+                    metadata =
+                        navKeyMetadata(RemoteNavKey.Settings) +
+                            metadata {
+                                put(NavDisplay.TransitionKey) { settingsTransition() }
+                                put(NavDisplay.PopTransitionKey) { settingsTransition() }
+                                put(NavDisplay.PredictivePopTransitionKey) { settingsTransition() }
+                            },
                 ) { key ->
                     val model = viewModel { SettingsViewModel(repository, settings) }
                     CenteredPage {

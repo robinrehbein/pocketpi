@@ -88,7 +88,7 @@ class FolderNavigationTest {
     }
 
     @Test
-    fun `beside the projects column the browser closes the open project first`() = runTest {
+    fun `beside the projects column the browser opens over the open chat and back returns to it`() = runTest {
         for (open in listOf(RemoteSelection("host", "project"), RemoteSelection("host", "project", "s1"))) {
             val repository = NavigationFakeRepository()
             val stack = open.keys().toMutableList<NavKey>()
@@ -97,44 +97,60 @@ class FolderNavigationTest {
             assertEquals(open.keys(), stack)
             navigation.openFolders("host")
             runCurrent()
-            assertEquals(projects + RemoteNavKey.FolderBrowser("host"), stack)
-            assertEquals(RemoteSelection("host") to ActivationMode.RESTORE, repository.activations.last())
+            // The open project or chat stays beneath the browser; its selection is not re-activated.
+            assertEquals(open.keys() + RemoteNavKey.FolderBrowser("host"), stack)
+            assertEquals(emptyList<Pair<RemoteSelection, ActivationMode>>(), repository.activations)
             assertEquals(listOf("host" to ""), repository.browsed)
-            // Back from the browser lands on the projects.
+            // Back from the browser returns to the chat or project it was opened over.
             navigation.back()
             runCurrent()
-            assertEquals(projects, stack)
+            assertEquals(open.keys(), stack)
+            assertEquals(open to ActivationMode.RESTORE, repository.activations.last())
         }
     }
 
     @Test
-    fun `a failed restore beside the projects column keeps the page open`() = runTest {
+    fun `close leaves the browser in one step whatever folder it shows`() = runTest {
         val open = RemoteSelection("host", "project", "s1")
-        val pages =
-            listOf<Pair<(RemoteNavigator) -> Unit, NavKey>>(
-                { it: RemoteNavigator -> it.openFolders("host") } to RemoteNavKey.FolderBrowser("host"),
-                { it: RemoteNavigator -> it.openProviders("host") } to RemoteNavKey.Providers("host"),
-            )
-        for ((openPage, page) in pages) {
-            val repository = NavigationFakeRepository()
-            // The repository answers a failed restore with the selection it still holds.
-            repository.activation = { _, _ -> open }
-            val stack = open.keys().toMutableList<NavKey>()
-            val navigation = RemoteNavigator(repository, stack, backgroundScope)
-            openPage(navigation)
-            runCurrent()
-            assertEquals(projects + page, stack)
-        }
+        val repository = NavigationFakeRepository()
+        val stack = (open.keys() + RemoteNavKey.FolderBrowser("host")).toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.browseFolder("host", "a/b")
+        navigation.closeFolders("host")
+        runCurrent()
+        assertEquals(open.keys(), stack)
+        assertEquals(open to ActivationMode.RESTORE, repository.activations.last())
+        // A close for a browser that is not open does nothing.
+        navigation.closeFolders("host")
+        runCurrent()
+        assertEquals(open.keys(), stack)
     }
 
     @Test
-    fun `a host lost while the projects restore still leaves the page`() = runTest {
+    fun `a host lost while the folder browser is open leaves the page`() = runTest {
         val repository = NavigationFakeRepository()
         repository.activation = { _, _ -> RemoteSelection() }
         val stack = RemoteSelection("host", "project", "s1").keys().toMutableList<NavKey>()
         val navigation = RemoteNavigator(repository, stack, backgroundScope)
         navigation.openFolders("host")
         runCurrent()
+        navigation.restore()
+        runCurrent()
         assertEquals(listOf<NavKey>(RemoteNavKey.Hosts), stack)
+    }
+
+    @Test
+    fun `a failed restore beside the projects column keeps the browser open`() = runTest {
+        val open = RemoteSelection("host", "project", "s1")
+        val repository = NavigationFakeRepository()
+        // The repository answers a failed restore with the selection it still holds.
+        repository.activation = { _, _ -> open }
+        val stack = open.keys().toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.openFolders("host")
+        runCurrent()
+        navigation.restore()
+        runCurrent()
+        assertEquals(open.keys() + RemoteNavKey.FolderBrowser("host"), stack)
     }
 }

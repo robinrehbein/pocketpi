@@ -90,13 +90,22 @@ class AdaptiveLayoutTest {
     }
 
     @Test
-    fun otherDestinationsStayFullScreen() {
+    fun columnsNeedAnOpenHostAndPairableSessions() {
         assertNull(columnPanes(listOf(RemoteNavKey.Hosts)))
-        assertNull(
-            columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.FolderBrowser("host")))
+        assertNull(columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Settings)))
+        // Folders, providers and Settings over a host's projects take the detail column beside them.
+        assertEquals(
+            ColumnPanes(projects = 1, list = null, detail = 2),
+            columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.FolderBrowser("host"))),
         )
-        assertNull(columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.Providers("host"))))
-        assertNull(columnPanes(RemoteSelection("host", "project", "s1").keys() + RemoteNavKey.Settings))
+        assertEquals(
+            ColumnPanes(projects = 1, list = null, detail = 2),
+            columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"), RemoteNavKey.Providers("host"))),
+        )
+        assertEquals(
+            ColumnPanes(projects = 1, list = 2, detail = 4),
+            columnPanes(RemoteSelection("host", "project", "s1").keys() + RemoteNavKey.Settings),
+        )
         // A chat without its project's Sessions below it has nothing to pair with.
         assertNull(columnPanes(listOf(RemoteNavKey.Hosts, RemoteNavKey.Chat("host", "project", "s1"))))
         assertNull(

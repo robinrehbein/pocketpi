@@ -18,15 +18,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -86,6 +86,8 @@ internal fun ProvidersScreen(
         available = available,
         connection = state.connection,
         onBack = navigator::back,
+        onRefresh = model::reload,
+        onSettings = navigator::settings,
         onRetry = model::reload,
         onStart = model::startLogin,
         onLogout = model::logout,
@@ -167,6 +169,8 @@ internal fun ProvidersContent(
     onDismissNotice: () -> Unit,
     onOpenLink: (String) -> Boolean,
     modifier: Modifier = Modifier,
+    onRefresh: () -> Unit = {},
+    onSettings: () -> Unit = {},
 ) {
     val flow = auth.flow
     // Back from a running login leaves it running on the Mac; the list shows a banner to return.
@@ -194,6 +198,8 @@ internal fun ProvidersContent(
             available = available,
             connection = connection,
             onBack = onBack,
+            onRefresh = onRefresh,
+            onSettings = onSettings,
             onRetry = onRetry,
             onStart = onStart,
             onLogout = onLogout,
@@ -203,33 +209,45 @@ internal fun ProvidersContent(
         )
 }
 
+/**
+ * A provider page with the shared [PageHeader]. [onRefresh] and [onSettings] add the refresh and
+ * settings actions the other pages have; [connection] puts the connection chip under the header.
+ */
 @Composable
 private fun ProviderScaffold(
     title: String,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onRefresh: (() -> Unit)? = null,
+    onSettings: (() -> Unit)? = null,
+    connection: Int? = null,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     Scaffold(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            Row(
-                Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                FloatingSurface(modifier = Modifier.testTag("navigationPill"), shape = CircleShape) {
-                    IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.remote_back))
-                    }
-                }
-                Spacer(Modifier.width(16.dp))
-                Text(
-                    title,
-                    style = MaterialTheme.typography.headlineSmall,
-                    modifier = Modifier.semantics { heading() },
-                )
-            }
+            PageHeader(
+                title = title,
+                titleInPill = true,
+                onBack = onBack,
+                modifier = Modifier.statusBarsPadding(),
+                actions =
+                    if (onRefresh == null && onSettings == null) null
+                    else {
+                        {
+                            if (onRefresh != null)
+                                IconButton(onClick = onRefresh, modifier = Modifier.size(48.dp).testTag("providersRefresh")) {
+                                    Icon(Icons.Default.Refresh, stringResource(R.string.remote_refresh))
+                                }
+                            if (onSettings != null)
+                                IconButton(onClick = onSettings, modifier = Modifier.size(48.dp)) {
+                                    Icon(Icons.Default.Settings, stringResource(R.string.remote_settings))
+                                }
+                        }
+                    },
+                connection = connection,
+            )
         },
         content = content,
     )
@@ -266,6 +284,8 @@ private fun ProviderListScreen(
     available: Boolean,
     connection: Int,
     onBack: () -> Unit,
+    onRefresh: () -> Unit,
+    onSettings: () -> Unit,
     onRetry: () -> Unit,
     onStart: (String, ProviderAuthMethod, Boolean) -> Unit,
     onLogout: (String) -> Unit,
@@ -283,14 +303,18 @@ private fun ProviderListScreen(
         if (provider.storedLogin) replacing = provider to method else onStart(provider.id, method, false)
     }
 
-    ProviderScaffold(stringResource(R.string.providers_title), onBack, modifier) { insets ->
+    ProviderScaffold(
+        title = stringResource(R.string.providers_title),
+        onBack = onBack,
+        modifier = modifier,
+        onRefresh = onRefresh,
+        onSettings = onSettings,
+        connection = connectionStatusLine(connected, connection, hostChosen = true),
+    ) { insets ->
         Column(
             Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            connectionStatusLine(connected, connection, hostChosen = true)?.let { line ->
-                ConnectionStatusChip(line)
-            }
             auth.notice?.let { NoticeCard(noticeText(it), onDismissNotice) }
             when {
                 // The connection chip above says why there is no list.
