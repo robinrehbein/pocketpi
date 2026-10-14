@@ -19,7 +19,7 @@
     <string name="remote_keymap_help">Keyboard shortcuts</string>
     <string name="remote_keymap_expand_inspector">Widen the side pane</string>
     <string name="remote_keymap_toggle_inspector">Show or hide the side pane</string>
-    <string name="remote_keymap_other_busy_action">Send with the other choice, steer or follow-up</string>
+    <string name="remote_keymap_other_busy_action">Send with the other mode: now or when done</string>
     <string name="remote_keymap_refresh">Refresh</string>
     <string name="remote_keymap_rename">Rename session</string>
     <string name="remote_keymap_fork">Rewind from the latest message</string>
