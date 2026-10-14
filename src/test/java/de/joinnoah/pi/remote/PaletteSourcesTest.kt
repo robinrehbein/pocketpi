@@ -307,4 +307,36 @@ class PaletteSourcesTest {
         const val NOW = 1_800_000_000_000L
         const val DAY_MILLIS = 24L * 60 * 60 * 1000
     }
+
+    @Test
+    fun pinnedSessionsRankFirstInTheSessionMode() {
+        val host = PairedHost("host", "wss://relay.test", "device", "secret", "Studio Mac")
+        val rows =
+            listOf(
+                Wire.objectOf("id" to "fresh", "title" to "Fresh", "status" to "idle", "updatedAt" to 900L),
+                Wire.objectOf("id" to "pinned", "title" to "Pinned", "status" to "idle", "updatedAt" to 100L),
+            )
+        val state =
+            RemoteState(
+                hosts = listOf(host),
+                hostsLoaded = true,
+                host = host,
+                selection = RemoteSelection("host", "project"),
+                connected = true,
+                projectSessions = mapOf("project" to projectSessions("project", "Project", rows, verified = true)),
+            )
+        val input =
+            PaletteInput(
+                state = state,
+                home = HomeSnapshot(),
+                chat = false,
+                usage = emptyMap(),
+                now = 1_000L,
+                marks = mapOf(("host" to "pinned") to SessionMark(pinned = true)),
+            )
+
+        val keys = paletteItems(input, labels, "#").map { it.key }
+
+        assertEquals(listOf("session:host:pinned", "session:host:fresh"), keys)
+    }
 }

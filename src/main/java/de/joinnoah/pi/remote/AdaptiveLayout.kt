@@ -735,6 +735,16 @@ internal fun columnPanes(keys: List<Any?>): ColumnPanes? {
     return when (val top = keys.lastOrNull()) {
         is RemoteNavKey.Projects -> ColumnPanes(lastIndex, null, null)
         is RemoteNavKey.Sessions -> ColumnPanes(projectsBelow(lastIndex, top.routeId), lastIndex, null)
+        // The board takes the session list's column beside the chat beneath it. Without a chat it
+        // is the detail column, a card grid where the window is wide, and the projects column stays.
+        is RemoteNavKey.Activity -> {
+            val beneath = columnPanes(keys.subList(0, lastIndex))
+            when {
+                beneath == null -> null
+                beneath.detail != null -> ColumnPanes(beneath.projects, lastIndex, beneath.detail)
+                else -> ColumnPanes(beneath.projects, null, lastIndex)
+            }
+        }
         is RemoteNavKey.Chat -> {
             var index = lastIndex - 1
             while (index >= 0) {
@@ -780,10 +790,11 @@ internal class ProjectColumnsSceneStrategy(
                 is RemoteNavKey.Projects -> top.routeId
                 is RemoteNavKey.Sessions -> top.routeId
                 is RemoteNavKey.Chat -> top.routeId
+                is RemoteNavKey.Activity -> top.routeId
                 else -> return null
             }
         val detail = panes.detail?.let(entries::get)
-        val collapsed = detail != null && listCollapsed
+        val collapsed = panes.list != null && detail != null && listCollapsed
         return ProjectColumnsScene(
             key = ProjectColumnsSceneKey(routeId),
             projects = panes.projects?.let(entries::get),
@@ -838,7 +849,10 @@ private data class ProjectColumnsScene(
         val keepFull = projects != null && !reviewing && state.projectsExpanded && fullLayout != null
         // The list and the chat decide against the room the projects column really leaves.
         val placed = if (keepFull) checkNotNull(fullLayout) else layout
-        val strip = detail != null && !keepFull
+        // The strip stands in for the projects column beside a chat only; a board in the detail
+        // column keeps the projects column.
+        val besideChat = detail?.metadata?.get(NAV_KEY_METADATA) is RemoteNavKey.Chat
+        val strip = besideChat && !keepFull
         val stripHidden = projects != null && strip && reviewing
         val projectsTarget = if (stripHidden) 0.dp else if (strip) PROJECT_STRIP_WIDTH else layout.projectsWidth
         val projectsWidth = rememberProjectsWidth(projectsTarget)
@@ -929,7 +943,7 @@ private data class ProjectColumnsScene(
                                             selectedProjectId,
                                             strip,
                                             canExpand = strip && !reviewing && fullLayout != null,
-                                            canCollapse = detail != null && !strip && !reviewing,
+                                            canCollapse = besideChat && !strip && !reviewing,
                                         )
                                 ) {
                                     projects.Content()

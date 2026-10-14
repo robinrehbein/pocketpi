@@ -78,6 +78,9 @@ internal sealed interface PaletteItem {
 
     /** In the open chat's project: the session mode ranks such rows right after the live ones. */
     val preferred: Boolean get() = false
+
+    /** Pinned on this phone: such sessions rank first. */
+    val pinned: Boolean get() = false
 }
 
 internal data class SessionItem(
@@ -92,6 +95,7 @@ internal data class SessionItem(
     val current: Boolean,
     /** The session belongs to the project of the selection. */
     val sameProject: Boolean,
+    override val pinned: Boolean = false,
 ) : PaletteItem {
     override val key get() = "session:$routeId:$sessionId"
     override val category get() = PaletteCategory.SESSION
@@ -148,12 +152,15 @@ internal class PaletteInput(
     val now: Long,
     /** A create or other change is in flight, so the header's New session waits too. */
     val mutating: Boolean = false,
+    /** The phone's marks of sessions; pinned ones rank first among the sessions. */
+    val marks: Map<Pair<String, String>, SessionMark> = emptyMap(),
 )
 
 /**
- * The rows [query] matches, best first. Without text they list the live sessions, then the rest by
- * recency; with text the match score leads, then live rows, then recency. In the session mode the
- * open chat's project ranks right after the live rows, so the switcher offers its siblings first.
+ * The rows [query] matches, best first. Without text they list the pinned sessions, then the live
+ * sessions, then the rest by recency; with text the match score leads, then pinned and live rows,
+ * then recency. In the session mode the open chat's project ranks right after the live rows, so
+ * the switcher offers its siblings first.
  */
 internal fun paletteItems(input: PaletteInput, labels: PaletteLabels, query: String): List<PaletteItem> {
     val parsed = paletteQuery(query)
@@ -165,7 +172,8 @@ internal fun paletteItems(input: PaletteInput, labels: PaletteLabels, query: Str
     fun PaletteItem.preferredNow() = parsed.mode == PaletteMode.SESSIONS && preferred
     if (parsed.text.isEmpty())
         return candidates.sortedWith(
-            compareByDescending<PaletteItem> { it.live }
+            compareByDescending<PaletteItem> { it.pinned }
+                .thenByDescending { it.live }
                 .thenByDescending { it.preferredNow() }
                 .thenByDescending { it.recency },
         )
@@ -173,6 +181,7 @@ internal fun paletteItems(input: PaletteInput, labels: PaletteLabels, query: Str
         .mapNotNull { item -> matchScore(parsed.text, item)?.let { item to it } }
         .sortedWith(
             compareByDescending<Pair<PaletteItem, Int>> { it.second }
+                .thenByDescending { it.first.pinned }
                 .thenByDescending { it.first.live }
                 .thenByDescending { it.first.preferredNow() }
                 .thenByDescending { it.first.recency },
@@ -268,6 +277,7 @@ private fun sessionItems(input: PaletteInput, labels: PaletteLabels): List<Sessi
                 projectId = row.projectId,
                 sessionId = row.sessionId,
                 title = row.title ?: row.sessionId,
+                pinned = input.marks[key]?.pinned == true,
                 detail =
                     listOfNotNull(
                         labels.current.takeIf { current },

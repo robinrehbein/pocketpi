@@ -215,21 +215,37 @@ internal fun Modifier.contextMenu(
         }
 }
 
-/** The entries of a session row's menu. Pin and Mark read join later. */
+/** The entries of a session row's menu. Pin and Mark read are phone-local (SessionMarksStore). */
 internal enum class SessionMenuAction(@StringRes val label: Int) {
     OPEN(R.string.remote_menu_open),
     RENAME(R.string.remote_rename_session),
     /** Opens the chat and its rewind menu on the latest message, as Ctrl+Shift+N does there. */
     FORK_LATEST(R.string.remote_keymap_fork),
+    PIN(R.string.remote_menu_pin),
+    UNPIN(R.string.remote_menu_unpin),
+    MARK_READ(R.string.remote_menu_mark_read),
     CLOSE(R.string.remote_session_close),
     COPY_ID(R.string.remote_menu_copy_session_id),
 }
 
-internal fun sessionMenuActions(canRename: Boolean, canClose: Boolean, canFork: Boolean = false): List<SessionMenuAction> =
+/**
+ * The entries of a session row's menu. [pinned] names the pin entry: Pin, or Unpin when it is
+ * set; [canMarkRead] offers Mark read on a row that is unread.
+ */
+internal fun sessionMenuActions(
+    canRename: Boolean,
+    canClose: Boolean,
+    canFork: Boolean = false,
+    canPin: Boolean = false,
+    pinned: Boolean = false,
+    canMarkRead: Boolean = false,
+): List<SessionMenuAction> =
     buildList {
         add(SessionMenuAction.OPEN)
         if (canRename) add(SessionMenuAction.RENAME)
         if (canFork) add(SessionMenuAction.FORK_LATEST)
+        if (canPin) add(if (pinned) SessionMenuAction.UNPIN else SessionMenuAction.PIN)
+        if (canMarkRead) add(SessionMenuAction.MARK_READ)
         if (canClose) add(SessionMenuAction.CLOSE)
         add(SessionMenuAction.COPY_ID)
     }

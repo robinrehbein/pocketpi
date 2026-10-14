@@ -36,6 +36,10 @@ class RemoteApplication : Application() {
     internal lateinit var home: HomeSurfaces
         private set
 
+    /** The phone's pins and read marks of sessions; see [SessionMarksStore]. */
+    internal lateinit var sessionMarks: SessionMarksStore
+        private set
+
     internal lateinit var predictions: PromptPredictions
         private set
 
@@ -92,6 +96,8 @@ class RemoteApplication : Application() {
         predictions = PromptPredictions(this, scope, stores.pairings)
         home = HomeSurfaces(this, scope, stores.pairings)
         home.observe(repository.state)
+        sessionMarks = SessionMarksStore(this)
+        sessionMarks.observe(repository.state, scope)
         observeOpenedSession()
         RemoteNotifications.createChannel(this)
         RemoteNotifications.deleteSyncChannel(this)
