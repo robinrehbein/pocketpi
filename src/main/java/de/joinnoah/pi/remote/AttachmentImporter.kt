@@ -73,8 +73,43 @@ internal object AttachmentImportRules {
             it.length <= 127 && Regex("[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+").matches(it)
         } ?: "application/octet-stream"
 
-    fun sha256(bytes: ByteArray): String =
-        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+    fun sha256(bytes: ByteArray): String = hex(MessageDigest.getInstance("SHA-256").digest(bytes))
+
+    fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
+
+    /** Reads into [buffer] until [length] bytes or the end of [input]; returns how many it read. */
+    fun readInto(input: InputStream, buffer: ByteArray, length: Int = buffer.size): Int {
+        var total = 0
+        while (total < length) {
+            val read = input.read(buffer, total, length - total)
+            if (read < 0) break
+            total += read
+        }
+        return total
+    }
+
+    /** The size and SHA-256 of everything [input] holds, read through a small buffer. */
+    class Digest(val size: Long, val sha256: String)
+
+    fun digest(
+        input: InputStream,
+        limit: Int = FILE_BYTES,
+        checkActive: () -> Unit = {},
+    ): Digest {
+        require(limit in 1..FILE_BYTES)
+        val messageDigest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(16 * 1024)
+        var size = 0L
+        while (true) {
+            checkActive()
+            val read = input.read(buffer)
+            if (read < 0) break
+            size += read
+            require(size <= limit) { "Attachment exceeds the file limit" }
+            messageDigest.update(buffer, 0, read)
+        }
+        return Digest(size, hex(messageDigest.digest()))
+    }
 
     fun readLimited(
         input: InputStream,
@@ -111,8 +146,29 @@ internal object AttachmentImportRules {
     }
 }
 
+/** Checks for cancellation before each read, so a slow source stops an import promptly. */
+private class CancellableInput(
+    private val input: InputStream,
+    private val checkActive: () -> Unit,
+) : InputStream() {
+    override fun read(): Int {
+        checkActive()
+        return input.read()
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        checkActive()
+        return input.read(buffer, offset, length)
+    }
+
+    override fun close() = input.close()
+}
+
 class AttachmentImporter(context: Context, private val store: AttachmentStorage) {
     private val resolver = context.contentResolver
+
+    private fun openSource(uri: Uri): InputStream =
+        requireNotNull(resolver.openInputStream(uri)) { "Attachment is unavailable" }
 
     suspend fun import(uri: Uri, photo: Boolean): LocalAttachment {
         var storedId: String? = null
@@ -129,13 +185,28 @@ class AttachmentImporter(context: Context, private val store: AttachmentStorage)
                         ?.use { cursor ->
                             if (cursor.moveToFirst()) cursor.getString(0) else null
                         }
-                val original =
-                    requireNotNull(resolver.openInputStream(uri)) { "Attachment is unavailable" }
-                        .use {
-                            AttachmentImportRules.readLimited(it) { coroutine.ensureActive() }
+                // A photo is decoded and re-encoded in memory, and its output is bounded by the image
+                // limit. Any other file is read twice: once to digest it, then streamed into the
+                // store, which refuses the import if the second read differs from the first. So the
+                // file never sits in memory whole, at the cost of a second read of the source.
+                val photoData =
+                    if (photo) {
+                        val original =
+                            openSource(uri).use {
+                                AttachmentImportRules.readLimited(it) { coroutine.ensureActive() }
+                            }
+                        normalizePhoto(original) { coroutine.ensureActive() }
+                    } else null
+                val digest =
+                    photoData?.let {
+                        AttachmentImportRules.Digest(
+                            it.size.toLong(),
+                            AttachmentImportRules.sha256(it),
+                        )
+                    }
+                        ?: openSource(uri).use {
+                            AttachmentImportRules.digest(it) { coroutine.ensureActive() }
                         }
-                val data =
-                    if (photo) normalizePhoto(original) { coroutine.ensureActive() } else original
                 coroutine.ensureActive()
                 val attachment =
                     LocalAttachment(
@@ -147,11 +218,17 @@ class AttachmentImporter(context: Context, private val store: AttachmentStorage)
                         if (photo) "image" else "file",
                         if (photo) "image/jpeg"
                         else AttachmentImportRules.mime(resolver.getType(uri)),
-                        data.size.toLong(),
-                        AttachmentImportRules.sha256(data),
+                        digest.size,
+                        digest.sha256,
                     )
                 storedId = attachment.id
-                store.write(attachment, data)
+                if (photoData != null) {
+                    store.write(attachment, photoData)
+                } else {
+                    openSource(uri).use {
+                        store.write(attachment, CancellableInput(it) { coroutine.ensureActive() })
+                    }
+                }
                 coroutine.ensureActive()
                 attachment
             }

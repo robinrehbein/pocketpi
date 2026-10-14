@@ -1368,6 +1368,156 @@ class RemoteRepositoryTest {
         assertTrue(local.id in storage.removed)
     }
 
+    /**
+     * A store whose [open] hands out a new stream per call, so a test can change the bytes that one
+     * open returns or fail it. Every stream is kept, to check that each one is closed.
+     */
+    private class StreamedAttachments(private val stored: ByteArray) : AttachmentStorage {
+        val opened = mutableListOf<CountingStream>()
+        var openFailure: RuntimeException? = null
+
+        /** The bytes of the open with this index (0 is the digest pass), given the stored bytes. */
+        var openedBytes: (index: Int, stored: ByteArray) -> ByteArray = { _, bytes -> bytes }
+
+        override fun write(attachment: LocalAttachment, bytes: ByteArray) = Unit
+
+        override fun read(attachment: LocalAttachment): ByteArray = stored.copyOf()
+
+        override fun open(attachment: LocalAttachment): java.io.InputStream {
+            openFailure?.let { throw it }
+            return CountingStream(openedBytes(opened.size, stored)).also { opened += it }
+        }
+
+        override fun remove(id: String) = Unit
+
+        override fun cleanup(keepIds: Set<String>) = Unit
+    }
+
+    private class CountingStream(bytes: ByteArray) : java.io.ByteArrayInputStream(bytes) {
+        var closed = false
+            private set
+
+        override fun close() {
+            closed = true
+            super.close()
+        }
+    }
+
+    /** Imports [local] from [storage], sends the prompt and lets its paced upload finish. */
+    private suspend fun TestScope.sendOneAttachment(
+        storage: AttachmentStorage,
+        local: LocalAttachment,
+        transport: Transport,
+        photo: Boolean = false,
+    ): DefaultRemoteRepository {
+        val repository = repository(transport, attachmentStorage = storage) { _, _ -> local }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        repository.importAttachments(
+            repository.state.value.selection,
+            listOf("content:attachment"),
+            photo,
+        )
+        runCurrent()
+        repository.prompt()
+        runCurrent()
+        advanceTimeBy(1_001)
+        runCurrent()
+        return repository
+    }
+
+    @Test
+    fun anAttachmentThatCannotBeOpenedStartsNoUpload() = runTest {
+        val bytes = ByteArray(130 * 1024) { (it % 251).toByte() }
+        val local = localFile(bytes)
+        val storage = StreamedAttachments(bytes).also { it.openFailure = IllegalStateException("gone") }
+        val transport = Transport().also { attachmentResponses(it, local) }
+        sendOneAttachment(storage, local, transport)
+        assertFalse(transport.sent.any { it.text("type") == "session.attachments.begin" })
+        assertFalse(transport.sent.any { it.text("type") == "session.prompt" })
+        assertTrue(storage.opened.isEmpty())
+    }
+
+    @Test
+    fun aStreamThatChangedBeforeSendingStartsNoUpload() = runTest {
+        val bytes = ByteArray(130 * 1024) { (it % 251).toByte() }
+        val local = localFile(bytes)
+        val storage =
+            StreamedAttachments(bytes).also {
+                it.openedBytes = { index, stored -> if (index == 0) stored.copyOf(stored.size - 1) else stored }
+            }
+        val transport = Transport().also { attachmentResponses(it, local) }
+        sendOneAttachment(storage, local, transport)
+        assertFalse(transport.sent.any { it.text("type") == "session.attachments.begin" })
+        assertFalse(transport.sent.any { it.text("type") == "session.prompt" })
+        assertTrue(storage.opened.all { it.closed })
+    }
+
+    @Test
+    fun aStreamThatChangesWhileItIsSentAbortsBeforeCommit() = runTest {
+        val bytes = ByteArray(130 * 1024) { (it % 251).toByte() }
+        val changes =
+            mapOf<String, (ByteArray) -> ByteArray>(
+                "shorter" to { it.copyOf(it.size - 1) },
+                "longer" to { it.copyOf(it.size + 1) },
+                "different" to {
+                    it.copyOf().also { copy -> copy[copy.size - 1] = (copy.last() + 1).toByte() }
+                },
+            )
+        for ((change, transform) in changes) {
+            val local = localFile(bytes)
+            val storage =
+                StreamedAttachments(bytes).also {
+                    it.openedBytes = { index, stored -> if (index == 1) transform(stored) else stored }
+                }
+            val transport = Transport().also { attachmentResponses(it, local) }
+            sendOneAttachment(storage, local, transport)
+            assertTrue("$change: begins", transport.sent.any { it.text("type") == "session.attachments.begin" })
+            assertFalse("$change: commits", transport.sent.any { it.text("type") == "session.attachments.commit" })
+            assertFalse("$change: prompts", transport.sent.any { it.text("type") == "session.prompt" })
+            assertTrue("$change: closes its stream", storage.opened.all { it.closed })
+        }
+    }
+
+    @Test
+    fun aFailedChunkClosesTheStreamAndCommitsNothing() = runTest {
+        val bytes = ByteArray(130 * 1024) { (it % 251).toByte() }
+        val local = localFile(bytes)
+        val storage = StreamedAttachments(bytes)
+        val transport = Transport().also { attachmentResponses(it, local) }
+        transport.failure = { if (it.text("type") == "session.attachments.chunk") "internal" else null }
+        sendOneAttachment(storage, local, transport)
+        assertTrue(storage.opened.isNotEmpty())
+        assertTrue(storage.opened.all { it.closed })
+        assertFalse(transport.sent.any { it.text("type") == "session.attachments.commit" })
+        assertFalse(transport.sent.any { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun aSentImageLargerThanOneChunkIsReadBackFromTheStreamedBytes() = runTest {
+        val bytes = ByteArray(150 * 1024) { (it % 239).toByte() }
+        val local = localFile(bytes).copy(kind = "image", name = "photo.jpg", mimeType = "image/jpeg")
+        val remoteId = Wire.encode(ByteArray(16) { 1 })
+        val storage = StreamedAttachments(bytes)
+        val transport = Transport().also { attachmentResponses(it, local, remoteId = remoteId) }
+        val repository = sendOneAttachment(storage, local, transport, photo = true)
+        assertTrue(transport.sent.any { it.text("type") == "session.prompt" })
+        assertTrue(storage.opened.all { it.closed })
+        val remote =
+            RemoteAttachment(
+                remoteId,
+                local.name,
+                local.kind,
+                local.mimeType,
+                local.size,
+                local.sha256,
+                3_600_000,
+            )
+        val result = repository.readAttachment("session", remote)
+        assertArrayEquals(bytes, (result as AttachmentReadResult.Loaded).bytes)
+        assertFalse(transport.sent.any { it.text("type") == "session.attachments.get" })
+    }
+
     @Test
     fun removingUnsubmittedAttachmentCancelsRemoteUploadAndReleasesBlob() = runTest {
         val bytes = byteArrayOf(1)

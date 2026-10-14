@@ -243,9 +243,9 @@ class StoreRecoveryTest {
         val good = attachment("B".repeat(22), "good".toByteArray())
         attachments.write(bad, "bad".toByteArray())
         attachments.write(good, "good".toByteArray())
-        corrupt("attachment-${bad.id}.enc")
+        corrupt("attachment-${bad.id}.v2")
         assertThrows(IllegalArgumentException::class.java) { attachments.read(bad) }
-        assertFalse(file("attachment-${bad.id}.enc").exists())
+        assertFalse(file("attachment-${bad.id}.v2").exists())
         assertEquals("good", attachments.read(good).decodeToString())
         assertNotNull(storedKey())
     }
