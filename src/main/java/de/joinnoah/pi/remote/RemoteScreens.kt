@@ -216,6 +216,10 @@ private val RETRYABLE_ERRORS =
         R.string.remote_device_paused,
     )
 
+/** A Projects or Sessions page has stopped loading and shows a list the Mac confirmed or the cache. */
+private fun listSettled(state: RemoteState): Boolean =
+    !state.loading && (state.connected || state.hostsLoaded)
+
 @Composable
 internal fun RemoteScreen(
     key: RemoteNavKey,
@@ -232,8 +236,15 @@ internal fun RemoteScreen(
     when (key) {
         RemoteNavKey.Hosts -> ReportDrawnWhen { state.hostsLoaded || state.hostsUnreadable || state.hosts.isNotEmpty() }
         // Offline or asleep, a Mac never confirms its lists: the cached page, settled, is what shows.
-        is RemoteNavKey.Projects, is RemoteNavKey.Sessions -> ReportDrawnWhen {
-            if (state.connected) !state.loading else state.hostsLoaded && !state.loading
+        // Only once this page's own route (and project) is selected: on a cold start the state
+        // is settled and empty before the activation of the last Mac has even begun.
+        is RemoteNavKey.Projects -> ReportDrawnWhen {
+            state.selection.routeId == key.routeId && listSettled(state)
+        }
+        is RemoteNavKey.Sessions -> ReportDrawnWhen {
+            state.selection.routeId == key.routeId &&
+                state.selection.projectId == key.projectId &&
+                listSettled(state)
         }
         else -> Unit
     }
@@ -2625,14 +2636,6 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_projects_quick_chats))
                                 }
-                                item(key = "project_chats_group_recent") {
-                                    Text(
-                                        stringResource(R.string.remote_projects_recent),
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(top = 12.dp),
-                                    )
-                                }
                                 projectChatRows(recentChats, routeMarks, state.connected, !state.loading) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
@@ -3536,8 +3539,8 @@ internal fun RemoteScreen(
                 TextButton(
                     onClick = {
                         disconnecting = false
-                        // Disconnect keeps the pairing, but a cold launch should not reconnect to the Mac the
-                        // user just let go of: the next launch opens the hosts list (or the only Mac).
+                        // Disconnect keeps the pairing; a cold launch no longer prefers this Mac. With
+                        // several Macs it opens the hosts list; a lone paired Mac still opens itself.
                         projectsPage?.routeId?.let(navigator::forgetLastRoute)
                         navigator.disconnect()
                     },
