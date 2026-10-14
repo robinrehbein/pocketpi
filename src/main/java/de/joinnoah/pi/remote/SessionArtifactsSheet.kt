@@ -38,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -203,12 +204,14 @@ internal fun SessionArtifactsPane(
     list: suspend () -> SessionArtifactListResult,
     open: suspend (artifact: SessionArtifact, listed: Boolean) -> SessionArtifactOpenResult,
     onClose: () -> Unit,
+    kept: MutableState<ArtifactGalleryState.Loaded?>? = null,
 ) {
     PaneBackHandler(onBack = onClose)
     Surface(Modifier.fillMaxSize().testTag("artifactsPane")) {
         SessionArtifactsGallery(
             sessionId, list, open,
             modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
+            kept = kept,
         )
     }
 }
@@ -222,16 +225,24 @@ internal fun SessionArtifactsGallery(
     modifier: Modifier = Modifier,
     /** How long ago an artifact changed; injectable so tests do not depend on the clock or locale. */
     formatAge: (updatedAt: Long) -> String = ::relativeAge,
+    /**
+     * Keeps the loaded list beyond this composition: the inspector composes only its active tab,
+     * and a switch back to the gallery shows the list it had instead of asking the Mac again.
+     */
+    kept: MutableState<ArtifactGalleryState.Loaded?>? = null,
 ) {
-    var state by remember { mutableStateOf<ArtifactGalleryState>(ArtifactGalleryState.Loading) }
+    var state by remember { mutableStateOf<ArtifactGalleryState>(kept?.value ?: ArtifactGalleryState.Loading) }
     var reload by remember { mutableIntStateOf(0) }
     val latestList by rememberUpdatedState(list)
     val viewers = LocalInspectorViewers.current
     LaunchedEffect(reload) {
+        if (reload == 0 && state is ArtifactGalleryState.Loaded) return@LaunchedEffect
         state = ArtifactGalleryState.Loading
         state = latestList().toGalleryState()
+        val loaded = state as? ArtifactGalleryState.Loaded
+        kept?.value = loaded
         // An artifact open beside the chat learns of its newer versions.
-        (state as? ArtifactGalleryState.Loaded)?.let { viewers?.listed(it.list.artifacts) }
+        loaded?.let { viewers?.listed(it.list.artifacts) }
     }
     Column(modifier.fillMaxWidth().testTag("artifactGallery")) {
         Row(

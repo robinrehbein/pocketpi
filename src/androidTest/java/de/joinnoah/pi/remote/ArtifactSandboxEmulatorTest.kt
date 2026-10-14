@@ -578,6 +578,23 @@ class ArtifactSandboxEmulatorTest {
         assertFalse(webViews().any { it === first })
     }
 
+    /** Another artifact opened into the occupied tab draws in a new sandboxed view, never in the last one's. */
+    @Test fun anotherArtifactInTheTabGetsItsOwnView() {
+        lateinit var slot: InspectorViewerSlot
+        fun artifact(name: String) =
+            InspectorViewer.Artifact(ArtifactKind.Html, "out/$name.html", name, versionPage(name), reload = null)
+        compose.setContent {
+            val scope = rememberCoroutineScope()
+            slot = remember { InspectorViewerSlot(scope).apply { show(artifact("first"), null) } }
+            MaterialTheme { InspectorViewerPane(slot, onClose = {}) }
+        }
+        compose.waitUntil(30_000) { webViews().singleOrNull()?.let(::title) == "first" }
+        val first = webViews().single()
+        compose.runOnIdle { slot.show(artifact("second"), null) }
+        compose.waitUntil(30_000) { webViews().singleOrNull()?.let(::title) == "second" }
+        assertFalse(webViews().any { it === first })
+    }
+
     @Test fun mermaidDrawsAValidDiagram() {
         val outcome = CountDownLatch(1)
         var title = ""

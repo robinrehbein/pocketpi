@@ -50,13 +50,15 @@ class InspectorViewersTest {
     fun aNewVersionWaitsUntilTheUserTakesIt() = runTest {
         var reloads = 0
         val slot = slot()
-        slot.show(page({ "v${++reloads + 1}" }), "edit-1")
+        // Opened before the chat edited the file: the card's page is current.
+        slot.show(page({ "v${++reloads + 1}" }), null)
         assertFalse(slot.newVersion)
-        // The same change again, or none, is no news.
-        slot.changed("edit-1")
+        // No change, or the same again, is no news.
         slot.changed(null)
         assertFalse(slot.newVersion)
-        slot.changed("edit-2")
+        slot.changed("edit-1")
+        assertTrue(slot.newVersion)
+        slot.changed("edit-1")
         assertTrue(slot.newVersion)
         advanceUntilIdle()
         assertEquals(0, reloads)
@@ -67,6 +69,58 @@ class InspectorViewersTest {
         assertEquals(1, reloads)
         assertEquals("v2", slot.artifact?.text)
         assertEquals(1, slot.artifact?.generation)
+    }
+
+    @Test
+    fun aCardLoadedBeforeTheLastEditOpensWhatIsOnTheMacNow() = runTest {
+        var onMac = "v2"
+        val slot = slot()
+        // The card loaded v1, then the chat edited the file (edit-1), then the user tapped the card.
+        slot.show(page({ onMac }), "edit-1")
+        assertFalse(slot.newVersion)
+        advanceUntilIdle()
+        assertEquals("v2", slot.artifact?.text)
+        assertFalse(slot.newVersion)
+        // Tapping the old card again keeps the newer page instead of its stale text.
+        slot.show(page({ onMac }), "edit-1")
+        advanceUntilIdle()
+        assertEquals("v2", slot.artifact?.text)
+        // The same text fetched on opening keeps the loaded view.
+        onMac = "v1"
+        slot.show(page({ onMac }, ArtifactWatch.File("b.html")), "edit-2")
+        advanceUntilIdle()
+        assertEquals("v1", slot.artifact?.text)
+        assertEquals(0, slot.artifact?.generation)
+    }
+
+    @Test
+    fun aFailedFetchOnOpeningOffersTheNewestVersion() = runTest {
+        val slot = slot()
+        slot.show(page({ null }), "edit-1")
+        advanceUntilIdle()
+        assertEquals("v1", slot.artifact?.text)
+        assertTrue(slot.newVersion)
+    }
+
+    @Test
+    fun aLaterReloadSupersedesOneStillRunning() = runTest {
+        val first = CompletableDeferred<String?>()
+        val second = CompletableDeferred<String?>()
+        val answers = ArrayDeque(listOf(first, second))
+        val slot = slot()
+        slot.show(page({ answers.removeFirst().await() }), null)
+        slot.reloadAlways()
+        slot.changed("edit-1")
+        advanceUntilIdle()
+        slot.changed("edit-2")
+        advanceUntilIdle()
+        second.complete("v3")
+        advanceUntilIdle()
+        // The older answer, coming last, does not replace the newer page.
+        first.complete("v2")
+        advanceUntilIdle()
+        assertEquals("v3", slot.artifact?.text)
+        assertFalse(slot.newVersion)
     }
 
     @Test
@@ -91,7 +145,7 @@ class InspectorViewersTest {
     fun aFailedReloadOffersTheVersionAgain() = runTest {
         val answer = CompletableDeferred<String?>()
         val slot = slot()
-        slot.show(page({ answer.await() }), "edit-1")
+        slot.show(page({ answer.await() }), null)
         slot.changed("edit-2")
         slot.reload()
         answer.complete(null)
@@ -103,10 +157,27 @@ class InspectorViewersTest {
     @Test
     fun aReloadByHandCountsAsTheNewVersion() = runTest {
         val slot = slot()
-        slot.show(page({ "v2" }), "edit-1")
+        slot.show(page({ "v2" }), null)
         slot.changed("edit-2")
         slot.reloaded()
         assertFalse(slot.newVersion)
+    }
+
+    private fun listed(version: Int, text: String) =
+        InspectorViewer.Artifact(ArtifactKind.Html, "a.html", "A", text, { "latest" }, ArtifactWatch.Listed("id", version))
+
+    @Test
+    fun anOpenedListedVersionOlderThanTheNewestOffersIt() = runTest {
+        val slot = slot()
+        // The gallery listed version 3 already, but the card opened version 2.
+        slot.show(listed(2, "v2"), "3")
+        assertTrue(slot.newVersion)
+        // The gallery's version 3 replaces the page, and an older card again keeps it.
+        slot.show(listed(3, "v3"), "3")
+        assertEquals("v3", slot.artifact?.text)
+        assertFalse(slot.newVersion)
+        slot.show(listed(2, "v2"), "3")
+        assertEquals("v3", slot.artifact?.text)
     }
 
     @Test
@@ -118,11 +189,13 @@ class InspectorViewersTest {
         slot.show(page({ "v2" }), null)
         assertSame(first, slot.artifact)
         assertFalse(slot.poppedOut)
-        // The same artifact with another text, a newer version from the gallery, replaces the page.
-        slot.show(InspectorViewer.Artifact(ArtifactKind.Html, "a.html", "A", "v3", { "v3" }, ArtifactWatch.File("a.html")), null)
-        assertEquals("v3", slot.artifact?.text)
-        slot.show(page({ "v2" }, ArtifactWatch.Listed("id", 2)), null)
-        assertFalse(first === slot.artifact)
+        // A newer version of the same artifact from the gallery replaces the page with a new one.
+        slot.show(listed(1, "v1"), "1")
+        val listedPage = slot.artifact
+        slot.show(listed(2, "v2"), "2")
+        assertEquals("v2", slot.artifact?.text)
+        assertFalse(listedPage === slot.artifact)
+        assertEquals(0, slot.artifact?.generation)
         // A diagram has nothing to reload and offers no versions.
         slot.show(InspectorViewer.Artifact(ArtifactKind.Mermaid, "diagram.mmd", "D", "flowchart TD", null), null)
         slot.changed("anything")

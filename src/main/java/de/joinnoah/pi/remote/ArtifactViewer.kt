@@ -52,19 +52,30 @@ internal class ArtifactViewerState(initialText: String) {
         private set
     var showCode by mutableStateOf(false)
     var previewFailed by mutableStateOf(false)
+    /** A share is exporting the page. */
     var busy by mutableStateOf(false)
+    // Reloads running; counted, so one that ends while another still runs keeps the buttons off.
+    private var loads by mutableIntStateOf(0)
 
-    /** Shows what [fetch] returns; false when it returned nothing and the page stays as it is. */
-    suspend fun reload(fetch: suspend () -> String?): Boolean {
-        busy = true
+    /** Nothing exports or loads: the reload and share buttons work. */
+    val idle: Boolean
+        get() = !busy && loads == 0
+
+    /**
+     * Shows what [fetch] returns; false when it returned nothing and the page stays as it is. With
+     * [keepSame] the same text keeps the loaded view instead of drawing it again.
+     */
+    suspend fun reload(fetch: suspend () -> String?, keepSame: Boolean = false): Boolean {
+        loads++
         try {
             val fresh = fetch() ?: return false
+            if (keepSame && fresh == text) return true
             text = fresh
             generation++
             previewFailed = false
             return true
         } finally {
-            busy = false
+            loads--
         }
     }
 }
@@ -73,7 +84,7 @@ internal class ArtifactViewerState(initialText: String) {
  * Full-screen view of an HTML artifact or a Mermaid diagram: a Preview in a fresh sandboxed WebView
  * (one per viewer, destroyed on close) and a Code tab. [reload] fetches the current source from the
  * Mac and is null where reloading makes no sense (a diagram in the message text). The inspector's
- * tab pops out into this dialog with its own [state].
+ * tab pops out into this dialog with its own [state] and the [notice] of a newer version.
  */
 @Composable
 internal fun ArtifactViewer(
@@ -85,6 +96,7 @@ internal fun ArtifactViewer(
     onDismiss: () -> Unit,
     state: ArtifactViewerState = remember { ArtifactViewerState(initialText) },
     onReloaded: () -> Unit = {},
+    notice: (@Composable () -> Unit)? = null,
 ) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         ArtifactViewerBody(
@@ -93,6 +105,7 @@ internal fun ArtifactViewer(
             onReloaded = onReloaded,
             modifier = Modifier.testTag("artifactViewer"),
             insets = Modifier.statusBarsPadding().navigationBarsPadding(),
+            notice = notice,
         )
     }
 }
@@ -156,7 +169,7 @@ internal fun ArtifactViewerBody(
                 }
                 if (reload != null)
                     IconButton(
-                        enabled = !state.busy,
+                        enabled = state.idle,
                         modifier = Modifier.testTag("artifactViewerReload"),
                         onClick = {
                             scope.launch {
@@ -166,7 +179,7 @@ internal fun ArtifactViewerBody(
                         },
                     ) { Icon(Icons.Default.Refresh, stringResource(R.string.remote_artifact_reload)) }
                 IconButton(
-                    enabled = !state.busy,
+                    enabled = state.idle,
                     modifier = Modifier.testTag("artifactViewerShare"),
                     onClick = {
                         scope.launch {
@@ -261,7 +274,9 @@ internal fun ArtifactViewerBody(
                 else
                     // A dark mode switch no longer recreates the activity: a new view draws the
                     // page in the new colors, while rotation and resizing keep the loaded one.
-                    key(state.generation, dark) {
+                    // Keyed on the state too: another artifact in the same place starts at
+                    // generation 0 as well and must not keep the previous page.
+                    key(state, state.generation, dark) {
                         val page = remember { ArtifactPage(kind, text, dark) }
                         AndroidView(
                             factory = { ctx ->

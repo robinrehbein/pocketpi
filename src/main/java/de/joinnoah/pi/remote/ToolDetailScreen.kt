@@ -30,7 +30,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Warning
@@ -492,7 +492,7 @@ private fun ToolDetailTopBar(item: ConversationItem.Activity, onClose: () -> Uni
         }
         if (onPopOut != null)
             IconButton(onClick = onPopOut, Modifier.testTag("toolDetailPopOut")) {
-                Icon(Icons.AutoMirrored.Filled.OpenInNew, stringResource(R.string.remote_inspector_pop_out))
+                Icon(Icons.Default.Fullscreen, stringResource(R.string.remote_inspector_pop_out))
             }
     }
 }

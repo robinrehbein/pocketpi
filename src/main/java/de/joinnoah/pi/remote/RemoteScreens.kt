@@ -654,6 +654,10 @@ internal fun RemoteScreen(
     fun toggleHistory() {
         toggleTab(InspectorTab.HISTORY, historyOpen, canOpen = true)
     }
+    /** `/artifacts`: the gallery's tab beside the chat, selected even when open behind another tab; a sheet on a phone. */
+    fun openGallery() {
+        if (sideCapable) openInspector(InspectorTab.GALLERY) else artifactsSheetRequested = true
+    }
     val showViewer by rememberUpdatedState<(InspectorViewer) -> Unit> { viewer ->
         viewerSlot.show(viewer, viewerChange(viewer))
         showTab(InspectorTab.ARTIFACT)
@@ -903,7 +907,7 @@ internal fun RemoteScreen(
                 else if (reloading) showToast(R.string.remote_reload_running)
                 else state.selection.sessionId?.let(::startReload)
             LocalCommand.ARTIFACTS ->
-                if (artifactsAvailable) artifactsSheetRequested = true
+                if (artifactsAvailable) openGallery()
                 else showToast(R.string.remote_artifacts_host_outdated)
             LocalCommand.NAME -> {
                 val session = state.session ?: return true
@@ -1241,12 +1245,16 @@ internal fun RemoteScreen(
     }
     val artifactsShown =
         artifactsSheetRequested && chatKey != null && listArtifacts != null && artifactsSessionId != null && canShowArtifacts(state)
+    // The gallery tab's list while the tab stays open; it loads again once the tab reopens.
+    val keptGallery = remember(key, artifactsSessionId) { mutableStateOf<ArtifactGalleryState.Loaded?>(null) }
+    LaunchedEffect(artifactsShown) { if (!artifactsShown) keptGallery.value = null }
     val galleryContent: (@Composable () -> Unit)? =
         if (artifactsShown && sideCapable) {
             {
                 SessionArtifactsPane(
                     artifactsSessionId, listArtifacts, openArtifact,
                     onClose = { closeTab(InspectorTab.GALLERY) },
+                    kept = keptGallery,
                 )
             }
         } else null
@@ -2657,7 +2665,7 @@ internal fun RemoteScreen(
                                         // Like a sent command, a command draft does not stay in the composer.
                                         if (composer.text.trimStart().startsWith("/")) composer.replace("")
                                         if (command == LocalCommand.TREE) treeSheetRequested = true
-                                        else if (artifactsAvailable) artifactsSheetRequested = true
+                                        else if (artifactsAvailable) openGallery()
                                         else showToast(R.string.remote_artifacts_host_outdated)
                                     }
                                     // A terminal session only explains itself; nothing to send.

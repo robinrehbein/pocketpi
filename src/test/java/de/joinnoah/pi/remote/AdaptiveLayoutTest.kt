@@ -449,6 +449,26 @@ class AdaptiveLayoutTest {
     }
 
     @Test
+    fun navigationRevealingTheListIsNoChoiceToRemember() {
+        val wide = paneLayout(1300.dp, TALL)
+        val state = TwoPaneState()
+        state.window = 1300.dp
+        state.adopt(wide)
+        state.revealList()
+        assertFalse(wide.sizeKey() in state.memos)
+        // The user hides the list; a project opened brings it back and drops the stored hide.
+        state.listCollapsed = true
+        assertEquals(true, state.memos[wide.sizeKey()]?.listCollapsed)
+        state.resizeList(wide, 420.dp)
+        state.revealList()
+        assertFalse(state.listCollapsed)
+        assertNull(state.memos[wide.sizeKey()]?.listCollapsed)
+        // So the width's reset removes the bucket's entry.
+        state.resizeList(wide, null)
+        assertFalse(wide.sizeKey() in state.memos)
+    }
+
+    @Test
     fun storedWidthsNeverPushTheChatBelowItsMinimum() {
         // Widths dragged in the widest window of a bucket come back clamped in its narrowest one.
         for ((wideWindow, narrowWindow) in listOf(1599 to 960, 959 to 750, 2560 to 1600)) {

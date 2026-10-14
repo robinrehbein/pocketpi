@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -29,6 +30,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /** How an open artifact learns that a newer version exists. */
@@ -121,28 +123,52 @@ internal class InspectorViewerSlot(private val scope: CoroutineScope) {
     var autoRefresh by mutableStateOf(false)
         private set
 
+    /** The change the page shows; null where that is unknown, which offers the newest. */
     private var shown by mutableStateOf<String?>(null)
     private var latest by mutableStateOf<String?>(null)
+    private var loading: Job? = null
 
     val newVersion: Boolean
         get() = latest != shown && (viewer as? InspectorViewer.Artifact)?.reload != null
 
     /**
      * Opens [next], whose newest known change is [change]. The open one again stays as it is,
-     * unless it comes with another text than the tab shows (a newer version from the gallery).
+     * unless the gallery opens a newer version of it than the tab shows.
+     *
+     * A project file's card may have loaded its page before the chat's last edit of it, so where
+     * the chat edited the file, the tab fetches what is on the Mac now; should that fail, the
+     * notice offers it.
      */
     fun show(next: InspectorViewer, change: String?) {
         poppedOut = false
         val same = viewer?.key == next.key
-        if (same && (next !is InspectorViewer.Artifact || artifact?.text == next.text)) return
+        if (same && !newerThanShown(next)) return
+        loading?.cancel()
+        loading = null
         viewer = next
         artifact = (next as? InspectorViewer.Artifact)?.let { ArtifactViewerState(it.text) }
         if (!same) autoRefresh = false
-        shown = change
         latest = change
+        when (val watch = (next as? InspectorViewer.Artifact)?.watch) {
+            is ArtifactWatch.File ->
+                if (change != null && next.reload != null) {
+                    shown = null
+                    fetch(keepSame = true)
+                } else shown = change
+            is ArtifactWatch.Listed -> shown = watch.version.toString()
+            null -> shown = change
+        }
+    }
+
+    /** [next] names the open artifact: only a newer listed version than the tab shows replaces it. */
+    private fun newerThanShown(next: InspectorViewer): Boolean {
+        val watch = (next as? InspectorViewer.Artifact)?.watch as? ArtifactWatch.Listed ?: return false
+        return next.text != artifact?.text && watch.version > (shown?.toIntOrNull() ?: 0)
     }
 
     fun close() {
+        loading?.cancel()
+        loading = null
         viewer = null
         artifact = null
         poppedOut = false
@@ -160,13 +186,23 @@ internal class InspectorViewerSlot(private val scope: CoroutineScope) {
 
     /** Loads the newest version; should it fail, the notice stays and offers it again. */
     fun reload() {
+        fetch(keepSame = false)
+    }
+
+    // One fetch at a time: a later one supersedes the one running, so an older answer that comes
+    // last never ends on the page.
+    private fun fetch(keepSame: Boolean) {
         val open = viewer as? InspectorViewer.Artifact ?: return
         val fetch = open.reload ?: return
         val page = artifact ?: return
         val previous = shown
         val target = latest
         shown = target
-        scope.launch { if (!page.reload(fetch) && shown == target && artifact === page) shown = previous }
+        loading?.cancel()
+        loading =
+            scope.launch {
+                if (!page.reload(fetch, keepSame) && shown == target && artifact === page) shown = previous
+            }
     }
 
     /** Loads this and every later version as it comes. */
@@ -193,21 +229,27 @@ internal fun InspectorViewerPane(slot: InspectorViewerSlot, onClose: () -> Unit)
         when (viewer) {
             is InspectorViewer.Artifact -> {
                 val page = slot.artifact ?: return@Box
-                ArtifactViewerBody(
-                    page, viewer.kind, viewer.path, viewer.title, viewer.reload,
-                    modifier = Modifier.testTag("artifactTab"),
-                    onPopOut = { slot.poppedOut = true },
-                    onReloaded = slot::reloaded,
-                    insets = insets,
-                    notice = if (slot.newVersion) ({ ArtifactChangedNotice(slot::reload, slot::reloadAlways) }) else null,
-                )
+                // Each page its own composition: another artifact gets a new view, not the last one's.
+                key(page) {
+                    ArtifactViewerBody(
+                        page, viewer.kind, viewer.path, viewer.title, viewer.reload,
+                        modifier = Modifier.testTag("artifactTab"),
+                        onPopOut = { slot.poppedOut = true },
+                        onReloaded = slot::reloaded,
+                        insets = insets,
+                        notice = slot.notice(),
+                    )
+                }
             }
             is InspectorViewer.Image ->
-                ImageViewerBody(
-                    viewer.path, viewer.sha256, viewer.mimeType, viewer.source,
-                    modifier = Modifier.testTag("imageTab"),
-                    onPopOut = { slot.poppedOut = true },
-                )
+                // Another image starts unzoomed.
+                key(viewer.key) {
+                    ImageViewerBody(
+                        viewer.path, viewer.sha256, viewer.mimeType, viewer.source,
+                        modifier = Modifier.testTag("imageTab"),
+                        onPopOut = { slot.poppedOut = true },
+                    )
+                }
         }
     }
 }
@@ -218,16 +260,23 @@ internal fun InspectorViewerDialog(slot: InspectorViewerSlot, onDismiss: () -> U
     when (val viewer = slot.viewer) {
         is InspectorViewer.Artifact -> {
             val page = slot.artifact ?: return
-            ArtifactViewer(
-                viewer.kind, viewer.path, viewer.title, viewer.text, viewer.reload, onDismiss,
-                state = page,
-                onReloaded = slot::reloaded,
-            )
+            key(page) {
+                ArtifactViewer(
+                    viewer.kind, viewer.path, viewer.title, viewer.text, viewer.reload, onDismiss,
+                    state = page,
+                    onReloaded = slot::reloaded,
+                    notice = slot.notice(),
+                )
+            }
         }
         is InspectorViewer.Image -> ImageViewer(viewer.path, viewer.sha256, viewer.mimeType, viewer.source, onDismiss)
         null -> Unit
     }
 }
+
+/** The notice a newer version shows in the tab and in the dialog it pops out to. */
+private fun InspectorViewerSlot.notice(): (@Composable () -> Unit)? =
+    if (newVersion) ({ ArtifactChangedNotice(::reload, ::reloadAlways) }) else null
 
 /** A newer version of the page is on the Mac: load it now, or this and every later one. */
 @Composable

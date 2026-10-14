@@ -436,6 +436,18 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
         }
 
     /**
+     * Navigation brings the list back: a project opened, the search or the next project. That is
+     * no choice of the user's for the bucket to remember, but a hide it remembers no longer holds.
+     */
+    fun revealList() {
+        collapsed = false
+        autoCollapsed = false
+        val key = sizedFor ?: return
+        val memo = memos[key]?.takeIf { it.listCollapsed == true }?.copy(listCollapsed = null) ?: return
+        memos = if (memo.empty) memos - key else memos + (key to memo)
+    }
+
+    /**
      * The list collapsed by itself to make room for the inspector ([autoCollapseList]); closing
      * the inspector brings it back ([restoreList]).
      */

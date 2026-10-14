@@ -640,7 +640,7 @@ internal class RemoteNavigator(
             adjacentId(state.projects.map { it.text("id") }, current, step)
                 ?.takeIf { it != current }
                 ?.let {
-                    twoPane?.listCollapsed = false
+                    twoPane?.revealList()
                     open(RemoteNavKey.Sessions(projects.routeId, it))
                 }
             return true
@@ -648,7 +648,7 @@ internal class RemoteNavigator(
         val sessions = panes.list?.let { stack[it] as? RemoteNavKey.Sessions } ?: return false
         return when (shortcut) {
             Shortcut.SEARCH -> {
-                if (twoPane != null) twoPane.listCollapsed = false
+                if (twoPane != null) twoPane.revealList()
                 // The phone shows one destination: the sessions come to the top for their search.
                 // A request waits for the list, so it is made only once the list is on top, never
                 // for a navigation held for an unsaved edit.
