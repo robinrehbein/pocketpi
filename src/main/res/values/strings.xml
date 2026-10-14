@@ -145,11 +145,6 @@
     <string name="remote_abort_run_confirmation">Abort the current run? Pending answers will not be sent.</string>
     <string name="remote_busy">pi is working. Your draft will stay here.</string>
     <string name="remote_draft_uncertain">Connection lost. Check the conversation before sending your draft again.</string>
-    <string name="remote_follow_up">Queue follow-up</string>
-    <string name="remote_steer">Steer current turn</string>
-    <string name="remote_follow_up_short">Follow-up</string>
-    <string name="remote_steer_short">Steer</string>
-    <string name="remote_switch_delivery">Tap or swipe the send button to switch delivery</string>
     <string name="remote_steer_accepted">Steering the running step: %1$s</string>
     <string name="remote_tui_info_title">Mac terminal session</string>
     <string name="remote_tui_info_body">While this session is busy, follow-up and steer are available only locally on the Mac. Send a remote prompt when it is idle, or use Stop to interrupt it.</string>

@@ -182,10 +182,12 @@ again when the app returns to the foreground on a validated network, and after t
 changes. It keeps the socket while the app is in the background and stops automatic retries there.
 It never opens or forks a historical session, and never retries prompts or answers automatically.
 After an uncertain prompt result, read the conversation before sending the draft again. In a
-running host-owned RPC session, Queue follow-up submits the draft to pi's follow-up queue; the
-journal distinguishes queued messages from uncertain outcomes. Stop clears the RPC queue before
-aborting, but pi does not return request IDs for removed messages, so PocketPi cannot claim that a
-particular follow-up was discarded. The journal keeps up to 64 entries per session; dismiss an
+running host-owned RPC session, the busy row offers two send modes: Send now (interrupt step) sends
+the draft as a steer, and Send when done submits it to pi's follow-up queue. The journal
+distinguishes queued messages from uncertain outcomes. Stop, from the busy row, Esc Esc, Ctrl+. or a
+question's abort, asks first when queued messages would be discarded. Once confirmed, it clears the
+RPC queue before aborting, but pi does not return request IDs for removed messages, so PocketPi
+cannot claim that a particular follow-up was discarded. The journal keeps up to 64 entries per session; dismiss an
 uncertain entry after checking the conversation to make room without resending it. Ordinary prompts
 and slash commands remain idle-only. Interactive Mac TUI sessions do not accept remote follow-up
 while busy; the information icon next to the chat title explains their local controls. Refresh
