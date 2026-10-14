@@ -121,6 +121,7 @@ internal class RemoteNavigator(
     private fun invalidate(): Long {
         // Another navigation began before the created chat's screen took it.
         freshSession = null
+        forkLatestRequest = null
         consumePendingNotification?.invoke()
         consumePendingNotification = null
         activation?.cancel()
@@ -243,6 +244,28 @@ internal class RemoteNavigator(
             replace(key.selection(), keepSettings = false, keepStackedChats = false)
             activate(key, ActivationMode.USER_OPEN)
         }
+
+    /**
+     * Opens the chat [key] like [open], and its rewind menu on the latest message once the chat
+     * has loaded: a session row's "Rewind from the latest message".
+     */
+    fun openAndForkLatest(key: RemoteNavKey.Chat) =
+        leavingEditor(key.selection()) {
+            replace(key.selection(), keepSettings = false, keepStackedChats = false)
+            activate(key, ActivationMode.USER_OPEN)
+            forkLatestRequest = key
+        }
+
+    /** The chat [openAndForkLatest] opened, until its screen took it ([takeForkLatest]). */
+    var forkLatestRequest: RemoteNavKey.Chat? by mutableStateOf(null)
+        private set
+
+    /** True once, for the chat whose rewind menu [openAndForkLatest] asked for. */
+    fun takeForkLatest(key: RemoteNavKey.Chat): Boolean {
+        if (forkLatestRequest != key) return false
+        forkLatestRequest = null
+        return true
+    }
 
     /** Where keyboard focus is relative to the code editor; the editor reports it. */
     val editorFocus = EditorFocus()

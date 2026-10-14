@@ -69,7 +69,11 @@ internal fun ChatActionLayout.withHistory(): ChatActionLayout =
     else copy(menu = (menu + ChatAction.HISTORY).sortedBy { it.ordinal })
 
 /**
- * [this] with Close at the end of the menu, which it opens when it was empty: the same session
- * actions as a session row's menu, without a swipe.
+ * [this] with Close at the end of the menu: the same session actions as a session row's menu,
+ * without a swipe. When Close opens the menu, the chevron takes the third button's place, so the
+ * pill stays as wide as [chatActionLayout] makes it; History's own button stays.
  */
-internal fun ChatActionLayout.withClose(): ChatActionLayout = copy(menu = (menu + ChatAction.CLOSE).sortedBy { it.ordinal })
+internal fun ChatActionLayout.withClose(): ChatActionLayout {
+    val moved = if (menu.isEmpty()) shown.filter { it != ChatAction.HISTORY }.drop(2) else emptyList()
+    return ChatActionLayout(shown - moved.toSet(), (menu + moved + ChatAction.CLOSE).sortedBy { it.ordinal })
+}

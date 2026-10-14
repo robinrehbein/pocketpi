@@ -171,15 +171,28 @@ private val plainBulletRegex = Regex("^[-*] ")
 
 /**
  * [text] as the chat shows it, for "Copy": inline marks dropped, links as their labels, headings
- * without their #, bullets as • and fenced code as the code alone.
+ * without their #, bullets as •, fenced code as the code alone, table rows as tab-separated
+ * cells, images as their description and rules (---) left out.
  */
 internal fun markdownPlainText(text: String): String =
     markdownSegments(text).joinToString("\n") { segment ->
         if (segment.code) segment.text
         else
-            segment.text.lines().joinToString("\n") { line ->
-                val level = line.takeWhile { it == '#' }.length.takeIf { it in 1..6 && line.getOrNull(it) == ' ' }
-                val content = if (level != null) line.drop(level + 1) else line.replace(plainBulletRegex, "• ")
-                parseInline(content, Color.Unspecified, 0, true).text
-            }
+            markdownBlocks(segment.text).mapNotNull { block ->
+                when (block) {
+                    is MarkdownBlock.Table ->
+                        (listOf(block.header) + block.rows).joinToString("\n") { row ->
+                            row.joinToString("\t") { parseInline(it, Color.Unspecified, 0, true).text }
+                        }
+                    is MarkdownBlock.Image -> markdownImageAltText(block)
+                    is MarkdownBlock.Artifact -> plainLine(block.line)
+                    is MarkdownBlock.Line -> if (block.text.trim() == "---") null else plainLine(block.text)
+                }
+            }.joinToString("\n")
     }
+
+private fun plainLine(line: String): String {
+    val level = line.takeWhile { it == '#' }.length.takeIf { it in 1..6 && line.getOrNull(it) == ' ' }
+    val content = if (level != null) line.drop(level + 1) else line.replace(plainBulletRegex, "• ")
+    return parseInline(content, Color.Unspecified, 0, true).text
+}

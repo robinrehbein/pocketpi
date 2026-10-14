@@ -144,7 +144,7 @@ internal fun ProjectStrip(
 }
 
 @Composable
-private fun ProjectAvatar(
+internal fun ProjectAvatar(
     name: String,
     projectId: String,
     selected: Boolean,

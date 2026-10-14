@@ -49,6 +49,8 @@ internal fun SessionListRow(
     swipe: Pair<SwipeAction, SwipeAction> = SwipeAction.CLOSE to SwipeAction.RENAME,
     /** The chat beside the list in the two-pane layout shows this session. */
     selected: Boolean = false,
+    /** Opens the chat with its rewind menu on the latest message; null where it cannot fork. */
+    onForkLatest: (() -> Unit)? = null,
 ) {
     fun available(action: SwipeAction): SwipeAction =
         when (action) {
@@ -78,16 +80,18 @@ internal fun SessionListRow(
     val closeLabel = stringResource(R.string.remote_session_close)
     val renameLabel = stringResource(R.string.remote_rename_session)
     val macTuiLabel = stringResource(R.string.remote_mac_tui_session)
+    val showActionsLabel = stringResource(R.string.remote_menu_show_actions)
     val copyId = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_session_id))
     // A right-click, the S Pen button, Shift+F10 and a long press all open the same menu, so
     // rename and close stay reachable with swipe actions turned off or a mouse in hand.
     val menuAnchor = rememberMenuAnchor()
     val menuItems = {
-        sessionMenuActions(canRename = onRename != null, canClose = closeAvailable).map { action ->
+        sessionMenuActions(canRename = onRename != null, canClose = closeAvailable, canFork = onForkLatest != null).map { action ->
             MenuItem(action.label, "session_${action.name.lowercase()}") {
                 when (action) {
                     SessionMenuAction.OPEN -> onClick()
                     SessionMenuAction.RENAME -> onRename?.invoke()
+                    SessionMenuAction.FORK_LATEST -> onForkLatest?.invoke()
                     SessionMenuAction.CLOSE -> onClose()
                     SessionMenuAction.COPY_ID -> copyId(item.id)
                 }
@@ -170,6 +174,7 @@ internal fun SessionListRow(
                             role = Role.Button,
                             onClick = onClick,
                             onLongClick = { menuAnchor.open() },
+                            onLongClickLabel = showActionsLabel,
                         )
                         .padding(
                             start = 4.dp + (item.depth.coerceAtMost(4) * 28).dp,

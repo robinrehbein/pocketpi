@@ -20,6 +20,14 @@ class PointerMenusTest {
             sessionMenuActions(canRename = true, canClose = true),
         )
         assertEquals(listOf(SessionMenuAction.OPEN, SessionMenuAction.COPY_ID), sessionMenuActions(canRename = false, canClose = false))
+        // A session that can fork offers its latest message's rewind, before the destructive Close.
+        assertEquals(
+            listOf(
+                SessionMenuAction.OPEN, SessionMenuAction.RENAME, SessionMenuAction.FORK_LATEST,
+                SessionMenuAction.CLOSE, SessionMenuAction.COPY_ID,
+            ),
+            sessionMenuActions(canRename = true, canClose = true, canFork = true),
+        )
     }
 
     @Test
@@ -72,6 +80,15 @@ class PointerMenusTest {
             ```
             """.trimIndent()
         assertEquals("Title\n• bold and code\nSee the docs.\nval x = **1**", markdownPlainText(markdown))
+        val blocks =
+            """
+            | Name | **Size** |
+            | --- | --- |
+            | `a.kt` | 2 KB |
+            ---
+            ![The login screen](shots/login.png)
+            """.trimIndent()
+        assertEquals("Name\tSize\na.kt\t2 KB\nThe login screen", markdownPlainText(blocks))
     }
 
     @Test
@@ -164,6 +181,15 @@ class PointerMenusTest {
         assertFalse(ChatAction.CLOSE in DEFAULT_CHAT_ACTIONS)
         val few = chatActionLayout(DEFAULT_CHAT_ACTIONS, setOf(ChatAction.REFRESH, ChatAction.SETTINGS))
         assertEquals(ChatActionLayout(few.shown, listOf(ChatAction.CLOSE)), few.withClose())
+        // Three buttons without a menu: Close's chevron takes the third one's place.
+        val three = chatActionLayout(DEFAULT_CHAT_ACTIONS, setOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.SETTINGS))
+        assertEquals(3, three.shown.size)
+        val closable = three.withClose()
+        assertEquals(listOf(ChatAction.CHANGES, ChatAction.REFRESH), closable.shown)
+        assertEquals(listOf(ChatAction.SETTINGS, ChatAction.CLOSE), closable.menu)
+        // History keeps the button of its own.
+        val narrow = three.withHistory().withClose()
+        assertEquals(listOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.HISTORY), narrow.shown)
         val many = chatActionLayout(DEFAULT_CHAT_ACTIONS, ChatAction.entries.toSet()).withHistory().withClose()
         assertEquals(ChatAction.CLOSE, many.menu.last())
         assertFalse(ChatAction.CLOSE in many.shown)
@@ -177,6 +203,10 @@ class PointerMenusTest {
         assertEquals(0, emptySpaceBelowList(layout(total = 5, items = listOf(item(3, 600, 100), item(4, 710, 100)).take(1), end = 780)))
         assertEquals(0, emptySpaceBelowList(layout(total = 1, items = listOf(item(0, 0, 900)), end = 780)))
         assertEquals(780, emptySpaceBelowList(layout(total = 0, items = emptyList(), end = 780)))
+        // The after-padding is never empty space: a list scrolled to its end has none.
+        assertEquals(0, emptySpaceBelowList(layout(total = 9, items = listOf(item(8, 500, 180)), end = 780, after = 100)))
+        assertEquals(380, emptySpaceBelowList(layout(total = 2, items = listOf(item(0, 0, 100), item(1, 110, 190)), end = 780, after = 100)))
+        assertEquals(680, emptySpaceBelowList(layout(total = 0, items = emptyList(), end = 780, after = 100)))
     }
 
     private fun item(index: Int, offset: Int, size: Int) =
@@ -188,7 +218,7 @@ class PointerMenusTest {
             override val contentType: Any? = null
         }
 
-    private fun layout(total: Int, items: List<LazyListItemInfo>, end: Int) =
+    private fun layout(total: Int, items: List<LazyListItemInfo>, end: Int, after: Int = 0) =
         object : LazyListLayoutInfo {
             override val visibleItemsInfo = items
             override val viewportStartOffset = -20
@@ -198,7 +228,7 @@ class PointerMenusTest {
             override val orientation = Orientation.Vertical
             override val reverseLayout = false
             override val beforeContentPadding = 20
-            override val afterContentPadding = 0
+            override val afterContentPadding = after
             override val mainAxisItemSpacing = 0
         }
 }

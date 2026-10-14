@@ -421,6 +421,8 @@ internal fun RemoteScreen(
     var composerSize by remember { mutableStateOf(IntSize.Zero) }
     var headerSize by remember { mutableStateOf(IntSize.Zero) }
     val composerHeight = with(LocalDensity.current) { composerSize.height.toDp() }
+    // The conversation list's after-padding: its last item can scroll to just above the composer.
+    val conversationEndPadding = composerHeight + 24.dp
     val headerHeight = with(LocalDensity.current) { headerSize.height.toDp() }
     val listScope = rememberCoroutineScope()
     var autoFollow by rememberSaveable(key) { mutableStateOf(savedViewport?.following ?: true) }
@@ -707,6 +709,20 @@ internal fun RemoteScreen(
     val chatFocus = remember { FocusRequester() }
     // Ctrl+Shift+N opens the rewind menu of this bubble once it is on screen.
     var forkMenuRequest by remember(key) { mutableStateOf<String?>(null) }
+    // A session row's "Rewind from the latest message" opened this chat: once it has loaded, the
+    // latest message's rewind menu opens as for Ctrl+Shift+N. A chat with nothing to rewind
+    // simply stays open.
+    if (chatKey != null && navigator.forkLatestRequest == chatKey) {
+        val loaded = !state.loading && state.session?.optionalText("id") == chatKey.sessionId
+        LaunchedEffect(chatKey, loaded) {
+            if (!loaded || !navigator.takeForkLatest(chatKey)) return@LaunchedEffect
+            val latest = shownItems.lastOrNull { it.id in forkableIds }
+            if (messageFork != null && latest != null) {
+                jumpTo(latest.id)
+                forkMenuRequest = latest.id
+            }
+        }
+    }
     val snackbar = remember { SnackbarHostState() }
     val childNotice = stringResource(R.string.remote_insights_child_not_found)
     // An extension's notice (`session.notice`) shows once, in the chat only, which holds the snackbar
@@ -979,11 +995,12 @@ internal fun RemoteScreen(
             val canRename = canRenameSession(state)
             // The open session's row in the project's list, when that row could close it. The
             // repository closes only a session of that list, and its entries are complete rows.
+            // A refresh does not take Close away for its duration; the confirmation waits for it.
             val closableSession =
                 state.session?.optionalText("id")
                     ?.let { id -> state.sessions.firstOrNull { it.optionalText("id") == id } }
-                    ?.let { sessionListItem(it, state.connected, state.loading, state.stale) }
-                    ?.takeIf { canCloseSession(it, state.connected, state.loading, state.capabilities) }
+                    ?.let { sessionListItem(it, state.connected, loading = false, state.stale) }
+                    ?.takeIf { canCloseSession(it, state.connected, loading = false, state.capabilities) }
             val hasTuiInfo =
                 state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
             val headerColor = floatingHeaderColor()
@@ -1684,7 +1701,7 @@ internal fun RemoteScreen(
                             key is RemoteNavKey.Sessions || key is RemoteNavKey.Hosts ||
                                 (key is RemoteNavKey.Projects && canOpenFolders(state))
                         ) 112.dp
-                        else if (key is RemoteNavKey.Chat) composerHeight + 24.dp
+                        else if (key is RemoteNavKey.Chat) conversationEndPadding
                         else 24.dp,
                 ),
             verticalArrangement = Arrangement.spacedBy(LIST_ITEM_SPACING),
@@ -2297,6 +2314,14 @@ internal fun RemoteScreen(
                                         }
                                     } else null,
                                 onClose = { closing = session },
+                                onForkLatest =
+                                    if (
+                                        state.connected && !state.loading && !navigator.mutating &&
+                                            SESSION_FORK_CAPABILITY in state.capabilities &&
+                                            session.parentSessionId == null
+                                    ) {
+                                        { navigator.openAndForkLatest(RemoteNavKey.Chat(key.routeId, key.projectId, session.id)) }
+                                    } else null,
                                 swipe =
                                     (sessionPreferences?.swipeEndToStart ?: SwipeAction.CLOSE) to
                                         (sessionPreferences?.swipeStartToEnd ?: SwipeAction.RENAME),
@@ -2460,16 +2485,16 @@ internal fun RemoteScreen(
         }
         if (key is RemoteNavKey.Chat && !composerCovered) {
             // Writing with the S Pen in the empty space between the conversation and the composer
-            // starts a prompt. While that space exists the list ends above it and cannot scroll,
-            // so the area takes nothing from the list.
+            // starts a prompt. The area lies above the list's after-padding, so it exists only
+            // while the items end above where a list scrolled to its end would stop; such a list
+            // cannot scroll, and the area takes no fling or wheel scroll from it.
             val emptyBelow by remember(listState) { derivedStateOf { emptySpaceBelowList(listState.layoutInfo) } }
-            val handwritingHeight = emptyBelow - composerSize.height
-            if (handwritingHeight > 0)
+            if (emptyBelow > 0)
                 Box(
                     Modifier.align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .padding(bottom = composerHeight)
-                        .height(with(LocalDensity.current) { handwritingHeight.toDp() })
+                        .padding(bottom = conversationEndPadding)
+                        .height(with(LocalDensity.current) { emptyBelow.toDp() })
                         .testTag("handwritingArea")
                         .handwritingDetector { runCatching { composerFocus.requestFocus() } }
                 )

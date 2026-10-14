@@ -919,12 +919,14 @@ private fun QuestionComposer(
 }
 
 /**
- * The height in pixels between the end of a list's last item and the bottom of its viewport,
- * after-padding included; 0 while items lie below the viewport. A list without items is empty
- * from where its content starts.
+ * The height in pixels between the end of a list's last item and the start of its after-padding,
+ * which is where the last item stops when the list is scrolled to its end; 0 while items reach
+ * that far, so above 0 the list cannot scroll. A list without items is empty from where its
+ * content starts.
  */
 internal fun emptySpaceBelowList(info: androidx.compose.foundation.lazy.LazyListLayoutInfo): Int {
-    val last = info.visibleItemsInfo.lastOrNull() ?: return info.viewportEndOffset.coerceAtLeast(0)
+    val contentEnd = info.viewportEndOffset - info.afterContentPadding
+    val last = info.visibleItemsInfo.lastOrNull() ?: return contentEnd.coerceAtLeast(0)
     if (last.index != info.totalItemsCount - 1) return 0
-    return (info.viewportEndOffset - (last.offset + last.size)).coerceAtLeast(0)
+    return (contentEnd - (last.offset + last.size)).coerceAtLeast(0)
 }

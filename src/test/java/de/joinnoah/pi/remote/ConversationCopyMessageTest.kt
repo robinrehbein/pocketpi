@@ -34,13 +34,14 @@ class ConversationCopyMessageTest {
             }
         }
 
-    @Test fun completeAssistantBubbleCopiesItsRawMarkdown() {
+    // Like the menu's Copy, the button copies what the bubble shows; Copy as Markdown copies the source.
+    @Test fun completeAssistantBubbleCopiesWhatItShows() {
         show(bubble("assistant"))
         compose.onNodeWithTag("copyMessage-b1").performClick()
         compose.waitForIdle()
         val clipboard = ApplicationProvider.getApplicationContext<Context>()
             .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        assertEquals("**Hello** `world`", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+        assertEquals("Hello world", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
     }
 
     @Test fun olderAssistantBubbleHasNoCopyButton() {

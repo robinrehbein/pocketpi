@@ -61,9 +61,12 @@ internal class MenuItem(
     val onClick: () -> Unit,
 )
 
-/** The one menu open in the window: its entries and where it opens, in window coordinates. */
+/**
+ * The one menu open in the window: its entries and where it opens, in window coordinates.
+ * [owner] is the element that opened it, which closes it again when it leaves the screen.
+ */
 @Immutable
-internal class OpenMenu(val position: Offset, val items: List<MenuItem>)
+internal class OpenMenu(val position: Offset, val items: List<MenuItem>, val owner: Any? = null)
 
 /** The window's pointer menu; [PointerMenuHost] shows it, [contextMenu] elements open it. */
 @Stable
@@ -74,12 +77,17 @@ internal class PointerMenus(
     var menu by mutableStateOf<OpenMenu?>(null)
         private set
 
-    fun open(position: Offset, items: List<MenuItem>) {
-        if (items.isNotEmpty()) menu = OpenMenu(position, items)
+    fun open(position: Offset, items: List<MenuItem>, owner: Any? = null) {
+        if (items.isNotEmpty()) menu = OpenMenu(position, items, owner)
     }
 
     fun dismiss() {
         menu = null
+    }
+
+    /** Closes the menu if [owner] opened it: its entries would act on an element that is gone. */
+    fun dismissFrom(owner: Any) {
+        if (menu?.owner === owner) menu = null
     }
 }
 
@@ -146,7 +154,7 @@ internal class MenuAnchor {
         val position = coordinates.localToWindow(lastPress ?: coordinates.size.center.toOffset())
         val items = items(null)
         if (items.isEmpty()) return false
-        menus.open(position, items)
+        menus.open(position, items, owner = this)
         return true
     }
 }
@@ -176,6 +184,8 @@ internal fun Modifier.contextMenu(
     val own = anchor ?: rememberMenuAnchor()
     own.menus = menus
     own.items = { latest(it) }
+    // A row scrolled away or a screen left behind takes its open menu along.
+    if (menus != null) DisposableEffect(menus, own) { onDispose { menus.dismissFrom(own) } }
     // A dialog or popup is a window of its own, which the host's coordinates do not reach.
     if (menus == null || !enabled || LocalView.current !== menus.view) return@composed Modifier
     Modifier.onGloballyPositioned { own.coordinates = it }
@@ -192,7 +202,7 @@ internal fun Modifier.contextMenu(
                     val entries = latest(position)
                     if (entries.isEmpty()) continue
                     change.consume()
-                    menus.open(position, entries)
+                    menus.open(position, entries, owner = own)
                 }
             }
         }
@@ -209,14 +219,17 @@ internal fun Modifier.contextMenu(
 internal enum class SessionMenuAction(@StringRes val label: Int) {
     OPEN(R.string.remote_menu_open),
     RENAME(R.string.remote_rename_session),
+    /** Opens the chat and its rewind menu on the latest message, as Ctrl+Shift+N does there. */
+    FORK_LATEST(R.string.remote_keymap_fork),
     CLOSE(R.string.remote_session_close),
     COPY_ID(R.string.remote_menu_copy_session_id),
 }
 
-internal fun sessionMenuActions(canRename: Boolean, canClose: Boolean): List<SessionMenuAction> =
+internal fun sessionMenuActions(canRename: Boolean, canClose: Boolean, canFork: Boolean = false): List<SessionMenuAction> =
     buildList {
         add(SessionMenuAction.OPEN)
         if (canRename) add(SessionMenuAction.RENAME)
+        if (canFork) add(SessionMenuAction.FORK_LATEST)
         if (canClose) add(SessionMenuAction.CLOSE)
         add(SessionMenuAction.COPY_ID)
     }
@@ -310,7 +323,11 @@ internal fun diffLineMenuActions(commentable: Boolean): List<DiffLineMenuAction>
         add(DiffLineMenuAction.COPY_HUNK)
     }
 
-/** The entries of a project row's or project avatar's menu. */
+/**
+ * The entries of a project row's or project avatar's menu. "Open Files" and "Copy path" wait for
+ * the host: Files belong to a session, not a project, and `projects.list` sends no folder path.
+ * Unshare repeats the row's swipe, behind the same confirmation.
+ */
 internal enum class ProjectMenuAction(@StringRes val label: Int) {
     OPEN(R.string.remote_menu_open),
     NEW_SESSION(R.string.remote_new_session),
@@ -327,12 +344,13 @@ internal fun projectMenuActions(canCreateSession: Boolean, canUnshare: Boolean):
 /** The entries of a link's menu in chat Markdown. */
 internal enum class LinkMenuAction(@StringRes val label: Int) {
     OPEN_ADJACENT(R.string.remote_menu_link_adjacent),
-    OPEN_FULL_SCREEN(R.string.remote_menu_link_full_screen),
+    /** A plain view intent: the browser opens where the system puts it, often in PocketPi's window. */
+    OPEN_IN_WINDOW(R.string.remote_menu_link_in_window),
     COPY(R.string.remote_menu_link_copy),
 }
 
-/** How the link menu opens a link: [adjacent] beside PocketPi, [fullScreen] over it. */
-internal class LinkOpeners(val adjacent: UriHandler, val fullScreen: UriHandler)
+/** How the link menu opens a link: [adjacent] beside PocketPi, [inWindow] in its window. */
+internal class LinkOpeners(val adjacent: UriHandler, val inWindow: UriHandler)
 
 /** Replaces the link menu's openers, for tests; null opens through [AdjacentUriHandler]. */
 internal val LocalLinkOpeners = staticCompositionLocalOf<LinkOpeners?> { null }
@@ -352,7 +370,7 @@ internal fun rememberLinkMenu(): (String) -> List<MenuItem> {
                 // Like a tapped link, a link no app opens is dropped silently.
                 when (action) {
                     LinkMenuAction.OPEN_ADJACENT -> runCatching { openers.adjacent.openUri(url) }
-                    LinkMenuAction.OPEN_FULL_SCREEN -> runCatching { openers.fullScreen.openUri(url) }
+                    LinkMenuAction.OPEN_IN_WINDOW -> runCatching { openers.inWindow.openUri(url) }
                     LinkMenuAction.COPY -> copy(url)
                 }
             }

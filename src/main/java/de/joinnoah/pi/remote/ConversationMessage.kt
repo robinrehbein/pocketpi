@@ -10,13 +10,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.rememberSelectionState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -39,7 +39,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -265,6 +264,7 @@ private fun ConversationMessageContent(
     val forkLabel = stringResource(R.string.remote_fork_action)
     val copyLabel = stringResource(R.string.remote_copy_message)
     val copyAny = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy))
+    val copyMarkdownLabel = stringResource(R.string.remote_menu_copy_markdown)
     when (item) {
         is ConversationItem.Bubble -> {
             val outgoing = item.role == "user"
@@ -275,18 +275,19 @@ private fun ConversationMessageContent(
             val copyToClipboard = rememberCopyToClipboard(copyLabel)
             var forkMenu by remember(item.id) { mutableStateOf(false) }
             var forkConfirming by remember(item.id) { mutableStateOf<ForkMode?>(null) }
-            // Text is selected in the bubble while its selection holds focus; a right-click then
-            // opens the selection's own menu instead of the bubble's.
-            var selecting by remember(item.id) { mutableStateOf(false) }
+            // While text is selected in the bubble, a right-click opens the selection's own menu
+            // instead of the bubble's. A click without a drag selects nothing.
+            val selection = rememberSelectionState()
             val linkTargets = remember { LinkTargets() }
             val linkMenu = rememberLinkMenu()
             val hover = remember { MutableInteractionSource() }
-            val hovered by hover.collectIsHoveredAsState()
             val menuCopyable = !item.streaming && item.text.isNotBlank()
+            // Every Copy copies what the bubble shows; "Copy as Markdown" is the one raw route.
+            val copyMarkdownOffered = remember(item.text) { markdownPlainText(item.text) != item.text }
             val messageMenu: (androidx.compose.ui.geometry.Offset?) -> List<MenuItem> = { position ->
                 val url = position?.let(linkTargets::urlAt)
                 when {
-                    selecting -> emptyList()
+                    selection.selectedTexts.any { it.isNotEmpty() } -> emptyList()
                     url != null -> linkMenu(url)
                     else ->
                         messageMenuActions(item.role, item.text, item.streaming, forkShown, onAskToFixMessage != null)
@@ -324,13 +325,14 @@ private fun ConversationMessageContent(
                     if (forkShown) forkMenu = true
                     onForkMenuRequestHandled()
                 }
-            BoxWithConstraints(Modifier.fillMaxWidth()) {
+            // The whole line of the message counts as hovering it, so the pointer can reach the
+            // part of the action row that reaches past a short bubble.
+            BoxWithConstraints(Modifier.fillMaxWidth().hoverActions(hover)) {
                 val width = if (item.text.contains("```")) maxWidth else maxWidth * 0.88f
                 Box(
                     Modifier.align(if (outgoing) Alignment.CenterEnd else Alignment.CenterStart)
                         .widthIn(max = width)
                         .testTag("messageBubble-${item.id}")
-                        .hoverActions(hover)
                         .contextMenu(items = messageMenu)
                 ) {
                     Column {
@@ -372,7 +374,14 @@ private fun ConversationMessageContent(
                                             if (canCopy)
                                                 add(
                                                     CustomAccessibilityAction(copyLabel) {
-                                                        copyToClipboard(item.text)
+                                                        copyToClipboard(markdownPlainText(item.text))
+                                                        true
+                                                    }
+                                                )
+                                            if (canCopy && copyMarkdownOffered)
+                                                add(
+                                                    CustomAccessibilityAction(copyMarkdownLabel) {
+                                                        copyAny(item.text)
                                                         true
                                                     }
                                                 )
@@ -437,7 +446,7 @@ private fun ConversationMessageContent(
                                                 LocalProjectImageSource provides projectImages.takeIf { !outgoing },
                                                 LocalLinkTargets provides linkTargets,
                                             ) {
-                                                SelectionContainer(Modifier.onFocusChanged { selecting = it.hasFocus }) {
+                                                SelectionContainer(selection) {
                                                     MarkdownText(item.text)
                                                 }
                                             }
@@ -449,7 +458,7 @@ private fun ConversationMessageContent(
                                         if (canCopy && copyButton)
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 IconButton(
-                                                    onClick = { copyToClipboard(item.text) },
+                                                    onClick = { copyToClipboard(markdownPlainText(item.text)) },
                                                     modifier = Modifier.size(32.dp).testTag("copyMessage-${item.id}"),
                                                 ) {
                                                     Icon(
@@ -468,7 +477,7 @@ private fun ConversationMessageContent(
                         if (!outgoing && item.role == "assistant") item.usage?.let { UsageCaption(it) }
                     }
                     // Over the bubble's top corner, so showing it never moves the chat.
-                    HoverActionRow(hovered, hoverActions, Modifier.align(Alignment.TopEnd))
+                    HoverActionOverlay(hover, hoverActions, growTowardStart = outgoing)
                 }
             }
         }
