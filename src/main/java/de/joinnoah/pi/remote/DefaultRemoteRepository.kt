@@ -56,6 +56,8 @@ private const val ATTENTION_REFRESH_MILLIS = 1_500L
 /** A session no project's list held after all of them were read is not looked for again this soon. */
 internal const val MISSING_SESSION_RETRY_MILLIS = 120_000L
 private const val ATTACHMENT_READ_SPACING_MILLIS = 200L
+/** How long typing waits for more keystrokes before its draft is written. */
+private const val DRAFT_WRITE_DELAY_MILLIS = 300L
 private const val CAPABILITIES_V1_ROUTE = "capabilities.v1:"
 private const val CAPABILITIES_V2_ROUTE = "capabilities.v2:"
 /** The v2 list holds the v1 entries plus newer ones; installed apps accept 16, this one 32. */
@@ -538,6 +540,13 @@ class DefaultRemoteRepository(
         val done: CompletableDeferred<Unit>,
     )
 
+    /**
+     * The send journal of each draft as the last queued write saved it. A journal change is queued
+     * at once; any other change to the drafts waits for [draftWriteTimer].
+     */
+    private var journalQueued: Map<DraftKey, SendJournal>? = null
+    private var draftWriteTimer: Job? = null
+
     private val writes = Channel<Write>(Channel.UNLIMITED)
     private var storageFailure: Exception? = null
     private var draftsAvailable = false
@@ -578,11 +587,12 @@ class DefaultRemoteRepository(
             try {
                 val (storedDrafts, draftsReset) = loadedDrafts.await().getOrThrow()
                 drafts.putAll(storedDrafts.mapValues { (_, value) ->
-                    value.copy(followUps = value.followUps.map { entry ->
+                    value.restoringSubmitted().copy(followUps = value.followUps.map { entry ->
                         if (entry.status in setOf("pending", "accepted")) entry.copy(status = "uncertain") else entry
                     })
                 })
                 persistedAttachmentIds = journalAttachmentIds(drafts)
+                journalQueued = drafts.journals()
                 draftsAvailable = true
                 // The attachment cleanup below then removes the blobs no remaining draft references.
                 if (draftsReset && !pairingsReset) reportError(R.string.remote_storage_drafts_reset)
@@ -1578,7 +1588,7 @@ class DefaultRemoteRepository(
         val previousRoute = activeHost?.routeId ?: timedOutRoute
         timedOutRoute = null
         if (previousRoute != host.routeId && markPendingFollowUpsUncertain(previousRoute)) {
-            persist().await()
+            persistNow()
         }
         if (previousRoute != host.routeId) {
             offlineSince = null
@@ -2207,7 +2217,11 @@ class DefaultRemoteRepository(
         update {
             // Before its first snapshot the Timeline holds no messages yet: what is on screen (a
             // cached or the last-known chat) stays until the snapshot replaces it.
-            if (!t.hasSnapshot) it.copy(status = t.status, compaction = t.compaction)
+            if (!t.hasSnapshot) it.copy(
+                status = t.status,
+                compaction = t.compaction,
+                pendingSend = settledSend(it.pendingSend, it.messages),
+            )
             else
                 it.copy(
                     messages = t.messages,
@@ -2215,6 +2229,7 @@ class DefaultRemoteRepository(
                     status = t.status,
                     nextCursor = t.nextCursor,
                     compaction = t.compaction,
+                    pendingSend = settledSend(it.pendingSend, t.messages),
                 )
         }
         val runEdge = t.status != previous && (t.status == "running" || previous == "running")
@@ -2507,6 +2522,8 @@ class DefaultRemoteRepository(
                 commandsTruncated = if (sameSession) it.commandsTruncated else meta?.commandsTruncated == true,
                 commandNotice = null,
                 notice = it.notice?.takeIf { sameSession },
+                // Another chat has no prompt in flight to show; an unconfirmed one is in its composer.
+                pendingSend = it.pendingSend?.takeIf { sameSession },
             )
         }
         cacheCurrentScreen()
@@ -3243,7 +3260,7 @@ class DefaultRemoteRepository(
         val deferred = CompletableDeferred<PairedHost>()
         pairing = deferred
         pairingEpoch = epoch
-        if (markPendingFollowUpsUncertain(activeHost?.routeId)) persist().await()
+        if (markPendingFollowUpsUncertain(activeHost?.routeId)) persistNow()
         // cancelPairing() or a newer pair() during the write gave this pairing up already.
         if (!deferred.isActive || pairing !== deferred) return null
         activeHost = null
@@ -3351,7 +3368,7 @@ class DefaultRemoteRepository(
                 pairingWrites.withLock {
                     val remaining = state.value.hosts
                     drafts.keys.filter { it.routeId == routeId }.forEach { drafts.remove(it) }
-                    persist().await()
+                    persistNow()
                     cleanupAttachments()
                     withContext(io) { pairings.save(remaining) }
                     try {
@@ -4396,18 +4413,58 @@ class DefaultRemoteRepository(
             else null
         }
 
-    private fun persist(): CompletableDeferred<Unit> =
-        CompletableDeferred<Unit>().also {
-            if (!draftsAvailable) {
-                reportError(R.string.remote_storage_error)
-                it.completeExceptionally(IllegalStateException("Draft storage unavailable"))
-            } else check(writes.trySend(Write(drafts.toMap(), it)).isSuccess)
+    /**
+     * Queues the drafts for storage without waiting for the write. A change to a send journal (what
+     * a restart needs to resolve an unacknowledged send) is queued at once; any other change, the
+     * text typed in the composer for one, waits [DRAFT_WRITE_DELAY_MILLIS] so a run of keystrokes
+     * is one write. A barrier that must see the write finish uses [persistNow] instead.
+     */
+    private fun persist() {
+        if (!draftsAvailable) {
+            reportError(R.string.remote_storage_error)
+            return
         }
+        if (journalChanged()) queueDrafts(CompletableDeferred())
+        else {
+            draftWriteTimer?.cancel()
+            draftWriteTimer = scope.launch {
+                delay(DRAFT_WRITE_DELAY_MILLIS)
+                queueDrafts(CompletableDeferred())
+            }
+        }
+    }
+
+    /** Stores the drafts before it returns: the barrier before a send, and the one in [flush]. */
+    private suspend fun persistNow() {
+        if (!draftsAvailable) {
+            reportError(R.string.remote_storage_error)
+            throw IllegalStateException("Draft storage unavailable")
+        }
+        val done = CompletableDeferred<Unit>()
+        queueDrafts(done)
+        done.await()
+    }
+
+    /** Queues a write of the drafts as they are now, which replaces any debounced write still waiting. */
+    private fun queueDrafts(done: CompletableDeferred<Unit>) {
+        draftWriteTimer?.cancel()
+        draftWriteTimer = null
+        // Without drafts loaded a write carries no values: it only reports the earlier failure, and
+        // never saves an empty map over the stored drafts.
+        val values = if (draftsAvailable) drafts.toMap() else null
+        if (values != null) journalQueued = values.journals()
+        check(writes.trySend(Write(values, done)).isSuccess)
+    }
+
+    private fun journalChanged(): Boolean = journalQueued != drafts.journals()
 
     override suspend fun flush() {
         initialized.await()
         val done = CompletableDeferred<Unit>()
-        writes.send(Write(null, done))
+        // Keystrokes still waiting for their debounce are written now; otherwise this only waits
+        // behind the writes already queued.
+        if (draftWriteTimer != null) queueDrafts(done)
+        else writes.send(Write(null, done))
         done.await()
     }
 
@@ -4508,7 +4565,7 @@ class DefaultRemoteRepository(
                             val attachments = latest.attachments + imported
                             require(validAttachmentSet(attachments))
                             drafts[key] = latest.copy(attachments = attachments)
-                            persist().await()
+                            persistNow()
                             update { it.copy(attachments = attachments) }
                         } catch (e: Exception) {
                             Diagnostics.caught("repo.importAttachments", e)
@@ -4522,7 +4579,7 @@ class DefaultRemoteRepository(
                                                 }
                                         )
                                     }
-                                withContext(NonCancellable) { runCatching { persist().await() } }
+                                withContext(NonCancellable) { runCatching { persistNow() } }
                                 if (currentDraftKey() == key)
                                     update {
                                         it.copy(attachments = drafts[key]?.attachments.orEmpty())
@@ -4554,11 +4611,10 @@ class DefaultRemoteRepository(
         if (latest.attachments.none { it.id == id }) return
         drafts[key] = latest.copy(attachments = latest.attachments.filterNot { it.id == id })
         update { it.copy(attachments = drafts.getValue(key).attachments) }
-        val persisted = persist()
         val epoch = selectionEpoch
         scope.launch {
             try {
-                persisted.await()
+                persistNow()
                 if (id !in attachmentInFlight && latest.submittedAttachments.none { it.id == id }) {
                     latest.uploads
                         .find { it.localId == id }
@@ -4570,7 +4626,7 @@ class DefaultRemoteRepository(
                                         uploads = it.uploads.filterNot { entry -> entry == upload }
                                     )
                                 }
-                            persist().await()
+                            persistNow()
                         }
                 }
             } catch (_: CancellationException) {} catch (swallowed: Exception) { Diagnostics.caught("repo.removeAttachment", swallowed) } finally {
@@ -4596,7 +4652,7 @@ class DefaultRemoteRepository(
                             (drafts[key] ?: StoredDraft()).let {
                                 it.copy(uploads = it.uploads.filterNot { entry -> entry == upload })
                             }
-                        persist().await()
+                        persistNow()
                     }
                 } catch (swallowed: Exception) { Diagnostics.caught("repo.cancelAttachmentWork", swallowed) }
             }
@@ -4636,7 +4692,7 @@ class DefaultRemoteRepository(
                 (drafts[key] ?: StoredDraft()).let {
                     it.copy(uploads = it.uploads.filterNot { entry -> entry == upload })
                 }
-            persist().await()
+            persistNow()
         }
         val total = values.sumOf { it.size }.coerceAtLeast(1)
         var uploaded = 0L
@@ -4673,7 +4729,7 @@ class DefaultRemoteRepository(
                                     it.uploads.filterNot { upload -> upload.localId == local.id }
                             )
                         }
-                    persist().await()
+                    persistNow()
                 }
                 val begin =
                     request(
@@ -4692,7 +4748,7 @@ class DefaultRemoteRepository(
                 val upload = AttachmentUpload(local.id, remoteId, projectId)
                 drafts[key] =
                     (drafts[key] ?: StoredDraft()).let { it.copy(uploads = it.uploads + upload) }
-                persist().await()
+                persistNow()
                 var offset = 0
                 while (offset < bytes.size) {
                     delay(200)
@@ -4750,7 +4806,7 @@ class DefaultRemoteRepository(
                                 }
                         )
                     }
-                persist().await()
+                persistNow()
                 uploaded += local.size
                 attachment
             }
@@ -4835,7 +4891,11 @@ class DefaultRemoteRepository(
                 return
             }
         val epoch = selectionEpoch
-        val id = Wire.random()
+        // A plain prompt is sent through the composer and shown at the chat's tail; the other two
+        // keep their draft until the host acknowledges them.
+        val plain = !queued && command == null
+        val tapped = Diagnostics.now()
+        val id = (if (plain) unconfirmedMutationId(key, current) else null) ?: Wire.random()
         attachmentInFlight.addAll(current.attachments.map { it.id })
         update {
             it.copy(
@@ -4860,16 +4920,38 @@ class DefaultRemoteRepository(
                     (!queued || ((if (delivery == "steer") canSteer(state.value) else canFollowUp(state.value)) &&
                         state.value.questions.isEmpty() &&
                         (drafts[key]?.followUps?.size ?: 0) < 64)))
+                val stored = drafts[key] ?: StoredDraft()
+                // Text and attachments typed since the send began stay; what was sent leaves the
+                // composer and lives in the journal. Uploads stay, so a resend reuses them.
+                val unchanged = stored.text == current.draft && stored.quote == current.quote
                 drafts[key] =
-                    (drafts[key] ?: StoredDraft()).copy(
+                    stored.copy(
+                        text = if (plain && unchanged) "" else stored.text,
+                        quote = if (plain && unchanged) null else stored.quote,
+                        attachments =
+                            if (plain && stored.attachments == current.attachments) emptyList()
+                            else stored.attachments,
                         mutationId = id,
                         submittedText = current.draft,
                         submittedQuote = current.quote,
                         submittedAttachments = current.attachments,
                     )
-                persist().await()
+                persistNow()
                 checkEpoch(epoch)
-                update { it.copy(uncertain = true, attachmentProgress = null) }
+                val journaled = drafts.getValue(key)
+                update {
+                    it.copy(
+                        uncertain = true,
+                        attachmentProgress = null,
+                        draft = if (plain) journaled.text else it.draft,
+                        quote = if (plain) journaled.quote else it.quote,
+                        attachments = if (plain) journaled.attachments else it.attachments,
+                        pendingSend =
+                            if (plain) PendingSend(id, current.draft, current.quote, current.attachments, PendingSendState.SENDING)
+                            else it.pendingSend,
+                    )
+                }
+                if (plain) Diagnostics.record(Diagnostics.Kind.REQUEST, "send.pending", Diagnostics.now() - tapped)
                 val fields =
                     mutableListOf<Pair<String, Any?>>(
                         "sessionId" to key.sessionId,
@@ -4903,13 +4985,18 @@ class DefaultRemoteRepository(
                         check(latest.followUps.size < 64)
                         latest.followUps + PendingFollowUp(id, current.draft, receipt ?: "accepted", delivery)
                     } else latest.followUps
-                    val unchanged = latest.text == current.draft && latest.quote == current.quote
+                    val unchanged = !plain && latest.text == current.draft && latest.quote == current.quote
+                    // A plain prompt left the composer at the journal, so its text is only here when
+                    // typed since. A quote chosen since brings the sent body back with it, as before.
+                    val body =
+                        if (plain) latest.text.ifEmpty { if (latest.quote != null) current.draft else "" }
+                        else latest.text
                     val attachments =
                         if (latest.attachments == current.attachments) emptyList()
                         else latest.attachments
                     drafts[key] =
                         StoredDraft(
-                            text = if (unchanged) "" else latest.text,
+                            text = if (unchanged) "" else body,
                             quote = if (unchanged) null else latest.quote,
                             attachments = attachments,
                             uploads =
@@ -4920,7 +5007,7 @@ class DefaultRemoteRepository(
                             // A sent message leaves the changes view's pending review alone.
                             reviewComments = latest.reviewComments,
                         )
-                    persist().await()
+                    persistNow()
                     if (epoch == selectionEpoch && currentDraftKey() == key) {
                         val stored = drafts.getValue(key)
                         update {
@@ -4934,6 +5021,7 @@ class DefaultRemoteRepository(
                         }
                     }
                 }
+                if (plain) confirmPendingSend(key, id, epoch, tapped)
             } catch (_: CancellationException) {} catch (e: Exception) {
                 Diagnostics.caught("repo.sendPrompt.2", e)
                 if (
@@ -4996,12 +5084,59 @@ class DefaultRemoteRepository(
                         update { it.copy(commandNotice = R.string.remote_command_uncertain) }
                 }
             } finally {
+                // Unless the host acknowledged it, a plain prompt is not confirmed: failed, cancelled
+                // by leaving the chat, or still unanswered when the coroutine ends.
+                if (plain) unconfirmPendingSend(key, id, epoch)
                 attachmentInFlight.removeAll(current.attachments.map { it.id }.toSet())
                 if (epoch == selectionEpoch)
                     update { it.copy(sending = false, attachmentProgress = null) }
                 resumeDeferredRecovery()
                 withContext(NonCancellable) { runCatching { cleanupAttachments() } }
             }
+        }
+    }
+
+    /**
+     * The mutation ID of an unconfirmed send of this same prompt, which a resend reuses so the host
+     * sees one prompt. Null when the composer holds something else: that is a new prompt.
+     */
+    private fun unconfirmedMutationId(key: DraftKey, current: RemoteState): String? {
+        val stored = drafts[key] ?: return null
+        val mutationId = stored.mutationId ?: return null
+        return mutationId.takeIf { stored.submittedText == current.draft && stored.submittedQuote == current.quote }
+    }
+
+    /** The host acknowledged the plain prompt [id]: the chat keeps it until its timeline has it. */
+    private fun confirmPendingSend(key: DraftKey, id: String, epoch: Long, tapped: Long) {
+        if (epoch != selectionEpoch || currentDraftKey() != key) return
+        val pending = state.value.pendingSend?.takeIf { it.mutationId == id && it.state == PendingSendState.SENDING }
+            ?: return
+        update { it.copy(pendingSend = settledSend(pending.copy(state = PendingSendState.CONFIRMED), it.messages)) }
+        Diagnostics.record(Diagnostics.Kind.REQUEST, "send.confirmed", Diagnostics.now() - tapped)
+    }
+
+    /**
+     * A plain prompt the host did not confirm: its text goes back into the composer, to send again
+     * with the same mutation ID, and the chat marks the bubble as not confirmed. A send whose
+     * journal was already resolved has nothing to undo.
+     */
+    private fun unconfirmPendingSend(key: DraftKey, id: String, epoch: Long) {
+        val stored = drafts[key]?.takeIf { it.mutationId == id } ?: return
+        val restored = stored.restoringSubmitted()
+        drafts[key] = restored
+        persist()
+        if (epoch != selectionEpoch || currentDraftKey() != key) return
+        update {
+            it.copy(
+                draft = restored.text,
+                quote = restored.quote,
+                attachments = restored.attachments,
+                pendingSend = it.pendingSend?.let { pending ->
+                    if (pending.mutationId == id && pending.state != PendingSendState.CONFIRMED)
+                        pending.copy(state = PendingSendState.NOT_CONFIRMED)
+                    else pending
+                },
+            )
         }
     }
 
@@ -7276,4 +7411,46 @@ class DefaultRemoteRepository(
         editReviewComments { comments -> comments.filterNot { it.sameLine(comment) } }
 
     override fun clearReviewComments() = editReviewComments { emptyList() }
+}
+
+/** What a restart needs to resolve a send the host did not confirm; a change to it is written at once. */
+private data class SendJournal(
+    val mutationId: String?,
+    val submittedText: String?,
+    val submittedQuote: MessageQuote?,
+    val submittedAttachments: List<LocalAttachment>,
+    val followUps: List<PendingFollowUp>,
+)
+
+private fun StoredDraft.journal() =
+    SendJournal(mutationId, submittedText, submittedQuote, submittedAttachments, followUps)
+
+/** The drafts that hold a send journal; a draft that is only typed in has none, so typing never counts. */
+private fun Map<DraftKey, StoredDraft>.journals(): Map<DraftKey, SendJournal> =
+    filterValues { it.mutationId != null || it.followUps.isNotEmpty() }.mapValues { (_, draft) -> draft.journal() }
+
+/**
+ * A plain prompt cleared from the composer while it was sent keeps its text only in the journal.
+ * Once the send is unconfirmed, that text goes back into the composer so it can be sent again;
+ * text typed since stays where it is, and the pending bubble keeps showing what was sent.
+ */
+private fun StoredDraft.restoringSubmitted(): StoredDraft {
+    val submitted = submittedText ?: return this
+    if (mutationId == null || text.isNotEmpty()) return this
+    return copy(
+        text = submitted,
+        quote = quote ?: submittedQuote,
+        attachments = attachments.ifEmpty { submittedAttachments },
+    )
+}
+
+/**
+ * The pending prompt once the timeline may show the host's copy of it: a confirmed prompt leaves
+ * the chat when the newest user message reads as it does. Checked on every timeline change, since
+ * the acknowledgement and the message can arrive in either order.
+ */
+private fun settledSend(pending: PendingSend?, messages: List<JsonObject>): PendingSend? {
+    if (pending == null || pending.state != PendingSendState.CONFIRMED) return pending
+    val latest = messages.lastOrNull { it.text("role") == "user" } ?: return pending
+    return if (userMessageBody(latest) == pending.text) null else pending
 }

@@ -66,6 +66,30 @@ enum class ActivationMode {
     USER_OPEN,
 }
 
+/** Where a plain prompt stands between tapping send and the host's timeline having it. */
+enum class PendingSendState {
+    /** Journaled and on its way; the host has not answered yet. */
+    SENDING,
+
+    /** The host acknowledged it; the timeline may not show it yet. */
+    CONFIRMED,
+
+    /** The send failed or may not have left the phone. */
+    NOT_CONFIRMED,
+}
+
+/**
+ * A plain prompt the chat shows at its tail until the host's timeline has it. It lives in memory
+ * for this run only; after a restart the unresolved send is back in the composer instead.
+ */
+data class PendingSend(
+    val mutationId: String,
+    val text: String,
+    val quote: MessageQuote?,
+    val attachments: List<LocalAttachment>,
+    val state: PendingSendState,
+)
+
 data class RemoteState(
     val hosts: List<PairedHost> = emptyList(),
     /**
@@ -130,6 +154,8 @@ data class RemoteState(
     val sending: Boolean = false,
     val uncertain: Boolean = false,
     val followUps: List<PendingFollowUp> = emptyList(),
+    /** The plain prompt the chat shows at its tail until the timeline has it; null when none. */
+    val pendingSend: PendingSend? = null,
     /**
      * Phone stops and resumes of subagent children, by child session ID. Memory only on purpose:
      * "stopped by you" describes this app run; after a restart the host's status is the truth.
