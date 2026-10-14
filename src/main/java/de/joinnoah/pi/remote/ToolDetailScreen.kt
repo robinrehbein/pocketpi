@@ -34,7 +34,6 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -463,38 +462,34 @@ private fun ToolDetailTopBar(item: ConversationItem.Activity, onClose: () -> Uni
         withFrameNanos { }
         runCatching { titleFocus.requestFocus() }
     }
-    Row(
-        Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(end = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        IconButton(onClick = onClose, Modifier.testTag("toolDetailClose")) {
-            Icon(Icons.Default.Close, stringResource(R.string.remote_tool_detail_close))
-        }
-        Column(Modifier.weight(1f)) {
-            Text(
-                item.summary.labelRes?.let { stringResource(it) } ?: item.name ?: stringResource(R.string.remote_tool),
-                modifier = Modifier.testTag("toolDetailTitle").focusRequester(titleFocus).focusable(),
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            item.summary.detail?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            StateChip(item.state)
-        }
-        if (onPopOut != null)
-            IconButton(onClick = onPopOut, Modifier.testTag("toolDetailPopOut")) {
-                Icon(Icons.Default.Fullscreen, stringResource(R.string.remote_inspector_pop_out))
-            }
+    Column(Modifier.fillMaxWidth()) {
+        PaneHeader(
+            title = item.summary.labelRes?.let { stringResource(it) } ?: item.name ?: stringResource(R.string.remote_tool),
+            // The detail is the list's first item, the arguments; the header keeps the title and the state.
+            subtitle = null,
+            nested = false,
+            busy = false,
+            tag = "toolDetail",
+            backLabel = stringResource(R.string.remote_back),
+            closeLabel = stringResource(R.string.remote_tool_detail_close),
+            reloadLabel = stringResource(R.string.remote_refresh),
+            onBack = onClose,
+            onClose = onClose,
+            onReload = null,
+            actions =
+                listOfNotNull(
+                    onPopOut?.let {
+                        PaneAction(
+                            label = stringResource(R.string.remote_inspector_pop_out),
+                            icon = Icons.Default.Fullscreen,
+                            tag = "toolDetailPopOut",
+                            onClick = it,
+                        )
+                    }
+                ),
+            titleFocus = titleFocus,
+        )
+        Box(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) { StateChip(item.state) }
     }
 }
 

@@ -11,11 +11,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.*
@@ -28,7 +29,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
@@ -81,6 +81,9 @@ internal fun FolderBrowserScreen(
         available = available,
         connection = state.connection,
         onBack = navigator::back,
+        onClose = { navigator.closeFolders(key.routeId) },
+        onRefresh = model::reload,
+        onSettings = navigator::settings,
         onJump = { navigator.browseFolder(key.routeId, it) },
         onEnter = model::enter,
         onRetry = model::reload,
@@ -126,6 +129,10 @@ internal fun FolderBrowserContent(
     onDismissClone: () -> Unit,
     onDismissNotice: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Leaves the browser in one step, whatever folder it shows. */
+    onClose: () -> Unit = onBack,
+    onRefresh: () -> Unit = {},
+    onSettings: () -> Unit = {},
 ) {
     var creating by rememberSaveable { mutableStateOf(false) }
     var cloning by rememberSaveable { mutableStateOf(false) }
@@ -136,25 +143,31 @@ internal fun FolderBrowserContent(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            Column(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    FloatingSurface(modifier = Modifier.testTag("navigationPill"), shape = CircleShape) {
-                        IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.remote_back))
+            Column(Modifier.fillMaxWidth().statusBarsPadding()) {
+                PageHeader(
+                    title = stringResource(R.string.remote_folders_title),
+                    titleInPill = true,
+                    onBack = onBack,
+                    onClose = onClose,
+                    actions = {
+                        IconButton(
+                            onClick = onRefresh,
+                            enabled = available && !folders.loading,
+                            modifier = Modifier.size(48.dp).testTag("folderRefresh"),
+                        ) {
+                            Icon(Icons.Default.Refresh, stringResource(R.string.remote_refresh))
                         }
-                    }
-                    Spacer(Modifier.width(16.dp))
-                    Text(
-                        stringResource(R.string.remote_folders_title),
-                        style = MaterialTheme.typography.headlineSmall,
-                        modifier = Modifier.semantics { heading() },
-                    )
-                }
+                        IconButton(onClick = onSettings, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.Default.Settings, stringResource(R.string.remote_settings))
+                        }
+                    },
+                    connection = connectionStatusLine(connected, connection, hostChosen = true),
+                )
                 FolderBreadcrumb(
                     root = folders.root,
                     path = folders.path,
                     onJump = onJump,
-                    modifier = Modifier.padding(top = 8.dp),
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
                 )
             }
         },
@@ -211,9 +224,6 @@ internal fun FolderBrowserContent(
             Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            connectionStatusLine(connected, connection, hostChosen = true)?.let { line ->
-                ConnectionStatusChip(line)
-            }
             folders.notice?.let { notice ->
                 FolderNotice(stringResource(notice), onDismissNotice)
             }

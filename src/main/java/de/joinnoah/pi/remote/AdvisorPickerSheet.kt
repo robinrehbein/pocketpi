@@ -1,11 +1,14 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -40,6 +43,8 @@ internal fun AdvisorPickerSheet(
     onDismiss: () -> Unit,
     unavailableReason: String? = null,
     onRetry: (() -> Unit)? = null,
+    /** Opens the host's providers, where a missing advisor model can be signed in to; null hides the row. */
+    onManageProviders: (() -> Unit)? = null,
 ) {
     val currentChoice = advisor?.choices?.firstOrNull { choice ->
         advisor.model == "${choice.provider}/${choice.id}"
@@ -230,6 +235,19 @@ internal fun AdvisorPickerSheet(
                   }
               }
           }
+          if (onManageProviders != null)
+              ManageProvidersRow(onManageProviders)
         }
     }
+}
+
+/** The footer row of the model and advisor pickers that opens the host's providers. */
+@Composable
+internal fun ManageProvidersRow(onClick: () -> Unit) {
+    HorizontalDivider()
+    ListItem(
+        headlineContent = { Text(stringResource(R.string.remote_page_manage_providers)) },
+        trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
+        modifier = Modifier.clickable(role = Role.Button, onClick = onClick).testTag("managePickerProviders"),
+    )
 }

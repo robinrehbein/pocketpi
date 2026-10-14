@@ -849,4 +849,26 @@ class RemoteFolderRepositoryTest {
         assertEquals("a", parentFolderPath("a/b"))
         assertEquals("", parentFolderPath("a"))
     }
+
+    @Test
+    fun browsingFoldersAndProvidersWorksWithAChatSelected() = runTest {
+        val transport = Transport()
+        transport.advertised = listOf(PROJECT_OPEN_CAPABILITY, PROVIDER_AUTH_CAPABILITY)
+        transport.replies["fs.browse"] = { listing(it.text("path"), entry("app")) }
+        opened(transport)
+        val repository = connected(transport)
+        // The folder browser and the providers open over the chat, so the chat stays the selection.
+        repository.activate(RemoteSelection("host", "opened", "fresh"))
+        runCurrent()
+        assertEquals(RemoteSelection("host", "opened", "fresh"), repository.state.value.selection)
+        repository.browseFolder("host", "Code")
+        runCurrent()
+        assertEquals(listOf("Code"), transport.of("fs.browse").map { it.text("path") })
+        assertEquals("Code", repository.state.value.folders.path)
+        repository.browseProviders("host")
+        runCurrent()
+        assertEquals("host", repository.state.value.providerAuth.routeId)
+        assertEquals(1, transport.of("provider.auth.list").size)
+        assertEquals(RemoteSelection("host", "opened", "fresh"), repository.state.value.selection)
+    }
 }
