@@ -1,6 +1,10 @@
 package de.joinnoah.pi.remote
 
 import java.util.Locale
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -231,6 +235,61 @@ class ToolPresentationTest {
         assertEquals(TouchedLineCounts(added = 3, removed = 2), touchedLineCounts(items))
         assertNull(touchedLineCounts(listOf(activity("w", "write", """{"path":"c.kt","content":"x"}"""))))
         assertNull(touchedLineCounts(emptyList()))
+    }
+
+    @Test
+    fun touchedLineCacheDiffsEachEditOnceByItemId() = runTest {
+        // More edits than the old 64-entry cache held.
+        fun edit(index: Int, newText: String = "b$index\nc") =
+            activity("edit-$index", "edit", """{"path":"f$index.kt","edits":[{"oldText":"a$index","newText":"$newText"}]}""")
+        val items = List(100) { edit(it) } + activity("r", "read", """{"path":"f1.kt"}""")
+        val cache = TouchedLineCache()
+        assertEquals(touchedLineCounts(items), cache.counts(items))
+        assertEquals(TouchedLineCounts(added = 200, removed = 100), cache.counts(items))
+        assertEquals(100, cache.computed)
+
+        // A streamed delta changes one edit and adds another: only those two are diffed again.
+        val changed = items.toMutableList().apply {
+            set(50, edit(50, "only"))
+            add(edit(100))
+        }
+        assertEquals(touchedLineCounts(changed), cache.counts(changed))
+        assertEquals(102, cache.computed)
+        assertEquals(touchedLineCounts(changed), cache.counts(changed))
+        assertEquals(102, cache.computed)
+
+        // An edit that left the chat is forgotten, so it is diffed again when it comes back.
+        cache.counts(changed.drop(1))
+        cache.counts(changed)
+        assertEquals(103, cache.computed)
+        assertNull(cache.counts(emptyList()))
+    }
+
+    @Test
+    fun touchedLineCacheStopsWhenCancelledMidLoop() = runTest {
+        val items = List(20) {
+            activity("edit-$it", "edit", """{"path":"f.kt","edits":[{"oldText":"a$it","newText":"b"}]}""")
+        }
+        val cache = TouchedLineCache()
+        // The counting yields after its first diff, and the canceller runs in that gap.
+        val counting = launch { cache.counts(items) }
+        launch { counting.cancel() }
+        advanceUntilIdle()
+        assertTrue(counting.isCancelled)
+        assertEquals(1, cache.computed)
+
+        // An already cancelled caller diffs nothing.
+        val cancelled = launch {
+            cancel()
+            cache.counts(items)
+        }
+        advanceUntilIdle()
+        assertTrue(cancelled.isCancelled)
+        assertEquals(1, cache.computed)
+
+        // The diff the cancelled pass computed is kept.
+        assertEquals(touchedLineCounts(items), cache.counts(items))
+        assertEquals(20, cache.computed)
     }
 
     @Test

@@ -48,6 +48,15 @@ class PointerMenusTest {
     }
 
     @Test
+    fun aPendingPromptOffersNoQuoteButStillCopies() {
+        val pending = messageMenuActions(
+            "user", "Sent just now", streaming = false, forkable = false, canAskToFix = false, canQuote = false,
+        )
+        assertFalse(MessageMenuAction.QUOTE in pending)
+        assertTrue(MessageMenuAction.COPY in pending)
+    }
+
+    @Test
     fun streamingTextIsQuotedButNotCopiedOrFixed() {
         assertEquals(
             listOf(MessageMenuAction.QUOTE),

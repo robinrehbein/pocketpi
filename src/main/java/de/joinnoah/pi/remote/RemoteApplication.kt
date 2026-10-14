@@ -1,6 +1,8 @@
 package de.joinnoah.pi.remote
 
+import android.app.ActivityManager
 import android.app.Application
+import android.content.Context
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
@@ -16,9 +18,14 @@ import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import okhttp3.OkHttpClient
 
 class RemoteApplication : Application() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** The process's stores; services, receivers and workers reach them through [Context.stores]. */
+    internal val stores by lazy { AppStores(this) }
+
     private lateinit var pushRegistration: PushRegistration
     lateinit var repository: RemoteRepository
         private set
@@ -51,37 +58,42 @@ class RemoteApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        // Exports hold chat content; none outlives the process that shared it.
-        Thread { runCatching { ExportStorage.clear(cacheDir) } }.start()
-        // Shared agent images are copies of project files; none outlives the process either.
-        Thread { runCatching { ImageStorage.clear(cacheDir) } }.start()
-        // Opened or shared artifacts are copies of project files too.
-        Thread { runCatching { ArtifactStorage.clear(cacheDir) } }.start()
-        // So are files dragged into other apps.
-        Thread { runCatching { DragStorage.clear(cacheDir) } }.start()
-        // Camera captures the import is done with are deleted then; this catches the rest.
-        Thread { runCatching { PhotoCapture.sweep(cacheDir) } }.start()
+        scope.launch(Dispatchers.IO) {
+            // Exports hold chat content; none outlives the process that shared it.
+            runCatching { ExportStorage.clear(cacheDir) }
+            // Shared agent images are copies of project files; none outlives the process either.
+            runCatching { ImageStorage.clear(cacheDir) }
+            // Opened or shared artifacts are copies of project files too.
+            runCatching { ArtifactStorage.clear(cacheDir) }
+            // So are files dragged into other apps.
+            runCatching { DragStorage.clear(cacheDir) }
+            // Camera captures the import is done with are deleted then; this catches the rest.
+            runCatching { PhotoCapture.sweep(cacheDir) }
+        }
+        BitmapCaches.configure(getSystemService(ActivityManager::class.java).memoryClass)
         settings = DefaultSettingsRepository(this)
+        LiveRunSettings.preload(this)
         appLock = AppLock(AppLockStore(this), deviceSecure = { deviceSecure(this) })
-        val attachments = AttachmentStore(this)
+        val attachments = stores.attachments
         val importer = AttachmentImporter(this, attachments)
         repository =
             DefaultRemoteRepository(
-                PairingStore(this),
-                DraftStore(this),
+                stores.pairings,
+                stores.drafts,
                 remoteTransport(this, scope),
                 scope,
-                navigationStorage = NavigationSnapshotStore(this),
+                navigationStorage = stores.navigation,
                 attachmentStorage = attachments,
                 attachmentImporter = { uri, photo ->
                     importer.import(android.net.Uri.parse(uri), photo)
                 },
                 onRecoverySignal = { onPushRecoverySignal() },
                 onUnpaired = ::onUnpaired,
+                projectHint = ::sessionProjectHint,
             )
         observeRecovery()
-        predictions = PromptPredictions(this, scope, PairingStore(this))
-        home = HomeSurfaces(this, scope, PairingStore(this))
+        predictions = PromptPredictions(this, scope, stores.pairings)
+        home = HomeSurfaces(this, scope, stores.pairings)
         home.observe(repository.state)
         sessionMarks = SessionMarksStore(this)
         sessionMarks.observe(repository.state, scope)
@@ -119,6 +131,11 @@ class RemoteApplication : Application() {
         }
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        BitmapCaches.trim(level)
+    }
+
     fun enablePush() {
         if (!pushConfigured) return
         settings.setPushEnabled(true)
@@ -146,6 +163,14 @@ class RemoteApplication : Application() {
         RemoteNotifications.cancelRoute(this, routeId)
     }
 
+    /**
+     * Where the home snapshot or the label worker last saw a session, for a tapped notification
+     * whose session the repository's caches do not hold.
+     */
+    private suspend fun sessionProjectHint(routeId: String, sessionId: String): String? =
+        home.load().sessions.find { it.routeId == routeId && it.sessionId == sessionId }?.projectId
+            ?: CompletionUpgrades.names.get(routeId, sessionId)?.projectId
+
     /** A push arrived for a paired host; called on the messaging worker thread. */
     internal fun onPushEvent(payload: PushPayload) {
         home.onPush(payload)
@@ -165,9 +190,6 @@ class RemoteApplication : Application() {
     internal fun onRepliedInBackground(routeId: String, sessionId: String) {
         home.onAnswered(routeId, sessionId)
     }
-
-    /** The app's own connection, for background work that may use it while it is healthy. */
-    internal fun healthyConnection(): DefaultRemoteRepository? = repository as? DefaultRemoteRepository
 
     /** True unless the host was unpaired in this process or is missing from loaded pairings. */
     internal fun isPaired(routeId: String): Boolean =
@@ -286,6 +308,54 @@ class RemoteApplication : Application() {
         )
     }
 }
+
+/**
+ * The process's one instance of each encrypted store, so that each file has one store, one lock
+ * and one cached key no matter how many parts of the app read it. Each store is made on first use.
+ */
+internal class AppStores(
+    /** The application; tests pass a context with its own files directory. */
+    private val app: Context,
+) {
+    /** The paired route IDs a push checks; [pairings] keeps them in step. */
+    val routes by lazy { PairedRouteCache(app) }
+
+    /** The pairing file itself; only a push's route check, which fills [routes], reads it directly. */
+    val pairingFile by lazy { PairingStore(app, onReset = { routes.onPairingsReset() }) }
+
+    /** The pairings, with the route cache and the notifications' host names kept in step. */
+    val pairings: PairingStorage by lazy {
+        RouteCachingPairings(pairingFile, routes) { hosts -> hosts.forEach(RemoteNotifications::rememberHost) }
+    }
+
+    val drafts by lazy { DraftStore(app) }
+
+    val navigation by lazy { NavigationSnapshotStore(app) }
+
+    val attachments by lazy { AttachmentStore(app) }
+
+    /** The widget's and shortcuts' snapshot ([HomeSurfaces]). */
+    val home by lazy { EncryptedFileStore(app, "home-sessions.enc", "pi-remote-home-v1") }
+
+    /** The prompt history ([PromptPredictions]). */
+    val prompts by lazy { EncryptedFileStore(app, "prompt-history.enc", "pi-remote-prompts-v1") }
+}
+
+/**
+ * The stores of this process: the phone app's own, or, in a process whose application is not
+ * [RemoteApplication] (the watch app, some tests), a new set that still shares each file's lock and
+ * key with any other.
+ */
+internal val Context.stores: AppStores
+    get() = (applicationContext as? RemoteApplication)?.stores ?: AppStores(applicationContext)
+
+/**
+ * The process's one OkHttp client. The relay sockets ([SecureRemoteTransport]'s default and
+ * [BackgroundRemoteClient]'s) and the artifact CDN derive their clients from it with
+ * `newBuilder()`, so they share its dispatcher, connection pool and threads and set only their own
+ * timeouts, ping interval and cache. Built on first use; the wear app uses it too.
+ */
+internal val baseHttpClient: OkHttpClient by lazy { OkHttpClient() }
 
 /** Transports a VPN's network takes over from the networks it runs on. */
 private val VPN_UNDERLYING_TRANSPORTS =

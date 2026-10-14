@@ -367,14 +367,17 @@ internal class ArtifactCdnPolicyFetcher(private val transport: ArtifactCdnTransp
     }
 }
 
-/** The OkHttp transport: a client of its own, with no cookies, no interceptors, TLS only, and an app-private cache. */
+/**
+ * The OkHttp transport: a client derived from the app's (sharing its dispatcher and connection
+ * pool), with no cookies, no interceptors, TLS only, its own timeouts and an app-private cache.
+ */
 internal class OkHttpArtifactCdnTransport(
     cacheDirectory: File,
     /** Lets a JVM test point the transport at a plain-HTTP server; the app passes nothing. */
     configure: OkHttpClient.Builder.() -> Unit = {},
 ) : ArtifactCdnTransport {
-    private val client: OkHttpClient =
-        OkHttpClient.Builder()
+    internal val client: OkHttpClient =
+        baseHttpClient.newBuilder()
             .followRedirects(false)
             .followSslRedirects(false)
             .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS))

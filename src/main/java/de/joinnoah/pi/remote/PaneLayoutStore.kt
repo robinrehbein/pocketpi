@@ -16,17 +16,18 @@ import kotlinx.serialization.json.Json
 
 /**
  * What the user set for one layout bucket ([PaneLayout.sizeKey]): the session list's and the
- * inspector's widths as fractions of the window's width, and whether they hid the list. Null
- * leaves the layout's default.
+ * inspector's widths as fractions of the window's width, whether they hid the list and whether
+ * they keep the full projects column beside a chat. Null leaves the layout's default.
  */
 @Serializable
 internal data class PaneMemo(
     val list: Float? = null,
     val inspector: Float? = null,
     val listCollapsed: Boolean? = null,
+    val projectsExpanded: Boolean? = null,
 ) {
     val empty: Boolean
-        get() = list == null && inspector == null && listCollapsed == null
+        get() = list == null && inspector == null && listCollapsed == null && projectsExpanded == null
 }
 
 /** How long the widths wait after the last change, the end of a drag, before they are written. */
