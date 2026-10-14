@@ -49,6 +49,8 @@ class RemoteRepositoryTest {
         var route: String? = null
         var closes = 0
         var readyOnConnect = true
+        /** Routes whose handshake never completes, as when that Mac is asleep. */
+        var unreachable: Set<String> = emptySet()
         var failureOnConnect: Int? = null
         var response: (JsonObject) -> JsonObject? = { null }
         var failure: (JsonObject) -> String? = { null }
@@ -59,7 +61,7 @@ class RemoteRepositoryTest {
             route = host.routeId
             val failure = failureOnConnect
             if (failure != null) listener.failed(true, failure)
-            else if (readyOnConnect) listener.ready(capabilities)
+            else if (readyOnConnect && host.routeId !in unreachable) listener.ready(capabilities)
         }
 
         var pairing: JsonObject? = null
@@ -136,6 +138,7 @@ class RemoteRepositoryTest {
         hosts: List<PairedHost> = listOf(host),
         pairings: Pairings = Pairings(hosts),
         navigationStorage: NavigationSnapshotStorage? = null,
+        projectHint: suspend (String, String) -> String? = { _, _ -> null },
         attachmentImporter: (suspend (String, Boolean) -> LocalAttachment)? = null,
     ) =
         DefaultRemoteRepository(
@@ -148,6 +151,7 @@ class RemoteRepositoryTest {
             attachmentImporter,
             now = { testScheduler.currentTime },
             navigationStorage = navigationStorage,
+            projectHint = projectHint,
             jitter = { 0.5 },
         )
 
@@ -622,9 +626,10 @@ class RemoteRepositoryTest {
         assertEquals(0, leaseLists())
 
         // The host now advertises the lease capability; a later projects.list (here, resolving a
-        // notification while the chat stays connected) merges it in without a reconnect.
+        // notification for a session no cache knows while the chat stays connected) merges it in
+        // without a reconnect.
         leaseAdvertised = true
-        repository.openNotification("host", "session")
+        repository.openNotification("host", "elsewhere")
         runCurrent()
 
         assertTrue(canLeaseJobsList(repository.state.value))
@@ -3631,6 +3636,179 @@ class RemoteRepositoryTest {
         val kinds = transport.sent.map { it.text("type") }
         assertTrue(kinds.indexOf("sessions.list") < kinds.indexOf("sessions.open"))
     }
+
+    @Test
+    fun aNotificationWhoseProjectTheAppKnowsOpensWithoutWalkingTheProjects() = runTest {
+        val transport = Transport().also { configure(it) }
+        val listed = configuredResponse(transport)
+        transport.response = { request ->
+            if (request.text("type") == "projects.list") projectsData(listOf(project, Wire.objectOf("id" to "other")))
+            else listed(request)
+        }
+        // As the home snapshot or the label worker's names know it, the caches being empty.
+        val repository = repository(transport, projectHint = { route, id -> "project".takeIf { route == "host" && id == "session" } })
+        assertEquals(RemoteSelection("host", "project", "session"), repository.openNotification("host", "session"))
+        assertEquals(listOf("project"), transport.sent.filter { it.text("type") == "sessions.list" }.map { it.text("projectId") })
+        assertEquals(1, transport.sent.count { it.text("type") == "projects.list" })
+    }
+
+    @Test
+    fun aNotificationForASessionInTheCachesSendsNoListAtAll() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        repository.activate(RemoteSelection("host"))
+        runCurrent()
+        transport.sent.clear()
+        assertEquals(RemoteSelection("host", "project", "session"), repository.openNotification("host", "session"))
+        val kinds = transport.sent.map { it.text("type") }
+        assertFalse(kinds.toString(), "projects.list" in kinds || "sessions.list" in kinds)
+        assertTrue("sessions.open" in kinds)
+    }
+
+    @Test
+    fun aColdStartFindsTheNotificationsProjectInTheSavedNavigation() = runTest {
+        val transport = Transport().also { configure(it) }
+        val listed = configuredResponse(transport)
+        transport.response = { request ->
+            if (request.text("type") == "projects.list") projectsData(listOf(namedProject, Wire.objectOf("id" to "other")))
+            else listed(request)
+        }
+        val repository = repository(transport, navigationStorage = SavedNavigation(savedHost()))
+        assertEquals("project", repository.notificationProject("host", "session"))
+        assertNull("not paired", repository.notificationProject("unpaired", "session"))
+        assertNull("never seen", repository.notificationProject("host", "unknown"))
+        assertEquals(RemoteSelection("host", "project", "session"), repository.openNotification("host", "session"))
+        assertEquals(listOf("project"), transport.sent.filter { it.text("type") == "sessions.list" }.map { it.text("projectId") })
+    }
+
+    @Test
+    fun aStaleProjectHintStillFindsTheSessionByWalking() = runTest {
+        val transport = Transport()
+        val moved = session(projectId = "other")
+        configure(transport, opened = moved)
+        val listed = configuredResponse(transport)
+        transport.response = { request ->
+            when {
+                request.text("type") == "projects.list" ->
+                    data("projects", listOf(project, Wire.objectOf("id" to "other")))
+                request.text("type") == "sessions.list" ->
+                    data("sessions", if (request.text("projectId") == "other") listOf(moved) else emptyList())
+                else -> listed(request)
+            }
+        }
+        val repository = repository(transport, projectHint = { _, _ -> "project" })
+        assertEquals(RemoteSelection("host", "other", "session"), repository.openNotification("host", "session"))
+    }
+
+    @Test
+    fun theNotificationWalkReadsFourListsAtATimeAndStopsAtTheFirstHit() = runTest {
+        val transport = Transport()
+        val opened = session(projectId = "p1")
+        configure(transport, sessions = listOf(opened), opened = opened)
+        val listed = configuredResponse(transport)
+        val lists = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            when (request.text("type")) {
+                "projects.list" -> projectsData((0 until 6).map { Wire.objectOf("id" to "p$it") })
+                "sessions.list" -> null.also { lists += request }
+                else -> listed(request)
+            }
+        }
+        val repository = repository(transport)
+        val opening = async { repository.openNotification("host", "session") }
+        runCurrent()
+        assertEquals(listOf("p0", "p1", "p2", "p3"), lists.map { it.text("projectId") })
+        transport.result(lists[0], data("sessions", emptyList()))
+        transport.result(lists[1], data("sessions", listOf(opened)))
+        runCurrent()
+        assertEquals(RemoteSelection("host", "p1", "session"), opening.await())
+        // The later projects are never read, and the open reuses the walk's lists.
+        assertEquals(4, transport.sent.count { it.text("type") == "sessions.list" })
+        assertEquals(1, transport.sent.count { it.text("type") == "projects.list" })
+        assertTrue(transport.sent.any { it.text("type") == "sessions.open" })
+    }
+
+    @Test
+    fun aNotificationRequestUsesTheAppConnectionOnlyWhileItIsHealthy() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        assertNull("not connected", repository.withHealthyConnection("host") { error("no connection") })
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val result = repository.withHealthyConnection("host") { it.request("question.answer", "sessionId" to "session") }
+        assertEquals("accepted", result?.text("kind"))
+        assertEquals("question.answer", transport.sent.last().text("type"))
+        assertNull("another Mac", repository.withHealthyConnection("other") { error("another Mac") })
+        advanceTimeBy(HEALTHY_CONNECTION_MILLIS)
+        runCurrent()
+        assertNull("quiet too long", repository.withHealthyConnection("host") { error("quiet") })
+    }
+
+    @Test
+    fun aSlowAppConnectionGivesUpSoonAndAHostErrorPassesThrough() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        val listed = configuredResponse(transport)
+        transport.response = { request -> if (request.text("type") == "question.answer") null else listed(request) }
+        val slow = async { repository.withHealthyConnection("host") { it.request("question.answer") } }
+        advanceTimeBy(HEALTHY_REQUEST_TIMEOUT_MILLIS + 1)
+        runCurrent()
+        assertTrue(slow.isCompleted)
+        assertNull(slow.await())
+        transport.failure = { request -> "already_resolved".takeIf { request.text("type") == "question.answer" } }
+        val error = runCatching { repository.withHealthyConnection("host") { it.request("question.answer") } }.exceptionOrNull()
+        assertEquals("already_resolved", (error as RemoteCommandException).code)
+    }
+
+    @Test
+    fun aKnownNotificationForAnUnreachableMacReconnectsTheMacOnScreen() = runTest {
+        val other = host.copy(routeId = "other", name = "Other")
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, hosts = listOf(host, other), projectHint = { _, _ -> "project" })
+        val selection = RemoteSelection("host", "project", "session")
+        repository.activate(selection)
+        runCurrent()
+        val connects = transport.connects
+        transport.unreachable = setOf("other")
+        val opening = async { repository.openNotification("other", "session") }
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS + 1)
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        // A failed open is no selection: the navigator goes back to the screen it left.
+        assertNull(opening.await())
+        // Other was tried once, without a walk that would only time out again, then Host came back.
+        assertEquals(connects + 2, transport.connects)
+        assertEquals("host", transport.route)
+        val state = repository.state.value
+        assertEquals(selection, state.selection)
+        assertTrue(state.connected)
+        assertFalse(state.loading)
+        assertEquals("session", state.session?.text("id"))
+    }
+
+    @Test
+    fun aKnownNotificationOnAColdStartWithTheMacOfflineReturnsNoSelection() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, navigationStorage = SavedNavigation(savedHost()))
+        transport.unreachable = setOf("host")
+        val opening = async { repository.openNotification("host", "session") }
+        advanceTimeBy(CONNECT_READY_WAIT_MILLIS + 1)
+        runCurrent()
+        assertTrue(opening.isCompleted)
+        // Not the empty selection the activation started from, which would collapse the saved stack.
+        assertNull(opening.await())
+        assertEquals(1, transport.connects)
+        assertFalse(repository.state.value.loading)
+    }
+
+    private fun configuredResponse(transport: Transport): (JsonObject) -> JsonObject? = transport.response
+
+    /** A v2 project list, which no host answers twice. */
+    private fun projectsData(items: List<JsonObject>) =
+        JsonObject(data("projects", items) + ("capabilities" to JsonArray(emptyList())))
 
     private fun quoteMessages(transport: Transport) {
         val normal = transport.response

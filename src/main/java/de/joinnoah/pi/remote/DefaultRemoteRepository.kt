@@ -48,6 +48,9 @@ internal const val SESSION_REFRESH_INTERVAL_MILLIS = 5_000L
 internal const val PROJECTS_REVALIDATE_MILLIS = 10_000L
 /** A list of every project read more recently than this on the same connection is not read again. */
 internal const val PROJECT_LISTS_REFRESH_MILLIS = 30_000L
+
+/** Project lists a tapped notification's walk reads at a time while it looks for its session. */
+internal const val NOTIFICATION_WALK_PARALLELISM = 4
 /** On Projects, a waiting or running chat the lists miss reads them again once they are this old. */
 private const val ATTENTION_REFRESH_MILLIS = 1_500L
 /** A session no project's list held after all of them were read is not looked for again this soon. */
@@ -106,12 +109,6 @@ internal const val QUIET_RECONNECT_MILLIS = 5_000L
 
 /** The default wait for a request's reply. */
 internal const val REQUEST_TIMEOUT_MILLIS = 30_000L
-
-/** The app's connection counts as healthy for background work while a frame came this recently. */
-internal const val HEALTHY_INBOUND_MILLIS = 25_000L
-
-/** How long background work waits for a reply over the app's connection. */
-internal const val HEALTHY_REQUEST_TIMEOUT_MILLIS = 4_000L
 
 /** Connection-bound requests (folder, fan-out, background) that may be outstanding at once. */
 private const val MAX_CONNECTION_REQUESTS = 32
@@ -218,6 +215,11 @@ class DefaultRemoteRepository(
     private val navigationStorage: NavigationSnapshotStorage? = null,
     /** Called once a pairing is removed, so stores outside the repository can forget the host. */
     private val onUnpaired: (String) -> Unit = {},
+    /**
+     * Where the app's other stores last saw a session, for a tapped notification: the project ID
+     * the home snapshot or the label worker's names hold for a route and session, or null.
+     */
+    private val projectHint: suspend (routeId: String, sessionId: String) -> String? = { _, _ -> null },
     /** Uniform value in [0, 1) that spreads reconnect delays; injectable for tests. */
     private val jitter: () -> Double = { Random.nextDouble() },
 ) : RemoteRepository {
@@ -2490,6 +2492,7 @@ class DefaultRemoteRepository(
         mode: ActivationMode,
         force: Boolean,
         useCache: Boolean = true,
+        onFailed: (() -> Unit)? = null,
     ): RemoteSelection {
         initialized.await()
         restorePending = false
@@ -2773,6 +2776,7 @@ class DefaultRemoteRepository(
             checkEpoch(epoch)
             // A lost connection already set its own, more specific error, or reconnects quietly.
             if (!connectionDown()) reportError(R.string.remote_request_error)
+            onFailed?.invoke()
             return if (mode == ActivationMode.USER_OPEN && !cacheSelected) previousSelection else state.value.selection
         } finally {
             // What was read alongside and not taken is dropped; its late replies find no request.
@@ -2978,6 +2982,42 @@ class DefaultRemoteRepository(
         return source
     }
 
+    /**
+     * The project of [sessionId] on [routeId] as the repository's memory holds it: the open chat,
+     * the cached chats and lists, the project lists' aggregate and the saved navigation.
+     */
+    private fun localProject(routeId: String, sessionId: String): String? {
+        fun List<JsonObject>.holds() = any { it.optionalText("id") == sessionId }
+        state.value.selection.takeIf { it.routeId == routeId && it.sessionId == sessionId }?.projectId?.let { return it }
+        chatCache.entries().lastOrNull { (key, _) -> key.routeId == routeId && key.sessionId == sessionId }
+            ?.first?.projectId?.let { return it }
+        sessionCache.entries().lastOrNull { (key, entry) -> key.first == routeId && entry.sessions.holds() }
+            ?.first?.second?.let { return it }
+        if (projectSessionsRoute == routeId)
+            projectSessionsAggregate.values.find { it.sessions.holds() }?.projectId?.let { return it }
+        cachedProjectChats?.takeIf { it.first == routeId }?.second
+            ?.find { it.session.optionalText("id") == sessionId }?.projectId?.let { return it }
+        val saved = savedNavigation[routeId] ?: return null
+        if (saved.sessions.holds()) saved.projectId?.let { return it }
+        return saved.projectChats
+            .find { (it["session"] as? JsonObject)?.optionalText("id") == sessionId }
+            ?.optionalText("projectId")
+    }
+
+    override suspend fun notificationProject(routeId: String, sessionId: String): String? {
+        initialized.await()
+        if (!opaqueId(routeId) || !opaqueId(sessionId) || state.value.hosts.none { it.routeId == routeId }) return null
+        localProject(routeId, sessionId)?.let { return it }
+        return try {
+            projectHint(routeId, sessionId)?.takeIf(::opaqueId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (swallowed: Exception) {
+            Diagnostics.caught("repo.notificationProject", swallowed)
+            null
+        }
+    }
+
     override suspend fun openNotification(routeId: String, sessionId: String): RemoteSelection? {
         cancelRecovery()
         initialized.await()
@@ -2990,18 +3030,46 @@ class DefaultRemoteRepository(
             return null
         val host = state.value.hosts.find { it.routeId == routeId } ?: return null
         val previous = state.value
+        // A project known here opens the chat directly; the walk over every project is only for a
+        // session the app never saw. A stale project (the session is not in it) lands on that
+        // project's list or the projects, and the walk still finds the session.
+        notificationProject(routeId, sessionId)?.let { projectId ->
+            reconnectEnabled = true
+            var failed = false
+            val opened =
+                activate(
+                    RemoteSelection(routeId, projectId, sessionId),
+                    ActivationMode.USER_OPEN,
+                    force = false,
+                    onFailed = { failed = true },
+                )
+            // A failed open (the Mac unreachable, a request refused) hands back the selection from
+            // before it, which may be another Mac's: that is no answer to the tap. The walk would
+            // only fail the same way, so the previous screen comes back as when the walk fails.
+            if (failed || opened.routeId != routeId) return restorePrevious(previous, routeId, selectionEpoch)
+            val stale =
+                opened == RemoteSelection(routeId) ||
+                    (opened == RemoteSelection(routeId, projectId) &&
+                        state.value.sessions.none { it.optionalText("id") == sessionId })
+            if (!stale) return opened
+        }
         val epoch = selectionEpoch
         var resolved: RemoteSelection? = null
         update { it.copy(loading = true) }
         try {
             connect(host, epoch)
+            // Read again rather than reused: a session no cache knows may be in a newly shared project.
             val projects = request("projects.list", epoch).array("items")
-            for (project in projects) {
-                val sessions = listSessions(project.text("id"), epoch)
-                if (sessions.any { it.text("id") == sessionId }) {
-                    resolved = RemoteSelection(routeId, project.text("id"), sessionId)
-                    break
-                }
+            cachedProjects = routeId to projects
+            projectsReadOn = generation
+            projectsReadAt = now()
+            val found = findSessionProject(routeId, projects, sessionId)
+            checkEpoch(epoch)
+            if (found != null) {
+                // The open that follows reuses the list the walk just read.
+                sessionCache[routeId to found.first.text("id")] =
+                    CachedSessions(routeId, found.first.text("id"), found.first, found.second, generation)
+                resolved = RemoteSelection(routeId, found.first.text("id"), sessionId)
             }
         } catch (e: CancellationException) {
             throw e
@@ -3010,6 +3078,15 @@ class DefaultRemoteRepository(
             if (epoch == selectionEpoch) reportError(R.string.remote_request_error)
         }
         if (resolved != null) return activate(resolved, ActivationMode.USER_OPEN)
+        return restorePrevious(previous, routeId, epoch)
+    }
+
+    /**
+     * After a notification's open failed: reconnects the Mac that was on screen before when the
+     * notification was for another one, puts its [previous] state back, and returns null so the
+     * navigator restores its own stack.
+     */
+    private suspend fun restorePrevious(previous: RemoteState, routeId: String, epoch: Long): RemoteSelection? {
         if (epoch == selectionEpoch && previous.host != null && previous.host.routeId != routeId) {
             try {
                 connect(previous.host, epoch)
@@ -3035,6 +3112,47 @@ class DefaultRemoteRepository(
         }
         if (epoch == selectionEpoch) update { it.copy(loading = false) }
         return null
+    }
+
+    /**
+     * Reads the lists of [projects] on [routeId], [NOTIFICATION_WALK_PARALLELISM] at a time, until
+     * one holds [sessionId]; the reads still waiting then never go out. Each list read is kept
+     * like the project lists' fan-out keeps it. Returns the project and its list, or null; without
+     * a hit, a failed read fails the walk.
+     */
+    private suspend fun findSessionProject(
+        routeId: String,
+        projects: List<JsonObject>,
+        sessionId: String,
+    ): Pair<JsonObject, List<JsonObject>>? = coroutineScope {
+        val connection = generation
+        val permits = Semaphore(NOTIFICATION_WALK_PARALLELISM)
+        val hit = CompletableDeferred<Pair<JsonObject, List<JsonObject>>?>()
+        var failure: Exception? = null
+        val reads =
+            projects.filter { it.optionalText("id") != null }.map { project ->
+                launch {
+                    permits.withPermit {
+                        if (hit.isCompleted) return@withPermit
+                        try {
+                            val rows = readProjectList(routeId, project, connection)
+                                ?: throw RemoteRequestException.connectionLost()
+                            if (rows.any { it.optionalText("id") == sessionId }) hit.complete(project to rows)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            if (failure == null) failure = e
+                        }
+                    }
+                }
+            }
+        launch {
+            reads.joinAll()
+            hit.complete(null)
+        }
+        val result = hit.await()
+        coroutineContext.cancelChildren()
+        result ?: failure?.let { throw it }
     }
 
     override suspend fun pair(text: String): RemoteSelection? {
@@ -5403,48 +5521,86 @@ class DefaultRemoteRepository(
         return awaitConnectionReply(Wire.random(), type, fields, REQUEST_TIMEOUT_MILLIS, record = true)
     }
 
+    /** Thrown inside [withHealthyConnection] when a plain request's connection went or changed: the caller falls back. */
+    private class HealthyConnectionGone : Exception()
+
     /**
-     * Runs [block] over this connection for work outside the UI, such as a reply from a
-     * notification, when it is connected to [routeId] and a frame arrived within
-     * [HEALTHY_INBOUND_MILLIS]. Otherwise it returns null without sending anything, and the caller
-     * opens a connection of its own. A half-open socket would make that work slower, not faster,
-     * so a quiet one does not count. The requests are independent of the selection, like folder
-     * requests, and wait at most [HEALTHY_REQUEST_TIMEOUT_MILLIS] for their reply.
+     * Runs [block] over this connection for work outside the UI, such as an answer or a reply from
+     * a notification, when it is connected to [routeId], not stale, and a frame arrived within
+     * [HEALTHY_CONNECTION_MILLIS]. Otherwise it returns null without sending anything, and the
+     * caller opens a connection of its own. A half-open socket would make that work slower, not
+     * faster, so a quiet one does not count. The requests are independent of the selection, like
+     * folder requests, count against [MAX_CONNECTION_REQUESTS], and wait at most
+     * [HEALTHY_REQUEST_TIMEOUT_MILLIS] for their reply. [onSent] runs as each one goes out.
+     *
+     * A host error throws [RemoteCommandException] from either kind of request. Otherwise the two
+     * differ in what the caller learns:
+     * - [MutationCommands.mutate], under the caller's mutation ID, reports every failure: a request
+     *   refused before it was sent (the connection went, changed or is full, or the ID is in use)
+     *   throws [MutationNotSentException]; a timeout or a lost connection after sending throws its
+     *   [RemoteRequestException], so the caller decides whether a mutation that may have arrived
+     *   goes out again.
+     * - [RemoteCommands.request], under a fresh ID, ends the whole call with null in those cases,
+     *   so the caller falls back to its own connection; [onSent] told it whether the Mac may
+     *   already have the request.
      */
-    internal suspend fun <T> withHealthyConnection(
+    override suspend fun <T> withHealthyConnection(
         routeId: String,
+        onSent: () -> Unit,
         block: suspend (MutationCommands) -> T,
     ): T? {
         val main = scope.coroutineContext.minusKey(Job)
-        val healthy =
+        val connection =
             withContext(main) {
                 val inbound = lastInboundAt
-                state.value.connected && activeHost?.routeId == routeId && inbound != null &&
-                    now() - inbound in 0 until HEALTHY_INBOUND_MILLIS
+                val current = state.value
+                generation.takeIf {
+                    current.connected && !current.stale && activeHost?.routeId == routeId && inbound != null &&
+                        now() - inbound in 0 until HEALTHY_CONNECTION_MILLIS
+                }
+            } ?: return null
+        suspend fun send(requestId: String, type: String, fields: Array<out Pair<String, Any?>>): JsonObject =
+            withContext(main) {
+                if (
+                    connection != generation || !connectionRequestsOpen() || activeHost?.routeId != routeId ||
+                        requestId in connectionCompletions
+                )
+                    throw MutationNotSentException()
+                onSent()
+                try {
+                    awaitConnectionReply(requestId, type, fields, HEALTHY_REQUEST_TIMEOUT_MILLIS, record = false)
+                } catch (e: RemoteRequestException) {
+                    // The host answered: its code means the same on any connection.
+                    if (e.answered) throw RemoteCommandException(e.code)
+                    throw e
+                }
             }
-        if (!healthy) return null
-        return block(
-            object : MutationCommands {
-                override suspend fun request(type: String, vararg fields: Pair<String, Any?>) =
-                    mutate(Wire.random(), type, *fields)
+        return try {
+            block(
+                object : MutationCommands {
+                    override suspend fun request(type: String, vararg fields: Pair<String, Any?>): JsonObject =
+                        try {
+                            send(Wire.random(), type, fields)
+                        } catch (e: CancellationException) {
+                            // CancellationException is an IllegalStateException; let it cancel.
+                            throw e
+                        } catch (e: IllegalStateException) {
+                            // Not sent (disconnected meanwhile, another connection, too many in
+                            // flight), or sent without a reply in time or before the connection went.
+                            Diagnostics.caught("repo.withHealthyConnection", e)
+                            throw HealthyConnectionGone()
+                        }
 
-                override suspend fun mutate(
-                    requestId: String,
-                    type: String,
-                    vararg fields: Pair<String, Any?>,
-                ): JsonObject =
-                    withContext(main) {
-                        if (
-                            !connectionRequestsOpen() || activeHost?.routeId != routeId ||
-                                requestId in connectionCompletions
-                        )
-                            throw MutationNotSentException()
-                        awaitConnectionReply(
-                            requestId, type, fields, HEALTHY_REQUEST_TIMEOUT_MILLIS, record = false,
-                        )
-                    }
-            }
-        )
+                    override suspend fun mutate(
+                        requestId: String,
+                        type: String,
+                        vararg fields: Pair<String, Any?>,
+                    ): JsonObject = send(requestId, type, fields)
+                }
+            )
+        } catch (_: HealthyConnectionGone) {
+            null
+        }
     }
 
     /** Fails every connection-bound request; called when the connection is lost or replaced. */

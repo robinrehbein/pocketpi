@@ -9,8 +9,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.geometry.Offset
@@ -138,7 +140,8 @@ class TwoPaneNavigationTest {
         }
     }
 
-    private val notification = RemoteNotification("host", "s1", 1)
+    /** Consumed once opened, as MainActivity does, so a recreation restores the stack instead. */
+    private var notification by mutableStateOf<RemoteNotification?>(RemoteNotification("host", "s1", 1))
 
     @Composable
     private fun App(hardwareKeyboard: Boolean = false) {
@@ -155,7 +158,9 @@ class TwoPaneNavigationTest {
             }
         focusManager = androidx.compose.ui.platform.LocalFocusManager.current
         CompositionLocalProvider(LocalConfiguration provides configuration) {
-            MaterialTheme { RemoteNavigation(repository, settings, false, {}, notification) }
+            MaterialTheme {
+                RemoteNavigation(repository, settings, false, {}, notification, { if (notification == it) notification = null })
+            }
         }
     }
 
@@ -1126,7 +1131,9 @@ class TwoPaneNavigationTest {
         window.value = 1300.dp
         compose.waitForIdle()
         compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)
-        // A cold start reads it back from the preferences.
+        // A cold start reads it back from the preferences. It opens the chat from its
+        // notification again: the first one was consumed, and a fresh stack starts at Hosts.
+        notification = RemoteNotification("host", "s1", 2)
         launch.value++
         compose.waitForIdle()
         compose.onNodeWithTag("sessionListPane").assertWidthIsEqualTo(400.dp)

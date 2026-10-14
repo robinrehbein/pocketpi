@@ -64,7 +64,10 @@ class RemoteApplication : Application() {
         val importer = AttachmentImporter(this, attachments)
         repository =
             DefaultRemoteRepository(
-                PairingStore(this),
+                // Pushes check their route in the cache this keeps, without decrypting the store.
+                RouteCachingPairings(PairingStore(this), PairedRouteCache(this)) { hosts ->
+                    hosts.forEach(RemoteNotifications::rememberHost)
+                },
                 DraftStore(this),
                 remoteTransport(this, scope),
                 scope,
@@ -75,6 +78,7 @@ class RemoteApplication : Application() {
                 },
                 onRecoverySignal = { onPushRecoverySignal() },
                 onUnpaired = ::onUnpaired,
+                projectHint = ::sessionProjectHint,
             )
         observeRecovery()
         predictions = PromptPredictions(this, scope, PairingStore(this))
@@ -141,6 +145,14 @@ class RemoteApplication : Application() {
         RemoteNotifications.cancelRoute(this, routeId)
     }
 
+    /**
+     * Where the home snapshot or the label worker last saw a session, for a tapped notification
+     * whose session the repository's caches do not hold.
+     */
+    private suspend fun sessionProjectHint(routeId: String, sessionId: String): String? =
+        home.load().sessions.find { it.routeId == routeId && it.sessionId == sessionId }?.projectId
+            ?: CompletionUpgrades.names.get(routeId, sessionId)?.projectId
+
     /** A push arrived for a paired host; called on the messaging worker thread. */
     internal fun onPushEvent(payload: PushPayload) {
         home.onPush(payload)
@@ -160,9 +172,6 @@ class RemoteApplication : Application() {
     internal fun onRepliedInBackground(routeId: String, sessionId: String) {
         home.onAnswered(routeId, sessionId)
     }
-
-    /** The app's own connection, for background work that may use it while it is healthy. */
-    internal fun healthyConnection(): DefaultRemoteRepository? = repository as? DefaultRemoteRepository
 
     /** True unless the host was unpaired in this process or is missing from loaded pairings. */
     internal fun isPaired(routeId: String): Boolean =
