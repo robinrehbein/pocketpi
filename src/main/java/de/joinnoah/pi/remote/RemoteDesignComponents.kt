@@ -1,15 +1,17 @@
 package de.joinnoah.pi.remote
 
+import android.animation.ValueAnimator
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LaptopMac
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Info
@@ -27,6 +29,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -34,6 +37,7 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
@@ -182,6 +186,8 @@ internal fun ProjectRow(
         Row(
             Modifier.fillMaxWidth()
                 .background(MaterialTheme.colorScheme.background)
+                // The press ripple follows the rounded selection instead of a square.
+                .clip(RoundedCornerShape(16.dp))
                 .then(
                     if (selected == true)
                         Modifier.background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(16.dp))
@@ -226,7 +232,7 @@ internal fun ProjectRow(
             }
             Spacer(Modifier.width(16.dp))
             Text(name, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(Icons.AutoMirrored.Filled.NavigateNext, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -297,3 +303,21 @@ internal fun projectMenu(onOpen: () -> Unit, onNewSession: (() -> Unit)?, onUnsh
         }
     }
 }
+
+/**
+ * [fraction] of the window's height: the tallest a sheet or preview may grow. It comes from the
+ * window's container rather than the screen, so in a 50:50 split it is a share of the app's half.
+ */
+@Composable
+internal fun windowHeightFraction(fraction: Float): Dp {
+    val window = LocalWindowInfo.current.containerDpSize.height
+    // Before the window is first measured its size reads as zero: no limit until it is known.
+    return if (window > 0.dp) window * fraction else Dp.Infinity
+}
+
+/**
+ * The fade and slide of a list row that appears, leaves or moves, left out when the system's
+ * animations are off (Remove animations, or an animator duration scale of zero).
+ */
+internal fun Modifier.itemMotion(item: LazyItemScope): Modifier =
+    if (ValueAnimator.areAnimatorsEnabled()) with(item) { this@itemMotion.animateItem() } else this

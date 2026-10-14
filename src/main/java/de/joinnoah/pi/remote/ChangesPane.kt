@@ -456,33 +456,20 @@ private fun changeLabel(change: GitChange): Int =
     }
 
 @Composable
-private fun Notice(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text,
-        modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-}
-
-@Composable
 private fun FailureNotice(failure: ChangesFailure, onRetry: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(16.dp).testTag("changesFailure")) {
-        Text(
-            stringResource(failureText(failure)),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.error,
-        )
-        if (failure != ChangesFailure.UNSUPPORTED)
-            TextButton(onClick = onRetry) { Text(stringResource(R.string.remote_changes_retry)) }
-    }
+    PaneFailureNotice(
+        stringResource(failureText(failure)),
+        stringResource(R.string.remote_changes_retry),
+        onRetry.takeIf { failure != ChangesFailure.UNSUPPORTED },
+        Modifier.testTag("changesFailure"),
+    )
 }
 
 /** The changes shown could not be read again; [onRetry] tries once more. */
 @Composable
 private fun StaleNotice(text: String, onRetry: () -> Unit) {
     Column(Modifier.fillMaxWidth().testTag("changesStale")) {
-        Notice(text, Modifier.testTag("changesUpdated"))
+        PaneNotice(text, Modifier.testTag("changesUpdated"))
         TextButton(onClick = onRetry, Modifier.padding(horizontal = 8.dp)) { Text(stringResource(R.string.remote_changes_retry)) }
     }
 }
@@ -537,12 +524,12 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
             }
             if (state.sessionUnavailable != null)
                 item(key = "fallback", span = { GridItemSpan(maxLineSpan) }) {
-                    Notice(stringResource(R.string.remote_changes_session_fallback), Modifier.testTag("changesFallback"))
+                    PaneNotice(stringResource(R.string.remote_changes_session_fallback), Modifier.testTag("changesFallback"))
                 }
             status?.since?.let { since ->
                 item(key = "since", span = { GridItemSpan(maxLineSpan) }) {
                     val time = formatTime(context, since.at)
-                    Notice(
+                    PaneNotice(
                         stringResource(
                             if (since.firstContact) R.string.remote_changes_since_first_contact
                             else R.string.remote_changes_since_session_start,
@@ -553,12 +540,12 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
                 }
             }
             status?.takeIf { it.base == GitBase.DEV }?.let { it.devBase?.ref ?: it.devRef }?.let { ref ->
-                item(key = "devRef", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_dev_ref, ref)) }
+                item(key = "devRef", span = { GridItemSpan(maxLineSpan) }) { PaneNotice(stringResource(R.string.remote_changes_dev_ref, ref)) }
             }
             state.fetchedAt?.takeIf { (offline || state.stale) && status != null && state.failure == null }?.let { at ->
                 item(key = "updated", span = { GridItemSpan(maxLineSpan) }) {
                     val time = updatedTime(context, at)
-                    if (offline) Notice(stringResource(R.string.remote_changes_updated_at, time), Modifier.testTag("changesUpdated"))
+                    if (offline) PaneNotice(stringResource(R.string.remote_changes_updated_at, time), Modifier.testTag("changesUpdated"))
                     else StaleNotice(stringResource(R.string.remote_changes_stale_at, time), actions.onReload)
                 }
             }
@@ -568,7 +555,7 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
                 state.loading || status == null -> item(key = "loading", span = { GridItemSpan(maxLineSpan) }) { Loading() }
                 status.unavailable != null ->
                     item(key = "unavailable", span = { GridItemSpan(maxLineSpan) }) {
-                        Notice(stringResource(unavailableText(status.unavailable)), Modifier.testTag("changesUnavailable"))
+                        PaneNotice(stringResource(unavailableText(status.unavailable)), Modifier.testTag("changesUnavailable"))
                     }
                 else -> {
                     if (status.files.isNotEmpty() || subagents.isNotEmpty())
@@ -581,7 +568,7 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
                             )
                         }
                     if (status.files.isEmpty())
-                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_empty)) }
+                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) { PaneNotice(stringResource(R.string.remote_changes_empty)) }
                     items(status.files.size, key = { "file:" + status.files[it].path }) { index ->
                         val file = status.files[index]
                         ChangesFileTile(file, commentCounts[file.path] ?: 0, state.previews[file.path],
@@ -590,7 +577,7 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
                             onOpen = { actions.onOpenFile(file.path) })
                     }
                     if (status.truncated)
-                        item(key = "truncated", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_truncated)) }
+                        item(key = "truncated", span = { GridItemSpan(maxLineSpan) }) { PaneNotice(stringResource(R.string.remote_changes_truncated)) }
                     commits(state, context, actions.onReload)
                     subagents.forEach { sub -> subagentGroup(sub, actions) }
                 }
@@ -632,7 +619,7 @@ private fun LazyGridScope.subagentGroup(sub: SubagentChanges, actions: ChangesAc
     }
     if (sub.status.truncated)
         item(key = "subagentTruncated:" + sub.sessionId, span = { GridItemSpan(maxLineSpan) }) {
-            Notice(stringResource(R.string.remote_changes_truncated))
+            PaneNotice(stringResource(R.string.remote_changes_truncated))
         }
 }
 
@@ -652,10 +639,10 @@ private fun LazyGridScope.commits(state: ChangesState, context: Context, onRetry
         failure != null -> item(key = "commitsFailure", span = { GridItemSpan(maxLineSpan) }) { FailureNotice(failure, onRetry) }
         state.logLoading || log == null -> item(key = "commitsLoading", span = { GridItemSpan(maxLineSpan) }) { Loading() }
         log.unavailable != null ->
-            item(key = "commitsUnavailable", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_commits_unavailable)) }
+            item(key = "commitsUnavailable", span = { GridItemSpan(maxLineSpan) }) { PaneNotice(stringResource(R.string.remote_changes_commits_unavailable)) }
         else -> {
             if (log.commits.isEmpty())
-                item(key = "commitsEmpty", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_commits_empty)) }
+                item(key = "commitsEmpty", span = { GridItemSpan(maxLineSpan) }) { PaneNotice(stringResource(R.string.remote_changes_commits_empty)) }
             items(log.commits.size, key = { "commit:" + log.commits[it].sha }, span = { GridItemSpan(maxLineSpan) }) { index ->
                 val commit = log.commits[index]
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).testTag("changesCommit")) {
@@ -680,7 +667,7 @@ private fun LazyGridScope.commits(state: ChangesState, context: Context, onRetry
                 }
             }
             if (log.truncated)
-                item(key = "commitsTruncated", span = { GridItemSpan(maxLineSpan) }) { Notice(stringResource(R.string.remote_changes_commits_truncated)) }
+                item(key = "commitsTruncated", span = { GridItemSpan(maxLineSpan) }) { PaneNotice(stringResource(R.string.remote_changes_commits_truncated)) }
         }
     }
 }
@@ -916,7 +903,7 @@ private fun ChangesFileDiff(
     ) {
         if (readOnly)
             item(key = "subagent") {
-                Notice(
+                PaneNotice(
                     stringResource(
                         R.string.remote_changes_subagent_file,
                         subagent?.title?.ifBlank { null } ?: stringResource(R.string.remote_changes_subagent_untitled),
@@ -956,11 +943,11 @@ private fun ChangesFileDiff(
             }
             state.diffLoading || diff == null -> item(key = "loading") { Loading() }
             diff.omitted == GitOmitted.TOO_LARGE ->
-                item(key = "tooLarge") { Notice(stringResource(R.string.remote_changes_diff_too_large)) }
+                item(key = "tooLarge") { PaneNotice(stringResource(R.string.remote_changes_diff_too_large)) }
             diff.omitted == GitOmitted.BASE_UNAVAILABLE ->
-                item(key = "baseGone") { Notice(stringResource(R.string.remote_changes_diff_base_content_gone)) }
-            diff.binary -> item(key = "binary") { Notice(stringResource(R.string.remote_changes_diff_binary)) }
-            lines.isEmpty() -> item(key = "empty") { Notice(stringResource(R.string.remote_changes_diff_empty)) }
+                item(key = "baseGone") { PaneNotice(stringResource(R.string.remote_changes_diff_base_content_gone)) }
+            diff.binary -> item(key = "binary") { PaneNotice(stringResource(R.string.remote_changes_diff_binary)) }
+            lines.isEmpty() -> item(key = "empty") { PaneNotice(stringResource(R.string.remote_changes_diff_empty)) }
             splitRows != null -> {
                 // A hunk header spans both sides; every other row pairs an old and a new line.
                 item(key = "splitHeading", contentType = "splitHeading") { SplitDiffHeading() }
@@ -989,7 +976,7 @@ private fun ChangesFileDiff(
                     ) { LineComment(it) }
                 }
                 if (diff.truncated)
-                    item(key = "truncated") { Notice(stringResource(R.string.remote_changes_diff_truncated)) }
+                    item(key = "truncated") { PaneNotice(stringResource(R.string.remote_changes_diff_truncated)) }
             }
             else -> {
                 // Rows stay one text line high, below the 48dp touch target, to keep code readable;
@@ -1041,7 +1028,7 @@ private fun ChangesFileDiff(
                     }
                 }
                 if (diff.truncated)
-                    item(key = "truncated") { Notice(stringResource(R.string.remote_changes_diff_truncated)) }
+                    item(key = "truncated") { PaneNotice(stringResource(R.string.remote_changes_diff_truncated)) }
             }
         }
     }

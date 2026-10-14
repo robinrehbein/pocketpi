@@ -1,6 +1,20 @@
 package de.joinnoah.pi.remote
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
@@ -224,5 +238,56 @@ class ConversationMessageUiTest {
             )
         )
         compose.onNodeWithTag("messageUsage").assertDoesNotExist()
+    }
+
+    @Test
+    fun expandRowsAre48dpButtonsThatSayWhetherTheyAreOpen() {
+        show(activity("bash", """{"command":"ls -la"}"""))
+        val header = compose.onNodeWithTag("toolCardHeader")
+        header.assertHeightIsAtLeast(48.dp)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, text(R.string.remote_chat_a11y_collapsed)))
+        header.performClick()
+        header.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, text(R.string.remote_chat_a11y_expanded)))
+    }
+
+    @Test
+    fun rightToLeftQuoteSwipeGoesRight() {
+        val quoted = mutableListOf<String>()
+        compose.setContent {
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                MaterialTheme {
+                    ConversationMessage(
+                        ConversationItem.Bubble(
+                            id = "rtl",
+                            sourceId = "message-rtl",
+                            role = "assistant",
+                            author = "model",
+                            text = "A reply that is long enough to swipe across",
+                            quote = null,
+                            truncated = false,
+                            timestamp = null,
+                        ),
+                        thinkingDisplay = "text",
+                        thinkingActive = false,
+                        onQuote = { quoted += it },
+                    )
+                }
+            }
+        }
+        compose.onNodeWithTag("messageBubble-rtl").performTouchInput { swipeRight() }
+        compose.waitForIdle()
+        assertEquals(listOf("message-rtl"), quoted)
+    }
+
+    @Test
+    fun rightToLeftBubbleTailAndChevronsMirror() {
+        val size = Size(200f, 100f)
+        val outline = BubbleShape(true).createOutline(size, LayoutDirection.Rtl, Density(1f)) as Outline.Generic
+        val bottomLeft = Path().apply { addRect(Rect(0f, 96f, 4f, 100f)) }
+        val bottomRight = Path().apply { addRect(Rect(196f, 96f, 200f, 100f)) }
+        assertTrue(!Path.combine(PathOperation.Intersect, outline.path, bottomLeft).isEmpty)
+        assertTrue(Path.combine(PathOperation.Intersect, outline.path, bottomRight).isEmpty)
+        assertTrue(Icons.AutoMirrored.Filled.NavigateNext.autoMirror)
     }
 }

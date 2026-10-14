@@ -115,30 +115,12 @@ internal data class WatchQuestionAnswers(
         return copy(custom = custom + (id to values.distinct()))
     }
     fun skip(id: String) = copy(selected = selected - id, custom = custom - id)
-    fun valid(questions: List<JsonObject>) = questions.all { q ->
-        !q.flag("required") || selected[q.text("id")].orEmpty().isNotEmpty() || custom[q.text("id")].orEmpty().any(String::isNotBlank)
-    }
-    fun wire(questions: List<JsonObject>): JsonObject {
-        require(valid(questions))
-        return Wire.objectOf(
-            "kind" to "questionnaire", "cancelled" to false,
-            "answers" to JsonArray(questions.map { q ->
-                val id = q.text("id")
-                val selections = q.array("options").mapIndexedNotNull { index, option ->
-                    if (option.text("value") in selected[id].orEmpty())
-                        Wire.objectOf("value" to option.text("value"), "label" to option.text("label"), "index" to index + 1, "wasCustom" to false)
-                    else null
-                } + custom[id].orEmpty().filter(String::isNotBlank).map {
-                    Wire.objectOf("value" to it, "label" to it, "wasCustom" to true)
-                }
-                Wire.objectOf("id" to id, "skipped" to selections.isEmpty(), "selections" to JsonArray(selections))
-            }),
-        )
-    }
+    /** The phone's encoding: see [QuestionnaireAnswers]. */
+    private val answers get() = QuestionnaireAnswers(selected, custom)
+    fun valid(questions: List<JsonObject>) = answers.valid(questions)
+    fun wire(questions: List<JsonObject>): JsonObject = answers.wire(questions)
     companion object {
-        fun defaults(questions: List<JsonObject>) = WatchQuestionAnswers(
-            questions.associate { it.text("id") to questionDefaults(it).first },
-            questions.associate { it.text("id") to questionDefaults(it).second },
-        )
+        fun defaults(questions: List<JsonObject>) =
+            QuestionnaireAnswers.defaults(questions).let { WatchQuestionAnswers(it.selected, it.custom) }
     }
 }

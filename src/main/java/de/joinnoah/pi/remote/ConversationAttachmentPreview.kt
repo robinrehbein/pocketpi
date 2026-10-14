@@ -14,7 +14,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -88,6 +87,8 @@ internal fun ConversationAttachmentPreview(
             }
         }
     }
+    // Read outside the dialog: its own window is not the app's.
+    val maxHeight = windowHeightFraction(0.6f)
     selected?.let { item ->
         Dialog(
             onDismissRequest = {
@@ -96,7 +97,6 @@ internal fun ConversationAttachmentPreview(
             },
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
-            val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.6f).dp
             Surface(
                 Modifier.fillMaxWidth().padding(16.dp),
                 shape = RoundedCornerShape(24.dp),

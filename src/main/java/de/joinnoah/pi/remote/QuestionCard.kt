@@ -5,6 +5,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -101,20 +102,22 @@ internal fun QuestionCard(
             }
             "select" -> {
                 var selected by remember(id) { mutableStateOf<String?>(null) }
-                question.getValue("options").jsonArray.forEach { option ->
-                    val value = option.jsonPrimitive.content
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .selectable(
-                                selected = selected == value,
-                                enabled = controlsEnabled,
-                                role = Role.RadioButton,
-                            ) { if (controlsEnabled) selected = value }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                    ) {
-                        RadioButton(selected = selected == value, onClick = null, enabled = controlsEnabled)
-                        Text(value, Modifier.padding(start = 12.dp))
+                Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    question.getValue("options").jsonArray.forEach { option ->
+                        val value = option.jsonPrimitive.content
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .selectable(
+                                    selected = selected == value,
+                                    enabled = controlsEnabled,
+                                    role = Role.RadioButton,
+                                ) { if (controlsEnabled) selected = value }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = selected == value, onClick = null, enabled = controlsEnabled)
+                            Text(value, Modifier.padding(start = 12.dp))
+                        }
                     }
                 }
                 Button(
@@ -185,21 +188,12 @@ internal fun QuestionnaireForm(
     val controlsEnabled = enabled && !pending
     val currentControlsEnabled by rememberUpdatedState(controlsEnabled)
     val questions = question.array("questions")
-    var selected by
-        remember(question.text("id")) {
-            mutableStateOf(questions.associate { it.text("id") to questionDefaults(it).first })
-        }
-    var customDefaults by
-        remember(question.text("id")) {
-            mutableStateOf(questions.associate { it.text("id") to questionDefaults(it).second })
-        }
+    val initial = remember(question.text("id")) { QuestionnaireAnswers.defaults(questions) }
+    var selected by remember(question.text("id")) { mutableStateOf(initial.selected) }
+    var customDefaults by remember(question.text("id")) { mutableStateOf(initial.custom) }
     var custom by remember(question.text("id")) { mutableStateOf<Map<String, String>>(emptyMap()) }
     var customSelected by
-        remember(question.text("id")) {
-            mutableStateOf(
-                questions.associate { q -> q.text("id") to questionDefaults(q).second.isNotEmpty() }
-            )
-        }
+        remember(question.text("id")) { mutableStateOf(initial.custom.mapValues { it.value.isNotEmpty() }) }
     if (compactHeader)
         Text(
             question.optionalText("title") ?: stringResource(R.string.remote_questions),
@@ -209,121 +203,127 @@ internal fun QuestionnaireForm(
         val id = q.text("id")
         val recommended = questionDefaults(q).first
         QuestionPrompt(q.text("prompt"))
-        q.array("options").forEach { option ->
-            val checked = option.text("value") in selected[id].orEmpty()
-            val optionModifier =
-                Modifier.fillMaxWidth().then(
+        val ownAnswerSelected = q.flag("allowOther") && customSelected[id] == true
+        // Single choices form one radio group, so TalkBack reads each as one of the group.
+        Column(
+            if (q.flag("multiSelect")) Modifier else Modifier.selectableGroup(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            q.array("options").forEach { option ->
+                val checked = option.text("value") in selected[id].orEmpty()
+                val optionModifier =
+                    Modifier.fillMaxWidth().then(
+                        if (q.flag("multiSelect"))
+                            Modifier.toggleable(
+                                value = checked,
+                                enabled = controlsEnabled,
+                                role = Role.Checkbox,
+                            ) {
+                                value ->
+                                val choices = selected[id].orEmpty().toMutableSet()
+                                if (value) choices.add(option.text("value"))
+                                else choices.remove(option.text("value"))
+                                selected = selected + (id to choices)
+                            }
+                        else
+                            Modifier.selectable(
+                                selected = checked,
+                                enabled = controlsEnabled,
+                                role = Role.RadioButton,
+                            ) {
+                                selected = selected + (id to setOf(option.text("value")))
+                                custom = custom - id
+                                customDefaults = customDefaults - id
+                                customSelected = customSelected + (id to false)
+                            }
+                    ).padding(vertical = 8.dp)
+                Row(optionModifier) {
                     if (q.flag("multiSelect"))
-                        Modifier.toggleable(
-                            value = checked,
-                            enabled = controlsEnabled,
-                            role = Role.Checkbox,
-                        ) {
-                            value ->
-                            val choices = selected[id].orEmpty().toMutableSet()
-                            if (value) choices.add(option.text("value"))
-                            else choices.remove(option.text("value"))
-                            selected = selected + (id to choices)
+                        Checkbox(checked, onCheckedChange = null, enabled = controlsEnabled)
+                    else RadioButton(checked, onClick = null, enabled = controlsEnabled)
+                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                        Text(option.text("label"))
+                        if (option.text("value") in recommended)
+                            Text(
+                                stringResource(R.string.remote_recommended),
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        option.optionalText("description")?.let { description ->
+                            if (hasFencedDiagram(description)) MarkdownText(description)
+                            else Text(description, style = MaterialTheme.typography.bodySmall)
                         }
-                    else
-                        Modifier.selectable(
-                            selected = checked,
-                            enabled = controlsEnabled,
-                            role = Role.RadioButton,
-                        ) {
-                            selected = selected + (id to setOf(option.text("value")))
-                            custom = custom - id
-                            customDefaults = customDefaults - id
-                            customSelected = customSelected + (id to false)
-                        }
-                ).padding(vertical = 8.dp)
-            Row(optionModifier) {
-                if (q.flag("multiSelect"))
-                    Checkbox(checked, onCheckedChange = null, enabled = controlsEnabled)
-                else RadioButton(checked, onClick = null, enabled = controlsEnabled)
-                Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                    Text(option.text("label"))
-                    if (option.text("value") in recommended)
-                        Text(
-                            stringResource(R.string.remote_recommended),
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    option.optionalText("description")?.let { description ->
-                        if (hasFencedDiagram(description)) MarkdownText(description)
-                        else Text(description, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
-        }
-        customDefaults[id].orEmpty().forEach { value ->
-            TextButton(
-                onClick = {
-                    customDefaults =
-                        customDefaults +
-                            (id to customDefaults[id].orEmpty().filterNot { it == value })
-                },
-                enabled = controlsEnabled,
-            ) {
-                Text(stringResource(R.string.remote_remove_answer, value))
-            }
-        }
-        if (q.flag("allowOther")) {
-            val ownAnswerSelected = customSelected[id] == true
-            val ownAnswerModifier =
-                if (q.flag("multiSelect"))
-                    Modifier.toggleable(
-                        value = ownAnswerSelected,
-                        enabled = controlsEnabled,
-                        role = Role.Checkbox,
-                        onValueChange = { selectedOwn ->
-                            customSelected = customSelected + (id to selectedOwn)
-                            if (!selectedOwn) {
-                                custom = custom - id
-                                customDefaults = customDefaults - id
-                            }
-                        }
-                    )
-                else
-                    Modifier.selectable(
-                        selected = ownAnswerSelected,
-                        enabled = controlsEnabled,
-                        role = Role.RadioButton,
-                    ) {
-                        selected = selected + (id to emptySet())
-                        customDefaults = customDefaults - id
-                        customSelected = customSelected + (id to true)
-                    }
-            Row(
-                Modifier.fillMaxWidth().then(ownAnswerModifier).padding(vertical = 8.dp),
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-            ) {
-                if (q.flag("multiSelect"))
-                    Checkbox(
-                        checked = ownAnswerSelected,
-                        onCheckedChange = null,
-                        enabled = controlsEnabled,
-                    )
-                else RadioButton(selected = ownAnswerSelected, onClick = null, enabled = controlsEnabled)
-                Text(stringResource(R.string.remote_other), Modifier.padding(start = 12.dp))
-            }
-            if (ownAnswerSelected)
-                OutlinedTextField(
-                    value = custom[id].orEmpty(),
-                    onValueChange = { custom = custom + (id to it.take(4096)) },
-                    enabled = controlsEnabled,
-                    label = { Text(stringResource(R.string.remote_other)) },
-                    modifier = Modifier.fillMaxWidth().then(rememberQuestionFieldKeys(custom[id].orEmpty())),
-                )
-            if (ownAnswerSelected)
+            customDefaults[id].orEmpty().forEach { value ->
                 TextButton(
                     onClick = {
-                        custom = custom - id
-                        customDefaults = customDefaults - id
-                        customSelected = customSelected + (id to false)
+                        customDefaults =
+                            customDefaults +
+                                (id to customDefaults[id].orEmpty().filterNot { it == value })
                     },
                     enabled = controlsEnabled,
-                ) { Text(stringResource(R.string.remote_remove_answer, stringResource(R.string.remote_other))) }
+                ) {
+                    Text(stringResource(R.string.remote_remove_answer, value))
+                }
+            }
+            if (q.flag("allowOther")) {
+                val ownAnswerModifier =
+                    if (q.flag("multiSelect"))
+                        Modifier.toggleable(
+                            value = ownAnswerSelected,
+                            enabled = controlsEnabled,
+                            role = Role.Checkbox,
+                            onValueChange = { selectedOwn ->
+                                customSelected = customSelected + (id to selectedOwn)
+                                if (!selectedOwn) {
+                                    custom = custom - id
+                                    customDefaults = customDefaults - id
+                                }
+                            }
+                        )
+                    else
+                        Modifier.selectable(
+                            selected = ownAnswerSelected,
+                            enabled = controlsEnabled,
+                            role = Role.RadioButton,
+                        ) {
+                            selected = selected + (id to emptySet())
+                            customDefaults = customDefaults - id
+                            customSelected = customSelected + (id to true)
+                        }
+                Row(
+                    Modifier.fillMaxWidth().then(ownAnswerModifier).padding(vertical = 8.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    if (q.flag("multiSelect"))
+                        Checkbox(
+                            checked = ownAnswerSelected,
+                            onCheckedChange = null,
+                            enabled = controlsEnabled,
+                        )
+                    else RadioButton(selected = ownAnswerSelected, onClick = null, enabled = controlsEnabled)
+                    Text(stringResource(R.string.remote_other), Modifier.padding(start = 12.dp))
+                }
+            }
         }
+        if (ownAnswerSelected)
+            OutlinedTextField(
+                value = custom[id].orEmpty(),
+                onValueChange = { custom = custom + (id to it.take(4096)) },
+                enabled = controlsEnabled,
+                label = { Text(stringResource(R.string.remote_other)) },
+                modifier = Modifier.fillMaxWidth().then(rememberQuestionFieldKeys(custom[id].orEmpty())),
+            )
+        if (ownAnswerSelected)
+            TextButton(
+                onClick = {
+                    custom = custom - id
+                    customDefaults = customDefaults - id
+                    customSelected = customSelected + (id to false)
+                },
+                enabled = controlsEnabled,
+            ) { Text(stringResource(R.string.remote_remove_answer, stringResource(R.string.remote_other))) }
         if (!q.flag("required"))
             TextButton(
                 onClick = {
@@ -337,12 +337,7 @@ internal fun QuestionnaireForm(
                 Text(stringResource(R.string.remote_skip))
             }
     }
-    val valid = questions.all {
-        !it.flag("required") ||
-            selected[it.text("id")].orEmpty().isNotEmpty() ||
-            custom[it.text("id")].orEmpty().isNotBlank() ||
-            customDefaults[it.text("id")].orEmpty().isNotEmpty()
-    }
+    val valid = QuestionnaireAnswers.of(selected, customDefaults, custom).valid(questions)
     if (!valid)
         Text(
             stringResource(R.string.remote_question_required),
@@ -352,42 +347,8 @@ internal fun QuestionnaireForm(
         enabled = controlsEnabled && valid,
         onClick = {
             if (!currentControlsEnabled) return@Button
-            val answers = questions.map { q ->
-                val selections =
-                    q.array("options")
-                        .mapIndexedNotNull { index, o ->
-                            if (o.text("value") in selected[q.text("id")].orEmpty())
-                                Wire.objectOf(
-                                    "value" to o.text("value"),
-                                    "label" to o.text("label"),
-                                    "index" to index + 1,
-                                    "wasCustom" to false,
-                                )
-                            else null
-                        }
-                        .toMutableList()
-                customDefaults[q.text("id")].orEmpty().forEach {
-                    selections += Wire.objectOf("value" to it, "label" to it, "wasCustom" to true)
-                }
-                custom[q.text("id")]
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let {
-                        selections +=
-                            Wire.objectOf("value" to it, "label" to it, "wasCustom" to true)
-                    }
-                Wire.objectOf(
-                    "id" to q.text("id"),
-                    "skipped" to selections.isEmpty(),
-                    "selections" to JsonArray(selections),
-                )
-            }
-            onAnswer(
-                Wire.objectOf(
-                    "kind" to "questionnaire",
-                    "cancelled" to false,
-                    "answers" to JsonArray(answers),
-                )
-            )
+            // The watch sends the same encoding (WatchQuestionAnswers), defaults included.
+            onAnswer(QuestionnaireAnswers.of(selected, customDefaults, custom).wire(questions))
         },
     ) {
         Text(

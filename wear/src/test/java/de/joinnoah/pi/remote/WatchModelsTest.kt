@@ -96,4 +96,22 @@ class WatchModelsTest {
         assertTrue(skipped.flag("skipped"))
         assertTrue(skipped.array("selections").isEmpty())
     }
+    @Test fun `watch answers encode exactly like the phone form, custom defaults included`() {
+        val questions = listOf(
+            question(true, defaults = listOf("Beta", "Custom")),
+            JsonObject(question(required = false, defaults = listOf("Own words")) + ("id" to JsonPrimitive("r"))),
+        )
+        val watch = WatchQuestionAnswers.defaults(questions)
+        val phoneDefaults = QuestionnaireAnswers.defaults(questions)
+        // The phone keeps custom defaults apart from typed text; untouched, both send the same.
+        val phone = QuestionnaireAnswers.of(phoneDefaults.selected, phoneDefaults.custom, emptyMap())
+        assertEquals(phone.wire(questions), watch.wire(questions))
+        val selections = watch.wire(questions).array("answers").map { answer -> answer.array("selections").map { it.text("value") } }
+        assertEquals(listOf(listOf("b", "Custom"), listOf("Own words")), selections)
+        // A typed answer on either device follows the custom defaults.
+        assertEquals(
+            QuestionnaireAnswers.of(phoneDefaults.selected, phoneDefaults.custom, mapOf("q" to "Typed")).wire(questions),
+            watch.editOther(questions[0], "Typed", "").wire(questions),
+        )
+    }
 }
