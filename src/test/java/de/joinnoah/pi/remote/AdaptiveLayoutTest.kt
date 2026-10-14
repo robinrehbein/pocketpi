@@ -566,4 +566,66 @@ class AdaptiveLayoutTest {
             }
         )
     }
+
+    @Test
+    fun resetLayoutForgetsWidthsAndHiddenListsButLeavesRoomForTheInspector() {
+        val layout = paneLayout(1300.dp, TALL)
+        val state = TwoPaneState()
+        assertFalse(state.customized)
+        state.window = 1300.dp
+        state.adopt(layout)
+        state.resizeList(layout, 420.dp)
+        state.resizeInspector(layout, 500.dp)
+        state.listCollapsed = true
+        state.inspectorExpanded = true
+        assertTrue(state.customized)
+        state.resetLayout()
+        assertFalse(state.customized)
+        assertTrue(state.memos.isEmpty())
+        assertFalse(state.listCollapsed)
+        assertFalse(state.inspectorExpanded)
+        assertEquals(layout.listWidth, state.listWidth(layout))
+        assertEquals(layout.inspectorWidth, state.inspectorWidth(layout))
+        // A list that only made way for the open inspector is no change of the user's to undo.
+        state.autoCollapseList()
+        assertFalse(state.customized)
+        state.resetLayout()
+        assertTrue(state.listCollapsed)
+        state.restoreList()
+        assertFalse(state.listCollapsed)
+    }
+
+    @Test
+    fun projectsColumnKeptBesideAChatIsRememberedPerBucketAndReset() {
+        val wide = paneLayout(1300.dp, TALL)
+        val narrow = paneLayout(800.dp, TALL)
+        val state = TwoPaneState()
+        state.adopt(wide)
+        state.projectsExpanded = true
+        assertTrue(state.customized)
+        assertEquals(true, state.memos[wide.sizeKey()]?.projectsExpanded)
+        // Another bucket has its own choice, and coming back restores this one.
+        state.adopt(narrow)
+        assertFalse(state.projectsExpanded)
+        state.adopt(wide)
+        assertTrue(state.projectsExpanded)
+        val scope = androidx.compose.runtime.saveable.SaverScope { true }
+        assertTrue(TwoPaneState.Saver.restore(with(TwoPaneState.Saver) { scope.save(state) }!!)!!.projectsExpanded)
+        state.projectsExpanded = false
+        assertTrue(state.memos.isEmpty())
+        state.projectsExpanded = true
+        state.resetLayout()
+        assertFalse(state.projectsExpanded)
+        assertFalse(state.customized)
+    }
+
+    @Test
+    fun fullProjectsColumnFitsOnlyWhereTheChatKeepsItsMinimum() {
+        val layout = paneLayout(1300.dp, TALL)
+        assertTrue(projectsColumnFits(1300.dp, layout, listShown = true))
+        // 280 dp of projects, 240 dp of list, two dividers and 400 dp of chat need 922 dp.
+        assertTrue(projectsColumnFits(922.dp, layout, listShown = true))
+        assertFalse(projectsColumnFits(921.dp, layout, listShown = true))
+        assertTrue(projectsColumnFits(921.dp, layout, listShown = false))
+    }
 }

@@ -282,6 +282,15 @@ internal val PROJECT_STRIP_WIDTH = 64.dp
 internal val PROJECT_STRIP_RESERVE = PROJECT_STRIP_WIDTH + PANE_DIVIDER_WIDTH
 
 /**
+ * The full projects column fits beside a chat in a [window] wide [layout]: the chat keeps its
+ * minimum width beside it and, where [listShown], the narrowest session list.
+ */
+internal fun projectsColumnFits(window: Dp, layout: PaneLayout, listShown: Boolean): Boolean {
+    val list = if (listShown) LIST_PANE_MIN_WIDTH + PANE_DIVIDER_WIDTH else 0.dp
+    return window - layout.projectsWidth - PANE_DIVIDER_WIDTH - list >= CHAT_PANE_MIN_WIDTH
+}
+
+/**
  * The session list's width for [requested] in a [window] wide [layout]: it leaves room for the
  * chat and, where the inspector opens beside the list, the narrowest inspector pane. Where it
  * does not, opening the inspector collapses the list instead.
@@ -435,6 +444,22 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
             sizedFor?.let { key -> memos = memos + (key to (memos[key] ?: PaneMemo()).copy(listCollapsed = value)) }
         }
 
+    private var projectsWide by mutableStateOf(false)
+
+    /**
+     * The full projects column stays beside a chat instead of shrinking to the strip, where it
+     * fits ([projectsColumnFits]). The user's choice, remembered per bucket like a hidden list.
+     */
+    var projectsExpanded: Boolean
+        get() = projectsWide
+        set(value) {
+            projectsWide = value
+            sizedFor?.let { key ->
+                val memo = (memos[key] ?: PaneMemo()).copy(projectsExpanded = value.takeIf { it })
+                memos = if (memo.empty) memos - key else memos + (key to memo)
+            }
+        }
+
     /**
      * Navigation brings the list back: a project opened, the search or the next project. That is
      * no choice of the user's for the bucket to remember, but a hide it remembers no longer holds.
@@ -500,6 +525,24 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
         memos = if (memo.empty) memos - key else memos + (key to memo)
     }
 
+    /**
+     * The user changed the layout: a dragged width, a hidden list or the full projects column in
+     * some bucket, the list hidden by hand now, the inspector expanded or the projects column kept. A list hidden for the inspector does not count.
+     */
+    val customized: Boolean
+        get() = memos.isNotEmpty() || (collapsed && !autoCollapsed) || inspectorExpanded || projectsWide
+
+    /**
+     * Back to the defaults in every bucket: the widths, the list the user hid, the expanded
+     * inspector and the projects column kept beside a chat. A list hidden only to make room for the open inspector stays out of its way.
+     */
+    fun resetLayout() {
+        memos = emptyMap()
+        if (!autoCollapsed) collapsed = false
+        inspectorExpanded = false
+        projectsWide = false
+    }
+
     /** The session list's requested width in [layout], before [listPaneWidth] clamps it. */
     fun listWidth(layout: PaneLayout): Dp = share(memos[layout.sizeKey()]?.list) ?: layout.listWidth
 
@@ -529,6 +572,7 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
         val key = layout.sizeKey()
         if (sizedFor == key) return
         sizedFor = key
+        projectsWide = memos[key]?.projectsExpanded ?: false
         val hidden = memos[key]?.listCollapsed ?: return
         if (hidden) {
             collapsed = true
@@ -550,6 +594,7 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
                         it.autoCollapsed,
                         it.inspectorExpanded,
                         encodePaneMemos(it.memos),
+                        it.projectsWide,
                     )
                 },
                 restore = {
@@ -558,6 +603,7 @@ internal class TwoPaneState(listCollapsed: Boolean = false, memos: Map<String, P
                         // State saved by an older version has neither.
                         autoCollapsed = it.getOrNull(4) as? Boolean ?: false
                         inspectorExpanded = it.getOrNull(5) as? Boolean ?: false
+                        projectsWide = it.getOrNull(7) as? Boolean ?: false
                     }
                 },
             )
@@ -706,7 +752,9 @@ private data class ProjectColumnsScene(
         // Registered before the chat's own handlers, so an open tool detail or diff still closes
         // first; without a predictive preview (see previousEntries).
         BackHandler(enabled = collapsed) { state.listCollapsed = false }
-        val strip = detail != null
+        // Beside a chat the column shrinks to the strip, unless the user keeps it and it fits.
+        val wideFits = projectsColumnFits(state.window, layout, listShown = list != null && !collapsed)
+        val strip = detail != null && !(state.projectsExpanded && wideFits)
         val projectsTarget = if (strip) PROJECT_STRIP_WIDTH else layout.projectsWidth
         val projectsWidth = rememberProjectsWidth(projectsTarget)
         // Back from the sessions or a chat stays in this scene, so Navigation 3 has no other scene
@@ -727,7 +775,12 @@ private data class ProjectColumnsScene(
             if (strip) lerp(projectsWidth.value, layout.projectsWidth, backPreview.value) else projectsWidth.value
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val window by rememberUpdatedState(maxWidth)
-            val reserve = if (projects != null) PROJECT_STRIP_RESERVE else 0.dp
+            val reserve =
+                when {
+                    projects == null -> 0.dp
+                    detail != null && !strip -> layout.projectsWidth + PANE_DIVIDER_WIDTH
+                    else -> PROJECT_STRIP_RESERVE
+                }
             val listWidth = listPaneWidth(state.listWidth(layout), maxWidth - reserve, layout)
             val direction = if (rtl) -1f else 1f
             val slide = with(LocalDensity.current) { COLUMN_SLIDE.toPx() } * direction
@@ -772,7 +825,13 @@ private data class ProjectColumnsScene(
                             // At the target width too, so the content never reflows either.
                             Box(Modifier.width(projectsTarget).fillMaxHeight()) {
                                 CompositionLocalProvider(
-                                    LocalProjectsColumn provides ProjectsColumn(selectedProjectId, strip)
+                                    LocalProjectsColumn provides
+                                        ProjectsColumn(
+                                            selectedProjectId,
+                                            strip,
+                                            canExpand = strip && wideFits,
+                                            canCollapse = detail != null && !strip,
+                                        )
                                 ) {
                                     projects.Content()
                                 }
