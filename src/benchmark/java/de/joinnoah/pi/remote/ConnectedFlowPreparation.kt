@@ -53,5 +53,6 @@ internal object ConnectedFlowPreparation {
     fun lastChatCache(): String? =
         Diagnostics.report().activations
             .firstOrNull { it.outcome.startsWith("ok:") && ":chat." in it.outcome }
-            ?.outcome?.substringAfterLast(":chat.")
+            // Later tags such as `:snapshot.held` follow the chat's.
+            ?.outcome?.substringAfterLast(":chat.")?.substringBefore(':')
 }

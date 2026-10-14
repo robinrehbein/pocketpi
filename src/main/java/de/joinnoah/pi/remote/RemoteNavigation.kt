@@ -699,7 +699,8 @@ internal class RemoteNavigator(
             state.sessions,
             state.connected,
             state.loading,
-            hideOffline = targets.hideOfflineSessions && state.connected,
+            hideOffline = hidesOfflineSessions(targets.hideOfflineSessions, state.connected, state.stale),
+            stale = state.stale,
         ).map { it.id }
     }
 
