@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import java.util.Collections
 import java.util.Locale
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
@@ -3389,8 +3390,12 @@ class DefaultRemoteRepository(
         cancelQuietReconnect()
         cancelSelection()
         clearNavigationCache()
-        projectImageBytes.clear()
-        projectArtifacts.clear()
+        // The other Macs' images and pages stay; the bitmaps are keyed by content and cannot tell
+        // the routes apart, so they all go.
+        activeHost?.routeId?.let { route ->
+            projectImageBytes.clearRoute(route)
+            projectArtifacts.clearRoute(route)
+        }
         ProjectImageBitmaps.clear()
         ArtifactThumbnails.clear()
         retry?.cancel()
@@ -3420,6 +3425,7 @@ class DefaultRemoteRepository(
         attachmentBytes.clearRoute(routeId)
         SentImageThumbnails.clearRoute(routeId)
         projectImageBytes.clearRoute(routeId)
+        confirmedImages.removeAll { it.routeId == routeId }
         projectArtifacts.clearRoute(routeId)
         toolOutputs.clearRoute(routeId)
         if (toolOutputProgress?.key?.routeId == routeId) toolOutputProgress = null
@@ -6951,6 +6957,12 @@ class DefaultRemoteRepository(
     }
 
     private val projectImageBytes = ProjectImageByteCache()
+    /**
+     * The images whose disk pointer this run has read from the Mac. A pointer kept from an earlier
+     * run may name a file the agent has since overwritten, so while the Mac can answer, it is asked
+     * once before the kept copy counts; offline, the kept copy shows.
+     */
+    private val confirmedImages: MutableSet<ProjectImageByteCache.Key> = Collections.synchronizedSet(mutableSetOf())
     private val projectImageReads = mutableMapOf<Triple<String, String, Boolean>, ProjectImageRead>()
     private val projectImageReadMutex = Mutex()
     /** The host keeps four copies per device; two downloads leave room for a share or a save. */
@@ -6970,9 +6982,12 @@ class DefaultRemoteRepository(
         if (!fresh) projectImageBytes[cacheKey]?.let { return it }
         // Captured before the disk read suspends: a switch made meanwhile must not reach this read.
         val epoch = selectionEpoch
-        // A kept copy is the same bytes the host sent before; a fresh read asks the Mac again.
-        if (!fresh) diskImage(routeId, sessionId, path)?.let {
-            projectImageBytes[cacheKey] = it
+        // A kept copy is the bytes the host sent before; a fresh read asks the Mac again, and so
+        // does the first read this run of a copy kept from an earlier one while the Mac can answer.
+        val confirmed = cacheKey in confirmedImages
+        if (!fresh && (confirmed || !mediaReadable(state.value))) diskImage(routeId, sessionId, path)?.let {
+            // Unconfirmed, it stays out of memory: once connected, the next read asks the Mac.
+            if (confirmed) projectImageBytes[cacheKey] = it
             return it
         }
         if (!stillSelected(epoch, routeId, sessionId)) return ProjectImageResult.Failed
@@ -7017,6 +7032,11 @@ class DefaultRemoteRepository(
             }
         }
     }
+
+    /** The Mac is connected and reads project images, so a kept pointer can be checked with it. */
+    private fun mediaReadable(current: RemoteState): Boolean =
+        current.connected && FILES_MEDIA_CAPABILITY in current.capabilities &&
+            FILES_MEDIA_CAPABILITY !in current.unavailableCapabilities
 
     /** The image [path] of [sessionId] as the disk cache holds it, or null. */
     private suspend fun diskImage(routeId: String, sessionId: String, path: String): ProjectImageResult.Loaded? =
@@ -7097,7 +7117,9 @@ class DefaultRemoteRepository(
                     ).also {
                         // A fresh read replaces the copy, so Share, Save and the next view agree.
                         projectImageBytes[cacheKey] = it
-                        if (fresh) ProjectImageBitmaps.dropStale(sessionId, path, it.sha256)
+                        confirmedImages += cacheKey
+                        // A kept pointer from an earlier run may have named older bytes, too.
+                        ProjectImageBitmaps.dropStale(sessionId, path, it.sha256)
                         keepMedia(cacheKey.routeId) { cache ->
                             cache.put(cacheKey.routeId, it.sha256, it.bytes)
                             cache.putPointer(

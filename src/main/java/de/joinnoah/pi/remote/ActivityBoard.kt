@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -188,7 +189,7 @@ internal fun ActivityBoardScreen(
     val marks = remember(marksAll, key.routeId) { sessionMarksById(marksAll, key.routeId) }
     val visibleChat by visibleChatState()
     val visibleSessionId = visibleChat?.takeIf { it.first == key.routeId }?.second
-    val cards = remember(state.sessions, state.projectSessions, state.host, state.selection, marks, visibleSessionId) {
+    val cards = remember(state.sessions, state.projectSessions, state.project, state.host, state.selection, marks, visibleSessionId) {
         activityCards(state, marks, visibleSessionId)
     }
     // "x minutes ago" moves on while the board stays open without any state change.
@@ -272,7 +273,11 @@ internal fun ActivityBoardContent(
             }
         else
             LazyColumn(
-                Modifier.fillMaxSize().widthIn(max = MAX_PAGE_WIDTH).padding(horizontal = 16.dp),
+                Modifier.fillMaxSize()
+                    .wrapContentWidth(Alignment.CenterHorizontally)
+                    .widthIn(max = MAX_PAGE_WIDTH)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 groups.forEach { (group, items) ->
@@ -291,7 +296,8 @@ internal fun ActivityBoardContent(
 @Composable
 private fun ActivityHeading(group: ActivityGroup, count: Int) {
     Row(
-        Modifier.fillMaxWidth().padding(top = 12.dp).semantics { heading() },
+        // One heading node, "Waiting 3", so heading navigation reads the count with its group.
+        Modifier.fillMaxWidth().padding(top = 12.dp).semantics(mergeDescendants = true) { heading() },
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

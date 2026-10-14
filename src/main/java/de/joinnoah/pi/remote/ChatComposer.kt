@@ -646,9 +646,10 @@ internal fun ChatComposer(
     val editorMinHeight: (() -> Dp)? =
         if (editorExpanded && chatHeight != null) ({ (heightOf?.invoke() ?: 0.dp) * 0.5f }) else null
     // The variable extras above the field (quote, attachments, suggestions) take at most 40% of the chat
-    // area, the field keeps the rest. The large editor lifts that limit, since it is the composer's whole
-    // point. Stop, the send mode and the long-paste offer stay outside, so they never sit behind a scroll.
-    val extrasCapped = chatHeight != null && !editorExpanded
+    // area, the field keeps the rest. The large editor keeps the limit too: it takes half the area
+    // itself, and uncapped extras would push it and Send past the top. Stop, the send mode and the
+    // long-paste offer stay outside, so they never sit behind a scroll.
+    val extrasCapped = chatHeight != null
     // The control to expand the editor appears once the draft has grown past a line or two: a short or
     // empty draft gets no row of its own, so a phone keeps its height until the field needs more.
     val longDraft = draft.text.length > EXPAND_OFFER_CHARS || '\n' in draft.text

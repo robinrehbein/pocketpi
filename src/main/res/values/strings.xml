@@ -631,4 +631,6 @@
     <string name="remote_jobs_expand">Expand background jobs</string>
     <string name="remote_jobs_collapse">Collapse background jobs</string>
     <string name="remote_jobs_close">Close background jobs</string>
+    <string name="remote_new_session_model_failed">The chosen model could not be set.</string>
+    <string name="remote_new_session_model_failed_kept">The chosen model could not be set, so your first message was not sent. It waits in the message field.</string>
 </resources>

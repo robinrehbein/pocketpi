@@ -571,49 +571,52 @@ internal fun SessionControls(
                 }
             if (state.configurationLoading || state.configurationChanging)
                 LinearProgressIndicator(Modifier.fillMaxWidth())
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp).navigationBarsPadding()) {
-                if (picker == "model") {
-                    items(confirmed?.models ?: emptyList(), key = { it.provider + ":" + it.id }) {
-                        model ->
-                        val chosen =
-                            confirmed?.model?.let {
-                                it.provider == model.provider && it.id == model.id
-                            } == true
-                        PickerRow(
-                            chosen = chosen,
-                            enabled = canChange,
-                            onSelect = { selectModel(model.provider, model.id) },
-                        ) {
-                            Column {
-                                Text(model.name)
-                                Text(
-                                    model.provider + " · " + model.id,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
+            // The navigation bar pads the list and the providers row under it together.
+            Column(Modifier.navigationBarsPadding()) {
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
+                    if (picker == "model") {
+                        items(confirmed?.models ?: emptyList(), key = { it.provider + ":" + it.id }) {
+                            model ->
+                            val chosen =
+                                confirmed?.model?.let {
+                                    it.provider == model.provider && it.id == model.id
+                                } == true
+                            PickerRow(
+                                chosen = chosen,
+                                enabled = canChange,
+                                onSelect = { selectModel(model.provider, model.id) },
+                            ) {
+                                Column {
+                                    Text(model.name)
+                                    Text(
+                                        model.provider + " · " + model.id,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
                             }
                         }
-                    }
-                    if (confirmed?.modelsTruncated == true)
-                        item {
-                            Text(
-                                stringResource(R.string.remote_catalog_truncated),
-                                Modifier.padding(24.dp),
-                            )
+                        if (confirmed?.modelsTruncated == true)
+                            item {
+                                Text(
+                                    stringResource(R.string.remote_catalog_truncated),
+                                    Modifier.padding(24.dp),
+                                )
+                            }
+                    } else
+                        items(confirmed?.thinkingLevels ?: emptyList()) { level ->
+                            PickerRow(
+                                chosen = confirmed?.thinkingLevel == level,
+                                enabled = canChange,
+                                onSelect = { selectThinking(level) },
+                            ) {
+                                Text(thinkingLevelLabel(level))
+                            }
                         }
-                } else
-                    items(confirmed?.thinkingLevels ?: emptyList()) { level ->
-                        PickerRow(
-                            chosen = confirmed?.thinkingLevel == level,
-                            enabled = canChange,
-                            onSelect = { selectThinking(level) },
-                        ) {
-                            Text(thinkingLevelLabel(level))
-                        }
-                    }
+                }
+                // A model the host lacks is signed in to on the providers page; the thinking picker has none.
+                if (picker == "model")
+                    manageProviders?.let { manage -> ManageProvidersRow { closePicker(); manage() } }
             }
-            // A model the host lacks is signed in to on the providers page; the thinking picker has none.
-            if (picker == "model")
-                manageProviders?.let { manage -> ManageProvidersRow { closePicker(); manage() } }
         }
 }
 
