@@ -134,6 +134,38 @@ class ShareIntakeTest {
     }
 
     @Test
+    fun urisPastTheLimitAreCountedWithoutAskingTheirProvider() {
+        val images = (1..40).map { uri("gallery-$it.jpg") }
+        val asked = mutableListOf<Uri>()
+        val access =
+            object : ShareAccess {
+                override fun type(uri: Uri): String {
+                    asked += uri
+                    return "image/jpeg"
+                }
+
+                override fun readable(uri: Uri) = true
+
+                override fun size(uri: Uri): Long? = null
+
+                override fun own(uri: Uri) = false
+            }
+        val content = ShareIntake.parse(sendMultiple(images), access)
+        assertEquals(ShareIntake.MAX_FILES, content?.files?.size)
+        assertEquals(images.size - ShareIntake.MAX_FILES, content?.skipped)
+        assertEquals(images.take(ShareIntake.MAX_FILES), asked)
+    }
+
+    @Test
+    fun heifIsAPhotoOnlyWhereBitmapFactoryDecodesIt() {
+        assertEquals(true, ShareIntake.kind("image/heic", sdk = 28))
+        assertEquals(true, ShareIntake.kind("image/heif", sdk = 35))
+        assertNull(ShareIntake.kind("image/heic", sdk = 27))
+        assertNull(ShareIntake.kind("image/heif", sdk = 26))
+        assertEquals(true, ShareIntake.kind("image/jpeg", sdk = 26))
+    }
+
+    @Test
     fun uriWithoutReadPermissionOrOfPocketPiItselfIsSkipped() {
         val denied = uri("private.png")
         val own = Uri.parse("content://de.robinrehbein.pocketpi.exports/exports/pi-session.html")

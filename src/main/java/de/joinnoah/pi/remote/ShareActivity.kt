@@ -1,6 +1,7 @@
 package de.joinnoah.pi.remote
 
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -79,6 +80,8 @@ class ShareActivity : ComponentActivity() {
                                 }
                             directShareTarget(id, published, snapshot)
                         }
+                    // Cancelled while loading: the share goes nowhere.
+                    if (isFinishing) return@LaunchedEffect
                     app.appLock.check()
                     when {
                         direct != null -> forward(ShareRequest(content, direct))
@@ -96,11 +99,13 @@ class ShareActivity : ComponentActivity() {
     }
 
     private fun forward(request: ShareRequest) {
+        if (isFinishing) return
         try {
             startActivity(LaunchIntents.share(this, request))
         } catch (e: Exception) {
             // The sender's grant may not allow passing a URI on; nothing is sent then.
             Diagnostics.caught("share.forward", e)
+            Toast.makeText(applicationContext, R.string.remote_share_send_failed, Toast.LENGTH_LONG).show()
         }
         finish()
     }

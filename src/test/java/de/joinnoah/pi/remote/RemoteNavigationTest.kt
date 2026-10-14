@@ -712,4 +712,25 @@ class RemoteNavigationTest {
         assertEquals(listOf(R.string.remote_share_failed), repository.errors)
         assertEquals("Shared", repository.state.value.draft)
     }
+
+    @Test
+    fun `a share the editor's Keep holds back says it was dropped`() = runTest {
+        val repository = NavigationFakeRepository()
+        val editing = RemoteSelection("host", "project", "a")
+        repository.state.value =
+            RemoteState(
+                selection = editing,
+                files = FilesState("a", loading = false, editor = FileEditor("src/Main.kt", "v1", "old\n", "new\n")),
+            )
+        val stack = editing.keys().toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.share(ShareRequest(SharedContent("Shared"), ShareTarget.Session("host", "project", "b")))
+        runCurrent()
+        assertNotNull("the unsaved edit asks first", navigation.editorLeave)
+        navigation.stayInEditor()
+        assertNull(navigation.editorLeave)
+        assertEquals(listOf(R.string.remote_share_editor_kept), repository.errors)
+        assertEquals(RemoteNavKey.Chat("host", "project", "a"), stack.last())
+        assertEquals("", repository.state.value.draft)
+    }
 }

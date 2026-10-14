@@ -774,8 +774,9 @@ internal fun RemoteScreen(
                 saved,
                 photoCapture,
                 attachmentSelection,
-                accept = { selection, uris, photo -> (model as? ChatViewModel)?.acceptAttachments(selection, uris, photo) },
-                discard = { uri -> photoScope.launch(Dispatchers.IO) { PhotoCapture.discard(context, uri) } },
+                accept = { selection, uris, photo, done -> (model as? ChatViewModel)?.acceptAttachments(selection, uris, photo, done) ?: false },
+                // Not the screen's scope: the import may end after the screen is gone.
+                discard = { uri -> PhotoCapture.discardLater(context, uri) },
             )
             photoCapture = null
             attachmentSelection = null

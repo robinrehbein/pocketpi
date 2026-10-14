@@ -59,11 +59,13 @@ class MainActivity : ComponentActivity() {
         app.appLock.check()
         if (savedInstanceState == null) handleIntent(intent)
         else {
-            // Restored targets keep the saved prompt state: the user has been asked for them already.
+            // Restored launches keep the saved prompt state: the user has been asked for them already.
+            // The ones handed over before the lock engaged come first; what the lock holds came
+            // later, and the newest launch wins (a held target and a held share never coexist).
             savedInstanceState.target("pending")?.let { open(it, restored = true) }
+            savedInstanceState.share("pendingShare")?.let { receive(it, restored = true) }
             // Held behind the lock when the process died, for example behind the confirm-credential screen.
             savedInstanceState.target("held")?.let { open(it, restored = true) }
-            savedInstanceState.share("pendingShare")?.let { receive(it, restored = true) }
             savedInstanceState.share("heldShare")?.let { receive(it, restored = true) }
         }
         lifecycleScope.launch {

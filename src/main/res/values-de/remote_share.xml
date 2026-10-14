@@ -19,6 +19,8 @@
     <string name="remote_share_pick_help">Tippe auf eine Sitzung oder in einem Projekt auf „Neue Sitzung“.</string>
     <string name="remote_share_failed">Die geteilten Inhalte wurden nicht hinzugefügt, weil sich die Sitzung nicht geöffnet hat.</string>
     <string name="remote_share_dropped">Die geteilten Inhalte wurden nicht hinzugefügt, weil vorher eine andere Sitzung geöffnet wurde.</string>
+    <string name="remote_share_editor_kept">Die geteilten Inhalte wurden nicht hinzugefügt, weil du die Datei weiter bearbeitest.</string>
+    <string name="remote_share_send_failed">Das konnte nicht an PocketPi gesendet werden.</string>
     <string name="remote_share_text_too_long">Der geteilte Text passt nicht ins Eingabefeld.</string>
     <string name="remote_take_photo">Foto aufnehmen</string>
     <string name="remote_camera_unavailable">Keine Kamera-App verfügbar.</string>

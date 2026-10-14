@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Process
 import android.provider.OpenableColumns
@@ -109,13 +110,20 @@ internal object ShareIntake {
     const val MAX_TEXT_BYTES = 128 * 1024
 
     // What BitmapFactory decodes, and so what the photo import can normalize.
-    private val IMAGE_TYPES = setOf("image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif", "image/bmp", "image/heic", "image/heif")
+    private val IMAGE_TYPES = setOf("image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif", "image/bmp")
 
-    /** Whether a file of [type] is attached as a photo (true), as a file (false), or not at all (null). */
-    fun kind(type: String?): Boolean? {
+    // BitmapFactory decodes these only from API 28; below, the import would fail on them.
+    private val HEIF_TYPES = setOf("image/heic", "image/heif")
+
+    /**
+     * Whether a file of [type] is attached as a photo (true), as a file (false), or not at all
+     * (null), on a device running [sdk].
+     */
+    fun kind(type: String?, sdk: Int = Build.VERSION.SDK_INT): Boolean? {
         val mime = type?.lowercase()?.substringBefore(';')?.trim() ?: return null
         return when {
             mime in IMAGE_TYPES -> true
+            mime in HEIF_TYPES && sdk >= Build.VERSION_CODES.P -> true
             mime == "application/pdf" -> false
             mime.startsWith("text/") -> false
             else -> null
@@ -150,14 +158,16 @@ internal object ShareIntake {
         }
         val files = mutableListOf<SharedFile>()
         for (uri in uris) {
+            // Past the limit, a URI is only counted: asking its provider would cost binder calls
+            // for each of possibly hundreds of shared images.
+            if (files.size >= MAX_FILES) {
+                skipped++
+                continue
+            }
             val image =
                 if (uri.scheme != "content" || access.own(uri) || !access.readable(uri)) null
                 else kind(access.type(uri))?.takeIf { (access.size(uri) ?: 0L) <= AttachmentImportRules.FILE_BYTES }
-            when {
-                image == null -> skipped++
-                files.size >= MAX_FILES -> skipped++
-                else -> files += SharedFile(uri, image)
-            }
+            if (image == null) skipped++ else files += SharedFile(uri, image)
         }
         val raw = runCatching { intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString() }.getOrNull() ?: clipText
         val text = raw?.trim()?.takeIf { it.isNotEmpty() }
@@ -268,44 +278,58 @@ internal suspend fun deliverShare(repository: RemoteRepository, content: SharedC
 /**
  * Photos taken from the composer (ActivityResultContracts.TakePicture). The camera app writes
  * into a file of the app's cache, shared through the exports FileProvider; the import copies it
- * into the encrypted attachment store. A capture is kept until a later capture finds it older
- * than [KEEP_MILLIS], since the import reads it after the result arrives, possibly in a process
- * restarted behind the camera.
+ * into the encrypted attachment store, and the capture is deleted once the import is over or did
+ * not take it. A capture whose chat closed first is left for [sweep], which deletes captures older
+ * than [KEEP_MILLIS] on app start and before each capture: the import reads a capture after the
+ * result arrives, possibly in a process restarted behind the camera.
  */
 internal object PhotoCapture {
     const val DIRECTORY = "camera"
     private const val KEEP_MILLIS = 60 * 60_000L
 
+    /** Deletes captures older than [KEEP_MILLIS]. Blocking. */
+    fun sweep(cacheDir: File, now: Long = System.currentTimeMillis()) {
+        File(cacheDir, DIRECTORY).listFiles()?.filter { now - it.lastModified() > KEEP_MILLIS }?.forEach { it.delete() }
+    }
+
     /** A new, empty file for the camera to write, as a content URI the camera app may write. Blocking. */
     fun newUri(context: Context, now: Long = System.currentTimeMillis()): Uri {
         val dir = File(context.cacheDir, DIRECTORY)
         check(dir.isDirectory || dir.mkdirs()) { "Camera directory unavailable" }
-        dir.listFiles()?.filter { now - it.lastModified() > KEEP_MILLIS }?.forEach { it.delete() }
+        sweep(context.cacheDir, now)
         val name = "photo-" + ByteArray(8).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) } + ".jpg"
         val file = File(dir, name)
         check(file.createNewFile()) { "Camera file unavailable" }
         return FileProvider.getUriForFile(context, "${context.packageName}.exports", file)
     }
 
-    /** Deletes the capture behind [uri] (no photo was taken). Blocking. */
+    /** Deletes the capture behind [uri] (no photo was taken, or the import is done with it). Blocking. */
     fun discard(context: Context, uri: String) {
         val name = uri.toUri().lastPathSegment ?: return
         if (!name.startsWith("photo-")) return
         File(File(context.cacheDir, DIRECTORY), name).delete()
     }
 
+    /** [discard] off the main thread, independent of the screen that asked. */
+    fun discardLater(context: Context, uri: String) {
+        val app = context.applicationContext
+        Thread { runCatching { discard(app, uri) } }.start()
+    }
+
     /**
      * The camera's answer: a taken photo goes to [accept] for the chat it was taken in, as one
-     * photo of the batch import; otherwise the empty file is discarded.
+     * photo of the batch import, with a callback for when the import is done with it; the capture
+     * is discarded then, or at once when nothing was taken or [accept] did not take it.
      */
     fun onResult(
         saved: Boolean,
         uri: String?,
         selection: RemoteSelection?,
-        accept: (RemoteSelection, List<String>, Boolean) -> Unit,
+        accept: (RemoteSelection, List<String>, Boolean, () -> Unit) -> Boolean,
         discard: (String) -> Unit,
     ) {
         if (uri == null) return
-        if (saved && selection != null) accept(selection, listOf(uri), true) else discard(uri)
+        if (saved && selection != null && accept(selection, listOf(uri), true) { discard(uri) }) return
+        discard(uri)
     }
 }

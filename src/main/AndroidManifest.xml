@@ -44,9 +44,12 @@
             The share sheet's target. Exported, so it trusts nothing it receives: ShareIntake checks
             every URI and reads only EXTRA_TEXT, EXTRA_STREAM and the ClipData, never an extra that
             names a session. Narrow types, not */*, so PocketPi stays out of unrelated share sheets.
+            No task affinity: a share sent with FLAG_ACTIVITY_NEW_TASK must neither join PocketPi's
+            task (the app would show behind the scrim) nor start the task MainActivity then joins.
         -->
         <activity android:name=".ShareActivity" android:exported="true"
             android:theme="@style/Theme.PocketPi.Share" android:excludeFromRecents="true"
+            android:taskAffinity=""
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|navigation">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

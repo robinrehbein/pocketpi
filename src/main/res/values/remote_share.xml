@@ -24,6 +24,9 @@
     <string name="remote_share_pick_help">Tap a session, or New session in a project.</string>
     <string name="remote_share_failed">The shared items weren\'t added because the session didn\'t open.</string>
     <string name="remote_share_dropped">The shared items weren\'t added because another session opened first.</string>
+    <string name="remote_share_editor_kept">The shared items weren\'t added because you kept editing the file.</string>
+    <!-- The share sheet passed something PocketPi could not hand on to the app. -->
+    <string name="remote_share_send_failed">Couldn\'t send this to PocketPi.</string>
     <string name="remote_share_text_too_long">The shared text doesn\'t fit into the message box.</string>
     <!-- An entry of the composer's + menu that opens the camera. -->
     <string name="remote_take_photo">Take photo</string>

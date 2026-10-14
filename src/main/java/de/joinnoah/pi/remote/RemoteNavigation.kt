@@ -278,9 +278,15 @@ internal class RemoteNavigator(
     var editorLeave: HeldNavigation? by mutableStateOf(null)
         private set
 
-    private fun hold(held: HeldNavigation?) {
+    /**
+     * Shows [held]'s prompt; a navigation that was waiting and is not [run] was dropped and says
+     * so, [kept] when the user chose to stay in the editor.
+     */
+    private fun hold(held: HeldNavigation?, run: Boolean = false, kept: Boolean = false) {
+        val previous = editorLeave
         editorLeave = held
         editorFocus.asking = held != null
+        if (!run && previous !== held) previous?.onDropped?.invoke(kept)
     }
 
     /**
@@ -288,12 +294,12 @@ internal class RemoteNavigator(
      * [target] while the editor has unsaved changes. Navigation nobody chose here (a
      * notification, a restore) does not ask; the repository parks the edit for its session then.
      */
-    private fun leavingEditor(target: RemoteSelection, action: () -> Unit) {
+    private fun leavingEditor(target: RemoteSelection, onDropped: ((kept: Boolean) -> Unit)? = null, action: () -> Unit) {
         val state = repository.state.value
         val editor = state.files?.takeIf { it.sessionId == state.selection.sessionId }?.editor
         val leaves = target.routeId != state.selection.routeId || target.sessionId != state.selection.sessionId
         if (editor != null && leaves && editor.changed)
-            hold(HeldNavigation(checkNotNull(state.selection.routeId), editor.path, state.selection.sessionId, action))
+            hold(HeldNavigation(checkNotNull(state.selection.routeId), editor.path, state.selection.sessionId, action, onDropped))
         else action()
     }
 
@@ -303,16 +309,19 @@ internal class RemoteNavigator(
      */
     fun leaveEditor() {
         val held = editorLeave ?: return
-        hold(null)
+        hold(null, run = true)
         val state = repository.state.value
         val editor = state.files?.takeIf { it.sessionId == state.selection.sessionId }?.editor
-        if (state.selection.routeId != held.routeId || state.selection.sessionId != held.sessionId || editor?.path != held.path) return
+        if (state.selection.routeId != held.routeId || state.selection.sessionId != held.sessionId || editor?.path != held.path) {
+            held.onDropped?.invoke(false)
+            return
+        }
         repository.discardFileEditor()
         held.action()
     }
 
     fun stayInEditor() {
-        hold(null)
+        hold(null, kept = true)
     }
 
     /**
@@ -623,10 +632,15 @@ internal class RemoteNavigator(
         return true
     }
 
+    /** A share that waited for the editor's discard prompt and was dropped there says so. */
+    private val shareDropped: (Boolean) -> Unit = { kept ->
+        repository.reportError(if (kept) R.string.remote_share_editor_kept else R.string.remote_share_dropped)
+    }
+
     private fun deliver(content: SharedContent, target: ShareTarget) {
         when (target) {
             is ShareTarget.Session ->
-                leavingEditor(RemoteSelection(target.routeId, target.projectId, target.sessionId)) {
+                leavingEditor(RemoteSelection(target.routeId, target.projectId, target.sessionId), shareDropped) {
                     val project = target.projectId
                     if (project != null) {
                         openNow(RemoteNavKey.Chat(target.routeId, project, target.sessionId))
@@ -634,7 +648,7 @@ internal class RemoteNavigator(
                     } else shareByLookup(content, target.routeId, target.sessionId)
                 }
             is ShareTarget.NewSession ->
-                leavingEditor(RemoteSelection(target.routeId, target.projectId)) {
+                leavingEditor(RemoteSelection(target.routeId, target.projectId), shareDropped) {
                     if (mutation?.isActive == true) {
                         repository.reportError(R.string.remote_share_failed)
                         return@leavingEditor
@@ -855,8 +869,18 @@ internal class RemoteNavigator(
     }
 }
 
-/** A navigation waiting for the discard prompt of the editor of [path] in the session [sessionId]. */
-internal class HeldNavigation(val routeId: String, val path: String, val sessionId: String?, val action: () -> Unit) {
+/**
+ * A navigation waiting for the discard prompt of the editor of [path] in the session [sessionId];
+ * [onDropped] runs when it is dropped instead of run: kept (the user chose Keep), or not (another
+ * session or navigation took its place).
+ */
+internal class HeldNavigation(
+    val routeId: String,
+    val path: String,
+    val sessionId: String?,
+    val action: () -> Unit,
+    val onDropped: ((kept: Boolean) -> Unit)? = null,
+) {
     val fileName: String get() = path.substringAfterLast('/')
 }
 
