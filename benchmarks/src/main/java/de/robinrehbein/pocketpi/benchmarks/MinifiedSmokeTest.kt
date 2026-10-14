@@ -47,12 +47,30 @@ class MinifiedSmokeTest {
         originalIdleTimeout = configurator.waitForIdleTimeout
         configurator.setWaitForIdleTimeout(0)
         check(device.executeShellCommand("pm clear $TARGET").trim() == "Success")
-        device.executeShellCommand("am start -n $TARGET/$CONNECTED_FLOW --ez prepare true")
-        check(device.wait(Until.hasObject(By.desc(Pattern.compile("connected-flow-(prepared|failed)"))), 120_000)) {
-            "Preparing the fixture Mac timed out"
+        // The pass is setup, not the check: one that stalled on the emulator runs once more in a
+        // fresh process, where it only reconnects. A missing keep rule fails both passes.
+        val failures = mutableListOf<String>()
+        repeat(2) { attempt ->
+            val outcome = prepareFixtureMac()
+            device.executeShellCommand("am force-stop $TARGET")
+            if (outcome == null) return
+            failures += "pass ${attempt + 1}: $outcome"
         }
-        check(device.hasObject(By.desc("connected-flow-prepared"))) { "Preparing the fixture Mac failed. " + device.screenTexts() }
+        error("Preparing the fixture Mac failed. " + failures.joinToString("; "))
+    }
+
+    /** One prepare pass in a fresh process; null once it reports success, otherwise what showed. */
+    private fun prepareFixtureMac(): String? {
         device.executeShellCommand("am force-stop $TARGET")
+        device.executeShellCommand("am start -n $TARGET/$CONNECTED_FLOW --ez prepare true")
+        // ConnectedFlowActivity ends a pass within 90 s, so this wait only runs out when the
+        // app never reported at all.
+        val reported = device.wait(Until.hasObject(By.desc(Pattern.compile("connected-flow-(prepared|failed)"))), 120_000)
+        return when {
+            !reported -> "no result after 120 s. " + device.screenTexts()
+            device.hasObject(By.desc("connected-flow-prepared")) -> null
+            else -> device.screenTexts()
+        }
     }
 
     @After

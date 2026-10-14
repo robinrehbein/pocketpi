@@ -324,9 +324,23 @@ internal class NavigationFakeRepository : RemoteRepository {
 
     override fun cancelSelection() {}
 
-    override fun remove(routeId: String) {}
+    val removed = mutableListOf<String>()
 
-    override fun disconnect() {}
+    override fun remove(routeId: String) {
+        removed += routeId
+    }
+
+    var disconnects = 0
+
+    override fun disconnect() {
+        disconnects++
+    }
+
+    var revalidations = 0
+
+    override fun revalidateLists() {
+        revalidations++
+    }
 
     var refreshes = 0
 

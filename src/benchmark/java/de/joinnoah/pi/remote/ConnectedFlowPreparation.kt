@@ -32,17 +32,30 @@ internal object ConnectedFlowPreparation {
      * last chat, and the refreshed quick chats [state] shows. Nothing the visit started then
      * changes the snapshot again, so the process can be killed.
      */
-    fun settled(fixture: RelayFixture, state: RemoteState, stored: NavigationSnapshot?): Boolean {
-        if (!state.connected || state.loading || state.selection != RemoteSelection(fixture.routeId)) return false
+    fun settled(fixture: RelayFixture, state: RemoteState, stored: NavigationSnapshot?): Boolean =
+        unsettled(fixture, state, stored) == null
+
+    /**
+     * Null when [settled]; otherwise the first condition that is not met yet, so a prepare pass
+     * that gives up can say what it was waiting for.
+     */
+    fun unsettled(fixture: RelayFixture, state: RemoteState, stored: NavigationSnapshot?): String? {
+        if (!state.connected) return "not connected"
+        if (state.loading) return "loading"
+        if (state.selection != RemoteSelection(fixture.routeId)) return "selection ${state.selection}"
         val chats = state.projectChats
         val projectIds = fixture.sessions.mapTo(mutableSetOf()) { it.projectId }
-        if (chats.isEmpty() || !chats.all { it.verified } || chats.mapTo(mutableSetOf()) { it.projectId } != projectIds)
-            return false
-        return stored != null &&
-            stored.projectId == fixture.prepare.projectId &&
-            stored.sessionId == fixture.prepare.sessionId &&
-            stored.projectChats.map { (it["session"] as? JsonObject)?.optionalText("id") } ==
-                chats.map { it.session.optionalText("id") }
+        if (chats.isEmpty()) return "no quick chats"
+        val unverified = chats.filterNot { it.verified }.map { it.projectId }.distinct()
+        if (unverified.isNotEmpty()) return "quick chats of $unverified unverified"
+        val chatProjects = chats.mapTo(mutableSetOf()) { it.projectId }
+        if (chatProjects != projectIds) return "quick chats from $chatProjects, expected $projectIds"
+        if (stored == null) return "no stored snapshot"
+        if (stored.projectId != fixture.prepare.projectId || stored.sessionId != fixture.prepare.sessionId)
+            return "stored snapshot on ${stored.projectId}/${stored.sessionId}"
+        val storedChats = stored.projectChats.map { (it["session"] as? JsonObject)?.optionalText("id") }
+        if (storedChats != chats.map { it.session.optionalText("id") }) return "stored quick chats differ"
+        return null
     }
 
     /**
