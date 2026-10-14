@@ -537,4 +537,59 @@ class SessionListPresentationTest {
         assertTrue(finished.single().unread)
         assertFalse(read.single().unread)
     }
+
+    private fun quickChat(id: String, status: String, verified: Boolean = true) =
+        ProjectChatSummary("p1", "Alpha", Wire.objectOf("id" to id, "title" to id, "status" to status), verified)
+
+    @Test
+    fun quickAccessShowsThreeRunningAndThreeRecentChatsUntilShowAll() {
+        val chats =
+            (1..4).map { quickChat("running$it", "running") } +
+                (1..5).map { quickChat("recent$it", "idle") }
+
+        val folded = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
+        assertEquals(3, folded.running.size)
+        assertEquals(3, folded.recent.size)
+        assertTrue(folded.runningExpandable)
+        assertTrue(folded.recentExpandable)
+
+        val all = quickChats(chats, connected = true, showRunningAll = true, showRecentAll = true)
+        assertEquals(4, all.running.size)
+        assertEquals(5, all.recent.size)
+    }
+
+    @Test
+    fun eachGroupExpandsOnItsOwn() {
+        val chats = (1..4).map { quickChat("running$it", "running") } + (1..2).map { quickChat("recent$it", "idle") }
+
+        val runningOnly = quickChats(chats, connected = true, showRunningAll = true, showRecentAll = false)
+        assertEquals(4, runningOnly.running.size)
+        assertEquals(2, runningOnly.recent.size)
+        assertTrue(runningOnly.runningExpandable)
+        assertFalse(runningOnly.recentExpandable)
+    }
+
+    @Test
+    fun quickAccessHasNoShowAllWhileEveryGroupFitsThree() {
+        val chats = (1..3).map { quickChat("running$it", "running") } + quickChat("recent", "idle")
+
+        val folded = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
+        assertFalse(folded.runningExpandable)
+        assertFalse(folded.recentExpandable)
+    }
+
+    @Test
+    fun waitingChatsAreNeverCutAndNeedTheConnectionAndAVerifiedList() {
+        val chats =
+            (1..5).map { quickChat("waiting$it", "waiting") } +
+                quickChat("unverified", "waiting", verified = false)
+
+        val online = quickChats(chats, connected = true, showRunningAll = false, showRecentAll = false)
+        assertEquals(5, online.waiting.size)
+        assertEquals(listOf("unverified"), online.recent.map { it.session.text("id") })
+
+        val offline = quickChats(chats, connected = false, showRunningAll = true, showRecentAll = true)
+        assertTrue(offline.waiting.isEmpty())
+        assertEquals(6, offline.recent.size)
+    }
 }

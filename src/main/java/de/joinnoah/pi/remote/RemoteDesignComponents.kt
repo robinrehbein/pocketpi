@@ -1,5 +1,7 @@
 package de.joinnoah.pi.remote
 
+import android.content.Context
+import android.text.format.DateUtils
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -16,6 +18,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -33,19 +36,43 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
 internal fun HostCard(
     host: PairedHost,
     connected: Boolean,
+    /** When the Mac was last opened, or null when it never was since it was paired. */
+    lastUsedAt: Long?,
     onOpen: () -> Unit,
     onRemove: () -> Unit,
 ) {
+    // "Last used" moves on, so the clock is read again: each minute during the first hour, then each hour.
+    // Otherwise a card that stays composed would keep "just now" or "2 hours ago" until it recomposes.
+    val now by
+        produceState(System.currentTimeMillis(), lastUsedAt) {
+            if (lastUsedAt == null) return@produceState
+            while (true) {
+                val young = System.currentTimeMillis() - lastUsedAt < DateUtils.HOUR_IN_MILLIS
+                delay(if (young) DateUtils.MINUTE_IN_MILLIS else DateUtils.HOUR_IN_MILLIS)
+                value = System.currentTimeMillis()
+            }
+        }
+    // The relay is in the Mac's connection details; the card says what the user can do with the Mac.
+    val context = LocalContext.current
+    val status =
+        when {
+            connected -> stringResource(R.string.remote_connected)
+            lastUsedAt == null -> stringResource(R.string.remote_host_tap_to_connect)
+            else -> lastUsedStatus(context, lastUsedAt, now)
+        }
     OutlinedCard(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(16.dp),
@@ -59,17 +86,78 @@ internal fun HostCard(
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(host.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(host.relay, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    stringResource(if (connected) R.string.remote_connected else R.string.remote_design_not_connected),
+                    status,
                     style = MaterialTheme.typography.labelMedium,
                     color = if (connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             IconButton(onClick = onRemove) {
                 Icon(Icons.Default.DeleteOutline, stringResource(R.string.remote_remove))
             }
         }
+    }
+}
+
+private const val MINUTES_PER_HOUR = 60
+
+/**
+ * When a Mac was last used, for a host card: "just now", then minutes, hours and days in words that fit
+ * mid-sentence (plurals per language, so German stays "vor 5 Minuten"), and the date once it is a week old.
+ * A time in the future (the clock moved back) reads as just now.
+ */
+internal fun lastUsedStatus(context: Context, lastUsedAt: Long, now: Long): String {
+    val resources = context.resources
+    val minutes = (now - lastUsedAt) / DateUtils.MINUTE_IN_MILLIS
+    val hours = minutes / MINUTES_PER_HOUR
+    val days = hours / 24
+    return when {
+        minutes < 1 -> resources.getString(R.string.remote_host_last_used_just_now)
+        minutes < MINUTES_PER_HOUR ->
+            resources.getQuantityString(R.plurals.remote_host_last_used_minutes, minutes.toInt(), minutes.toInt())
+        hours < 24 -> resources.getQuantityString(R.plurals.remote_host_last_used_hours, hours.toInt(), hours.toInt())
+        days < 7 -> resources.getQuantityString(R.plurals.remote_host_last_used_days, days.toInt(), days.toInt())
+        else ->
+            resources.getString(
+                R.string.remote_host_last_used,
+                DateUtils.formatDateTime(context, lastUsedAt, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_ABBREV_MONTH),
+            )
+    }
+}
+
+/**
+ * What an empty list shows instead of its rows: an icon, a headline that screen readers take as a heading,
+ * what to do next, and an optional [action] such as a button.
+ */
+@Composable
+internal fun EmptyState(
+    icon: ImageVector,
+    title: String,
+    body: String,
+    modifier: Modifier = Modifier,
+    action: (@Composable () -> Unit)? = null,
+) {
+    Column(
+        modifier.fillMaxWidth().padding(top = 32.dp, bottom = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.semantics { heading() },
+        )
+        Text(
+            body,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        action?.invoke()
     }
 }
 

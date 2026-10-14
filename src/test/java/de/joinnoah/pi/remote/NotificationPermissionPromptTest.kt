@@ -67,4 +67,41 @@ class NotificationPermissionPromptTest {
         runCurrent()
         assertEquals(1, paired)
     }
+
+    @Test
+    fun theCardShowsOnlyWhileTheUserNeverDecidedAndDidNotSayNotNow() {
+        assertTrue(showsNotificationCard(pushConfigured = true, pushEnabled = false, decided = false, dismissed = false))
+        assertFalse("Not now hides it on this Mac", showsNotificationCard(true, false, false, dismissed = true))
+        assertFalse("A decision hides it", showsNotificationCard(true, false, decided = true, dismissed = false))
+        assertFalse("Push on needs no card", showsNotificationCard(true, pushEnabled = true, false, false))
+        assertFalse("A build without push shows none", showsNotificationCard(false, false, false, false))
+    }
+
+    @Test
+    fun theDecisionsAreTheOnesTheSettingsRecord() {
+        assertFalse(RemoteSettings().notificationsDecided)
+        assertTrue(RemoteSettings(pushEnabled = true).notificationsDecided)
+        assertTrue("Switching push off is an answer", RemoteSettings(pushOptedOut = true).notificationsDecided)
+        assertTrue("A denial after the offer is an answer", RemoteSettings(notificationPromptShown = true).notificationsDecided)
+    }
+
+    @Test
+    fun aRecordedPromptCountsAsAnAnswerAndHidesTheCard() {
+        val settings = FakeSettingsRepository()
+
+        // What the card records when its own permission request is denied, as the pairing's does.
+        // The launcher that calls it is not exercised here.
+        settings.markNotificationPromptShown()
+
+        assertTrue(settings.state.value.notificationsDecided)
+        assertFalse(showsNotificationCard(true, false, settings.state.value.notificationsDecided, dismissed = false))
+    }
+
+    @Test
+    fun switchingPushOffInTheAppHidesTheCardForGood() {
+        val settings = FakeSettingsRepository().apply { setPushEnabled(true); setPushEnabled(false) }
+
+        assertTrue(settings.state.value.pushOptedOut)
+        assertFalse(showsNotificationCard(true, settings.state.value.pushEnabled, settings.state.value.notificationsDecided, false))
+    }
 }

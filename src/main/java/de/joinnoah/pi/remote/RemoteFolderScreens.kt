@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Folder
@@ -51,7 +52,7 @@ internal fun OpenFolderButton(enabled: Boolean, onClick: () -> Unit) {
             modifier = Modifier.size(56.dp),
         ) {
             Icon(
-                Icons.Default.CreateNewFolder,
+                Icons.Default.FolderOpen,
                 contentDescription = stringResource(R.string.remote_folders_open_folder),
                 tint = MaterialTheme.colorScheme.onPrimary,
             )
