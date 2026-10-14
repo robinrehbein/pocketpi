@@ -104,6 +104,13 @@ internal const val CONNECT_READY_WAIT_MILLIS = HANDSHAKE_TIMEOUT_MILLIS + 2_000L
 internal const val HOST_WAIT_HINT_MILLIS = 5_000L
 
 /**
+ * While a chat streams, the navigation snapshot falls behind it by at most this long: events mark
+ * it dirty instead of writing it, and a timer writes it. Structure changes and the background
+ * write at once.
+ */
+internal const val NAVIGATION_DIRTY_WRITE_MILLIS = 15_000L
+
+/**
  * The first failure of a streak reconnects quietly; the error card follows only if the Mac is
  * still unreachable this long after it, or at once on the next failure.
  */
@@ -472,6 +479,12 @@ class DefaultRemoteRepository(
     private val navigationWriteMutex = Mutex()
     private var navigationVersion = 0L
     private var navigationWriteJob: Job? = null
+    /**
+     * The chat on screen changed since [savedNavigation] took it: the next persist, at the latest
+     * [navDirtyJob] after [NAVIGATION_DIRTY_WRITE_MILLIS], brings it up to date.
+     */
+    private var navDirty = false
+    private var navDirtyJob: Job? = null
     private var navigationLoaded = navigationStorage == null
     private var pairingsLoaded = false
     private val removedRoutes = mutableSetOf<String>()
@@ -722,9 +735,13 @@ class DefaultRemoteRepository(
                     pairing?.complete(host)
                 }
 
+                override fun inbound() {
+                    // At receipt: the frame is decoded off the main thread before message().
+                    lastInboundAt = now()
+                }
+
                 override fun message(payload: JsonObject) {
                     inboundFrames++
-                    lastInboundAt = now()
                     receive(payload)
                 }
 
@@ -869,11 +886,12 @@ class DefaultRemoteRepository(
         }
     }
 
-    private fun persistNavigation(immediate: Boolean = false) {
-        if (navigationStorage == null) return
-        val routeId = activeHost?.routeId ?: return
-        if (routeId in removedRoutes) return
-        val projects = cachedProjects?.takeIf { it.first == routeId }?.second ?: return
+    /** Returns whether it queued a write of the active host's snapshot. */
+    private fun persistNavigation(immediate: Boolean = false): Boolean {
+        if (navigationStorage == null) return false
+        val routeId = activeHost?.routeId ?: return false
+        if (routeId in removedRoutes) return false
+        val projects = cachedProjects?.takeIf { it.first == routeId }?.second ?: return false
         val projectChats = cachedProjectChats?.takeIf { it.first == routeId }?.second.orEmpty()
         val sessions = cachedSessions?.takeIf { it.routeId == routeId }
         val chat = cachedChat?.takeIf { it.selection.routeId == routeId }
@@ -896,7 +914,27 @@ class DefaultRemoteRepository(
         savedNavigation.remove(routeId)
         savedNavigation[routeId] = snapshot
         while (savedNavigation.size > 8) savedNavigation.remove(savedNavigation.keys.first())
+        navDirty = false
+        navDirtyJob?.cancel()
+        navDirtyJob = null
         queueNavigationWrite(immediate)
+        return true
+    }
+
+    /**
+     * The chat on screen changed in a way a process kill may lose for a while (a streamed event):
+     * the snapshot is written within [NAVIGATION_DIRTY_WRITE_MILLIS], or sooner by any persist.
+     */
+    private fun markNavigationDirty() {
+        if (navigationStorage == null) return
+        navDirty = true
+        if (navDirtyJob?.isActive == true) return
+        navDirtyJob =
+            scope.launch {
+                delay(NAVIGATION_DIRTY_WRITE_MILLIS)
+                navDirtyJob = null
+                if (navDirty) persistNavigation(immediate = true)
+            }
     }
 
     private fun restoreNavigation(routeId: String) {
@@ -1009,12 +1047,13 @@ class DefaultRemoteRepository(
         if (projectSessionsRoute == routeId) projectListReads.remove(projectId)
     }
 
-    private fun publishProjectChats(routeId: String) {
+    /** [persist]: false when the caller decides itself whether the change is worth a write. */
+    private fun publishProjectChats(routeId: String, persist: Boolean = true) {
         if (activeHost?.routeId != routeId || state.value.selection.routeId != routeId) return
         val chats = sortedProjectChats(projectChatCandidates.values.flatten())
         cachedProjectChats = routeId to chats
         update { it.copy(projectChats = chats) }
-        persistNavigation()
+        if (persist) persistNavigation()
     }
 
     /**
@@ -1198,9 +1237,17 @@ class DefaultRemoteRepository(
     }
 
     private fun cacheCurrentScreen(immediate: Boolean = false) {
+        if (rememberCurrentScreen()) persistNavigation(immediate)
+    }
+
+    /**
+     * Keeps what is on screen in the in-memory caches the snapshot is built from; returns false
+     * when the screen is not the connected, loaded active host's.
+     */
+    private fun rememberCurrentScreen(): Boolean {
         val current = state.value
-        val routeId = current.selection.routeId ?: return
-        if (!current.connected || current.loading || activeHost?.routeId != routeId) return
+        val routeId = current.selection.routeId ?: return false
+        if (!current.connected || current.loading || activeHost?.routeId != routeId) return false
         cachedProjects = routeId to current.projects
         cachedProjectChats = routeId to current.projectChats
         val projectId = current.selection.projectId
@@ -1225,7 +1272,7 @@ class DefaultRemoteRepository(
                     )
             }
         }
-        persistNavigation(immediate)
+        return true
     }
 
     /** Selects [selection] from the caches; returns whether they held it. */
@@ -2097,7 +2144,7 @@ class DefaultRemoteRepository(
                         else item
                     }
                 }
-                publishProjectChats(routeId)
+                publishProjectChats(routeId, persist = false)
                 if (projectSessionsRoute == routeId) {
                     projectSessionsAggregate.replaceAll { _, entry ->
                         if (entry.sessions.none { it.optionalText("id") == id }) entry
@@ -2125,7 +2172,8 @@ class DefaultRemoteRepository(
                 cachedChat =
                     cached.copy(session = withSessionStatus(cached.session), status = status)
             }
-            persistNavigation()
+            // A repeated status of another session changes nothing the snapshot keeps.
+            if (status != known || id == state.value.selection.sessionId) persistNavigation()
         }
     }
 
@@ -2137,9 +2185,14 @@ class DefaultRemoteRepository(
             .map { withSessionTitle(withSessionStatus(it)) }
     }
 
-    private fun publishTimeline(): Unit = Diagnostics.trace("PocketPi.publishTimeline") {
+    /**
+     * [persist]: the chat's structure changed (a snapshot), so the navigation snapshot is written
+     * as for a selection change. An event only marks it dirty, unless it starts or ends a run.
+     */
+    private fun publishTimeline(persist: Boolean = false): Unit = Diagnostics.trace("PocketPi.publishTimeline") {
         val t = timeline ?: return@trace
-        if (t.status != state.value.status) state.value.selection.sessionId?.let(::dropStaleChildControl)
+        val previous = state.value.status
+        if (t.status != previous) state.value.selection.sessionId?.let(::dropStaleChildControl)
         update {
             // Before its first snapshot the Timeline holds no messages yet: what is on screen (a
             // cached or the last-known chat) stays until the snapshot replaces it.
@@ -2153,7 +2206,8 @@ class DefaultRemoteRepository(
                     compaction = t.compaction,
                 )
         }
-        cacheCurrentScreen()
+        val runEdge = t.status != previous && (t.status == "running" || previous == "running")
+        if (persist || runEdge) cacheCurrentScreen() else if (rememberCurrentScreen()) markNavigationDirty()
     }
 
     /**
@@ -2205,7 +2259,7 @@ class DefaultRemoteRepository(
             if (current !== timeline) return
             current.snapshot(data, older)
             current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
-            publishTimeline()
+            publishTimeline(persist = !older)
             // The chat on screen is read again, also when the activation after a reconnect failed
             // to read it and a later refresh did.
             if (!older && state.value.connected) staleReplaced()
@@ -3672,7 +3726,8 @@ class DefaultRemoteRepository(
             backgroundedAt = now()
             backgrounds++
             selectionAtBackground = state.value.selection
-            queueNavigationWrite(immediate = true)
+            // A process kill in the background must not lose the tail a streaming chat is ahead.
+            if (!navDirty || !persistNavigation(immediate = true)) queueNavigationWrite(immediate = true)
             stopReconnectTimer()
             cancelRecovery()
             return

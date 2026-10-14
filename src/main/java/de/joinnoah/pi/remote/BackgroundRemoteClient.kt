@@ -20,9 +20,10 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import okhttp3.OkHttpClient
 
-// One client for all background connections, so each notification doesn't start new thread pools.
-private val backgroundHttp by lazy {
-    OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).build()
+// One client for all background connections, derived from the app's, so each notification
+// starts no thread pools of its own.
+internal val backgroundHttp: OkHttpClient by lazy {
+    baseHttpClient.newBuilder().pingInterval(20, TimeUnit.SECONDS).build()
 }
 
 /** A host rejected a command with this protocol error code (for example `already_resolved`). */

@@ -6815,6 +6815,8 @@ class RemoteRepositoryTest {
             repository.setForeground(false)
             for (revision in 1..10) {
                 advanceTimeBy(30_000)
+                // The transport reports each frame's receipt before its payload.
+                transport.listener.inbound()
                 transport.listener.message(
                     event(revision, "session.status", "status" to if (revision % 2 == 0) "idle" else "running")
                 )
@@ -7879,6 +7881,123 @@ class RemoteRepositoryTest {
             "type" to "event", "kind" to "session.status", "sessionId" to "session",
             "revision" to revision, "status" to "running",
         )
+
+    private class NavigationSaves : NavigationSnapshotStorage {
+        val saves = mutableListOf<Map<String, NavigationSnapshot>>()
+
+        override fun load() = emptyMap<String, NavigationSnapshot>()
+
+        override fun save(snapshots: Map<String, NavigationSnapshot>) {
+            saves += snapshots
+        }
+
+        fun lastText() = saves.last().getValue("host").messages.lastOrNull()?.optionalText("text")
+    }
+
+    /** A chat open and running, with the writes its open caused done. */
+    private suspend fun TestScope.streamingChat(
+        storage: NavigationSaves,
+    ): Pair<Transport, DefaultRemoteRepository> {
+        val transport = Transport().also { configure(it, sessions = listOf(session(), session("other"))) }
+        val repository = repository(transport, navigationStorage = storage)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        transport.listener.message(running(1))
+        advanceTimeBy(5_000)
+        runCurrent()
+        return transport to repository
+    }
+
+    @Test
+    fun streamedUpsertsWriteTheNavigationSnapshotAtMostOncePerFifteenSeconds() = runTest {
+        val storage = NavigationSaves()
+        val (transport, _) = streamingChat(storage)
+        val before = storage.saves.size
+        assertTrue(before > 0)
+
+        // 100 upserts spread over 15 s.
+        for (index in 1..100) {
+            transport.listener.message(upsert(1 + index, "m$index"))
+            advanceTimeBy(NAVIGATION_DIRTY_WRITE_MILLIS / 100)
+        }
+        runCurrent()
+        assertTrue("${storage.saves.size - before} writes", storage.saves.size - before <= 1)
+
+        // The tail reaches storage within the interval of the last event.
+        advanceTimeBy(NAVIGATION_DIRTY_WRITE_MILLIS)
+        runCurrent()
+        assertTrue(storage.saves.size - before <= 2)
+        assertEquals("Answer m100", storage.lastText())
+        // Nothing streamed since: no further writes.
+        val settled = storage.saves.size
+        advanceTimeBy(NAVIGATION_DIRTY_WRITE_MILLIS * 4)
+        runCurrent()
+        assertEquals(settled, storage.saves.size)
+    }
+
+    @Test
+    fun goingToTheBackgroundWritesTheStreamedTailAtOnce() = runTest {
+        val storage = NavigationSaves()
+        val (transport, repository) = streamingChat(storage)
+        transport.listener.message(upsert(2, "tail"))
+        runCurrent()
+        val before = storage.saves.size
+
+        repository.setForeground(false)
+        runCurrent()
+
+        assertEquals(before + 1, storage.saves.size)
+        assertEquals("Answer tail", storage.lastText())
+    }
+
+    @Test
+    fun theEndOfARunWritesTheNavigationSnapshot() = runTest {
+        val storage = NavigationSaves()
+        val (transport, _) = streamingChat(storage)
+        transport.listener.message(upsert(2, "last"))
+        runCurrent()
+        val before = storage.saves.size
+
+        transport.listener.message(
+            Wire.objectOf(
+                "type" to "event", "kind" to "session.status", "sessionId" to "session",
+                "revision" to 3, "status" to "idle",
+            )
+        )
+        // Within the write queue's one second, far sooner than the streaming interval.
+        advanceTimeBy(1_100)
+        runCurrent()
+
+        assertEquals(before + 1, storage.saves.size)
+        assertEquals("Answer last", storage.lastText())
+        assertEquals("idle", storage.saves.last().getValue("host").sessions.first().text("status"))
+    }
+
+    @Test
+    fun anotherSessionsRepeatedStatusWritesNothingButItsTransitionDoes() = runTest {
+        val storage = NavigationSaves()
+        val (transport, _) = streamingChat(storage)
+        val before = storage.saves.size
+        fun other(revision: Int, status: String) =
+            Wire.objectOf(
+                "type" to "event", "kind" to "session.status", "sessionId" to "other",
+                "revision" to revision, "status" to status,
+            )
+
+        transport.listener.message(other(1, "idle"))
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(before, storage.saves.size)
+
+        transport.listener.message(other(2, "running"))
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(before + 1, storage.saves.size)
+        assertEquals(
+            "running",
+            storage.saves.last().getValue("host").sessions.single { it.text("id") == "other" }.text("status"),
+        )
+    }
 
     @Test
     fun eventsThatArriveWhileARestoreHoldsItsSnapshotReachTheChat() = runTest {
