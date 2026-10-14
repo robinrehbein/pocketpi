@@ -104,6 +104,13 @@ internal fun ProjectImageCard(alt: String, path: String, source: ProjectImageSou
     val fileName = path.substringAfterLast('/')
     val ready = state as? ProjectImageState.Ready
     val label = stringResource(R.string.remote_image_open, fileName)
+    val viewers = LocalInspectorViewers.current
+    // Beside the chat the image opens in the inspector's tab instead of a dialog.
+    fun view() {
+        val image = ready ?: return
+        if (viewers == null) viewing = true
+        else viewers.show(InspectorViewer.Image(path, image.sha256, image.mimeType, source))
+    }
     Column(modifier.fillMaxWidth().testTag("projectImage-$path"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Surface(
             modifier =
@@ -114,7 +121,7 @@ internal fun ProjectImageCard(alt: String, path: String, source: ProjectImageSou
                     .clip(RoundedCornerShape(12.dp))
                     .then(
                         if (ready != null)
-                            Modifier.clickable(role = Role.Button, onClickLabel = label) { viewing = true }
+                            Modifier.clickable(role = Role.Button, onClickLabel = label, onClick = ::view)
                         else Modifier
                     ),
             color = MaterialTheme.colorScheme.surfaceContainer,
