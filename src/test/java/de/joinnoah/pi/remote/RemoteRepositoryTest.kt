@@ -1758,10 +1758,12 @@ class RemoteRepositoryTest {
     fun sessionStatusUpdatesListWithoutOpeningChatAndWinsListResponseRace() = runTest {
         val transport = Transport().also { configure(it) }
         val repository = repository(transport)
-        repository.activate(RemoteSelection("host"))
+        // The Projects page's read of the project gets no reply, so the open reads the list itself.
         transport.response = { request ->
             if (request.text("type") == "projects.list") data("projects", listOf(project)) else null
         }
+        repository.activate(RemoteSelection("host"))
+        runCurrent()
         val selection = async { repository.activate(RemoteSelection("host", "project")) }
         runCurrent()
         val listRequest = transport.sent.last { it.text("type") == "sessions.list" }
@@ -2345,10 +2347,13 @@ class RemoteRepositoryTest {
     /** A connected repository on the projects list, recoverable, one second after connecting. */
     private suspend fun TestScope.listingRepository(transport: Transport): DefaultRemoteRepository {
         val repository = repository(transport)
+        // The Projects page's reads of each project fail, so opening the project reads its list.
+        transport.failure = { if (it.text("type") == "sessions.list") "internal" else null }
         repository.activate(RemoteSelection("host"))
         repository.setForeground(true)
         repository.setValidatedNetwork("wifi")
         runCurrent()
+        transport.failure = { null }
         // Every frame so far arrived before the next request goes out.
         advanceTimeBy(1_000)
         return repository
@@ -7335,9 +7340,11 @@ class RemoteRepositoryTest {
         val saved = savedHost(projectId = "project", sessions = listOf(session()))
         val repository = repository(transport, navigationStorage = SavedNavigation(saved))
         runCurrent()
+        // The quick chats' reads of each project fail, so only the saved list is at hand.
+        transport.failure = { if (it.text("type") == "sessions.list") "internal" else null }
         assertEquals(RemoteSelection("host"), repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN))
-        // The quick chats' reads of each project are done.
         runCurrent()
+        transport.failure = { null }
         val lists = transport.sent.count { it.text("type") == "sessions.list" }
         val project = RemoteSelection("host", "project")
         assertEquals(project, repository.activate(project, ActivationMode.USER_OPEN))
@@ -7369,12 +7376,15 @@ class RemoteRepositoryTest {
         try {
             val saved = savedHost(projectId = "project", sessions = listOf(session()))
             val repository = gatedRepository(transport, gate, saved, io)
+            // The quick chats' reads of each project fail, so only the saved list is at hand.
+            transport.failure = { if (it.text("type") == "sessions.list") "internal" else null }
             val restoring = async { repository.activate(RemoteSelection("host"), ActivationMode.RESTORE) }
             runUntil { transport.connects == 1 }
             gate.countDown()
             runUntil { restoring.isCompleted }
             assertEquals(RemoteSelection("host"), restoring.await())
             runCurrent()
+            transport.failure = { null }
             val lists = transport.sent.count { it.text("type") == "sessions.list" }
 
             val project = RemoteSelection("host", "project")
@@ -7840,5 +7850,269 @@ class RemoteRepositoryTest {
         // Peeking never touches the repository's own state.
         assertFalse(repository.state.value.preview)
         assertEquals(RemoteSelection("host", "project", "other"), repository.state.value.selection)
+    }
+
+    /**
+     * [configure], with the named projects of [lists] and each one's sessions, read from [lists] at
+     * each request. A sessions.list that [hold] picks gets no reply; it waits in the returned list
+     * for the test to answer.
+     */
+    private fun configureProjects(
+        transport: Transport,
+        lists: Map<String, List<JsonObject>>,
+        hold: (JsonObject) -> Boolean = { false },
+    ): MutableList<JsonObject> {
+        configure(transport)
+        val held = mutableListOf<JsonObject>()
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "projects.list" ->
+                    data("projects", lists.keys.map { Wire.objectOf("id" to it, "name" to "Project $it") })
+                "sessions.list" ->
+                    if (hold(request)) {
+                        held += request
+                        null
+                    } else data("sessions", lists[request.text("projectId")].orEmpty())
+                else -> original(request)
+            }
+        }
+        return held
+    }
+
+    private fun Transport.lists(projectId: String? = null) =
+        sent.count { it.text("type") == "sessions.list" && (projectId == null || it.text("projectId") == projectId) }
+
+    private fun updated(session: JsonObject, at: Long) = JsonObject(session + ("updatedAt" to JsonPrimitive(at)))
+
+    @Test
+    fun returningToProjectsWithinThirtySecondsReadsNoListsUntilAReconnect() = runTest {
+        val transport = Transport()
+        configureProjects(
+            transport,
+            mapOf("a" to listOf(session("one", projectId = "a")), "b" to listOf(session("two", projectId = "b"))),
+        )
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        val project = RemoteSelection("host", "a")
+        assertEquals(root, repository.activate(root, ActivationMode.USER_OPEN))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        assertEquals(2, transport.lists())
+
+        // Into a project and back, twice: the lists the Projects page read are still fresh.
+        repeat(2) {
+            assertEquals(project, repository.activate(project, ActivationMode.USER_OPEN))
+            assertEquals(root, repository.activate(root))
+            runCurrent()
+            advanceTimeBy(10_000)
+        }
+        assertEquals(2, transport.lists())
+
+        // Once they are 30 s old, a return reads them again.
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS)
+        assertEquals(project, repository.activate(project, ActivationMode.USER_OPEN))
+        assertEquals(root, repository.activate(root))
+        runCurrent()
+        assertEquals(4, transport.lists())
+
+        // A reconnect reads them at once.
+        val connects = transport.connects
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        assertEquals(6, transport.lists())
+    }
+
+    @Test
+    fun aProjectOpenedWhileTheProjectsPageReadsKeepsTheLateRepliesForTheNextOpen() = runTest {
+        val transport = Transport()
+        val held = configureProjects(
+            transport,
+            mapOf(
+                "a" to listOf(session("one", projectId = "a")),
+                "b" to listOf(session("two", projectId = "b"), session("three", projectId = "b")),
+            ),
+            // The Projects page's read of b is still on its way.
+            hold = { it.text("projectId") == "b" && transport.lists("b") == 1 },
+        )
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        assertEquals(root, repository.activate(root, ActivationMode.USER_OPEN))
+        runCurrent()
+        assertEquals(1, held.size)
+
+        // Opening a project the Projects page already read asks the Mac for nothing.
+        val a = RemoteSelection("host", "a")
+        assertEquals(a, repository.activate(a, ActivationMode.USER_OPEN))
+        assertEquals(1, transport.lists("a"))
+        assertEquals(listOf("one"), repository.state.value.sessions.map { it.text("id") })
+
+        // The reply that comes after the open is kept, not dropped with the old selection.
+        transport.result(
+            held.single(),
+            data("sessions", listOf(session("two", projectId = "b"), session("three", projectId = "b"))),
+        )
+        runCurrent()
+        assertEquals(
+            listOf("two", "three"),
+            repository.state.value.projectSessions.getValue("b").sessions.map { it.text("id") },
+        )
+        val b = RemoteSelection("host", "b")
+        assertEquals(b, repository.activate(b, ActivationMode.USER_OPEN))
+        assertEquals(1, transport.lists("b"))
+        assertEquals(listOf("two", "three"), repository.state.value.sessions.map { it.text("id") })
+    }
+
+    @Test
+    fun featuredChatsStayVerifiedUntilTheirProjectsReplyReplacesThem() = runTest {
+        val transport = Transport()
+        val lists =
+            mutableMapOf(
+                "a" to listOf(session("waits", status = "waiting", projectId = "a")),
+                "b" to listOf(session("runs", status = "running", projectId = "b")),
+            )
+        var holding = false
+        val held = configureProjects(transport, lists, hold = { holding })
+        val repository = repository(transport)
+        val root = RemoteSelection("host")
+        repository.activate(root, ActivationMode.USER_OPEN)
+        runCurrent()
+        assertEquals(listOf("waits", "runs"), repository.state.value.projectChats.map { it.session.text("id") })
+        assertTrue(repository.state.value.projectChats.all { it.verified })
+
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS)
+        holding = true
+        repository.activate(RemoteSelection("host", "a"), ActivationMode.USER_OPEN)
+        repository.activate(root)
+        runCurrent()
+        assertEquals(2, held.size)
+        // Waiting and running chats keep their place while the lists come in.
+        assertEquals(listOf("waits", "runs"), repository.state.value.projectChats.map { it.session.text("id") })
+        assertTrue(repository.state.value.projectChats.all { it.verified })
+
+        transport.result(
+            held.first { it.text("projectId") == "a" },
+            data("sessions", listOf(session("waits", projectId = "a"))),
+        )
+        runCurrent()
+        // Only a's reply replaced its row: it now waits for nothing and drops behind b's running chat.
+        assertEquals(listOf("runs", "waits"), repository.state.value.projectChats.map { it.session.text("id") })
+        assertTrue(repository.state.value.projectChats.all { it.verified })
+    }
+
+    @Test
+    fun projectSessionsKeepEveryListedSessionWithItsCounts() = runTest {
+        val transport = Transport()
+        val many =
+            List(2) { session("waiting$it", status = "waiting", projectId = "a") } +
+                List(3) { session("running$it", status = "running", projectId = "a") } +
+                List(10) { session("idle$it", projectId = "a") }
+        configureProjects(transport, mapOf("a" to many, "b" to listOf(session("other", projectId = "b"))))
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN)
+        runCurrent()
+        val state = repository.state.value
+        // The Projects page features 12 chats; the aggregate keeps all 16.
+        assertEquals(12, state.projectChats.size)
+        val a = state.projectSessions.getValue("a")
+        assertEquals(15, a.sessions.size)
+        assertTrue(a.verified)
+        assertEquals(SessionCounts(waiting = 2, running = 3), a.counts)
+        assertEquals("Project a", a.projectName)
+        assertEquals(SessionCounts(), state.projectSessions.getValue("b").counts)
+
+        // Live status events patch the rows and the counts.
+        fun status(sessionId: String, value: String) =
+            transport.listener.message(
+                Wire.objectOf(
+                    "type" to "event", "sessionId" to sessionId, "revision" to 1,
+                    "kind" to "session.status", "status" to value,
+                )
+            )
+        status("idle0", "running")
+        status("waiting0", "idle")
+        val patched = repository.state.value.projectSessions.getValue("a")
+        assertEquals(SessionCounts(waiting = 1, running = 4), patched.counts)
+        assertEquals("running", patched.sessions.first { it.text("id") == "idle0" }.text("status"))
+
+        // A dropped connection leaves the rows unconfirmed and without counts.
+        transport.listener.failed(true, R.string.remote_connection_error)
+        val dropped = repository.state.value.projectSessions.getValue("a")
+        assertFalse(dropped.verified)
+        assertNull(dropped.counts)
+        assertEquals(15, dropped.sessions.size)
+    }
+
+    @Test
+    fun projectSessionsRestoredFromTheSavedNavigationCarryNoCounts() = runTest {
+        val transport = Transport().also {
+            configureNamed(it, sessions = listOf(session(), session("fresh", status = "waiting")))
+            it.readyOnConnect = false
+        }
+        val saved = savedHost(projectId = "project", sessions = listOf(session(status = "waiting")))
+        val repository = repository(transport, navigationStorage = SavedNavigation(saved))
+        runCurrent()
+        val opening = async { repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN) }
+        runCurrent()
+        val restored = repository.state.value.projectSessions.getValue("project")
+        assertEquals(listOf("session"), restored.sessions.map { it.text("id") })
+        assertFalse(restored.verified)
+        assertNull(restored.counts)
+
+        transport.listener.ready(emptySet())
+        opening.await()
+        runCurrent()
+        val read = repository.state.value.projectSessions.getValue("project")
+        assertEquals(listOf("session", "fresh"), read.sessions.map { it.text("id") })
+        assertTrue(read.verified)
+        assertEquals(SessionCounts(waiting = 1), read.counts)
+    }
+
+    @Test
+    fun anUnknownSessionWhileAChatIsOpenReadsOnlyTheProjectThatHoldsIt() = runTest {
+        val transport = Transport()
+        val lists =
+            mutableMapOf(
+                "a" to listOf(session("chat", projectId = "a")),
+                "b" to listOf(updated(session("old", projectId = "b"), 100)),
+                "c" to listOf(updated(session("older", projectId = "c"), 50)),
+            )
+        configureProjects(transport, lists)
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN)
+        runCurrent()
+        val chat = RemoteSelection("host", "a", "chat")
+        assertEquals(chat, repository.activate(chat))
+        runCurrent()
+        assertEquals(3, transport.lists())
+        fun status(sessionId: String, revision: Long = 1) =
+            transport.listener.message(
+                Wire.objectOf(
+                    "type" to "event", "sessionId" to sessionId, "revision" to revision,
+                    "kind" to "session.status", "status" to "running",
+                )
+            )
+
+        // Within 30 s of the lists, a session none holds waits for them to age.
+        status("new")
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(3, transport.lists())
+
+        // Started in b, the project active most lately, which is read first and alone.
+        advanceTimeBy(PROJECT_LISTS_REFRESH_MILLIS)
+        lists["b"] = lists.getValue("b") + updated(session("new", status = "running", projectId = "b"), 200)
+        status("new", revision = 2)
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(4, transport.lists())
+        assertEquals(2, transport.lists("b"))
+        val b = repository.state.value.projectSessions.getValue("b")
+        assertEquals(listOf("old", "new"), b.sessions.map { it.text("id") })
+        assertEquals(SessionCounts(running = 1), b.counts)
+        assertEquals(chat, repository.state.value.selection)
     }
 }

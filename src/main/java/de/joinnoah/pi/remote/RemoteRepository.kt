@@ -107,6 +107,12 @@ data class RemoteState(
     val pairingDeadline: Long? = null,
     val projects: List<JsonObject> = emptyList(),
     val projectChats: List<ProjectChatSummary> = emptyList(),
+    /**
+     * Each project's sessions by project ID, for views across projects: every list the Mac sent
+     * for [host] on this or an earlier connection, kept fresh by live status events. Unlike
+     * [projectChats] it is not cut to the featured few.
+     */
+    val projectSessions: Map<String, ProjectSessions> = emptyMap(),
     val project: JsonObject? = null,
     val sessions: List<JsonObject> = emptyList(),
     /** [sessions] came from a sessions.list on the current connection, not from a cache. */

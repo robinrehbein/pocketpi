@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -309,5 +310,73 @@ class SessionListPresentationTest {
 
         assertEquals(mapOf("parent" to 2, "live" to 1, "grandchild" to 0, "gone" to 0), counts(false))
         assertEquals(mapOf("parent" to 1, "live" to 1, "grandchild" to 0), counts(true))
+    }
+
+    private fun row(id: String, status: String = "idle", updatedAt: Long = 0) =
+        Wire.objectOf("id" to id, "title" to id, "origin" to "rpc", "status" to status, "updatedAt" to updatedAt)
+
+    @Test
+    fun projectSessionsCountAVerifiedListAndNotACachedOne() {
+        val rows = listOf(row("w", "waiting"), row("r1", "running"), row("r2", "running"), row("i"))
+
+        val verified = projectSessions("p", "Project", rows, verified = true)
+        assertEquals(rows, verified.sessions)
+        assertEquals(SessionCounts(waiting = 1, running = 2), verified.counts)
+        assertFalse(verified.truncated)
+
+        val cached = projectSessions("p", "Project", rows, verified = false)
+        assertNull(cached.counts)
+        assertEquals(verified.unverified(), cached)
+    }
+
+    @Test
+    fun projectSessionsKeepWaitingRunningAndRecentRowsOverTheCap() {
+        val idle = List(PROJECT_SESSIONS_CAP + 10) { row("idle$it", updatedAt = it.toLong()) }
+        val rows = idle + row("old-waiting", "waiting", updatedAt = -1) + row("old-running", "running", updatedAt = -2)
+
+        val entry = projectSessions("p", "Project", rows, verified = true)
+        assertEquals(PROJECT_SESSIONS_CAP, entry.sessions.size)
+        assertTrue(entry.truncated)
+        val kept = entry.sessions.map { it.text("id") }
+        assertEquals(listOf("old-waiting", "old-running"), kept.take(2))
+        // The oldest idle rows make room.
+        assertTrue("idle${idle.size - 1}" in kept)
+        assertFalse("idle0" in kept)
+        // The counts cover the whole list, not only the kept rows.
+        assertEquals(SessionCounts(waiting = 1, running = 1), entry.counts)
+    }
+
+    @Test
+    fun patchedProjectSessionsFollowTheirRowsChanges() {
+        val entry = projectSessions("p", "Project", listOf(row("a", "waiting"), row("b")), verified = true)
+        fun status(id: String, value: String): (JsonObject) -> JsonObject =
+            { if (it.text("id") == id) Wire.objectOf("id" to id, "status" to value) else it }
+
+        val running = entry.patched(status("b", "running"))
+        assertEquals(SessionCounts(waiting = 1, running = 1), running.counts)
+        val answered = running.patched(status("a", "idle"))
+        assertEquals(SessionCounts(running = 1), answered.counts)
+        // A row the patch leaves alone keeps the same entry.
+        assertSame(answered, answered.patched { it })
+        // A list without counts stays without them.
+        assertNull(entry.unverified().patched(status("a", "running")).counts)
+    }
+
+    @Test
+    fun projectSessionItemsReadOfflineUntilTheMacConfirmsThem() {
+        val entry = projectSessions("p", "Project", listOf(row("a", "running")), verified = true)
+
+        assertEquals(
+            listOf(SessionAvailability.RUNNING),
+            projectSessionItems(entry, connected = true).map(SessionListItem::availability),
+        )
+        assertEquals(
+            listOf(SessionAvailability.OFFLINE),
+            projectSessionItems(entry.unverified(), connected = true).map(SessionListItem::availability),
+        )
+        assertEquals(
+            listOf(SessionAvailability.OFFLINE),
+            projectSessionItems(entry, connected = false).map(SessionListItem::availability),
+        )
     }
 }
