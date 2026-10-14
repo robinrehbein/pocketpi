@@ -1,4 +1,4 @@
-# PocketPi – Handover (Stand 2026-10-14, ~15:45 UTC)
+# PocketPi – Handover (Stand 2026-10-14, ~16:20 UTC)
 
 Repo: `robinrehbein/pocketpi`. Regeln stehen in `CLAUDE.md`; dazu:
 - Robin auf Deutsch antworten; Code, Commits und PRs auf Englisch.
@@ -15,17 +15,21 @@ Robin hat erlaubt, selbstständig zu mergen. Melden soll man sich nur bei Proble
 - **Gemerged:**
   - Dependabot #87, #93, #94, #95, #96, #97
   - Lane-PRs #132 (B13), #133 (A16), #134 (B20)
+  - Fix #135 (Composer-Emulator-Test) und Dependabot #89 (wearable 20), beide von Robin gemerged
 - **Lane A** (A1–A16) ist komplett gemerged.
+- **`main` ist GRÜN** auf `6f9411e`, das ist der letzte CI-Push-Lauf.
 
 ## Offen / als Nächstes
-1. **`main` ist rot** in „Emulator tests“, seit #134 (Composer).
-   - Fix-PR **#135** (`claude/fix-composer-emulator`) ist offen. Er ändert nur den Test: `PromptPredictionUiTest.tabStillAcceptsTheSuggestion` fokussiert das Feld jetzt vor dem Tab-Druck.
-   - Wenn die PR-CI inklusive „Emulator tests“ grün ist: Draft aufheben, mit Merge-Commit mergen und prüfen, dass `main` grün wird.
-   - Wenn sie wieder rot ist: das Artefakt `pocketpi-emulator` herunterladen, `TEST-*.xml` lesen und die Ursache beheben.
+1. **PR #136 (B21, `claude/composer-content`)** ist offen, als Draft.
+   - Stand bei der Übergabe: Unit, Lint, Tablet und Minified sind grün; Emulator und Benchmark liefen noch.
+   - Wenn alle Jobs grün sind: Draft aufheben und mit Merge-Commit mergen.
+   - Wenn er rot ist: das Artefakt `pocketpi-emulator` herunterladen, `TEST-*.xml` lesen und die Ursache beheben.
 2. **Lane B und Lane C** laufen noch als Workflows in der alten Session. In einer neuen Session laufen sie NICHT weiter.
-   - **Lane B** (`claude/*`, stacked), noch offen: B14 page-headers, B15 mac-hub, B16 list-empty-states, B17 theme, B18 onboarding-settings, B19 chat-actions, B24 chat-a11y, B25 copy-sweep.
-   - **Lane C**, noch offen: B21 composer-content, B22 compact-chrome, B23 markdown.
-   - Die Branch-Namen und Titel stehen im Abschnitt „Lane-Liste“ unten. Mit `git ls-remote origin 'refs/heads/claude/*'` und der Liste offener PRs sieht man, was schon existiert.
+   - Noch ohne Branch oder PR:
+     - Lane B: B14 page-headers, B15 mac-hub, B16 list-empty-states, B17 theme, B18 onboarding-settings, B19 chat-actions, B24 chat-a11y, B25 copy-sweep.
+     - Lane C: B22 compact-chrome, B23 markdown.
+   - Zuerst prüfen, was inzwischen existiert: `git ls-remote origin 'refs/heads/claude/*'` und die Liste offener PRs.
+   - B14 hat einen unfertigen Snapshot auf `wip/page-headers` (siehe unten).
    - Fehlende Items je Branch: umsetzen, unabhängig reviewen, Checks laufen lassen, als Draft-PR öffnen.
 3. **Merge-Regel für Lane-PRs (verschärft):**
    - Erst mergen, wenn ALLE Jobs grün sind: Unit, Lint, Emulator, Tablet emulator, Minified smoke, Benchmark isolation.
@@ -37,13 +41,15 @@ Robin hat erlaubt, selbstständig zu mergen. Melden soll man sich nur bei Proble
      Die Maschine hat 15 GB RAM, Gradle läuft sonst in einen OOM.
    - Bricht ein Job beim SDK- oder Image-Download ab („Premature EOF“, „Peer disconnected“), ist das Infrastruktur. Dann die gescheiterten Jobs einmal neu starten.
 4. **Finales Release:** wenn alle Lane-PRs gemerged sind und die `main`-CI grün ist, `release.yml` auf `main` starten.
-5. **Danach:** #88 (firebase-bom 35) und #89 (play-services-wearable 20) aktualisieren, bei grüner CI mergen und ein kleines separates Release machen.
+5. **Danach:** #88 (firebase-bom 35) aktualisieren, bei grüner CI mergen und ein kleines separates Release machen. #89 hat Robin schon gemerged; das Wearable-Update kommt also bereits mit dem finalen Release.
 6. **Aufräumen:** Robin muss noch erlauben, dass alte Branches gelöscht werden, oder „Automatically delete head branches“ einschalten. Erst danach die gemergten Branches löschen.
 
 ## Gerätechecks für Robin (nicht selbst behaupten)
 - **R8:** Pairing, Push + Antwort aus der Benachrichtigung, Widget, Share, App-Sperre, Artefakt öffnen, Übergabe an die Uhr, Play-Pre-Launch-Bericht.
 - **Neue Funktionen:**
-  - Command Palette und Session-Wechsel (Tab mit Tastatur)
+  - Composer: Bild vom Keyboard einfügen, Rich Paste, langes Einfügen als Datei (#136)
+- Wearable-Lib 20 (#89): Übergabe an die Uhr erneut prüfen
+- Command Palette und Session-Wechsel (Tab mit Tastatur)
   - Activity Board, angepinnte Sessions, Ungelesen-Marker
   - Medien- und Tool-Output-Cache, sauberer Wechsel zwischen Macs
   - Neues Anhang-Format (auch große Dateien)
@@ -72,7 +78,7 @@ https://claude.ai/artifact/2SDQzjycdQ22cxMpYci2LG
 
 ## WIP-Snapshots (von den Lane-Agenten, Stand ~15:50 UTC)
 - `wip/page-headers` = B14 in Arbeit, auf `claude/activity-board` (B13, gemerged) aufgebaut, nicht committet, nicht reviewt.
-- `wip/composer-content` = B21 in Arbeit, auf `claude/composer` (B20, gemerged) aufgebaut, nicht committet, nicht reviewt.
+- `wip/composer-content`: überholt, B21 ist jetzt PR #136. Den Branch nach dem Merge löschen.
 Weitermachen: `git checkout -b claude/page-headers origin/wip/page-headers`, dann `main` hineinmergen, fertig bauen, reviewen, PR öffnen. B21 genauso.
 Kann es sein, dass die Agenten der alten Session diese Branches inzwischen selbst als `claude/page-headers` bzw. `claude/composer-content` gepusht haben? Das zuerst prüfen; der neuere Stand gewinnt.
 Dieses Handover liegt auch auf dem Branch `wip/handover` (HANDOVER.md).
