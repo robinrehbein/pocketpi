@@ -1144,7 +1144,7 @@ internal fun RemoteScreen(
     /** Runs the local command [command] with its [argument], as a typed command would. */
     fun runLocal(command: LocalCommand, argument: String) {
         when (command) {
-            LocalCommand.NEW -> if (key is RemoteNavKey.Chat) newSessionOpen = true
+            LocalCommand.NEW -> if (key is RemoteNavKey.Chat && !navigator.mutating) newSessionOpen = true
             LocalCommand.COMPACT -> model.compactContext()
             LocalCommand.MODEL -> modelPickerRequested = true
             LocalCommand.SETTINGS -> settingsSheetRequested = true
