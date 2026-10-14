@@ -1,7 +1,9 @@
 package de.joinnoah.pi.remote
 
 import android.animation.ValueAnimator
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material3.MaterialTheme
@@ -22,6 +24,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -92,6 +95,27 @@ class ChatA11yUiTest {
         compose.onNodeWithContentDescription("Removed line 2: old").assertExists()
         compose.onNodeWithContentDescription("Added line 2: new").assertExists()
         compose.onNodeWithContentDescription("Added line 3: blank line").assertExists()
+    }
+
+    @Test fun splitDiffCellsTellTalkBackWhatWasAddedAndRemoved() {
+        val context = DiffLine(DiffKind.CONTEXT, "keep", 4, 6)
+        val removed = DiffLine(DiffKind.REMOVED, "old", 5, null)
+        val added = DiffLine(DiffKind.ADDED, "new", null, 7)
+        compose.setContent {
+            MaterialTheme {
+                val style = rememberDiffRowStyle(listOf(context, removed, added))
+                val scroll = rememberScrollState()
+                Column {
+                    SplitDiffRow(context, context, style, scroll, wrap = false)
+                    SplitDiffRow(removed, added, style, scroll, wrap = false)
+                }
+            }
+        }
+        // Each side reads its own number.
+        compose.onNodeWithContentDescription("Line 4: keep").assertExists()
+        compose.onNodeWithContentDescription("Line 6: keep").assertExists()
+        compose.onNodeWithContentDescription("Removed line 5: old").assertExists()
+        compose.onNodeWithContentDescription("Added line 7: new").assertExists()
     }
 
     @Test fun diffLinesWithoutNumbersStillSayTheirKind() {
@@ -240,5 +264,20 @@ class ChatA11yUiTest {
             assertTrue("$limit", limit > 0.dp)
             assertTrue("$limit", limit <= 360.dp)
         }
+    }
+
+    @Test
+    @Config(qualifiers = "w640dp-h400dp")
+    fun aLongSheetStaysWithinHalfOfASplitScreen() {
+        val choices = (1..40).map { AdvisorChoice("p", "m$it", "Model $it", listOf("low", "high")) }
+        val advisor = SessionAdvisor("s", true, "p/m1", "low", false, false, 0, 3, 3, null, choices)
+        compose.setContent {
+            MaterialTheme {
+                AdvisorPickerSheet(advisor, choices.first(), "low", false, true, {}, {}, {}, {}, {})
+            }
+        }
+        val height = compose.onNodeWithTag("advisorPickerList").getUnclippedBoundsInRoot().let { it.bottom - it.top }
+        assertTrue("$height", height > 0.dp)
+        assertTrue("$height", height <= 400.dp * 0.84f)
     }
 }

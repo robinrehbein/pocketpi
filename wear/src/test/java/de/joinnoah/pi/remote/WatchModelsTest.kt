@@ -108,10 +108,14 @@ class WatchModelsTest {
         assertEquals(phone.wire(questions), watch.wire(questions))
         val selections = watch.wire(questions).array("answers").map { answer -> answer.array("selections").map { it.text("value") } }
         assertEquals(listOf(listOf("b", "Custom"), listOf("Own words")), selections)
-        // A typed answer on either device follows the custom defaults.
+        // On a multiple choice a typed answer on either device follows the custom defaults.
         assertEquals(
             QuestionnaireAnswers.of(phoneDefaults.selected, phoneDefaults.custom, mapOf("q" to "Typed")).wire(questions),
             watch.editOther(questions[0], "Typed", "").wire(questions),
         )
+        // On a single choice it replaces them, on both devices (QuestionnaireAnswers.other).
+        val single = watch.editOther(questions[1], "More", "").wire(questions)
+        assertEquals(phoneDefaults.other(questions[1], "More").wire(questions), single)
+        assertEquals(listOf("More"), single.array("answers")[1].array("selections").map { it.text("value") })
     }
 }

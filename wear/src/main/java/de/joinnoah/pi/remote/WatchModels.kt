@@ -100,20 +100,9 @@ internal data class WatchQuestionAnswers(
             copy(selected = selected + (id to if (value in choices) choices - value else choices + value))
         else copy(selected = selected + (id to setOf(value)), custom = custom - id)
     }
-    fun other(question: JsonObject, text: String): WatchQuestionAnswers {
-        val id = question.text("id")
-        return copy(
-            selected = if (question.flag("multiSelect")) selected else selected + (id to emptySet()),
-            custom = custom + (id to listOf(watchInputText(text, 4096)).filter(String::isNotBlank)),
-        )
-    }
-    fun editOther(question: JsonObject, text: String, previous: String): WatchQuestionAnswers {
-        if (!question.flag("multiSelect")) return other(question, text)
-        val id = question.text("id")
-        val values = custom[id].orEmpty().filterNot { previous.isNotBlank() && it == previous } +
-            listOf(watchInputText(text, 4096)).filter(String::isNotBlank)
-        return copy(custom = custom + (id to values.distinct()))
-    }
+    /** The shared Other rule: see [QuestionnaireAnswers.other]. */
+    fun editOther(question: JsonObject, text: String, previous: String): WatchQuestionAnswers =
+        answers.other(question, watchInputText(text, 4096), previous).let { WatchQuestionAnswers(it.selected, it.custom) }
     fun skip(id: String) = copy(selected = selected - id, custom = custom - id)
     /** The phone's encoding: see [QuestionnaireAnswers]. */
     private val answers get() = QuestionnaireAnswers(selected, custom)

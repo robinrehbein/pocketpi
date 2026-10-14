@@ -310,7 +310,15 @@ internal fun QuestionnaireForm(
         if (ownAnswerSelected)
             OutlinedTextField(
                 value = custom[id].orEmpty(),
-                onValueChange = { custom = custom + (id to it.take(4096)) },
+                onValueChange = { text ->
+                    custom = custom + (id to text.take(4096))
+                    // The shared Other rule, as on the watch: on a single choice the typed text
+                    // replaces the chosen option and the custom defaults; on a multiple choice
+                    // they stay. The typed text itself lives in [custom].
+                    val kept = QuestionnaireAnswers(selected, customDefaults).other(q, "")
+                    selected = kept.selected
+                    customDefaults = kept.custom
+                },
                 enabled = controlsEnabled,
                 label = { Text(stringResource(R.string.remote_other)) },
                 modifier = Modifier.fillMaxWidth().then(rememberQuestionFieldKeys(custom[id].orEmpty())),
@@ -347,8 +355,11 @@ internal fun QuestionnaireForm(
         enabled = controlsEnabled && valid,
         onClick = {
             if (!currentControlsEnabled) return@Button
-            // The watch sends the same encoding (WatchQuestionAnswers), defaults included.
-            onAnswer(QuestionnaireAnswers.of(selected, customDefaults, custom).wire(questions))
+            // The watch sends the same encoding (WatchQuestionAnswers), defaults included. The
+            // state can change after the last composition enabled this button, so check again.
+            val answers = QuestionnaireAnswers.of(selected, customDefaults, custom)
+            if (!answers.valid(questions)) return@Button
+            onAnswer(answers.wire(questions))
         },
     ) {
         Text(

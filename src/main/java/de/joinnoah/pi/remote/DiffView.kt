@@ -153,15 +153,24 @@ private fun rememberDiffLineLabels(): DiffLineLabels {
 
 /**
  * What TalkBack reads for [line]: whether it was added or removed, its line number and its text,
- * so the change never rests on the colour or the '+' and '-' signs alone. A hunk header reads as
- * it is.
+ * so the change never rests on the colour or the '+' and '-' signs alone. [number] is the line
+ * number to read, for a split diff the number on that side. A hunk header reads as it is.
  */
-internal fun diffLineDescription(line: DiffLine, labels: DiffLineLabels): String? {
+internal fun diffLineDescription(
+    line: DiffLine,
+    labels: DiffLineLabels,
+    number: Int? = when (line.kind) {
+        DiffKind.ADDED -> line.newLine
+        DiffKind.REMOVED -> line.oldLine
+        DiffKind.CONTEXT -> line.newLine ?: line.oldLine
+        DiffKind.HUNK -> null
+    },
+): String? {
     val text = line.text.take(MAX_CODE_LINE_CHARS).ifBlank { labels.blank }
     return when (line.kind) {
-        DiffKind.ADDED -> line.newLine?.let { labels.addedLine.format(it, text) } ?: labels.added.format(text)
-        DiffKind.REMOVED -> line.oldLine?.let { labels.removedLine.format(it, text) } ?: labels.removed.format(text)
-        DiffKind.CONTEXT -> (line.newLine ?: line.oldLine)?.let { labels.contextLine.format(it, text) } ?: text
+        DiffKind.ADDED -> number?.let { labels.addedLine.format(it, text) } ?: labels.added.format(text)
+        DiffKind.REMOVED -> number?.let { labels.removedLine.format(it, text) } ?: labels.removed.format(text)
+        DiffKind.CONTEXT -> number?.let { labels.contextLine.format(it, text) } ?: text
         DiffKind.HUNK -> null
     }
 }

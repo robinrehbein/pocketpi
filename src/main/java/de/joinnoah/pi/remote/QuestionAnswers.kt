@@ -46,6 +46,20 @@ internal data class QuestionnaireAnswers(
         )
     }
 
+    /**
+     * [text] typed under Other in place of [previous]. On a single choice the typed text is the
+     * question's only answer, so it replaces the chosen option and the custom defaults; on a
+     * multiple choice it joins them. Both devices apply this rule.
+     */
+    fun other(question: JsonObject, text: String, previous: String = ""): QuestionnaireAnswers {
+        val id = question.text("id")
+        val typed = listOf(text).filter(String::isNotBlank)
+        if (!question.flag("multiSelect"))
+            return copy(selected = selected + (id to emptySet()), custom = custom + (id to typed))
+        val kept = custom[id].orEmpty().filterNot { previous.isNotBlank() && it == previous }
+        return copy(custom = custom + (id to (kept + typed).distinct()))
+    }
+
     private fun customValues(id: String): List<String> = custom[id].orEmpty().filter(String::isNotBlank).distinct()
 
     companion object {
