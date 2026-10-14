@@ -98,6 +98,8 @@ internal open class DestinationViewModel(
 
     fun refresh() = active(repository::refresh)
 
+    fun revalidateLists() = active(repository::revalidateLists)
+
     fun renameSession(sessionId: String, title: String) = active {
         repository.renameSession(sessionId, title)
     }

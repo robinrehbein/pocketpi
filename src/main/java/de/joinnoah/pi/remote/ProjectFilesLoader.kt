@@ -10,6 +10,9 @@ import kotlinx.coroutines.launch
 /** How many earlier unanswered saves an editor remembers ([FileEditor.superseded]). */
 private const val MAX_SUPERSEDED_WRITES = 4
 
+/** How many folder listings [ProjectFilesLoader] keeps for an instant reopen. */
+private const val MAX_REMEMBERED_LISTINGS = 16
+
 /** The `session.files.*` commands. Implementations throw [RemoteRequestException] on errors. */
 internal interface FileSource {
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing
@@ -25,7 +28,9 @@ internal interface FileSource {
  * Loads the file browser into [RemoteState.files]. Folders and files load a page at a time; a
  * later file page that comes back `not_found` (the file changed, so its version no longer
  * matches) reads the file once more from the start. A response for a folder or file that is no
- * longer shown is dropped, and so is a save reply once its editor is gone.
+ * longer shown is dropped, and so is a save reply once its editor is gone. The last listing of
+ * each folder stays in memory, so a connected browser opens a folder on it at once and lists it
+ * again in place.
  */
 internal class ProjectFilesLoader(
     private val scope: CoroutineScope,
@@ -44,6 +49,17 @@ internal class ProjectFilesLoader(
     private var drainingPreviews = false
     private var peekJob: Job? = null
     private var editorVersion = 0L
+    /** By Mac, session and folder. */
+    private val remembered = NavigationMemoryCache<Triple<String?, String, String>, FileListing>(MAX_REMEMBERED_LISTINGS)
+
+    private fun key(sessionId: String, path: String) = Triple(current().selection.routeId, sessionId, path)
+
+    /** Keeps the listing [sessionId]'s browser shows now for the folder's next opening. */
+    private fun remember(sessionId: String) {
+        val files = files()?.takeIf { it.sessionId == sessionId } ?: return
+        val listing = files.listing?.takeIf { it.unavailable == null && files.failure == null } ?: return
+        remembered[key(sessionId, files.path)] = listing
+    }
 
     private fun files(): FilesState? =
         current().files?.takeIf { it.sessionId == current().selection.sessionId }
@@ -259,19 +275,21 @@ internal class ProjectFilesLoader(
                 else -> null
             }
         val opened = file?.takeIf { failure == null }
+        val known = remembered[key(sessionId, path)].takeIf { failure == null }
         update {
             it.copy(
                 files = FilesState(
                     sessionId,
                     path = path,
-                    loading = failure == null,
+                    loading = failure == null && known == null,
+                    listing = known,
                     failure = failure,
                     file = opened?.let(::OpenFile),
                 )
             )
         }
         if (failure != null) return
-        list(sessionId, path, after = null)
+        if (known != null) relist(sessionId, path) else list(sessionId, path, after = null)
         if (opened != null) read(sessionId, opened, 0, null, reopen = false)
     }
 
@@ -287,7 +305,10 @@ internal class ProjectFilesLoader(
      * Shows the folder [path]: a child of the shown folder keeps the shown listing for Back, and
      * an ancestor comes back from those kept listings without a request.
      */
-    fun openDir(path: String) {
+    fun openDir(path: String) = openDir(path, cached = true)
+
+    /** [cached] shows the folder's last listing while it is listed again, if there is one. */
+    private fun openDir(path: String, cached: Boolean) {
         val files = files() ?: return
         stopList()
         stopFile()
@@ -317,12 +338,13 @@ internal class ProjectFilesLoader(
                 files.parents + listOfNotNull(files.listing?.takeIf { it.unavailable == null })
             else files.parents.filter { path.startsWith(if (it.path.isEmpty()) "" else it.path + "/") && it.path != path }
         val offline = !current().connected
+        val known = remembered[key(files.sessionId, path)].takeIf { cached && !offline }
         write(files.sessionId) {
             it.copy(
                 path = path,
                 parents = parents,
-                loading = !offline,
-                listing = null,
+                loading = !offline && known == null,
+                listing = known,
                 failure = if (offline) FilesFailure.OFFLINE else null,
                 moreLoading = false,
                 moreFailure = null,
@@ -332,7 +354,11 @@ internal class ProjectFilesLoader(
                 editor = null,
             )
         }
-        if (!offline) list(files.sessionId, path, after = null)
+        when {
+            offline -> Unit
+            known != null -> relist(files.sessionId, path)
+            else -> list(files.sessionId, path, after = null)
+        }
     }
 
     /** Reloads what is shown: the open file from its start, or the shown folder's first page. */
@@ -341,7 +367,8 @@ internal class ProjectFilesLoader(
         stopPreviews()
         write(files.sessionId) { it.copy(previews = emptyMap(), peek = null) }
         val file = files.file
-        if (file != null) openFile(file.path) else openDir(files.path)
+        // Reload by hand shows the read and its failure; it does not stand behind a remembered listing.
+        if (file != null) openFile(file.path) else openDir(files.path, cached = false)
     }
 
     /**
@@ -425,6 +452,7 @@ internal class ProjectFilesLoader(
                         },
                     )
                 }
+                remember(sessionId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -484,6 +512,7 @@ internal class ProjectFilesLoader(
                         }
                     files.copy(loading = false, listing = listing, failure = null, moreLoading = false, moreFailure = null)
                 }
+                remember(sessionId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

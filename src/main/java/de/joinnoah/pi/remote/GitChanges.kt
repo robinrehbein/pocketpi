@@ -232,6 +232,8 @@ data class ChangesState(
     val subagents: List<SubagentChanges> = emptyList(),
     /** The subagent [file] belongs to, or null for the session's own changes. */
     val fileSession: String? = null,
+    /** When [status] was read, by the loader's clock; shown while offline. */
+    val fetchedAt: Long? = null,
 )
 
 internal fun canViewChanges(state: RemoteState): Boolean =

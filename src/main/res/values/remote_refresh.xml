@@ -1,0 +1,5 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <!-- When the changes on screen were read, shown while offline; %1$s is a time, or a date and time. -->
+    <string name="remote_changes_updated_at">Updated %1$s</string>
+</resources>
