@@ -502,7 +502,11 @@ internal class RemoteNavigator(
      * invalidate() would cancel the first coroutine after the host may already have created its
      * session, leaving an orphan. Other navigation still cancels it, which also releases the guard.
      */
-    private fun mutate(fresh: Boolean = false, call: suspend () -> RemoteSelection) {
+    private fun mutate(
+        fresh: Boolean = false,
+        opened: ((RemoteSelection) -> Unit)? = null,
+        call: suspend () -> RemoteSelection,
+    ) {
         if (mutation?.isActive == true) return
         val current = invalidate()
         val job = scope.launch {
@@ -510,6 +514,7 @@ internal class RemoteNavigator(
             if (current == request) {
                 replace(selection, keepSettings = false)
                 if (fresh) freshSession = selection.keys().lastOrNull() as? RemoteNavKey.Chat
+                opened?.invoke(selection)
             }
         }
         activation = job
@@ -522,6 +527,24 @@ internal class RemoteNavigator(
         if (completeSharePick(ShareTarget.NewSession(routeId, projectId))) return
         leavingEditor(RemoteSelection(routeId, projectId)) {
             mutate(fresh = true) { repository.createSession(routeId, projectId) }
+        }
+    }
+
+    /**
+     * Starts a session as the new-session sheet describes it (see [finishNewSession]). Without a
+     * model or a prompt it is [createSession]. Like it, the new chat opens at once and takes
+     * [freshSession]'s focus; the model and the prompt follow in the background, only while that chat
+     * stays the selected one.
+     */
+    fun startSession(routeId: String, projectId: String, choice: NewSessionChoice) {
+        if (choice.model == null && choice.prompt.isBlank()) return createSession(routeId, projectId)
+        leavingEditor(RemoteSelection(routeId, projectId)) {
+            mutate(
+                fresh = true,
+                opened = { created ->
+                    scope.launch { finishNewSession(created, choice, RepositorySteps(repository)) }
+                },
+            ) { repository.createSession(routeId, projectId) }
         }
     }
 
@@ -1444,4 +1467,27 @@ private fun RemoteNavDisplay(
         popTransitionSpec = { depthTransition(forward = false) },
         predictivePopTransitionSpec = { depthTransition(forward = false) },
     )
+}
+
+/** The [NewSessionSteps] over the real repository. */
+private class RepositorySteps(private val repository: RemoteRepository) : NewSessionSteps {
+    override fun selected(): RemoteSelection = repository.state.value.selection
+
+    override suspend fun awaitModels(selection: RemoteSelection): Boolean =
+        awaitConfiguredModels(repository.state, selection)
+
+    override suspend fun setModel(model: RemoteModel): Boolean {
+        val selection = selected()
+        val held = repository.state.value.configuration?.model
+        if (held?.provider == model.provider && held.id == model.id) return true
+        repository.setModel(model.provider, model.id)
+        return awaitModelApplied(repository.state, selection, model)
+    }
+
+    override fun draftText(selection: RemoteSelection): String =
+        repository.state.value.takeIf { it.selection == selection }?.draft.orEmpty()
+
+    override fun draft(selection: RemoteSelection, text: String) = repository.draft(selection, text)
+
+    override fun send() = repository.prompt()
 }
