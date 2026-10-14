@@ -330,9 +330,10 @@ internal fun RemoteScreen(
     val sentImages =
         state.selection.sessionId?.takeIf { chatModel != null }?.let { sessionId ->
             val supported = ATTACHMENT_READ_CAPABILITY in state.capabilities
-            remember(chatModel, sessionId, state.connected, state.capabilitiesKnown, supported) {
+            val routeId = state.selection.routeId
+            remember(chatModel, routeId, sessionId, state.connected, state.capabilitiesKnown, supported) {
                 SentImageSource(
-                    sessionId, state.connected, state.capabilitiesKnown, supported,
+                    routeId.orEmpty(), sessionId, state.connected, state.capabilitiesKnown, supported,
                     checkNotNull(chatModel)::readAttachment,
                 )
             }

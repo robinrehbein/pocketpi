@@ -235,6 +235,20 @@ class StoreRecoveryTest {
     }
 
     @Test
+    fun aPairingResetClearsTheKeptImages() {
+        val stores = AppStores(context)
+        stores.pairings.save(listOf(host))
+        val bytes = "kept image".toByteArray()
+        val digest = AttachmentImportRules.sha256(bytes)
+        stores.media.put("route", digest, bytes)
+        assertArrayEquals(bytes, stores.media.get("route", digest))
+        corrupt("paired-hosts.enc")
+        // The load finds the pairings unreadable and resets them; the kept images go with them.
+        assertEquals(emptyList<PairedHost>(), stores.pairings.load())
+        assertNull(stores.media.get("route", digest))
+    }
+
+    @Test
     fun oneUnreadableAttachmentReadsAsMissingAndTheOthersStayReadable() {
         val attachments = AttachmentStore(context, alias)
         fun attachment(id: String, bytes: ByteArray) =
