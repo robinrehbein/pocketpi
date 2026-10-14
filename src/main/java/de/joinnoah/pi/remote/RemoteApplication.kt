@@ -58,6 +58,7 @@ class RemoteApplication : Application() {
         // Camera captures the import is done with are deleted then; this catches the rest.
         Thread { runCatching { PhotoCapture.sweep(cacheDir) } }.start()
         settings = DefaultSettingsRepository(this)
+        LiveRunSettings.preload(this)
         appLock = AppLock(AppLockStore(this), deviceSecure = { deviceSecure(this) })
         val attachments = AttachmentStore(this)
         val importer = AttachmentImporter(this, attachments)
