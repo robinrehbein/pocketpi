@@ -192,13 +192,12 @@ private class DragOutNode(
 
     init {
         // Hover and press only look: the element's own clicks and the list's scroll see them too.
+        // After a press the scope waits for the release; a hover has no pointer down.
         delegate(
             SuspendingPointerInputModifierNode {
-                awaitPointerEventScope {
-                    while (true) {
-                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                        if (event.type == PointerEventType.Enter || event.type == PointerEventType.Press) refresh()
-                    }
+                awaitEachGesture {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    if (event.type == PointerEventType.Enter || event.type == PointerEventType.Press) refresh()
                 }
             }
         )
