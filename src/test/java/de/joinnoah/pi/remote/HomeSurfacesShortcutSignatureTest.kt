@@ -9,7 +9,13 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -202,6 +208,79 @@ class HomeSurfacesShortcutSignatureTest {
         val receiver = receivers.single { it.activityInfo.name == PackageReplacedReceiver::class.java.name }
         assertFalse(receiver.activityInfo.exported)
         assertTrue(receiver.filter.hasAction(Intent.ACTION_MY_PACKAGE_REPLACED))
+    }
+
+    private fun streaming(status: String, reply: String, title: String = "A"): RemoteState {
+        val host = PairedHost("route", "relay", "device", "secret", "Mac")
+        return RemoteState(
+            hosts = listOf(host),
+            host = host,
+            selection = RemoteSelection("route", "project", "a"),
+            connected = true,
+            sessionsFresh = true,
+            project = Wire.objectOf("id" to "project", "name" to "Project"),
+            sessions = listOf(Wire.objectOf("id" to "a", "title" to title, "status" to status)),
+            messages = listOf(Wire.objectOf("id" to "m", "text" to reply)),
+            status = status,
+        )
+    }
+
+    @Test
+    fun homeUpdatesFireWhileStreamingWhenWhatTheyShowChangesButNotOnOtherDeltas() = runTest {
+        val state = MutableStateFlow(streaming("running", ""))
+        val seen = mutableListOf<HomeInputs>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { homeUpdates(state).toList(seen) }
+
+        // pi streams a delta every 100 ms for three seconds: nothing the widget shows changes.
+        repeat(30) {
+            advanceTimeBy(100)
+            state.value = streaming("running", "x".repeat(it + 1))
+        }
+        assertEquals(1, seen.size)
+
+        // The session starts waiting while deltas keep coming, which a debounce would hold back
+        // until the stream ends.
+        state.value = streaming("waiting", "y")
+        repeat(3) {
+            advanceTimeBy(100)
+            state.value = streaming("waiting", "y".repeat(it + 2))
+        }
+        assertEquals(2, seen.size)
+        assertEquals("waiting", seen.last().sessions.single().optionalText("status"))
+
+        // Within the interval a change waits, and the latest one arrives.
+        state.value = streaming("waiting", "z", title = "Renamed")
+        state.value = streaming("running", "z", title = "Renamed again")
+        assertEquals(2, seen.size)
+        advanceTimeBy(HOME_UPDATE_INTERVAL_MS)
+        assertEquals(3, seen.size)
+        assertEquals("Renamed again", seen.last().sessions.single().optionalText("title"))
+    }
+
+    @Test
+    fun aConnectedAppFoldsItsStateInAboutOnceAMinuteSoTheRefreshTimeFollows() = runTest {
+        val state = MutableStateFlow(streaming("running", ""))
+        val seen = mutableListOf<HomeInputs>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { homeUpdates(state).toList(seen) }
+        assertEquals(1, seen.size)
+
+        // Nothing changes for three minutes: the same inputs come again each minute.
+        advanceTimeBy(3 * HOME_REFRESH_INTERVAL_MS + 1)
+        assertEquals(4, seen.size)
+        assertEquals(1, seen.toSet().size)
+        // Each pass marks the rows refreshed at its time.
+        var snapshot = HomeSnapshot()
+        seen.forEachIndexed { index, inputs ->
+            snapshot = mergeHomeSnapshot(snapshot, inputs, true, setOf("route"), index * HOME_REFRESH_INTERVAL_MS)
+        }
+        assertEquals(3 * HOME_REFRESH_INTERVAL_MS, snapshot.refreshedAt)
+
+        // Offline, nothing is confirmed, so nothing comes again.
+        state.value = streaming("running", "").copy(connected = false)
+        advanceTimeBy(HOME_UPDATE_INTERVAL_MS)
+        val offline = seen.size
+        advanceTimeBy(5 * HOME_REFRESH_INTERVAL_MS)
+        assertEquals(offline, seen.size)
     }
 
     @Test
