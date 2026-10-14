@@ -267,7 +267,7 @@ internal fun RemoteScreen(
     // The selection names the chat beside the list; the screen's state strips the chat's session.
     val shownSessionId = state.selection.sessionId
     val visibleSessions =
-        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds, routeMarks) {
+        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds, routeMarks, shownSessionId) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
@@ -1995,7 +1995,7 @@ internal fun RemoteScreen(
                                         Text(stringResource(R.string.providers_open))
                                     }
                                 OutlinedButton(
-                                    onClick = { navigator.openActivity(key.routeId) },
+                                    onClick = { navigator.openActivity(key.routeId, twoPane) },
                                     enabled = state.host != null,
                                     modifier = Modifier.fillMaxWidth().testTag("activityButton"),
                                 ) {

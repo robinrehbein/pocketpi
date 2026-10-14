@@ -256,7 +256,7 @@ internal fun CommandPaletteHost(
 ) {
     val state by repository.state.collectAsStateWithLifecycle()
     val snapshot by home.collectAsStateWithLifecycle()
-    val chat = navigator.topChat
+    val chat = navigator.chatInView(LocalTwoPane.current)
     val mutating = navigator.mutating
     val labels = rememberPaletteLabels()
     val marks by sessionMarksState()

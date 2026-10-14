@@ -168,6 +168,17 @@ internal class RemoteNavigator(
     /** The chat on top of the stack, or null when another destination is (Settings included). */
     val topChat: RemoteNavKey.Chat? get() = stack.lastOrNull() as? RemoteNavKey.Chat
 
+    /**
+     * The chat whose shortcuts and palette actions apply: the one on top, or in the two-pane
+     * layout ([twoPane] not null) the chat that stays in view beside the activity board.
+     */
+    fun chatInView(twoPane: TwoPaneState?): RemoteNavKey.Chat? {
+        topChat?.let { return it }
+        if (twoPane == null || stack.lastOrNull() !is RemoteNavKey.Activity) return null
+        val keys = stack.toList()
+        return columnPanes(keys)?.detail?.let { keys[it] as? RemoteNavKey.Chat }
+    }
+
     private fun topKey(): RemoteNavKey? =
         stack.lastOrNull { it != RemoteNavKey.Settings } as? RemoteNavKey
 
@@ -590,13 +601,15 @@ internal class RemoteNavigator(
     /**
      * Opens the activity board of [routeId] on top of the open project, session or chat, which stay
      * beneath it. Nothing happens for another host or on the Hosts page. A card opens its chat with
-     * [open], which replaces the board.
+     * [open], which replaces the board. Beside a chat the board takes the list column, so a
+     * collapsed list of [twoPane] comes back to show it.
      */
-    fun openActivity(routeId: String) {
+    fun openActivity(routeId: String, twoPane: TwoPaneState? = null) {
         // Settings stays on top of whatever is beneath it, like for the other pages.
         if (stack.lastOrNull() == RemoteNavKey.Settings) return
         val top = topKey()
         if (top == RemoteNavKey.Activity(routeId) || top?.selection()?.routeId != routeId) return
+        twoPane?.revealList()
         stack.add(RemoteNavKey.Activity(routeId))
     }
 
@@ -864,12 +877,12 @@ internal class RemoteNavigator(
                 return true
             }
             Shortcut.HELP -> {
-                if (!repeat) targets.help = if (top is RemoteNavKey.Chat) KeyContext.CHAT else KeyContext.GLOBAL
+                if (!repeat) targets.help = if (chatInView(twoPane) != null) KeyContext.CHAT else KeyContext.GLOBAL
                 return true
             }
             Shortcut.ACTIVITY -> {
                 val route = repository.state.value.selection.routeId ?: return false
-                if (!repeat) openActivity(route)
+                if (!repeat) openActivity(route, twoPane)
                 return true
             }
             // Holding the key must not reopen the palette over the one it opened.
@@ -890,7 +903,7 @@ internal class RemoteNavigator(
             Shortcut.PAGE_DOWN,
             Shortcut.CHAT_START,
             Shortcut.CHAT_END -> {
-                val target = (top as? RemoteNavKey.Chat)?.let(targets::chat) ?: return false
+                val target = chatInView(twoPane)?.let(targets::chat) ?: return false
                 val region = targets.regions.current
                 if (target.composerCovered || (region != null && region != FocusRegion.CHAT)) return false
                 if (shortcut == Shortcut.CHAT_START || shortcut == Shortcut.CHAT_END) {
@@ -911,7 +924,7 @@ internal class RemoteNavigator(
             Shortcut.REVIEW,
             Shortcut.RENAME,
             Shortcut.FORK -> {
-                val target = (top as? RemoteNavKey.Chat)?.let(targets::chat) ?: return false
+                val target = chatInView(twoPane)?.let(targets::chat) ?: return false
                 if (repeat) return true
                 if (shortcut != Shortcut.STOP) return target.shortcut(shortcut)
                 target.stopNow()
@@ -1295,11 +1308,13 @@ internal fun RemoteNavigation(
  * composer. With focus in the code editor its keys are its own; an Esc it leaves comes back.
  */
 private fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets: ShortcutTargets, unhandled: Boolean): Boolean {
-    val chat = topChat?.let(targets::chat)
+    // Beside the activity board the chat keeps its keys, but Esc stays Back and closes the board.
+    val chat = chatInView(twoPane)?.let(targets::chat)
     val native = event.nativeKeyEvent
     if (event.key == Key.Escape) {
-        if (chat == null || (editing && !unhandled)) return false
-        if (event.type == KeyEventType.KeyDown && native.repeatCount == 0) chat.escape(native.eventTime)
+        val escaping = topChat?.let(targets::chat)
+        if (escaping == null || (editing && !unhandled)) return false
+        if (event.type == KeyEventType.KeyDown && native.repeatCount == 0) escaping.escape(native.eventTime)
         // Up and down alike, so no half of the key becomes Back.
         return true
     }
