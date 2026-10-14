@@ -649,6 +649,9 @@ internal fun RemoteScreen(
             InspectorTab.TOUCHED -> touchedSheet = false
         }
     }
+    // The panes show beside the chat, or would if the user had not hidden them (Ctrl+\); set
+    // once the tabs are known below, read by the actions.
+    val panesBesideNow = remember { mutableStateOf(false) }
     // A file the chat names (a tool card, a touched file, a diff line, a path:line in pi's text)
     // opens in Files at its lines, as a tab beside the chat or over it on a phone.
     val copyPath = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_path))
@@ -656,8 +659,14 @@ internal fun RemoteScreen(
     val openFileNow by rememberUpdatedState<(FileTarget) -> Unit> { target ->
         val chat = chatModel
         if (chat != null) {
-            showTab(InspectorTab.FILES)
-            chat.openFileAt(target.path, target.lines, exclusive = !sideCapable)
+            if (chat.openFileAt(target.path, target.lines, exclusive = !sideCapable)) {
+                showTab(InspectorTab.FILES)
+                // Over the chat the tool detail is drawn above Files and would hide it.
+                if (!panesBesideNow.value) closeTool()
+            } else {
+                // Files keeps an open editor, so nothing shows; the copy says the tap landed.
+                copyPathNow(target.path)
+            }
         }
     }
     val toolPaths = remember(touched) { (touched.changed + touched.read).map { it.path } }
@@ -669,9 +678,6 @@ internal fun RemoteScreen(
         chatFileOpener.canOpen = canOpenFiles
     }
     val fileOpener = chatFileOpener.takeIf { chatKey != null && chatModel != null }
-    // The panes show beside the chat, or would if the user had not hidden them (Ctrl+\); set
-    // once the tabs are known below, read by the actions.
-    val panesBesideNow = remember { mutableStateOf(false) }
     /**
      * Ctrl+Shift+G, E, J, Ctrl+H and the history button: open [tab], or switch to it where it is
      * open behind another tab or hidden; the tab already shown, or a pane over the chat, closes.

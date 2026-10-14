@@ -54,6 +54,7 @@ class FilesPaneUiTest {
     private val files = mutableListOf<String?>()
     private val sent = mutableListOf<String>()
     private val asked = mutableListOf<String>()
+    private var askPlaced = true
     private var closed = 0
     private var reloaded = 0
     private var moreLoads = 0
@@ -116,7 +117,7 @@ class FilesPaneUiTest {
                         },
                         onAsk = {
                             asked += it
-                            true
+                            askPlaced
                         },
                     ),
                     projectName = projectName,
@@ -405,6 +406,13 @@ class FilesPaneUiTest {
         compose.onNodeWithTag("filesAsk").performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
         assertEquals("$quote\n\nAnd here?", asked.last())
         compose.onNodeWithTag("filesAskSend").assertIsNotEnabled()
+        // A question that went nowhere stays for another try.
+        askPlaced = false
+        compose.onNodeWithTag("filesAsk").performTextInput("Too long?")
+        compose.onNodeWithTag("filesAskSend").performClick()
+        assertEquals("$quote\n\nToo long?", asked.last())
+        compose.onNodeWithTag("filesAskSend").assertIsEnabled()
+        compose.onNodeWithTag("filesAsk").assertTextEquals("Too long?")
         // Sending the lines stays: it only fills the composer.
         compose.onNodeWithTag("filesSendLines").performClick()
         assertEquals(listOf(quote), sent)
@@ -560,11 +568,28 @@ class FilesPaneUiTest {
 
     @Test
     @Config(qualifiers = "w411dp-h891dp")
-    fun withoutFilesTheToolCardOffersThePathToCopy() {
+    fun withoutFilesTheToolCardShowsNoFileIcon() {
         chat(emptySet())
         readToolCall()
+        compose.onNodeWithTag("toolCard").assertIsDisplayed()
+        // Every path would only offer a copy; the tool menu has Copy path.
         compose.onNodeWithTag("openInFiles").assertDoesNotExist()
-        compose.onNodeWithTag("copyOutsidePath").assertIsDisplayed()
+        compose.onNodeWithTag("copyOutsidePath").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun onAPhoneTheToolDetailMakesWayForTheFileItOpens() {
+        chat(setOf(FILES_CAPABILITY))
+        readToolCall()
+        compose.onNodeWithTag("toolCardHeader").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("toolDetail").assertIsDisplayed()
+        compose.onNode(hasTestTag("openInFiles") and hasAnyAncestor(hasTestTag("toolDetail"))).performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("src/a.kt" to LineSelection(3, 5)), repository.filesOpenedAt)
+        compose.onNodeWithTag("toolDetail").assertDoesNotExist()
+        compose.onNodeWithTag("filesPane").assertIsDisplayed()
     }
 
     @Test

@@ -59,6 +59,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -78,6 +79,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -156,7 +158,7 @@ internal fun FilesPane(
     var prefillFailed by remember { mutableStateOf(false) }
     LaunchedEffect(state.file?.path, state.path) { prefillFailed = false }
     val send: (String) -> Unit = { prompt -> prefillFailed = !actions.onSend(prompt) }
-    val ask: (String) -> Unit = { prompt -> prefillFailed = !actions.onAsk(prompt) }
+    val ask: (String) -> Boolean = { prompt -> actions.onAsk(prompt).also { prefillFailed = !it } }
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
     val codeWrap = rememberCodeWrap()
@@ -488,7 +490,7 @@ private fun FileView(
     file: OpenFile,
     actions: FilesActions,
     send: (String) -> Unit,
-    ask: (String) -> Unit,
+    ask: (String) -> Boolean,
     headerHeight: Dp,
     onEdit: (() -> Unit)? = null,
     wrap: Boolean = false,
@@ -522,10 +524,14 @@ private fun FileView(
     // context above them. A line picked here later never scrolls the view.
     val reveal = file.revealLine
     val revealReady = reveal != null && !file.loading && lines.size >= reveal
+    // Once per read: a rotation or a return to the file keeps where the user scrolled on to.
+    var revealed by rememberSaveable(reveal) { mutableStateOf(false) }
+    LaunchedEffect(file.loading) { if (file.loading) revealed = false }
     LaunchedEffect(reveal, revealReady) {
-        if (reveal == null || !revealReady) return@LaunchedEffect
+        if (reveal == null || !revealReady || revealed) return@LaunchedEffect
         val leading = if (file.reopened) 1 else 0
         listState.scrollToItem((leading + reveal - 1 - REVEAL_CONTEXT_LINES).coerceAtLeast(0))
+        revealed = true
     }
     val selectionState =
         selection?.let {
@@ -584,7 +590,7 @@ private fun FileView(
                 onSendFile = { send(filePrompt(context, file, lines, null, language)) },
                 onSendLines = { selection?.let { send(filePrompt(context, file, lines, it, language)) } },
                 onAsk = { question ->
-                    selection?.let { ask(filePrompt(context, file, lines, it, language) + "\n\n" + question.trim()) }
+                    selection?.let { ask(filePrompt(context, file, lines, it, language) + "\n\n" + question.trim()) } ?: false
                 },
                 onEdit = onEdit,
             )
@@ -651,7 +657,7 @@ private fun FileActionBar(
     onClearSelection: () -> Unit,
     onSendFile: () -> Unit,
     onSendLines: () -> Unit,
-    onAsk: (String) -> Unit = {},
+    onAsk: (String) -> Boolean = { false },
     onEdit: (() -> Unit)? = null,
 ) {
     HorizontalDivider()
@@ -699,16 +705,13 @@ private const val REVEAL_CONTEXT_LINES = 3
 
 /**
  * A question about the picked lines: Enter (or Ctrl+Enter) or the button sends the lines and it
- * to pi as one prompt. A blank question sends nothing.
+ * to pi as one prompt. A blank question sends nothing; one [onAsk] could not place stays.
  */
 @Composable
-private fun AskAboutLines(onAsk: (String) -> Unit) {
-    var question by remember { mutableStateOf("") }
+private fun AskAboutLines(onAsk: (String) -> Boolean) {
+    var question by rememberSaveable { mutableStateOf("") }
     val submit = {
-        if (question.isNotBlank()) {
-            onAsk(question)
-            question = ""
-        }
+        if (question.isNotBlank() && onAsk(question)) question = ""
     }
     val label = stringResource(R.string.remote_open_files_ask_hint)
     // One compact row, so a phone keeps most of its height for the file.
@@ -719,8 +722,15 @@ private fun AskAboutLines(onAsk: (String) -> Unit) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f).padding(start = 12.dp), contentAlignment = Alignment.CenterStart) {
+                // The field says it itself; TalkBack reads the hint once.
                 if (question.isEmpty())
-                    Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    Text(
+                        label,
+                        Modifier.clearAndSetSemantics {},
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
                 BasicTextField(
                     value = question,
                     onValueChange = { question = it },
@@ -742,6 +752,7 @@ private fun AskAboutLines(onAsk: (String) -> Unit) {
                     keyboardActions = KeyboardActions(onSend = { submit() }),
                 )
             }
+            // 40dp keeps the row low; Compose still takes touches 48dp around it (minimumTouchTargetSize).
             IconButton(onClick = submit, enabled = question.isNotBlank(), modifier = Modifier.size(40.dp).testTag("filesAskSend")) {
                 Icon(Icons.AutoMirrored.Filled.Send, stringResource(R.string.remote_open_files_ask_send), Modifier.size(20.dp))
             }

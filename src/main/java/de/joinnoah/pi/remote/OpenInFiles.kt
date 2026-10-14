@@ -65,8 +65,10 @@ private fun absolutePath(path: String) = path.startsWith("/") || path.startsWith
 /**
  * [path] relative to the session folder, or null when it lies outside or cannot be placed. A
  * relative path is one already, unless it climbs out with `..`. An absolute path loses the first
- * of [SessionFolderHints.roots] it lies in; failing that it is the longest relative tool path it
- * ends with, or what follows the first segment named like the project.
+ * of [SessionFolderHints.roots] it lies in, and with a root known nothing else is inside. Without
+ * one it is the longest relative tool path of two or more segments it ends with, or what follows
+ * the one folder in a home folder named like the project. A guess that may name another file
+ * places nothing: showing the wrong file at its lines is worse than copying the path.
  */
 internal fun projectRelativePath(path: String, hints: SessionFolderHints = SessionFolderHints()): String? {
     val trimmed = path.trim()
@@ -78,41 +80,66 @@ internal fun projectRelativePath(path: String, hints: SessionFolderHints = Sessi
     val segments = normalSegments(trimmed.removePrefix("~")) ?: return null
     if (segments.isEmpty()) return null
     val home = trimmed.startsWith("~")
-    for (root in hints.roots) {
-        if (root.startsWith("~") != home) continue
-        val rootSegments = normalSegments(root.removePrefix("~")) ?: continue
-        if (rootSegments.isNotEmpty() && segments.size > rootSegments.size && segments.subList(0, rootSegments.size) == rootSegments)
+    val roots = hints.roots.filter { it.startsWith("~") == home }.mapNotNull { normalSegments(it.removePrefix("~")) }.filter { it.isNotEmpty() }
+    for (rootSegments in roots) {
+        if (segments.size > rootSegments.size && segments.subList(0, rootSegments.size) == rootSegments)
             return segments.drop(rootSegments.size).joinToString("/")
     }
+    // Where the session folder is known, a path outside it is outside the project.
+    if (hints.roots.isNotEmpty()) return null
     val joined = segments.joinToString("/")
     hints.toolPaths
         .mapNotNull { projectRelativePath(it) }
-        .filter { joined.endsWith("/$it") }
+        // `README.md` alone ends many paths; `docs/README.md` far fewer.
+        .filter { '/' in it && joined.endsWith("/$it") }
         .maxByOrNull { it.length }
         ?.let { return it }
-    val name = hints.projectName?.takeIf { it.isNotBlank() && '/' !in it }
-    if (name != null) {
-        val at = segments.indexOf(name)
-        if (at >= 0 && at < segments.lastIndex) return segments.drop(at + 1).joinToString("/")
-    }
-    return null
+    val name = hints.projectName?.takeIf { it.isNotBlank() && '/' !in it } ?: return null
+    // Only in a home folder (`~`, /Users/x, /home/x), outside its hidden folders, and named once:
+    // /tmp/pocketpi or ~/.cache/pocketpi is no checkout.
+    val homeLength =
+        when {
+            home -> 0
+            segments.size > 2 && (segments[0] == "Users" || segments[0] == "home") -> 2
+            else -> return null
+        }
+    val at = segments.indexOf(name)
+    if (at < homeLength || at != segments.lastIndexOf(name) || at >= segments.lastIndex) return null
+    if (segments.subList(homeLength, at).any { it.startsWith(".") }) return null
+    return segments.drop(at + 1).joinToString("/")
 }
 
 /**
  * The hints for [projectRelativePath] from the chat: a `cwd` on the session or project, should the
  * host send one, the project's name, and the paths [toolPaths] its tools used. An absolute tool
- * path that ends with a relative one names the folder above it.
+ * path that ends with a relative one names the folder above it, when the relative one has two or
+ * more segments or the folder is named like the project; `package.json` alone could be any
+ * package's. Folders that disagree name none.
  */
 internal fun sessionFolderHints(session: JsonObject?, project: JsonObject?, toolPaths: Collection<String>): SessionFolderHints {
     fun JsonObject.cwd() = (get("cwd") as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(::absolutePath)
+    val projectName = project?.optionalText("name")?.takeIf { it.isNotBlank() && '/' !in it }
     val relative = toolPaths.filterNot(::absolutePath).mapNotNull { projectRelativePath(it) }.toSet()
     val derived =
         toolPaths.filter(::absolutePath).mapNotNull { absolute ->
             val joined = absolute.trimEnd('/')
-            relative.filter { joined.endsWith("/$it") }.maxByOrNull { it.length }?.let { joined.removeSuffix("/$it") }
+            relative
+                .filter { joined.endsWith("/$it") }
+                .filter { '/' in it || joined.removeSuffix("/$it").substringAfterLast('/') == projectName }
+                .maxByOrNull { it.length }
+                ?.let { joined.removeSuffix("/$it") }
+                ?.takeIf { it.isNotEmpty() && it != "~" }
+        }.distinct()
+    val named = derived.filter { it.substringAfterLast('/') == projectName }
+    val agreed =
+        when {
+            derived.size <= 1 -> derived
+            named.size == 1 -> named
+            else -> emptyList()
         }
+    val sent = listOfNotNull(session?.cwd(), project?.cwd())
     return SessionFolderHints(
-        roots = (listOfNotNull(session?.cwd(), project?.cwd()) + derived).distinct(),
+        roots = (sent.ifEmpty { agreed }).distinct(),
         projectName = project?.optionalText("name"),
         toolPaths = relative,
     )
@@ -130,10 +157,13 @@ internal fun toolFileTarget(item: ConversationItem.Activity): FileTarget? {
         when (item.name) {
             "read" -> {
                 val args = item.arguments?.let(::parsedToolArguments)
-                val offset = (args?.get("offset") as? JsonPrimitive)?.content?.toDoubleOrNull()?.toInt()
-                val limit = (args?.get("limit") as? JsonPrimitive)?.content?.toDoubleOrNull()?.toInt()
-                offset?.takeIf { it >= 1 }?.let { first ->
-                    if (limit != null && limit > 1) LineSelection(first, first + limit - 1) else LineSelection(first)
+                // Bounded, so an absurd offset or limit neither overflows nor reads the file on and on.
+                fun number(key: String) =
+                    (args?.get(key) as? JsonPrimitive)?.content?.toDoubleOrNull()?.takeIf { it >= 1 && it <= MAX_TOOL_LINE }?.toInt()
+                val limit = number("limit")
+                number("offset")?.let { first ->
+                    if (limit != null && limit > 1) LineSelection(first, (first.toLong() + limit - 1).coerceAtMost(MAX_TOOL_LINE.toLong()).toInt())
+                    else LineSelection(first)
                 }
             }
             "edit" ->
@@ -143,6 +173,9 @@ internal fun toolFileTarget(item: ConversationItem.Activity): FileTarget? {
         }
     return FileTarget(path, lines)
 }
+
+/** The highest line a tool call's `offset` or `limit` is taken at; past it the call opens at the top. */
+private const val MAX_TOOL_LINE = 10_000_000
 
 /** The lines of the new file an edit's patch changed, from the first to the last; null for none. */
 internal fun editedLines(lines: List<DiffLine>): LineSelection? {
@@ -255,11 +288,13 @@ internal val LocalFileOpener = staticCompositionLocalOf<FileOpener?> { null }
 
 /**
  * A trailing icon that opens [path] in Files at [lines], then runs [onDone], or copies a path
- * outside the project. Nothing outside a chat ([LocalFileOpener]).
+ * outside the project. Nothing outside a chat ([LocalFileOpener]) or while Files cannot browse it.
  */
 @Composable
 internal fun OpenInFilesButton(path: String, lines: LineSelection?, modifier: Modifier = Modifier, onDone: () -> Unit = {}) {
     val opener = LocalFileOpener.current ?: return
+    // Without Files every path would offer a copy; the tool menu has Copy path for that.
+    if (!opener.canOpen) return
     val action = opener.action(path, lines)
     val open = action is FileOpenAction.Open
     IconButton(

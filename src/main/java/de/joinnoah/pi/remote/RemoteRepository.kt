@@ -494,7 +494,7 @@ interface RemoteRepository {
     /**
      * Opens Files at the folder of [path] (relative to the session folder) with the file open and
      * [lines] picked and in view; [exclusive] as for [openFiles]. False, with nothing opened, for a
-     * path outside the session folder.
+     * path outside the session folder or while an open editor keeps the pane.
      */
     fun openFileAt(path: String, lines: LineSelection?, exclusive: Boolean = true): Boolean {
         if (!isSessionPath(path)) return false

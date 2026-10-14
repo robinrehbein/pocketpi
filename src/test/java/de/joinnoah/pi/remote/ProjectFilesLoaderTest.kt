@@ -1266,6 +1266,51 @@ class ProjectFilesLoaderTest {
     }
 
     @Test
+    fun aFileThatChangesWhileReadingOnKeepsTheLinesItWasOpenedAt() = runTest {
+        val first = lines(1..5)
+        val second = lines(6..10)
+        val size = first.length + second.length
+        val transport = Transport(capabilities) { request ->
+            when {
+                request.text("type") == "session.files.list" -> listing(request, "a.kt")
+                offset(request) == 0 -> page(request, first, size, nextOffset = first.length)
+                else -> page(request, second, size)
+            }
+        }
+        // The first page two belongs to an older version: the host no longer finds it.
+        var failed = 0
+        transport.failure = { request -> if (offset(request) > 0 && failed++ == 0) "not_found" else null }
+        val repository = activated(transport)
+        repository.openFileAt("a.kt", LineSelection(8, 9))
+        runCurrent()
+        val file = checkNotNull(repository.state.value.files?.file)
+        assertTrue(file.reopened)
+        assertEquals(first + second, file.content)
+        assertEquals(LineSelection(8, 9), file.selection)
+        assertEquals(8, file.revealLine)
+        assertEquals(
+            listOf(0, first.length, 0, first.length),
+            transport.files().filter { it.text("type") == "session.files.read" }.map(::offset),
+        )
+    }
+
+    @Test
+    fun aFileThatKeepsChangingIsReadAgainOnlyOnce() = runTest {
+        val first = lines(1..5)
+        val transport = Transport(capabilities) { request ->
+            if (request.text("type") == "session.files.list") listing(request, "a.kt")
+            else page(request, first, first.length * 2, nextOffset = first.length)
+        }
+        transport.failure = { request -> if (offset(request) > 0) "not_found" else null }
+        val repository = activated(transport)
+        repository.openFileAt("a.kt", LineSelection(8))
+        runCurrent()
+        val file = checkNotNull(repository.state.value.files?.file)
+        assertEquals(FilesFailure.NOT_FOUND, file.moreFailure)
+        assertEquals(listOf(0, first.length, 0, first.length), transport.files().filter { it.text("type") == "session.files.read" }.map(::offset))
+    }
+
+    @Test
     fun linesPastTheEndAreCutToTheFile() = runTest {
         val content = lines(1..10)
         val transport = Transport(capabilities) { request ->
@@ -1309,7 +1354,8 @@ class ProjectFilesLoaderTest {
         val repository = editing(editorTransport())
         val editor = repository.state.value.files?.editor
         assertNotNull(editor)
-        assertTrue(repository.openFileAt("README.md", LineSelection(1)))
+        // Nothing opens, and the caller is told so.
+        assertFalse(repository.openFileAt("README.md", LineSelection(1)))
         runCurrent()
         assertEquals(editor, repository.state.value.files?.editor)
     }

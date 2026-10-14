@@ -58,12 +58,48 @@ class OpenInFilesTest {
     }
 
     @Test
+    fun aFileOutsideTheProjectWithACommonNameIsNotTakenForTheProjectsOwn() {
+        // pi read the project's README.md, then another checkout's.
+        val readme = sessionFolderHints(null, buildJsonObject { put("name", "pocketpi") }, listOf("README.md", "/Users/robin/other-repo/README.md"))
+        assertEquals(emptyList<String>(), readme.roots)
+        assertNull(projectRelativePath("/Users/robin/other-repo/README.md", readme))
+        assertNull(projectRelativePath("/Users/robin/other-repo/src/Foo.kt", readme))
+        // A one-segment match never names the session folder; npm's own package.json is not the project's.
+        val npm = sessionFolderHints(null, null, listOf("package.json", "/Users/robin/.nvm/versions/node/v22/lib/node_modules/npm/package.json"))
+        assertEquals(emptyList<String>(), npm.roots)
+        assertNull(projectRelativePath("/Users/robin/.nvm/versions/node/v22/lib/node_modules/npm/lib/cli.js", npm))
+        // ... unless the folder is named like the project.
+        val named = sessionFolderHints(null, buildJsonObject { put("name", "app") }, listOf("package.json", "/Users/robin/app/package.json"))
+        assertEquals(listOf("/Users/robin/app"), named.roots)
+        // Folders that disagree name none.
+        val split = sessionFolderHints(null, null, listOf("src/Foo.kt", "/a/one/src/Foo.kt", "/b/two/src/Foo.kt"))
+        assertEquals(emptyList<String>(), split.roots)
+        // With the session folder known, nothing outside it is inside, however it ends.
+        val known = sessionFolderHints(null, null, listOf("src/Foo.kt", "/w/app/src/Foo.kt"))
+        assertNull(projectRelativePath("/w/other/src/Foo.kt", known))
+    }
+
+    @Test
+    fun theProjectNamePlacesOnlyPathsInAHomeFolderNamingItOnce() {
+        val named = SessionFolderHints(projectName = "pocketpi")
+        assertNull(projectRelativePath("/tmp/pocketpi/x.log", named))
+        assertNull(projectRelativePath("/Users/robin/.cache/pocketpi/x.log", named))
+        assertNull(projectRelativePath("/Users/robin/pocketpi/old/pocketpi/a.kt", named))
+        assertNull(projectRelativePath("/Users/pocketpi/a.kt", named))
+        assertEquals("a.kt", projectRelativePath("/home/robin/code/pocketpi/a.kt", named))
+        assertEquals("a.kt", projectRelativePath("~/pocketpi/a.kt", named))
+    }
+
+    @Test
     fun toolCallsOpenAtTheLinesTheyWorkedOn() {
         assertEquals(FileTarget("src/a.kt", LineSelection(10, 29)), toolFileTarget(activity("read", """{"path":"src/a.kt","offset":10,"limit":20}""")))
         assertEquals(FileTarget("src/a.kt", LineSelection(10)), toolFileTarget(activity("read", """{"path":"src/a.kt","offset":10}""")))
         assertEquals(FileTarget("src/a.kt"), toolFileTarget(activity("read", """{"path":"src/a.kt"}""")))
         assertEquals(FileTarget("b.kt"), toolFileTarget(activity("write", """{"path":"b.kt","content":"x"}""")))
         assertNull(toolFileTarget(activity("bash", """{"command":"ls"}""")))
+        // Absurd numbers neither overflow nor read the file on and on.
+        assertEquals(FileTarget("a.kt"), toolFileTarget(activity("read", """{"path":"a.kt","offset":1e12,"limit":5}""")))
+        assertEquals(FileTarget("a.kt", LineSelection(9_999_999, 10_000_000)), toolFileTarget(activity("read", """{"path":"a.kt","offset":9999999,"limit":10000000}""")))
         val patch = "@@ -3,3 +3,4 @@\n a\n-b\n+c\n+d\n e\n"
         val edit = activity("edit", """{"path":"c.kt","edits":[{"oldText":"b","newText":"c\nd"}]}""", ToolDetails(patch, 4, false))
         assertEquals(FileTarget("c.kt", LineSelection(4, 5)), toolFileTarget(edit))

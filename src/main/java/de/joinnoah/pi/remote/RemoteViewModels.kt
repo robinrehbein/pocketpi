@@ -400,7 +400,7 @@ internal class ChatViewModel(
 
     fun openFilesFile(path: String?) = active { repository.openFilesFile(path) }
 
-    /** [RemoteRepository.openFileAt]; false for a path outside the session folder. */
+    /** [RemoteRepository.openFileAt]; false when nothing opened (a path outside the session folder, or an editor open). */
     fun openFileAt(path: String, lines: LineSelection?, exclusive: Boolean = true): Boolean {
         var opened = false
         active { opened = repository.openFileAt(path, lines, exclusive) }

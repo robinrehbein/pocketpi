@@ -348,8 +348,18 @@ internal class NavigationFakeRepository : RemoteRepository {
         toolOutputRequests += toolCallId
     }
 
+    /** Whether [prompt] sends the draft, like the real repository, instead of only counting. */
+    var sendsPrompts = false
+
+    /** The drafts [prompt] sent while [sendsPrompts]. */
+    val sentPrompts = mutableListOf<String>()
+
     override fun prompt() {
         prompts++
+        if (sendsPrompts) {
+            sentPrompts += state.value.draft
+            state.value = state.value.copy(draft = "", sending = true)
+        }
     }
 
     var aborts = 0

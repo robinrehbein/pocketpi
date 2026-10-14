@@ -612,7 +612,8 @@ internal class ProjectFilesLoader(
                 val next = file?.nextOffset
                 if (file != null && wanted != null && next != null && !file.binary && lineCount(file.content) < wanted) {
                     writeFile(sessionId, path) { it.copy(moreLoading = true, moreFailure = null) }
-                    read(sessionId, path, next, chunk.version, reopen = true)
+                    // Once only: a file that keeps changing shows the failure instead of reading again and again.
+                    read(sessionId, path, next, chunk.version, reopen = !file.reopened)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -621,8 +622,11 @@ internal class ProjectFilesLoader(
                 if (!active()) return@launch
                 val reason = failure(e)
                 if (offset > 0 && reason == FilesFailure.NOT_FOUND && reopen) {
-                    // "File changed; reopen": the pages so far belong to the old version.
-                    writeFile(sessionId, path) { OpenFile(path, reopened = true) }
+                    // "File changed; reopen": the pages so far belong to the old version. Lines the
+                    // chat opened it at are still wanted; the read on from the start reaches them.
+                    writeFile(sessionId, path) {
+                        OpenFile(path, reopened = true, selection = it.selection.takeIf { _ -> it.revealLine != null }, revealLine = it.revealLine)
+                    }
                     read(sessionId, path, 0, null, reopen = false)
                     return@launch
                 }
