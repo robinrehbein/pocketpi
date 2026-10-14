@@ -23,6 +23,18 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     experimentalProperties["android.experimental.self-instrumenting"] = true
+    testOptions {
+        managedDevices {
+            localDevices {
+                // For BaselineProfileGenerator without a phone; never for timing measurements.
+                create("pixel6Api36") {
+                    device = "Pixel 6"
+                    apiLevel = 36
+                    systemImageSource = "aosp"
+                }
+            }
+        }
+    }
 }
 
 androidComponents {

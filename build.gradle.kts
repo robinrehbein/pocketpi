@@ -153,24 +153,30 @@ android {
         }
     }
     buildTypes {
-        create("benchmark") {
-            initWith(getByName("release"))
-            applicationIdSuffix = ".benchmark"
-            signingConfig = signingConfigs.getByName("debug")
-            matchingFallbacks += "release"
-            isDebuggable = false
-            // Isolated app data and no production push registration during measurements.
-            for (key in listOf("API_KEY", "APP_ID", "PROJECT_ID", "GCM_SENDER_ID")) {
-                buildConfigField("String", "PI_REMOTE_FIREBASE_$key", "\"\"")
-            }
-        }
         release {
-            isMinifyEnabled = false
+            // R8 shrinks, optimizes and obfuscates the code and drops unused resources. Keep rules
+            // live in proguard-rules.pro; release.yml uploads mapping.txt to Play with the bundle.
+            isMinifyEnabled = true
+            isShrinkResources = true
             if (uploadStorePath.isNotBlank() && uploadStorePassword.isNotBlank() &&
                 uploadKeyAlias.isNotBlank() && uploadKeyPassword.isNotBlank()) {
                 signingConfig = signingConfigs.getByName("pocketpiUpload")
             }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+        create("benchmark") {
+            // Configured after release, so it inherits release's R8 setup, minify included.
+            initWith(getByName("release"))
+            applicationIdSuffix = ".benchmark"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+            isDebuggable = false
+            // Shrunk and optimized like release, but not obfuscated: see benchmark-rules.pro.
+            proguardFile("benchmark-rules.pro")
+            // Isolated app data and no production push registration during measurements.
+            for (key in listOf("API_KEY", "APP_ID", "PROJECT_ID", "GCM_SENDER_ID")) {
+                buildConfigField("String", "PI_REMOTE_FIREBASE_$key", "\"\"")
+            }
         }
     }
     bundle { language { enableSplit = false } }
@@ -292,4 +298,7 @@ dependencies {
     implementation(libs.androidx.glance.appwidget)
     implementation(libs.androidx.glance.material3)
     implementation(libs.androidx.work.runtime.ktx)
+    // Installs src/main/baseline-prof.txt on sideloaded and benchmark installs (Play does it from
+    // the bundle). App only: wear compiles the same sources, so no source may reference it.
+    implementation(libs.androidx.profileinstaller)
 }
