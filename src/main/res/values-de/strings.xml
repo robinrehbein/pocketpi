@@ -5,7 +5,6 @@
     <string name="remote_hosts">Rechner</string>
     <string name="remote_projects">Projekte</string>
     <string name="remote_projects_quick_chats">Schnellzugriff</string>
-    <string name="remote_projects_recent">Zuletzt</string>
     <string name="remote_projects_shared">Geteilte Projekte</string>
     <string name="remote_sessions">Sitzungen</string>
     <string name="remote_chat">Gespräch</string>
