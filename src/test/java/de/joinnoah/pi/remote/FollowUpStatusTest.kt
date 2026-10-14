@@ -27,6 +27,17 @@ class FollowUpStatusTest {
         compose.runOnIdle { assertEquals(listOf("one"), dismissed) }
     }
 
+    @Test fun deliveryCleanupWaitsForLoadingToFinish() {
+        val state = mutableStateOf(RemoteState(loading = true,
+            followUps = listOf(PendingFollowUp("one", "Confirmed message", "delivered"))))
+        val dismissed = mutableListOf<String>()
+        compose.setContent { MaterialTheme { FollowUpStatus(state.value, dismissed::add) } }
+        compose.runOnIdle { assertEquals(emptyList<String>(), dismissed) }
+        compose.onNodeWithTag("followUpJournal").assertDoesNotExist()
+        compose.runOnIdle { state.value = state.value.copy(loading = false) }
+        compose.runOnIdle { assertEquals(listOf("one"), dismissed) }
+    }
+
     @Test fun uncertainDeliveryStaysVisibleAndCanBeDismissed() {
         val dismissed = mutableListOf<String>()
         compose.setContent { MaterialTheme {

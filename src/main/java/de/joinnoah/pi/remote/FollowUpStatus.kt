@@ -17,8 +17,9 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun FollowUpStatus(state: RemoteState, onDismissFollowUp: (String) -> Unit) {
     val delivered = state.followUps.filter { it.status == "delivered" }.map { it.requestId }
-    LaunchedEffect(delivered) {
-        delivered.forEach(onDismissFollowUp)
+    LaunchedEffect(state.selection, state.loading, delivered) {
+        // DestinationViewModel rejects actions while loading; retry after reconnect completes.
+        if (!state.loading) delivered.forEach(onDismissFollowUp)
     }
     val visible = state.followUps.filter { it.status != "delivered" }
             if (visible.isNotEmpty()) {
