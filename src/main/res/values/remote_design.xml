@@ -9,7 +9,7 @@
     <string name="remote_design_filter_active_count">%1$d active filter</string>
     <string name="remote_design_camera_permission_title">Allow camera access</string>
     <string name="remote_design_pair_input_hint">Paste code</string>
-    <string name="remote_design_thinking_help">Off shows only the thinking status. On shows thinking text when the host provides it. Hidden or redacted reasoning cannot be shown.</string>
+    <string name="remote_design_thinking_help">Off shows only the thinking status. On shows thinking text when the model provides it. Hidden or redacted reasoning cannot be shown.</string>
     <string name="remote_design_show_thinking">Show thinking</string>
     <string name="remote_design_appearance_help">Choose light, dark or your device’s setting. The colors are picked separately.</string>
 </resources>

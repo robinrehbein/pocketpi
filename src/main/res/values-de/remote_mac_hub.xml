@@ -8,8 +8,8 @@
     <string name="remote_mac_details_device">Gerät</string>
     <string name="remote_mac_disconnect">Trennen (Kopplung bleibt)</string>
     <plurals name="remote_mac_waiting_count">
-        <item quantity="one">%d wartet</item>
-        <item quantity="other">%d warten</item>
+        <item quantity="one">%d braucht dich</item>
+        <item quantity="other">%d brauchen dich</item>
     </plurals>
     <plurals name="remote_mac_working_count">
         <item quantity="one">%d arbeitet</item>

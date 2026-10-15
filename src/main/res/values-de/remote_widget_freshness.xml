@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="UnusedResources">
     <string name="remote_widget_updated">Stand: %1$s</string>
-    <string name="remote_widget_preview_header">1 Sitzung wartet auf dich</string>
+    <string name="remote_widget_preview_header">1 Sitzung braucht dich</string>
     <string name="remote_widget_preview_updated">Stand: 14:02</string>
     <string name="remote_widget_preview_waiting_title">Login-Weiterleitung reparieren</string>
-    <string name="remote_widget_preview_waiting_detail">web-app · Wartet auf dich</string>
+    <string name="remote_widget_preview_waiting_detail">web-app · Braucht dich</string>
     <string name="remote_widget_preview_running_title">Release Notes schreiben</string>
-    <string name="remote_widget_preview_running_detail">docs · Läuft</string>
+    <string name="remote_widget_preview_running_detail">docs · Arbeitet</string>
 </resources>

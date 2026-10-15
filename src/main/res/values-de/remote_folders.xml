@@ -12,7 +12,7 @@
     <string name="remote_folders_truncated">Nicht alle Ordner werden angezeigt. Öffne einen Unterordner, um die Auswahl einzugrenzen.</string>
     <string name="remote_folders_retry">Erneut versuchen</string>
     <string name="remote_folders_dismiss">Schließen</string>
-    <string name="remote_folders_unavailable">Aktualisiere pi-remote auf deinem Mac, um Ordner von hier aus zu öffnen.</string>
+    <string name="remote_folders_unavailable">Aktualisiere pi Remote auf deinem Mac, um Ordner von hier aus zu öffnen.</string>
     <string name="remote_folders_badge_git">Git</string>
     <string name="remote_folders_badge_shared">Geteilt</string>
     <string name="remote_folders_badge_pi_config">Bringt eigene pi-Erweiterungen oder Skills mit</string>
@@ -46,7 +46,7 @@
     <string name="remote_folders_clone_repo_not_found">Das Repository wurde nicht gefunden.</string>
     <string name="remote_folders_clone_network">Das Klonen ist wegen eines Netzwerkfehlers fehlgeschlagen.</string>
     <string name="remote_folders_clone_timeout">Das Klonen hat länger als zehn Minuten gedauert und wurde abgebrochen.</string>
-    <string name="remote_folders_clone_cancelled">Das Klonen wurde abgebrochen, weil pi-remote auf deinem Mac beendet wurde.</string>
+    <string name="remote_folders_clone_cancelled">Das Klonen wurde abgebrochen, weil pi Remote auf deinem Mac beendet wurde.</string>
     <string name="remote_folders_clone_failed">Das Klonen ist fehlgeschlagen.</string>
     <string name="remote_folders_clone_unknown">Dein Mac kennt diesen Klonvorgang nicht mehr. Aktualisiere den Ordner, um zu sehen, ob er fertig wurde.</string>
     <string name="remote_folders_trust_title">Diesem Ordner vertrauen?</string>
@@ -62,7 +62,7 @@
     <string name="remote_folders_error_not_found">Dieser Ordner existiert nicht mehr.</string>
     <string name="remote_folders_error_busy">Auf deinem Mac laufen schon zwei Klonvorgänge. Warte, bis einer fertig ist.</string>
     <string name="remote_folders_error_browse_busy">Dein Mac hat zu lange gebraucht, um diesen Ordner aufzulisten. Versuche es erneut.</string>
-    <string name="remote_folders_error_offline">pi-remote wird auf deinem Mac gerade beendet. Versuche es gleich noch einmal.</string>
+    <string name="remote_folders_error_offline">pi Remote wird auf deinem Mac gerade beendet. Versuche es gleich noch einmal.</string>
     <string name="remote_folders_error_forbidden">Dein Mac hat den Zugriff auf diesen Ordner verweigert.</string>
     <string name="remote_folders_error_trust_required">Du musst diesem Ordner vertrauen, bevor er sich öffnen lässt.</string>
     <string name="remote_folders_error_trust_scope">Diesem Ordner kannst du von hier aus nicht vertrauen, weil er ein oberster Ordner ist oder über einen Link erreicht wird. Öffne stattdessen einen Unterordner darin.</string>

@@ -5,7 +5,7 @@
     <string name="remote_prediction_run_tests">Führe die Tests aus und behebe Fehler</string>
     <string name="remote_prediction_prepare_pr">Bereite einen PR vor</string>
     <string name="remote_prediction_setting">Prompt-Vorschläge</string>
-    <string name="remote_prediction_setting_help">Schlägt einen nächsten Prompt über dem Eingabefeld vor. Tippe auf den Vorschlag oder drücke Tab, um ihn zu übernehmen. Vorschläge kommen aus dem Gespräch und deinen häufigen Prompts, die verschlüsselt auf diesem Gerät bleiben.</string>
+    <string name="remote_prediction_setting_help">Schlägt einen nächsten Prompt über dem Eingabefeld vor. Tippe auf den Vorschlag oder drücke Tab, um ihn zu übernehmen. Vorschläge kommen aus der Sitzung und deinen häufigen Prompts, die verschlüsselt auf diesem Gerät bleiben.</string>
     <string name="remote_prediction_show">Vorschläge anzeigen</string>
     <string name="remote_prediction_clear">Prompt-Verlauf löschen</string>
 </resources>

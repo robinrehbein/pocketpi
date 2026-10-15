@@ -1,6 +1,6 @@
 <resources>
     <plurals name="remote_sessions_subagent_count">
-        <item quantity="one">%d Unteragent</item>
-        <item quantity="other">%d Unteragenten</item>
+        <item quantity="one">%d Subagent</item>
+        <item quantity="other">%d Subagenten</item>
     </plurals>
 </resources>

@@ -7,7 +7,7 @@
     <string name="remote_tool_detail_offset">Beginnt bei Zeile %1$s</string>
     <string name="remote_tool_detail_limit">Liest höchstens %1$s Zeilen</string>
     <string name="remote_tool_detail_no_arguments">Keine Argumente</string>
-    <string name="remote_tool_detail_arguments_truncated">Der Host hat diese Argumente gekürzt, daher werden sie als Rohtext angezeigt.</string>
+    <string name="remote_tool_detail_arguments_truncated">Diese Argumente kamen gekürzt an, daher werden sie als Rohtext angezeigt.</string>
     <string name="remote_tool_detail_change">Änderung %1$d</string>
     <string name="remote_tool_detail_before">Vorher</string>
     <string name="remote_tool_detail_after">Nachher</string>
@@ -40,9 +40,9 @@
     <string name="remote_tool_detail_loading_progress_percent">Vollständige Ausgabe wird geladen: %1$d Prozent</string>
     <string name="remote_tool_detail_cancel_load">Laden abbrechen</string>
     <string name="remote_tool_detail_retry">Erneut versuchen</string>
-    <string name="remote_tool_detail_failure_unsupported">Dieser Host oder die pi-Erweiterung kann die vollständige Ausgabe nicht senden. Lade die pi-Remote-Erweiterung neu oder aktualisiere den Host.</string>
+    <string name="remote_tool_detail_failure_unsupported">Dein Mac kann die vollständige Ausgabe noch nicht senden. Lade die Remote-Erweiterung in pi neu oder aktualisiere pi Remote.</string>
     <string name="remote_tool_detail_failure_not_found">Die vollständige Ausgabe ist noch nicht gespeichert. Versuche es erneut, sobald das Werkzeug fertig ist.</string>
-    <string name="remote_tool_detail_failure_offline">Der Host ist offline. Versuche es erneut, sobald er wieder da ist.</string>
+    <string name="remote_tool_detail_failure_offline">Dein Mac ist offline. Versuche es erneut, sobald er wieder da ist.</string>
     <string name="remote_tool_detail_failure_failed">Die vollständige Ausgabe konnte nicht geladen werden.</string>
     <string name="remote_tool_detail_full_loaded">Vollständige Ausgabe wird angezeigt</string>
     <string name="remote_tool_detail_capped">Die Ausgabe war länger als 1 MiB und ist dort abgeschnitten.</string>

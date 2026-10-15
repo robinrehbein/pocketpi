@@ -8,7 +8,7 @@
     <string name="remote_design_filter_active_count">%1$d aktiver Filter</string>
     <string name="remote_design_camera_permission_title">Kamerazugriff erlauben</string>
     <string name="remote_design_pair_input_hint">Code einfügen</string>
-    <string name="remote_design_thinking_help">Aus zeigt nur den Status der Gedanken an. Ein zeigt den Text der Gedanken an, wenn der Host ihn übermittelt. Verborgene oder geschwärzte Gedanken bleiben unsichtbar.</string>
-    <string name="remote_design_show_thinking">Anzeige von Gedanken</string>
+    <string name="remote_design_thinking_help">Aus zeigt nur den Status der Gedanken an. Ein zeigt den Text der Gedanken an, wenn das Modell ihn liefert. Verborgene oder geschwärzte Gedanken bleiben unsichtbar.</string>
+    <string name="remote_design_show_thinking">Gedanken anzeigen</string>
     <string name="remote_design_appearance_help">Wähle Hell, Dunkel oder die Einstellung deines Geräts. Die Farben wählst du getrennt davon.</string>
 </resources>

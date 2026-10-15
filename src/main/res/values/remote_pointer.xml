@@ -9,7 +9,7 @@
     <string name="remote_menu_copy_markdown">Copy as Markdown</string>
     <string name="remote_menu_copy_session_id">Copy session ID</string>
     <!-- Forks the chat at this message of the user and puts its text into the new composer. -->
-    <string name="remote_menu_edit_retry">Edit and retry from here</string>
+    <string name="remote_menu_edit_retry">Fork and edit from here</string>
     <!-- Prefilled after the quoted message by "Ask pi to fix"; the user can still change it. -->
     <string name="remote_menu_ask_fix_prompt">Look at this message, find what is wrong and fix it.</string>
     <string name="remote_menu_copy_command">Copy command</string>

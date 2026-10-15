@@ -188,7 +188,9 @@ class MacHubUiTest {
             chats = listOf(chat("p1", "Alpha", "waiting", "waiting")),
         )
 
-        compose.onNodeWithText(label(R.string.remote_status_needs_you)).assertIsDisplayed()
+        // The row's own status reads the same words, so match the group heading.
+        compose.onNode(hasText(label(R.string.remote_status_needs_you)) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
+            .assertIsDisplayed()
         compose.onAllNodesWithText(label(R.string.remote_status_working)).assertCountEquals(0)
         compose.onAllNodesWithText(label(R.string.remote_projects_quick_chats)).assertCountEquals(0)
     }
@@ -212,9 +214,9 @@ class MacHubUiTest {
                 ),
         )
 
-        compose.onNodeWithText("2 waiting").assertIsDisplayed()
+        compose.onNodeWithText("2 need you").assertIsDisplayed()
         compose.onNodeWithText("1 working").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Alpha, 2 waiting, 1 working").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Alpha, 2 need you, 1 working").assertIsDisplayed()
         compose.onAllNodesWithTag("projectBadgeWaiting-p2").assertCountEquals(0)
         compose.onAllNodesWithTag("projectBadgeWorking-p2").assertCountEquals(0)
         compose.onNodeWithTag("projectRow-p2").assertIsDisplayed()

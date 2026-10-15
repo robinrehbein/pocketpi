@@ -9,7 +9,7 @@
     <string name="remote_onboarding_scan">QR-Code scannen</string>
     <string name="remote_onboarding_paste">Code einfügen</string>
     <string name="remote_onboarding_setup">Mac einrichten</string>
-    <string name="remote_onboarding_setup_body">PocketPi arbeitet über pi Remote mit pi auf deinem Mac. Dein Mac braucht pi mit der Erweiterung pi Remote und muss wach und online bleiben, solange du die App nutzt.</string>
+    <string name="remote_onboarding_setup_body">PocketPi arbeitet über pi Remote mit pi auf deinem Mac. Dein Mac braucht pi mit der Remote-Erweiterung und muss wach und online bleiben, solange du die App nutzt.</string>
     <string name="remote_onboarding_setup_projects">Hier erscheinen nur Projekte, die du auf dem Mac teilst. Eine Kopplung kannst du jederzeit entfernen, hier oder auf dem Mac.</string>
     <string name="remote_onboarding_setup_done">Verstanden</string>
 

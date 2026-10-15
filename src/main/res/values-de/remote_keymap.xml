@@ -22,7 +22,7 @@
     <string name="remote_keymap_other_busy_action">Mit dem anderen Modus senden: jetzt einlenken oder nach Abschluss</string>
     <string name="remote_keymap_refresh">Aktualisieren</string>
     <string name="remote_keymap_rename">Sitzung umbenennen</string>
-    <string name="remote_keymap_fork">Ab der letzten Nachricht zurückspulen</string>
+    <string name="remote_keymap_fork">Ab der letzten Nachricht abzweigen</string>
     <string name="remote_keymap_escape">Schließen; zweimal drücken hält pi an</string>
     <string name="remote_escape_stop_hint">Drück noch mal Esc, um pi anzuhalten</string>
     <string name="remote_session_search_close">Suche schließen</string>
