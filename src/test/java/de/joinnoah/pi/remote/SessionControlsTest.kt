@@ -445,7 +445,7 @@ class SessionControlsTest {
     }
 
     @Test
-    fun compactChromeMergesOnPhonesAndOnShortKeyboardWindowsOnly() {
+    fun compactChromeOnPhonesAndOnShortKeyboardWindowsOnly() {
         // The phone bucket merges its rows, keyboard or not.
         assertTrue(compactChrome(phone = true, imeVisible = false, height = 800.dp))
         // A window with the keyboard up and little height left: the chat body is measured after the IME padding.
@@ -457,7 +457,7 @@ class SessionControlsTest {
     }
 
     @Test
-    fun insightChipsKeepTheirOrderExceptMergedWhereAttentionComesFirst() {
+    fun insightChipsKeepTheirOrderExceptCompactWhereAttentionComesFirst() {
         assertEquals(
             listOf(InsightChip.TOUCHED, InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS),
             insightChipOrder(compact = false),

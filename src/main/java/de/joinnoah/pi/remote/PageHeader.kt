@@ -33,6 +33,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+/** The room between the back pill and the actions pill, so a long title never touches them. */
+private val PAGE_HEADER_PILL_GAP = 12.dp
+
 /** The list key of a list page's large title, the first item after its connection chip. */
 internal const val PAGE_TITLE_KEY = "page-title"
 
@@ -74,7 +77,10 @@ internal fun PageHeader(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             // The back pill takes what the actions pill leaves, so a long title cuts off instead of
             // pushing the actions out, and the actions stay at the end.
-            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            Box(
+                Modifier.weight(1f).padding(end = if (actions != null) PAGE_HEADER_PILL_GAP else 0.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
                 if (onBack != null)
                     FloatingSurface(Modifier.testTag("navigationPill"), shape = CircleShape) {
                         Row(verticalAlignment = Alignment.CenterVertically) {

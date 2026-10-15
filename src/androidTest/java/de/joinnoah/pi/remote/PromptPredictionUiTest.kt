@@ -35,9 +35,9 @@ class PromptPredictionUiTest {
     private val suggestion get() = context.getString(R.string.remote_prediction_run_tests)
 
     @Test
-    fun emptyComposerShowsTheSuggestionAsAChipAndOneTapAcceptsIt() {
+    fun emptyComposerShowsTheSuggestionAsThePlaceholderAndOneTapAcceptsIt() {
         val harness = show()
-        compose.onNodeWithTag("promptSuggestion").assertTextContains(suggestion)
+        compose.onNodeWithTag("composerPlaceholder", useUnmergedTree = true).assertTextEquals(suggestion)
         compose.onNodeWithTag("promptSuggestion").performClick()
         compose.waitForIdle()
         // An accepted suggestion reaches the repository after the composer's pause.
@@ -71,7 +71,7 @@ class PromptPredictionUiTest {
     }
 
     @Test
-    fun turningPredictionsOffRemovesTheChipAndKeepsThePlainLabel() {
+    fun turningPredictionsOffRemovesTheSuggestionAndKeepsThePlainLabel() {
         val harness = show()
         compose.runOnIdle { harness.source.enabled.value = false }
         compose.onNodeWithTag("promptSuggestion").assertDoesNotExist()

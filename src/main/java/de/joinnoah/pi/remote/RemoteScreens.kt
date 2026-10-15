@@ -3304,7 +3304,8 @@ internal fun RemoteScreen(
                     val insightsShown =
                         touched.total > 0 || errorCount > 0 || onlyErrorsShown || strip.entries.isNotEmpty() ||
                             statusJobs != null
-                    // The chips sit in their own row, or merged into the controls' row while the chat is compact.
+                    // The chips sit in their own row above the composer, never inside it. While the chat is
+                    // compact the row also holds the status chip that stands in for the banners.
                     val chipOrder = insightChipOrder(compact)
                     val insightChips: @Composable RowScope.() -> Unit = {
                         for (chip in chipOrder)
@@ -3361,12 +3362,18 @@ internal fun RemoteScreen(
                                     }
                             }
                     }
-                    if (insightsShown && !compact)
+                    val compactStatusLine = statusChipLine.takeIf { compact }
+                    if (insightsShown || compactStatusLine != null)
                         Row(
                             Modifier.fillMaxWidth().testTag("chatInsights").horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                        ) { insightChips() }
+                        ) {
+                            compactStatusLine?.let { line ->
+                                ChatStatusChip(line, running = line != R.string.remote_export_done) { statusSheet = true }
+                            }
+                            if (insightsShown) insightChips()
+                        }
                     val treeSessionId = state.selection.sessionId
                     val treeChat = model as? ChatViewModel
                     if (treeSheetRequested && chatKey != null && treeSessionId != null && treeChat != null)
@@ -3500,17 +3507,6 @@ internal fun RemoteScreen(
                                 settingsSheetRequested = settingsSheetRequested,
                                 onSettingsSheetRequestHandled = { settingsSheetRequested = false },
                                 slashSuggestions = !composer.suggestionsClosed,
-                                leadingChips =
-                                    if (compact && (insightsShown || statusChipLine != null)) {
-                                        {
-                                            statusChipLine?.let { line ->
-                                                ChatStatusChip(line, running = line != R.string.remote_export_done) {
-                                                    statusSheet = true
-                                                }
-                                            }
-                                            if (insightsShown) insightChips()
-                                        }
-                                    } else null,
                                 onManageProviders = state.selection.routeId?.let { route -> { navigator.openProviders(route) } },
                             )
                         },
@@ -4375,9 +4371,9 @@ private fun rememberTouchExploring(): State<Boolean> {
 internal enum class InsightChip { TOUCHED, ERRORS, JOBS, SUBAGENTS }
 
 /**
- * The order of the insights chips: the touched files first in their own row, as they always were.
- * Merged into the controls' row, the chips that need attention (errors, jobs, subagents) come first
- * and the touched files after them, ahead of the controls.
+ * The order of the insights chips: the touched files first, as they always were. On a compact chat,
+ * where the narrow row scrolls, the chips that need attention (errors, jobs, subagents) come first
+ * and the touched files after them, behind the status chip.
  */
 internal fun insightChipOrder(compact: Boolean): List<InsightChip> =
     if (compact) listOf(InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS, InsightChip.TOUCHED)
