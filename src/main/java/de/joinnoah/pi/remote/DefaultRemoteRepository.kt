@@ -1691,6 +1691,7 @@ class DefaultRemoteRepository(
                 connected = false,
                 connection = line,
                 compaction = null,
+                suggestion = null,
                 compactionRequesting = false,
                 // A finished download stays readable; a running one stopped above.
                 toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },
@@ -2279,6 +2280,7 @@ class DefaultRemoteRepository(
             if (!t.hasSnapshot) it.copy(
                 status = t.status,
                 compaction = t.compaction,
+                suggestion = t.suggestion,
                 pendingSend = settledSend(it.pendingSend, it.messages),
             )
             else
@@ -2291,6 +2293,7 @@ class DefaultRemoteRepository(
                     status = t.status,
                     nextCursor = t.nextCursor,
                     compaction = t.compaction,
+                    suggestion = t.suggestion,
                     pendingSend = settledSend(it.pendingSend, t.messages),
                 )
         }
@@ -2519,6 +2522,7 @@ class DefaultRemoteRepository(
             it.copy(
                 selection = selection,
                 compaction = null,
+                suggestion = null,
                 compactionRequesting = false,
                 // Only a download that can still finish, or has, stays; a stopped one would spin.
                 toolOutput = it.toolOutput?.takeIf { output ->
@@ -2724,6 +2728,7 @@ class DefaultRemoteRepository(
                         connected = false,
                         connection = line,
                         compaction = null,
+                        suggestion = null,
                         compactionRequesting = false,
                         // A finished download stays readable; a running one stopped above.
                         toolOutput = it.toolOutput?.takeIf { output -> reconnecting && output.text != null },
@@ -3259,6 +3264,7 @@ class DefaultRemoteRepository(
                         // connect() above cancelled any download; the snapshot re-derives compaction.
                         toolOutput = null,
                         compaction = null,
+                        suggestion = null,
                     )
                 if (previous.session != null) {
                     timeline?.beginSnapshotEpoch(previous.status)
@@ -3583,6 +3589,7 @@ class DefaultRemoteRepository(
             shown.copy(
                 connected = false,
                 compaction = null,
+                suggestion = null,
                 compactionRequesting = false,
                 // A finished download stays readable; a running one stopped above.
                 toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },

@@ -195,6 +195,8 @@ data class RemoteState(
     /** The latest extension notice of the selected session, until the chat has shown it. */
     val notice: SessionNotice? = null,
     val compaction: SessionCompaction? = null,
+    /** The host's suggested next prompt for the selected session; untrusted plain text. */
+    val suggestion: String? = null,
     val toolOutput: ToolOutputDownload? = null,
     /** The changes view of the selected session; null while it is closed. */
     val changes: ChangesState? = null,

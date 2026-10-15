@@ -5502,6 +5502,66 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun hostSuggestionsFollowEventsSnapshotsOfflineAndSelection() = runTest {
+        val sessionId = "session"
+        val transport = Transport()
+        configure(transport, sessions = listOf(session(sessionId), session("other")), opened = session(sessionId))
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && request.text("sessionId") == sessionId)
+                JsonObject(
+                    original(request)!! +
+                        mapOf("revision" to JsonPrimitive(3), "suggestion" to JsonPrimitive("Run the tests again"))
+                )
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        // The snapshot's optional key restores the current suggestion.
+        assertEquals("Run the tests again", repository.state.value.suggestion)
+        fun suggestion(revision: Int, value: Any?) =
+            Wire.objectOf(
+                "type" to "event",
+                "sessionId" to sessionId,
+                "revision" to revision,
+                "kind" to "session.suggestion",
+                "suggestion" to value,
+            )
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        transport.deliver(suggestion(4, null))
+        runCurrent()
+        assertNull(repository.state.value.suggestion)
+        transport.deliver(suggestion(5, "Commit the change"))
+        runCurrent()
+        assertEquals("Commit the change", repository.state.value.suggestion)
+        // A malformed suggestion is ignored without an unknown-kind resync.
+        transport.deliver(suggestion(6, ""))
+        transport.deliver(suggestion(7, 42))
+        runCurrent()
+        advanceUntilIdle()
+        assertEquals("Commit the change", repository.state.value.suggestion)
+        assertEquals(snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        transport.deliver(
+            Wire.objectOf(
+                "type" to "event",
+                "sessionId" to sessionId,
+                "revision" to 8,
+                "kind" to "session.status",
+                "status" to "offline",
+            )
+        )
+        runCurrent()
+        assertNull(repository.state.value.suggestion)
+        transport.deliver(suggestion(9, "Open a pull request"))
+        runCurrent()
+        assertEquals("Open a pull request", repository.state.value.suggestion)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertNull(repository.state.value.suggestion)
+    }
+
+    @Test
     fun manualCompactionDispatchesWithoutChangingTheDraft() = runTest {
         val transport = Transport()
         configure(transport)

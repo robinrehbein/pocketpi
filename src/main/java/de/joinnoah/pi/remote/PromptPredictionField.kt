@@ -17,7 +17,8 @@ private val noHistory = MutableStateFlow(PromptHistory())
  * The suggested next prompt for the open chat, or null. The composer shows it as the empty field's
  * grey placeholder; the button at the end of the field or Tab takes it. A rule's text follows the
  * language of the user's recent prompts, falling back to the app's language, since the suggestion
- * is sent to pi as typed.
+ * is sent to pi as typed. The Mac's own suggestion for an idle session ([RemoteState.suggestion])
+ * comes first; it is untrusted plain text that reaches pi only when the user takes it and sends.
  */
 @Composable
 internal fun rememberPromptPrediction(state: RemoteState): String? {
@@ -28,6 +29,7 @@ internal fun rememberPromptPrediction(state: RemoteState): String? {
     val project = state.selection.projectId
     val session = state.selection.sessionId
     val active = enabled && state.connected && route != null && session != null
+    val hostSuggestion = state.suggestion?.takeIf { active && state.status == "idle" && state.questions.isEmpty() }
     val prediction =
         remember(active, state.messages, state.status, state.questions.isEmpty(), history, route, project, session) {
             if (!active) null
@@ -43,7 +45,7 @@ internal fun rememberPromptPrediction(state: RemoteState): String? {
     val language = remember(state.messages) { conversationLanguage(state.messages) }
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
-    return when (prediction) {
+    val predicted = when (prediction) {
         null -> null
         is PromptPrediction.Rule ->
             remember(prediction.rule, language, configuration) {
@@ -57,4 +59,5 @@ internal fun rememberPromptPrediction(state: RemoteState): String? {
             }
         is PromptPrediction.History -> prediction.text
     }
+    return hostSuggestion ?: predicted
 }
