@@ -3,7 +3,7 @@
     <string name="remote_fork_action">Fork from this message</string>
     <string name="remote_fork_retry">Fork and resend</string>
     <string name="remote_fork_edit">Fork and edit</string>
-    <string name="remote_fork_stop_first">Stop first</string>
+    <string name="remote_fork_stop_first">Stop pi first</string>
     <string name="remote_fork_retry_title">Fork and resend?</string>
     <string name="remote_fork_edit_title">Fork and edit?</string>
     <string name="remote_fork_retry_message">A new session forks off before this message and sends it again. This session stays as it is. Files on the Mac are not rewound.</string>

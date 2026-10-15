@@ -43,6 +43,48 @@ class WatchUiTest {
             assertEquals(0, repository.prompts)
         }
     }
+    @Test fun `subagent stop uses subagent wording and stops only the subagent`() {
+        val repository = WatchFakeRepository()
+        val model = model(repository, "CONTROLS")
+        compose.setContent { MaterialTheme { WearApp(model, DefaultSettingsRepository(androidx.test.core.app.ApplicationProvider.getApplicationContext())) } }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            val current = repository.state.value
+            repository.state.value = current.copy(
+                session = kotlinx.serialization.json.JsonObject(repository.session + ("parentSessionId" to JsonPrimitive("parent"))),
+                status = "running",
+                capabilities = current.capabilities + SUBAGENT_CONTROL_CAPABILITY,
+            )
+        }
+        compose.onNodeWithText("Stop pi").assertDoesNotExist()
+        compose.onNodeWithText("Stop subagent").performClick()
+        compose.onNodeWithText("Stop this subagent?").assertExists()
+        compose.onNodeWithText("Stop pi?", substring = true).assertDoesNotExist()
+        // The screen title also reads "Confirm", so match the clickable action.
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Confirm") and hasClickAction())
+        compose.onNode(hasText("Confirm") and hasClickAction()).performClick()
+        compose.runOnIdle {
+            assertEquals(1, repository.childStops)
+            assertEquals(0, repository.aborts)
+        }
+    }
+    @Test fun `parent stop names pi and aborts the run`() {
+        val repository = WatchFakeRepository()
+        val model = model(repository, "CONTROLS")
+        compose.setContent { MaterialTheme { WearApp(model, DefaultSettingsRepository(androidx.test.core.app.ApplicationProvider.getApplicationContext())) } }
+        compose.waitForIdle()
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "running") }
+        compose.onNodeWithText("Stop subagent").assertDoesNotExist()
+        compose.onNodeWithText("Stop pi").performClick()
+        compose.onNodeWithText("Stop pi?", substring = true).assertExists()
+        // The screen title also reads "Confirm", so match the clickable action.
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Confirm") and hasClickAction())
+        compose.onNode(hasText("Confirm") and hasClickAction()).performClick()
+        compose.runOnIdle {
+            assertEquals(1, repository.aborts)
+            assertEquals(0, repository.childStops)
+        }
+    }
     @Test fun `git base keeps discovered branch label while status is cleared`() {
         val repository = WatchFakeRepository()
         val model = model(repository)

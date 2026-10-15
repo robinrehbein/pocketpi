@@ -142,7 +142,7 @@
     <string name="remote_abort_run_confirmation">pi jetzt anhalten? Ausstehende Antworten werden nicht gesendet.</string>
     <string name="remote_draft_uncertain">Verbindung unterbrochen. Prüfe die Sitzung, bevor du deinen Entwurf erneut sendest.</string>
     <string name="remote_tui_info_title">Mac-Terminalsitzung</string>
-    <string name="remote_tui_info_body">Während diese Sitzung arbeitet, gehen „Jetzt einlenken“ und „Nach Abschluss senden“ nur direkt am Mac. Sende eine Nachricht, sobald sie bereit ist, oder halte pi an, um sie zu unterbrechen.</string>
+    <string name="remote_tui_info_body">Während diese Sitzung arbeitet, gehen „Jetzt einlenken“ und „Nach Abschluss senden“ nur direkt am Mac. Sende eine Nachricht, sobald die Sitzung bereit ist, oder halte pi an, um sie zu unterbrechen.</string>
     <string name="remote_tui_info_close">Verstanden</string>
     <string name="remote_steer_accepted">Wird an den laufenden Schritt übergeben: %1$s</string>
     <string name="remote_follow_up_pending">Wird gesendet, wenn pi fertig ist: %1$s</string>

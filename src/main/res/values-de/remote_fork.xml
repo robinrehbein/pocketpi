@@ -3,7 +3,7 @@
     <string name="remote_fork_action">Ab dieser Nachricht abzweigen</string>
     <string name="remote_fork_retry">Abzweigen und erneut senden</string>
     <string name="remote_fork_edit">Abzweigen und bearbeiten</string>
-    <string name="remote_fork_stop_first">Erst stoppen</string>
+    <string name="remote_fork_stop_first">Erst pi anhalten</string>
     <string name="remote_fork_retry_title">Abzweigen und erneut senden?</string>
     <string name="remote_fork_edit_title">Abzweigen und bearbeiten?</string>
     <string name="remote_fork_retry_message">Vor dieser Nachricht zweigt eine neue Sitzung ab und sendet sie erneut. Diese Sitzung bleibt unverändert. Dateien auf dem Mac werden nicht zurückgesetzt.</string>

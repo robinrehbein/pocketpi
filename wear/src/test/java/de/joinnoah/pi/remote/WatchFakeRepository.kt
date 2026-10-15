@@ -14,6 +14,7 @@ internal class WatchFakeRepository : RemoteRepository {
     var canonical: RemoteSelection? = null
     var prompts = 0
     var aborts = 0
+    var childStops = 0
     var forks = 0
     var closedChanges = 0
     var unshared: String? = null
@@ -49,6 +50,7 @@ internal class WatchFakeRepository : RemoteRepository {
     override fun quote(messageId: String?) {}
     override fun prompt() { prompts++ }
     override fun abort() { aborts++ }
+    override fun stopChild() { childStops++ }
     override fun answer(questionId: String, answer: JsonObject) { this.answer = answer }
     override fun dismissError() {}
     override fun reportError(resource: Int) { error = resource }

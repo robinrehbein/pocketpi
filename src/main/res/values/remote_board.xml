@@ -2,7 +2,7 @@
 <resources>
     <!-- The activity board (ActivityBoard.kt), its entry points and the session row marks (SessionMarksStore.kt). -->
     <string name="remote_activity_title">Activity</string>
-    <string name="remote_activity_empty">Nothing needs you, nothing is running and nothing finished while you were away.</string>
+    <string name="remote_activity_empty">Nothing needs you, nothing is working and nothing finished while you were away.</string>
     <string name="remote_activity_last_known">Your Mac is offline. These are its last known states.</string>
     <plurals name="remote_activity_needs_you_count">
         <item quantity="one">%d needs you</item>

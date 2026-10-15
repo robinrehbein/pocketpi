@@ -238,7 +238,11 @@ internal fun WearApp(model: WatchViewModel, settings: SettingsRepository, phone:
                 notice(R.string.wear_draft_local)
             }
             WatchScreen.CONTROLS -> {
-                if (state.status in setOf("running", "waiting") || childControlsAvailable(state)) action(R.string.wear_stop, ready) { model.ask(WatchConfirmationKind.STOP) }
+                val child = childControlsAvailable(state)
+                if (state.status in setOf("running", "waiting") || child) {
+                    // A subagent's Stop ends only that subagent, so it uses the phone's subagent wording.
+                    action(if (child) R.string.remote_child_stop else R.string.wear_stop, ready) { model.ask(WatchConfirmationKind.STOP) }
+                }
                 childControl(state)?.phase?.let { notice(R.string.wear_child_control_notice) }
                 if (configurationControlsAvailable(state.capabilities, state.unavailableCapabilities)) {
                     item { Text(state.configuration?.model?.name.orEmpty()) }

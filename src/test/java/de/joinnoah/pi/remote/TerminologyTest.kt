@@ -80,6 +80,8 @@ class TerminologyTest {
     }
 
     private fun strings(directory: File): List<Pair<String, String>> {
+        // Guard against a silent pass when the test runs from a directory where the path does not resolve.
+        assertTrue("${directory.absolutePath} is missing", directory.isDirectory)
         val builder = DocumentBuilderFactory.newInstance().newDocumentBuilder()
         return directory.listFiles { file -> file.extension == "xml" }.orEmpty().sorted().flatMap { file ->
             val root = builder.parse(file).documentElement
@@ -91,6 +93,6 @@ class TerminologyTest {
                     name to element.textContent
                 }
             }
-        }
+        }.also { assertTrue("${directory.path} holds only ${it.size} strings", it.size > 100) }
     }
 }

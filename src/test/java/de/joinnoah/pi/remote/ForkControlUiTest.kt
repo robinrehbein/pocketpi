@@ -71,7 +71,7 @@ class ForkControlUiTest {
     fun runningChatDisablesBothChoicesWithAStopFirstHint() {
         render(bubble(), MessageFork(ready = false, stopFirst = true) { id, mode -> forks += id to mode })
         compose.onNodeWithTag("forkControl").performClick()
-        compose.onNodeWithText("Stop first").assertIsDisplayed()
+        compose.onNodeWithText("Stop pi first").assertIsDisplayed()
         compose.onNodeWithTag("forkRetry").assertIsNotEnabled()
         compose.onNodeWithTag("forkEdit").assertIsNotEnabled()
     }
