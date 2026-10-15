@@ -27,13 +27,15 @@ or `review-diff.ts`. The process is:
 
 Before pushing, run `scripts/quick-check.sh`. It checks resource parity, then in one Gradle run
 compiles app main, unit tests, androidTest, the benchmark variant, the benchmarks module and wear,
-and runs the unit tests related to the changed files (the whole suite when a build file, Gradle
-setting or manifest changed). It skips Gradle when only docs changed. `QUICK_CHECK_LOW_MEMORY=1`
-fits it on a 15 GB cloud box.
+and runs the unit tests related to the changed files: tests named after a changed file or naming
+it or what it declares. A build file, Gradle setting, manifest or app resource change, or more than
+40 related classes, runs the whole suite; wear and benchmark changes add their own tests. It skips
+Gradle when only docs changed. `QUICK_CHECK_LOW_MEMORY=1` fits it on a 15 GB cloud box.
 
-CI runs the full set below, and it must be green before a merge. `scripts/quick-check.sh --full`
-runs it locally; CI also runs the emulator tests (`./gradlew pixel2Api36DebugAndroidTest`), which
-need `/dev/kvm`.
+Lint, R8, the full unit suite and the emulator tests run only in CI, which must be green before a
+merge. CI runs the set below plus the emulator tests (`./gradlew pixel2Api36DebugAndroidTest`,
+which need `/dev/kvm`). `scripts/quick-check.sh --full` runs the set locally, and
+`./gradlew lintDebug :wear:lintDebug` reproduces a lint failure.
 
 ```sh
 python3 scripts/i18n-check.py .
