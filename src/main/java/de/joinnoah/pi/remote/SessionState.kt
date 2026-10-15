@@ -1,5 +1,7 @@
 package de.joinnoah.pi.remote
 
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -36,6 +38,29 @@ internal fun sessionNotice(event: JsonObject, id: Long): SessionNotice? {
     val message = field("message") ?: return null
     if (message.isBlank() || message.encodeToByteArray().size > MAX_SESSION_NOTICE_BYTES) return null
     return SessionNotice(id, sessionId, level, message)
+}
+
+/** Longest prompt suggestion in `session.suggestion` events and snapshots, in UTF-8 bytes. */
+internal const val MAX_SESSION_SUGGESTION_BYTES = 1024
+
+/** A `session.suggestion` event: the host's suggested next prompt, or null when it was cleared. */
+internal data class SessionSuggestion(val text: String?)
+
+private val suggestionKeys = setOf("type", "sessionId", "revision", "kind", "suggestion")
+
+/** [value] as a prompt suggestion: a string of 1 to [MAX_SESSION_SUGGESTION_BYTES] UTF-8 bytes, else null. */
+internal fun suggestionText(value: JsonElement?): String? =
+    (value as? JsonPrimitive)
+        ?.takeIf { it !is JsonNull && it.isString }
+        ?.content
+        ?.takeIf { it.isNotEmpty() && it.encodeToByteArray().size <= MAX_SESSION_SUGGESTION_BYTES }
+
+/** The suggestion [event] sets or clears, or null when a field breaks the protocol's rules. */
+internal fun sessionSuggestion(event: JsonObject): SessionSuggestion? {
+    if (event.keys != suggestionKeys) return null
+    val value = event["suggestion"]
+    if (value is JsonNull) return SessionSuggestion(null)
+    return suggestionText(value)?.let(::SessionSuggestion)
 }
 
 data class PendingRequest(
@@ -88,6 +113,13 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         private set
 
     /**
+     * The host's suggested next prompt (`session.suggestion` or the snapshot's `suggestion` key),
+     * untrusted plain text; null when there is none or the session went offline.
+     */
+    var suggestion: String? = null
+        private set
+
+    /**
      * Whether a snapshot of this epoch has been applied. Until then [messages], [questions] and
      * [nextCursor] are empty placeholders, not the session's state, and the owner keeps showing
      * what it had.
@@ -120,6 +152,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         nextCursor = null
         pendingEvents.clear()
         compaction = null
+        suggestion = null
         this.status = status
     }
 
@@ -166,6 +199,8 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         retainedCursor = null
         hasSnapshot = true
         questions = data.array("pendingQuestions")
+        // Absent means none; a malformed value is dropped rather than failing the snapshot.
+        suggestion = suggestionText(data["suggestion"])
         compaction =
             if ((data["compacting"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull == true)
                 compaction ?: SessionCompaction(null, now())
@@ -228,6 +263,8 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
                 val incomingStatus = event.text("status")
                 require(incomingStatus in SESSION_STATUSES)
                 status = incomingStatus
+                // The host forgets a suggestion when the session goes offline.
+                if (incomingStatus == "offline") suggestion = null
             }
             "question.open" -> {
                 val question = event.obj("question")
@@ -238,6 +275,8 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
                 }
             "session.compaction" -> compaction(event)
             "session.notice" -> Unit
+            // A malformed suggestion is ignored; the next event or snapshot carries the value.
+            "session.suggestion" -> sessionSuggestion(event)?.let { suggestion = it.text }
             // Applied outside the timeline (the advisor chip); its revision needs no snapshot.
             "advisor.status" -> Unit
             else -> unknownKindSeen = true

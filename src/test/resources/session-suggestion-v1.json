@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "wireValid": [
+    {
+      "name": "suggestion-text",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 31,
+        "kind": "session.suggestion",
+        "suggestion": "Run the tests again"
+      }
+    },
+    {
+      "name": "suggestion-unicode",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 32,
+        "kind": "session.suggestion",
+        "suggestion": "Grüße an alle 👋 und weiter"
+      }
+    },
+    {
+      "name": "suggestion-cleared",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 33,
+        "kind": "session.suggestion",
+        "suggestion": null
+      }
+    },
+    {
+      "name": "snapshot-with-suggestion",
+      "payload": {
+        "type": "result",
+        "requestId": "snapshot-1",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "revision": 31,
+          "status": "idle",
+          "messages": [],
+          "pendingQuestions": [],
+          "suggestion": "Run the tests again"
+        }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "suggestion-empty",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 34,
+        "kind": "session.suggestion",
+        "suggestion": ""
+      }
+    },
+    {
+      "name": "suggestion-missing",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 34,
+        "kind": "session.suggestion"
+      }
+    },
+    {
+      "name": "suggestion-number",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 34,
+        "kind": "session.suggestion",
+        "suggestion": 42
+      }
+    },
+    {
+      "name": "suggestion-oversized",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 34,
+        "kind": "session.suggestion",
+        "suggestion": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "suggestion-extra-key",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 34,
+        "kind": "session.suggestion",
+        "suggestion": "hello",
+        "source": "prompt-suggest"
+      }
+    },
+    {
+      "name": "snapshot-null-suggestion",
+      "payload": {
+        "type": "result",
+        "requestId": "snapshot-1",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "revision": 31,
+          "status": "idle",
+          "messages": [],
+          "pendingQuestions": [],
+          "suggestion": null
+        }
+      }
+    },
+    {
+      "name": "snapshot-empty-suggestion",
+      "payload": {
+        "type": "result",
+        "requestId": "snapshot-1",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "revision": 31,
+          "status": "idle",
+          "messages": [],
+          "pendingQuestions": [],
+          "suggestion": ""
+        }
+      }
+    }
+  ]
+}

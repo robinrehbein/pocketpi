@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.*
@@ -130,6 +131,101 @@ class SessionStateTest {
         for ((name, payload) in payloads("wireValid")) assertNotNull(name, sessionNotice(payload, 1))
         assertTrue(payloads("wireInvalid").isNotEmpty())
         for ((name, payload) in payloads("wireInvalid")) assertNull(name, sessionNotice(payload, 1))
+    }
+
+    private fun suggestionTimeline(suggestion: String? = null): Timeline =
+        Timeline("one").apply {
+            snapshot(
+                Wire.objectOf(
+                    "sessionId" to "one",
+                    "revision" to 3,
+                    "status" to "idle",
+                    "messages" to kotlinx.serialization.json.JsonArray(emptyList()),
+                    "pendingQuestions" to kotlinx.serialization.json.JsonArray(emptyList()),
+                    *listOfNotNull(suggestion?.let { "suggestion" to it }).toTypedArray(),
+                )
+            )
+        }
+
+    private fun suggestionEvent(revision: Long, value: Any?, session: String = "one") =
+        Wire.objectOf(
+            "type" to "event",
+            "sessionId" to session,
+            "revision" to revision,
+            "kind" to "session.suggestion",
+            "suggestion" to value,
+        )
+
+    @Test
+    fun suggestionEventsSetAndClearWithoutAnUnknownKindResync() {
+        val timeline = suggestionTimeline()
+        assertNull(timeline.suggestion)
+        assertFalse(timeline.event(suggestionEvent(4, "Run the tests again")))
+        assertEquals("Run the tests again", timeline.suggestion)
+        assertEquals(4L, timeline.revision)
+        assertFalse(timeline.unknownKindSeen)
+        // Another session's or a replayed suggestion changes nothing.
+        timeline.event(suggestionEvent(5, "elsewhere", "two"))
+        timeline.event(suggestionEvent(4, "replayed"))
+        assertEquals("Run the tests again", timeline.suggestion)
+        assertFalse(timeline.event(suggestionEvent(5, null)))
+        assertNull(timeline.suggestion)
+        timeline.event(suggestionEvent(6, "Commit"))
+        // Malformed values advance the revision, keep the suggestion and ask for no snapshot.
+        assertFalse(timeline.event(suggestionEvent(7, "")))
+        assertFalse(timeline.event(suggestionEvent(8, 42)))
+        assertFalse(timeline.event(suggestionEvent(9, "a".repeat(MAX_SESSION_SUGGESTION_BYTES + 1))))
+        assertFalse(timeline.event(JsonObject(suggestionEvent(10, "x") + ("source" to JsonPrimitive("prompt-suggest")))))
+        assertEquals(10L, timeline.revision)
+        assertEquals("Commit", timeline.suggestion)
+        assertFalse(timeline.unknownKindSeen)
+        timeline.event(suggestionEvent(11, "é".repeat(MAX_SESSION_SUGGESTION_BYTES / 2)))
+        assertEquals("é".repeat(MAX_SESSION_SUGGESTION_BYTES / 2), timeline.suggestion)
+    }
+
+    @Test
+    fun snapshotsRestoreSuggestionsAndOfflineOrANewEpochClearsThem() {
+        val timeline = suggestionTimeline("Run the tests again")
+        assertEquals("Run the tests again", timeline.suggestion)
+        timeline.event(
+            Wire.objectOf("type" to "event", "sessionId" to "one", "revision" to 4, "kind" to "session.status", "status" to "running")
+        )
+        assertEquals("Run the tests again", timeline.suggestion)
+        timeline.event(
+            Wire.objectOf("type" to "event", "sessionId" to "one", "revision" to 5, "kind" to "session.status", "status" to "offline")
+        )
+        assertNull(timeline.suggestion)
+        timeline.event(suggestionEvent(6, "Again"))
+        timeline.beginSnapshotEpoch("idle")
+        assertNull(timeline.suggestion)
+        // A snapshot without the key, or with a malformed value, holds no suggestion.
+        assertNull(suggestionTimeline().suggestion)
+        assertNull(suggestionTimeline("").suggestion)
+        // A new session's Timeline starts without one.
+        assertNull(Timeline("two").suggestion)
+    }
+
+    @Test
+    fun sharedSuggestionFixturesParseAsTheHostDoes() {
+        val fixture =
+            Wire.json.parseToJsonElement(javaClass.getResource("/session-suggestion-v1.json")!!.readText()).jsonObject
+        fun payloads(list: String) = fixture.array(list).map { it.text("name") to it.obj("payload") }
+        fun valid(payload: JsonObject): Boolean =
+            when (payload.text("type")) {
+                "event" -> sessionSuggestion(payload) != null
+                // A snapshot result: the optional key is absent or a valid suggestion.
+                "result" -> payload.obj("data").let { data ->
+                    "suggestion" !in data || suggestionText(data["suggestion"]) != null
+                }
+                else -> error(payload.text("type"))
+            }
+        assertEquals(4, payloads("wireValid").size)
+        for ((name, payload) in payloads("wireValid")) assertTrue(name, valid(payload))
+        assertEquals(7, payloads("wireInvalid").size)
+        for ((name, payload) in payloads("wireInvalid")) assertFalse(name, valid(payload))
+        assertNull(sessionSuggestion(payloads("wireValid").single { it.first == "suggestion-cleared" }.second)!!.text)
+        val data = payloads("wireValid").single { it.first == "snapshot-with-suggestion" }.second.obj("data")
+        assertEquals("Run the tests again", Timeline(data.text("sessionId")).apply { snapshot(data) }.suggestion)
     }
 
     @Test

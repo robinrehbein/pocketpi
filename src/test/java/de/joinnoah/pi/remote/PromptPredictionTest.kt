@@ -296,4 +296,20 @@ class PromptPredictionTest {
         val history = PromptHistory().record("r/p", "Run it", 1).record("r/p", "Run it", 2).approvePlan("r/s", 9)
         assertEquals(history, promptHistory(Wire.parse(history.json().toString())))
     }
+
+    @Test
+    fun hostSuggestionShowsOnlyWhileIdleWithNoQuestionOrSendInFlight() {
+        val idle = RemoteState(status = "idle", suggestion = "Run the tests again")
+        assertEquals("Run the tests again", hostSuggestion(idle))
+        assertNull(hostSuggestion(idle.copy(suggestion = null)))
+        assertNull(hostSuggestion(idle.copy(status = "running")))
+        assertNull(hostSuggestion(idle.copy(sending = true)))
+        val pending = PendingSend("m1", "Run the tests again", null, emptyList(), PendingSendState.SENDING)
+        assertNull(hostSuggestion(idle.copy(pendingSend = pending)))
+        assertNull(hostSuggestion(idle.copy(pendingSend = pending.copy(state = PendingSendState.CONFIRMED))))
+        assertEquals(
+            "Run the tests again",
+            hostSuggestion(idle.copy(pendingSend = pending.copy(state = PendingSendState.NOT_CONFIRMED))),
+        )
+    }
 }
