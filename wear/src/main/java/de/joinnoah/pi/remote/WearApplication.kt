@@ -89,7 +89,8 @@ class WearApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        settings = DefaultSettingsRepository(this)
+        // The watch has no theme picker and follows the watch face, so it never sets a per-app night mode.
+        settings = DefaultSettingsRepository(this) {}
         repository = DefaultRemoteRepository(
             PairingStore(this), DraftStore(this), SecureRemoteTransport(scope), scope,
             navigationStorage = NavigationSnapshotStore(this),

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
@@ -27,7 +28,8 @@ class MarkdownTableUiTest {
         val second = "Weitere hilfreiche Informationen stehen hier auch während der laufenden Übertragung zur Verfügung."
         val text = mutableStateOf("Beschreibung | Hinweise\n--- | --")
         compose.setContent { MaterialTheme { Box(Modifier.width(320.dp)) { MarkdownText(text.value) } } }
-        compose.onNodeWithText("Beschreibung | Hinweise").assertExists()
+        // Without a separator row yet, the two lines are one paragraph, so the text is a part of it.
+        compose.onNodeWithText("Beschreibung | Hinweise", substring = true).assertExists()
         compose.runOnIdle { text.value = "Beschreibung | Hinweise\n--- | ---\n$first | $second" }
         val left = compose.onNodeWithText(first).fetchSemanticsNode().boundsInRoot
         val right = compose.onNodeWithText(second).fetchSemanticsNode().boundsInRoot
@@ -52,5 +54,15 @@ class MarkdownTableUiTest {
         compose.onNodeWithText("A | B\n--- | ---").assertExists()
         compose.onNode(hasScrollAction() and hasAnyDescendant(hasText("drei"))).performScrollToNode(hasText("drei"))
         compose.onNodeWithText("drei").assertIsDisplayed()
+    }
+
+    @Test fun tableExposesItsGridToAccessibility() {
+        compose.setContent { MaterialTheme { Box(Modifier.width(320.dp)) { MarkdownText("A | B\n--- | ---\n1 | 2") } } }
+        val grid = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.CollectionInfo)).fetchSemanticsNode()
+        assertEquals(2, grid.config[SemanticsProperties.CollectionInfo].rowCount)
+        assertEquals(2, grid.config[SemanticsProperties.CollectionInfo].columnCount)
+        val cell = compose.onNodeWithText("2").fetchSemanticsNode().config[SemanticsProperties.CollectionItemInfo]
+        assertEquals(1, cell.rowIndex)
+        assertEquals(1, cell.columnIndex)
     }
 }

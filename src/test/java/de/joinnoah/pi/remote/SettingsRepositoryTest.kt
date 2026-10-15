@@ -49,9 +49,33 @@ class SettingsRepositoryTest {
                 "unknown" to ThemePalette.BRAND,
             )
         for ((value, palette) in stored) {
-            preferences.edit().putString("theme", value).commit()
+            preferences.edit().clear().putString("theme", value).commit()
             assertEquals(value, palette, DefaultSettingsRepository(context).state.value.theme)
         }
+    }
+
+    @Test
+    fun legacyLightOrDarkThemeBecomesTheModeOnce() {
+        for ((value, mode) in mapOf("light" to ThemeMode.LIGHT, "dark" to ThemeMode.DARK)) {
+            preferences.edit().clear().putString("theme", value).commit()
+            applied.clear()
+            val state = repository().state.value
+            assertEquals(value, mode, state.themeMode)
+            assertEquals(value, ThemePalette.BRAND, state.theme)
+            assertEquals(value, listOf(mode), applied)
+            assertEquals(value, mode.stored, preferences.getString("theme_mode", null))
+            assertEquals(value, ThemePalette.BRAND.stored, preferences.getString("theme", null))
+        }
+
+        // A stored mode wins: a later build's choice is never overwritten by the legacy value.
+        preferences.edit().clear().putString("theme", "dark").putString("theme_mode", "light").commit()
+        assertEquals(ThemeMode.LIGHT, repository().state.value.themeMode)
+        assertEquals("dark", preferences.getString("theme", null))
+
+        // Other palettes leave the mode unset, so it follows the device.
+        preferences.edit().clear().putString("theme", "synthwave").commit()
+        assertEquals(ThemeMode.SYSTEM, repository().state.value.themeMode)
+        assertFalse(preferences.contains("theme_mode"))
     }
 
     @Test
