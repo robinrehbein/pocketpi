@@ -837,17 +837,26 @@ private fun jobStatusLabel(job: BackgroundJob): String =
         JobStatus.TIMEOUT -> stringResource(R.string.remote_jobs_status_timeout)
     }
 
-/** The selected session's status chip and overview; only job details navigate away. */
+/**
+ * The selected session's status chip and overview while a job runs; only job details navigate
+ * away. Finished jobs stay in the overview and in the full list behind the chat's Jobs action.
+ */
 @Composable
-internal fun BackgroundJobsChip(jobs: JobsState, actions: JobsActions) {
-    var expanded by androidx.compose.runtime.saveable.rememberSaveable(jobs.sessionId) { mutableStateOf(false) }
+internal fun BackgroundJobsChip(
+    jobs: JobsState,
+    actions: JobsActions,
+    expandedState: MutableState<Boolean> =
+        androidx.compose.runtime.saveable.rememberSaveable(jobs.sessionId) { mutableStateOf(false) },
+) {
+    var expanded by expandedState
+    if (!jobsChipShown(jobs, expanded)) return
     val running = jobs.jobs.count { it.status == JobStatus.RUNNING }
     val label =
         if (running > 0) pluralStringResource(R.plurals.remote_jobs_running_count, running, running)
         else stringResource(R.string.remote_jobs_title)
     StatusPopover(
         summary = label,
-        running = running > 0,
+        icon = Icons.Outlined.Terminal,
         expanded = expanded,
         onExpandedChange = {
             expanded = it
@@ -883,6 +892,10 @@ internal fun BackgroundJobsChip(jobs: JobsState, actions: JobsActions) {
         JobListContent(jobs, { id -> expanded = false; actions.onOpenJob(id) }, Modifier.heightIn(max = 320.dp))
     }
 }
+
+/** The jobs chip shows while a job runs; an open overview stays until closed, even once the last job ends. */
+internal fun jobsChipShown(jobs: JobsState?, expanded: Boolean): Boolean =
+    jobs != null && (expanded || jobs.jobs.any { it.status == JobStatus.RUNNING })
 
 internal class JobsActions(
     val onRefresh: () -> Unit,

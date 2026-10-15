@@ -13,6 +13,7 @@ import androidx.compose.foundation.content.contentReceiver
 import androidx.compose.foundation.text.handwriting.handwritingDetector
 import androidx.compose.foundation.text.handwriting.handwritingHandler
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardTab
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloseFullscreen
@@ -761,23 +762,6 @@ internal fun ChatComposer(
                     }
                 }
             }
-            // The suggestion is a chip above the field; a tap or Tab takes it.
-            prediction?.let { suggestion ->
-                // TalkBack names what a tap does; the chip's text alone would not say it fills the field.
-                val useSuggestion = stringResource(R.string.remote_suggestion_use, suggestion)
-                SuggestionChip(
-                    onClick = {
-                        acceptPrediction()
-                        // A tap lands in the field, as a Tab does, so the next keystroke goes into it.
-                        focusRequester?.let { runCatching { it.requestFocus() } }
-                    },
-                    label = { Text(suggestion, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    modifier =
-                        Modifier.padding(start = 4.dp)
-                            .semantics { contentDescription = useSuggestion }
-                            .testTag("promptSuggestion"),
-                )
-            }
             draft.longPaste?.let { held ->
                 LongPasteOffer(
                     onAttach = {
@@ -887,22 +871,43 @@ internal fun ChatComposer(
                         }
                     }
                 val promptLabel = stringResource(R.string.remote_prompt)
+                // TalkBack names what the button does; the suggestion alone would not say it fills the field.
+                val useSuggestion = prediction?.let { stringResource(R.string.remote_suggestion_use, it) }
                 TextField(
                     state = draft.textState,
                     // What the user types or pastes passes the draft first: see ComposerDraft.inputTransformation.
                     inputTransformation = draft.inputTransformation,
                     // The visible hint stays a placeholder: a floating label would grow the field and
                     // shift the chat when the first character arrives. The name for TalkBack is the
-                    // field's description below, and only while the field is empty; the suggestion is
-                    // a chip above the field.
+                    // field's description below, and only while the field is empty. A suggestion takes
+                    // the placeholder's place, grey behind the cursor as in pi's terminal; the button at
+                    // the end of the field or Tab takes it. It keeps to one line, so the empty field is
+                    // no taller than a typed line and the chat does not jump on the first character.
                     placeholder = {
                         Text(
-                            promptLabel,
-                            maxLines = 3,
+                            prediction ?: promptLabel,
+                            maxLines = if (prediction != null) 1 else 3,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.testTag("composerPlaceholder"),
                         )
                     },
+                    // Only while the field is empty: the draft reaches the state after a pause, and the
+                    // button must go with the first typed character, as the grey text does.
+                    trailingIcon =
+                        prediction?.takeIf { draft.textState.text.isEmpty() }?.let {
+                            {
+                                IconButton(
+                                    onClick = {
+                                        acceptPrediction()
+                                        // The field takes focus, as with Tab, so the next keystroke goes into it.
+                                        focusRequester?.let { runCatching { it.requestFocus() } }
+                                    },
+                                    modifier = Modifier.testTag("promptSuggestion"),
+                                ) {
+                                    Icon(Icons.AutoMirrored.Filled.KeyboardTab, useSuggestion)
+                                }
+                            }
+                        },
                     colors =
                         TextFieldDefaults.colors(
                             focusedContainerColor = Color.Transparent,
