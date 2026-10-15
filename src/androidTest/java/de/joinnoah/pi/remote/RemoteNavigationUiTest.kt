@@ -1719,7 +1719,10 @@ class RemoteNavigationUiTest {
             assertEquals(ThemeMode.DARK, uiSettings.state.value.themeMode)
         }
         compose.onNodeWithTag("themePalette-system").assertIsNotSelected()
-        compose.onNodeWithTag("themeMode-system").performScrollTo().performClick().assertIsSelected()
+        // Scrolling up just far enough would leave the mode row at the list's top edge, under the
+        // floating header that takes the tap; the whole Appearance card comes back into view instead.
+        list.performScrollToKey("settings-appearance")
+        compose.onNodeWithTag("themeMode-system").assertIsDisplayed().performClick().assertIsSelected()
         compose.runOnIdle { assertEquals(ThemeMode.SYSTEM, uiSettings.state.value.themeMode) }
         compose.onNodeWithTag("themePalette-system").performScrollTo().performClick().assertIsSelected()
         compose.runOnIdle { assertEquals(ThemePalette.BRAND, uiSettings.state.value.theme) }
