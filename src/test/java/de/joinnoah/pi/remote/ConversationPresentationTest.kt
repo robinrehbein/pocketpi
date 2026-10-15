@@ -392,6 +392,28 @@ class ConversationPresentationTest {
     }
 
     @Test
+    fun aUserBashMessageIsAShellCommandCardNamedByItsCommand() {
+        val entries =
+            Wire.json.parseToJsonElement(javaClass.getResource("/session-bash-v1.json")!!.readText())
+                .jsonObject.array("wireValid").associate { it.text("name") to it.obj("payload") }
+        val complete = entries.getValue("user-bash-message").obj("message")
+        val failed = entries.getValue("user-bash-message-error").obj("message")
+        val activity = conversationItems(listOf(complete)).single() as ConversationItem.Activity
+        assertEquals("user_bash", activity.name)
+        assertEquals(ToolSummary(R.string.remote_shell_command, "git status"), activity.summary)
+        assertEquals("complete", activity.state)
+        assertEquals(OutputFormat.SOURCE, outputFormat(activity.name, activity.arguments, activity.output.orEmpty()))
+        assertTrue(mayChangeFiles(complete))
+        val error = conversationItems(listOf(failed)).single() as ConversationItem.Activity
+        assertEquals("error", error.state)
+        assertTrue(error.truncated)
+        assertTrue(isErrorItem(error))
+        // A text without the command line keeps the label alone.
+        assertEquals(ToolSummary(R.string.remote_shell_command, null), toolSummary("user_bash", null, "output"))
+        assertEquals(ToolSummary(R.string.remote_shell_command, null), toolSummary("user_bash", null, null))
+    }
+
+    @Test
     fun thinkingIsVisibleOnlyWhenItRendersSomething() {
         val done = ConversationItem.Thinking("t", "s", "Reasoning", streaming = false)
         val empty = done.copy(text = "")

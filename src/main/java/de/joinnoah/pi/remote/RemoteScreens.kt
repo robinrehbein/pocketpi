@@ -1246,6 +1246,17 @@ internal fun RemoteScreen(
         return true
     }
 
+    /**
+     * Runs a `!` or `!!` draft as a shell command when the session takes them (see [shellDraft]);
+     * false leaves the draft for the local commands and the normal send.
+     */
+    fun runShellCommand(): Boolean {
+        if (key !is RemoteNavKey.Chat) return false
+        val chat = chatModel ?: return false
+        val composer = composerDraft ?: return false
+        return runShellDraft(state, composer.text, chat::runBash) { composer.replace("") }
+    }
+
     /** Runs a header action in this chat, as its pill button does. Close is left to the pill's own path. */
     fun runChatAction(action: ChatAction) {
         val chat = key as? RemoteNavKey.Chat ?: return
@@ -3441,13 +3452,16 @@ internal fun RemoteScreen(
                             busy = navigator.mutating,
                         )
                     ChatPreviewHint(state)
+                    val shellRun = state.bash?.takeIf { it.sessionId == state.selection.sessionId }
+                    if (shellRun != null && chatModel != null)
+                        ShellCommandPanel(shellRun, state.connected, onStop = chatModel::abortBash, onClose = chatModel::closeBash)
                     ChatComposerNotices(connectionStatusLine(state), state.uncertain)
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,
                         // Typed text goes through `composer`, which pushes it to model::draft.
                         draft = composer,
-                        onSend = { if (!runLocalCommand()) model.prompt() },
+                        onSend = { if (!runShellCommand() && !runLocalCommand()) model.prompt() },
                         onFollowUp = model::followUp,
                         onSteer = model::steer,
                         onStopChild = model::stopChild,

@@ -25,7 +25,7 @@ internal enum class OutputFormat { SOURCE, MARKDOWN, TEXT }
 /** Explicit tool metadata wins over heuristics: source files must remain source files. */
 internal fun outputFormat(name: String?, arguments: String?, text: String): OutputFormat {
     val path = runCatching { (Json.parseToJsonElement(arguments ?: "{}") as? JsonObject)?.get("path")?.jsonPrimitive?.contentOrNull }.getOrNull()
-    if (name in setOf("read", "bash", "edit", "write") || path != null) return OutputFormat.SOURCE
+    if (name in setOf("read", "bash", USER_BASH_TOOL, "edit", "write") || path != null) return OutputFormat.SOURCE
     if (text.trimStart().startsWith("{") || text.trimStart().startsWith("[")) return OutputFormat.SOURCE
     if (text.startsWith("diff --git") || text.startsWith("@@") || text.contains("\u001b[")) return OutputFormat.SOURCE
     if (text.contains("```") || Regex("(?m)^#{1,6} |^[-*] |^\\|.*\\|").containsMatchIn(text)) return OutputFormat.MARKDOWN

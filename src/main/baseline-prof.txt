@@ -22323,7 +22323,7 @@ PLde/joinnoah/pi/remote/ChatNavigationKt$thinTicks$$inlined$sortedBy$1;-><init>(
 PLde/joinnoah/pi/remote/ChatNavigationKt$thinTicks$$inlined$sortedBy$1;->compare(Ljava/lang/Object;Ljava/lang/Object;)I
 PLde/joinnoah/pi/remote/ChatPanelsKt;->$r8$lambda$sUoEQQEvlvpo64zMgdqEZu8rIFI(Ljava/lang/String;Landroidx/compose/ui/semantics/SemanticsPropertyReceiver;)Lkotlin/Unit;
 PLde/joinnoah/pi/remote/ChatPanelsKt;->ErrorFilterChip(IZLkotlin/jvm/functions/Function0;Landroidx/compose/runtime/Composer;I)V
-HPLde/joinnoah/pi/remote/ChatPanelsKt;->SubagentStrip(Lde/joinnoah/pi/remote/SubagentStrip;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Landroidx/compose/runtime/Composer;II)V
+HPLde/joinnoah/pi/remote/ChatPanelsKt;->SubagentStrip(Lde/joinnoah/pi/remote/SubagentStrip;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Landroidx/compose/runtime/MutableState;Landroidx/compose/runtime/Composer;II)V
 PLde/joinnoah/pi/remote/ChatPanelsKt;->TouchedFilesSummary$lambda$3$0$0(Ljava/lang/String;Landroidx/compose/ui/semantics/SemanticsPropertyReceiver;)Lkotlin/Unit;
 PLde/joinnoah/pi/remote/ChatPanelsKt;->TouchedFilesSummary$lambda$3(Lkotlin/jvm/functions/Function0;Ljava/lang/String;IILde/joinnoah/pi/remote/TouchedLineCounts;Landroidx/compose/runtime/Composer;I)Lkotlin/Unit;
 PLde/joinnoah/pi/remote/ChatPanelsKt;->TouchedFilesSummary(Lde/joinnoah/pi/remote/TouchedFiles;Lde/joinnoah/pi/remote/TouchedLineCounts;Lkotlin/jvm/functions/Function0;Landroidx/compose/runtime/Composer;I)V

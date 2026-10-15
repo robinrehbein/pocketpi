@@ -40,7 +40,7 @@ internal sealed interface ConversationItem {
         val output: String?,
         val state: String,
         val truncated: Boolean,
-        val summary: ToolSummary = toolSummary(name, arguments),
+        val summary: ToolSummary = toolSummary(name, arguments, output),
         val toolCallId: String? = null,
         val outputMessageId: String? = null,
         val argumentsTruncated: Boolean = false,
@@ -209,10 +209,22 @@ private fun subagentProgress(message: JsonObject): ConversationItem.Subagent {
     )
 }
 
+/** The tool name of a shell command the user ran with `!` in pi or from the phone. */
+internal const val USER_BASH_TOOL = "user_bash"
+
 /** A readable header for a tool card; a null [labelRes] means "show the raw tool name". */
 internal data class ToolSummary(val labelRes: Int?, val detail: String?)
 
-internal fun toolSummary(name: String?, arguments: String?): ToolSummary {
+/**
+ * The card header of tool [name]. A shell command typed by the user (`user_bash`) has no arguments:
+ * its [output] starts with `$ `, the command and a newline, so the command comes from there.
+ */
+internal fun toolSummary(name: String?, arguments: String?, output: String? = null): ToolSummary {
+    if (name == USER_BASH_TOOL)
+        return ToolSummary(
+            R.string.remote_shell_command,
+            output?.takeIf { it.startsWith("$ ") }?.substring(2)?.lineSequence()?.first()?.trim()?.takeIf(String::isNotEmpty),
+        )
     val label =
         when (name) {
             "read" -> R.string.remote_tool_read

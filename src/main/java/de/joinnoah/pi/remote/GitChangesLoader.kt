@@ -25,7 +25,7 @@ internal const val CHANGES_LIVE_RELOAD_MILLIS = 2_000L
 
 /**
  * Whether [message] is a finished tool call that may have changed the session's files: an edit
- * or a write that succeeded, or any finished bash command.
+ * or a write that succeeded, or any finished bash command, pi's own or one the user ran.
  */
 internal fun mayChangeFiles(message: JsonObject): Boolean {
     // A malformed message is the timeline's to report; here it changes nothing.
@@ -34,7 +34,8 @@ internal fun mayChangeFiles(message: JsonObject): Boolean {
     val state = text("state")
     return when (text("toolName")) {
         "edit", "write" -> state == "complete"
-        "bash" -> state == "complete" || state == "error"
+        // A user's shell command may change files as pi's own bash does.
+        "bash", USER_BASH_TOOL -> state == "complete" || state == "error"
         else -> false
     }
 }

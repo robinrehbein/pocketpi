@@ -383,6 +383,17 @@ internal class ChatViewModel(
 
     fun stopJob(jobId: String) = active { repository.stopJob(jobId) }
 
+    /** [RemoteRepository.runBash]; false when it did not start, also for a chat no longer shown. */
+    fun runBash(command: String, excludeFromContext: Boolean): Boolean {
+        var started = false
+        active { started = repository.runBash(command, excludeFromContext) }
+        return started
+    }
+
+    fun abortBash() = active(repository::abortBash)
+
+    fun closeBash() = repository.closeBash()
+
     fun closeChanges() = repository.closeChanges()
 
     fun selectChangesBase(base: GitBase) = active { repository.selectChangesBase(base) }

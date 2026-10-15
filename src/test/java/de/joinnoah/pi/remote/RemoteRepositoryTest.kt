@@ -5836,6 +5836,220 @@ class RemoteRepositoryTest {
         assertEquals(ReloadResult.Failed(ReloadFailure.Failed(null)), repository.reloadSession("session"))
     }
 
+    private fun bashing(transport: Transport, origin: String = "rpc", advertise: Boolean = true) {
+        configure(transport, sessions = listOf(session(origin = origin)), opened = session(origin = origin))
+        if (advertise) advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_BASH_CAPABILITY))))
+        // A command answers when the test says it ended.
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.bash") null else original(request) }
+    }
+
+    private fun Transport.bashRequests() = sent.filter { it.text("type") == "session.bash" }
+
+    private fun bashOutput(request: JsonObject, offset: Long, text: String) =
+        Wire.objectOf(
+            "type" to "host.event",
+            "kind" to "session.bash.output",
+            "sessionId" to request.text("sessionId"),
+            "requestId" to request.text("requestId"),
+            "offset" to offset,
+            "text" to text,
+        )
+
+    private fun bashResult(request: JsonObject, exitCode: Int? = 0, cancelled: Boolean = false, output: String = "") =
+        Wire.objectOf(
+            "kind" to "bash",
+            "sessionId" to request.text("sessionId"),
+            "exitCode" to exitCode,
+            "cancelled" to cancelled,
+            "truncated" to false,
+            "output" to output,
+        )
+
+    @Test
+    fun runBashSendsNothingWithoutTheRouteCapabilityOrForATerminalSession() = runTest {
+        val old = Transport().also { bashing(it, advertise = false) }
+        val repository = repository(old)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertFalse(repository.runBash("ls", false))
+        val terminal = Transport().also { bashing(it, origin = "tui") }
+        val other = repository(terminal)
+        other.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertFalse(other.runBash("ls", true))
+        runCurrent()
+        assertTrue(old.bashRequests().isEmpty())
+        assertTrue(terminal.bashRequests().isEmpty())
+        assertNull(other.state.value.bash)
+        // Positive control: the same setup with a host-owned session does send it.
+        val owned = Transport().also { bashing(it) }
+        val rpc = repository(owned)
+        rpc.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertFalse(rpc.runBash("", false))
+        assertTrue(rpc.runBash("ls", true))
+        runCurrent()
+        val request = owned.bashRequests().single()
+        assertEquals(setOf("type", "requestId", "sessionId", "command", "excludeFromContext"), request.keys)
+        assertEquals("ls", request.text("command"))
+        assertTrue(request.flag("excludeFromContext"))
+    }
+
+    @Test
+    fun runBashStreamsOutputUntilTheResultEndsTheRun() = runTest {
+        val transport = Transport().also { bashing(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repository.runBash("git status", false))
+        // Only one at a time.
+        assertFalse(repository.runBash("ls", false))
+        runCurrent()
+        val request = transport.bashRequests().single()
+        assertFalse("excludeFromContext" in request)
+        transport.deliver(bashOutput(request, 0, "On branch dev\n"))
+        // Another request's output, and a repeat, change nothing.
+        transport.deliver(bashOutput(JsonObject(request + ("requestId" to JsonPrimitive("other"))), 0, "nope\n"))
+        transport.deliver(bashOutput(request, 0, "On branch dev\n"))
+        // The host dropped 4 bytes while the relay was backed up.
+        transport.deliver(bashOutput(request, 18, "clean\n"))
+        runCurrent()
+        val live = checkNotNull(repository.state.value.bash)
+        assertTrue(live.running)
+        assertEquals(
+            listOf(JobOutputLine.Text("On branch dev"), JobOutputLine.Skipped(4), JobOutputLine.Text("clean")),
+            live.lines,
+        )
+        assertEquals(24L, live.shownBytes)
+        transport.result(request, bashResult(request, exitCode = 1, output = "On branch dev\nxxx\nclean\n"))
+        runCurrent()
+        val done = checkNotNull(repository.state.value.bash)
+        assertFalse(done.running)
+        assertEquals(BashResult(1, false, false, "On branch dev\nxxx\nclean\n"), done.result)
+        assertEquals(listOf("On branch dev", "xxx", "clean"), done.lines.map { (it as JobOutputLine.Text).text })
+        // Output after the result is dropped.
+        transport.deliver(bashOutput(request, 24, "late\n"))
+        runCurrent()
+        assertEquals(done, repository.state.value.bash)
+        repository.closeBash()
+        assertNull(repository.state.value.bash)
+    }
+
+    @Test
+    fun abortBashSendsTheAbortAndTheCancelledResultEndsTheRun() = runTest {
+        val transport = Transport().also { bashing(it) }
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.bash.abort")
+                Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+            else if (request.text("type") == "session.bash") null
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repository.runBash("sleep 60", false))
+        runCurrent()
+        // A running command cannot be closed.
+        repository.closeBash()
+        assertNotNull(repository.state.value.bash)
+        repository.abortBash()
+        repository.abortBash()
+        runCurrent()
+        val abort = transport.sent.single { it.text("type") == "session.bash.abort" }
+        assertEquals(setOf("type", "requestId", "sessionId"), abort.keys)
+        assertEquals("session", abort.text("sessionId"))
+        assertTrue(checkNotNull(repository.state.value.bash).stopping)
+        val request = transport.bashRequests().single()
+        transport.result(request, bashResult(request, exitCode = null, cancelled = true))
+        runCurrent()
+        val done = checkNotNull(repository.state.value.bash)
+        assertEquals(BashResult(null, true, false, ""), done.result)
+        assertFalse(done.stopping)
+    }
+
+    @Test
+    fun abortBashStillReachesACommandWhoseRequestWasLost() = runTest {
+        val transport = Transport().also { bashing(it) }
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.bash.abort")
+                Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        transport.failure = { if (it.text("type") == "session.bash") "offline" else null }
+        assertTrue(repository.runBash("sleep 60", false))
+        runCurrent()
+        val lost = checkNotNull(repository.state.value.bash)
+        assertEquals(BashFailure.CONNECTION, lost.failure)
+        assertTrue(lost.stoppable)
+        repository.abortBash()
+        runCurrent()
+        assertEquals("session", transport.sent.single { it.text("type") == "session.bash.abort" }.text("sessionId"))
+        // The attempt ends the stop: accepted, and nothing more to offer.
+        val stopped = checkNotNull(repository.state.value.bash)
+        assertFalse(stopped.stopping)
+        assertTrue(stopped.stopAttempted)
+        assertTrue(stopped.stopSent)
+        assertFalse(stopped.stoppable)
+        repository.abortBash()
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.bash.abort" })
+        // Another refusal leaves nothing to stop.
+        transport.failure = { if (it.text("type") == "session.bash") "busy" else null }
+        assertTrue(repository.runBash("ls", false))
+        runCurrent()
+        assertFalse(checkNotNull(repository.state.value.bash).stoppable)
+        repository.abortBash()
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.bash.abort" })
+    }
+
+    @Test
+    fun aRunThatNeverLeftThePhoneOffersNoStop() = runTest {
+        val transport = Transport().also { bashing(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repository.runBash("sleep 60", false))
+        // The connection drops before the request goes out.
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        val lost = checkNotNull(repository.state.value.bash)
+        assertEquals(BashFailure.CONNECTION, lost.failure)
+        assertFalse(lost.sent)
+        assertFalse(lost.stoppable)
+        assertTrue(transport.bashRequests().isEmpty())
+    }
+
+    @Test
+    fun runBashMapsTheHostRefusals() = runTest {
+        val transport = Transport().also { bashing(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        for ((error, failure) in
+            listOf(
+                ("unsupported" to BASH_SWITCHED_OFF_MESSAGE) to BashFailure.SWITCHED_OFF,
+                ("unsupported" to BASH_TERMINAL_SESSION_MESSAGE) to BashFailure.TERMINAL_SESSION,
+                ("unsupported" to BASH_UPDATE_PI_MESSAGE) to BashFailure.UPDATE_PI,
+                ("busy" to "Session is busy") to BashFailure.BUSY,
+                ("offline" to "Session is offline") to BashFailure.CONNECTION,
+            )) {
+            transport.failure = { if (it.text("type") == "session.bash") error.first else null }
+            transport.failureMessage = { error.second }
+            assertTrue(repository.runBash("ls", false))
+            runCurrent()
+            assertEquals(error.second, failure, repository.state.value.bash?.failure)
+            // A refusal keeps the gate: the next `!` draft still runs as a command.
+            assertTrue(canRunShellCommands(repository.state.value))
+        }
+    }
+
     @Test
     fun navigatingPutsTheTextInTheComposerAndRefreshesTheChat() = runTest {
         val quote = MessageQuote("assistant-2", "assistant", "earlier answer")
