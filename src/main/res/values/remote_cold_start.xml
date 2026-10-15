@@ -1,6 +1,6 @@
 <resources>
     <!-- English fallback for all unsupported locales. -->
-    <string name="remote_hosts_loading">Loading paired computers</string>
+    <string name="remote_hosts_loading">Loading paired Macs</string>
     <string name="remote_projects_loading">Loading projects</string>
     <string name="remote_projects_unread">Projects appear once your Mac is reachable.</string>
 </resources>

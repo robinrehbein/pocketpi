@@ -4,13 +4,13 @@
     <string name="remote_live_run_channel_help">Zeigt, woran pi arbeitet, während PocketPi im Hintergrund ist</string>
     <string name="remote_live_run_working_title">pi arbeitet</string>
     <string name="remote_live_run_working">Arbeitet …</string>
-    <string name="remote_live_run_waiting">Wartet auf deine Antwort</string>
+    <string name="remote_live_run_waiting">Braucht dich</string>
     <string name="remote_live_run_tool_detail">%1$s: %2$s</string>
     <string name="remote_live_run_tool">Werkzeug: %1$s</string>
     <string name="remote_live_run_stop">Nicht mehr verfolgen</string>
     <string name="remote_live_run_setting">Läufe im Hintergrund live halten</string>
     <plurals name="remote_live_run_setting_help">
-        <item quantity="one">Während pi arbeitet, zeigt eine laufende Benachrichtigung den Fortschritt und hält den Chat bis zu %1$d Minute verbunden, nachdem du PocketPi verlassen hast.</item>
-        <item quantity="other">Während pi arbeitet, zeigt eine laufende Benachrichtigung den Fortschritt und hält den Chat bis zu %1$d Minuten verbunden, nachdem du PocketPi verlassen hast.</item>
+        <item quantity="one">Während pi arbeitet, zeigt eine laufende Benachrichtigung den Fortschritt und hält die Sitzung bis zu %1$d Minute verbunden, nachdem du PocketPi verlassen hast.</item>
+        <item quantity="other">Während pi arbeitet, zeigt eine laufende Benachrichtigung den Fortschritt und hält die Sitzung bis zu %1$d Minuten verbunden, nachdem du PocketPi verlassen hast.</item>
     </plurals>
 </resources>

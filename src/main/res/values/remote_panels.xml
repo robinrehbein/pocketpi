@@ -28,7 +28,7 @@
         <item quantity="one">%d line removed</item>
         <item quantity="other">%d lines removed</item>
     </plurals>
-    <string name="remote_panel_files_title">Files in this chat</string>
+    <string name="remote_panel_files_title">Files in this session</string>
     <string name="remote_panel_files_changed">Changed</string>
     <string name="remote_panel_files_read">Read</string>
     <plurals name="remote_panel_subagents_running">
@@ -55,8 +55,8 @@
     <string name="remote_panel_compaction_manual">Started manually</string>
     <string name="remote_panel_compaction_threshold">Automatic, the context is nearly full</string>
     <string name="remote_panel_compaction_overflow">Recovering from a context overflow</string>
-    <string name="remote_panel_child_picker_title">Open subagent chat</string>
-    <string name="remote_panel_child_picker_hint">This subagent could not be matched to one chat. Pick the right one.</string>
+    <string name="remote_panel_child_picker_title">Open subagent session</string>
+    <string name="remote_panel_child_picker_hint">This subagent could not be matched to one session. Pick the right one.</string>
     <string name="remote_panel_usage_title">Session totals</string>
     <string name="remote_panel_usage_input">Input tokens</string>
     <string name="remote_panel_usage_output">Output tokens</string>

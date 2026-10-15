@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Leere Listen sagen, was als Nächstes zu tun ist (EmptyState in RemoteDesignComponents.kt), die Rechnerkarten (HostCard) und die Benachrichtigungskarte (RemoteScreens.kt). -->
+    <!-- Leere Listen sagen, was als Nächstes zu tun ist (EmptyState in RemoteDesignComponents.kt), die Mac-Karten (HostCard) und die Benachrichtigungskarte (RemoteScreens.kt). -->
     <string name="remote_empty_projects_title">Noch keine Projekte freigegeben</string>
     <string name="remote_empty_projects_open_folder">Gib ein Projekt mit /remote auf deinem Mac frei oder öffne hier einen Ordner auf dem Mac.</string>
     <string name="remote_empty_sessions_title">Noch keine Sitzungen</string>

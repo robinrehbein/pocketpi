@@ -1,17 +1,17 @@
 <resources>
     <!-- English fallback for all unsupported locales. -->
     <string name="remote_widget_name">PocketPi sessions</string>
-    <string name="remote_widget_description">Sessions that are waiting for you or running</string>
+    <string name="remote_widget_description">Sessions that need you or are working</string>
     <plurals name="remote_widget_waiting">
-        <item quantity="one">%1$d session waiting for you</item>
-        <item quantity="other">%1$d sessions waiting for you</item>
+        <item quantity="one">%1$d session needs you</item>
+        <item quantity="other">%1$d sessions need you</item>
     </plurals>
-    <string name="remote_widget_none_waiting">Nothing is waiting for you</string>
-    <string name="remote_widget_empty">No running sessions right now.</string>
+    <string name="remote_widget_none_waiting">Nothing needs you</string>
+    <string name="remote_widget_empty">No session is working right now.</string>
     <string name="remote_widget_not_paired">Not paired</string>
     <string name="remote_widget_pair_hint">Open PocketPi to pair with your Mac.</string>
-    <string name="remote_widget_state_waiting">Waiting for you</string>
-    <string name="remote_widget_state_running">Running</string>
+    <string name="remote_widget_state_waiting">Needs you</string>
+    <string name="remote_widget_state_running">Working</string>
     <string name="remote_widget_row_detail">%1$s · %2$s</string>
     <string name="remote_widget_untitled">Untitled session</string>
     <string name="remote_shortcut_closed">This session is closed.</string>

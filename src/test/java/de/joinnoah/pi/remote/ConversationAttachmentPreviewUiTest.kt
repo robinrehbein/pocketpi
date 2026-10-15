@@ -69,7 +69,7 @@ class ConversationAttachmentPreviewUiTest {
             ConversationAttachmentImageState.ConnectionFailure to "Could not load image. Check your connection.",
             ConversationAttachmentImageState.Unavailable to "Photo preview unavailable",
             ConversationAttachmentImageState.Expired to "This image has expired.",
-            ConversationAttachmentImageState.UnsupportedHost to "Update the host to view sent images.",
+            ConversationAttachmentImageState.UnsupportedHost to "Update pi Remote on your Mac to view sent images.",
             ConversationAttachmentImageState.MalformedImage to "This image cannot be displayed.",
         )
         for ((state, message) in cases) {
@@ -92,7 +92,7 @@ class ConversationAttachmentPreviewUiTest {
             ConversationAttachmentImageState.Loading to "Loading image…",
             ConversationAttachmentImageState.Unavailable to "Photo preview unavailable",
             ConversationAttachmentImageState.Expired to "This image has expired.",
-            ConversationAttachmentImageState.UnsupportedHost to "Update the host to view sent images.",
+            ConversationAttachmentImageState.UnsupportedHost to "Update pi Remote on your Mac to view sent images.",
             ConversationAttachmentImageState.MalformedImage to "This image cannot be displayed.",
         )) {
             compose.runOnIdle { current.value = current.value.copy(largeImage = state) }

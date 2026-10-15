@@ -13,7 +13,7 @@
     <string name="remote_folders_truncated">Not all folders are shown. Open a subfolder to narrow it down.</string>
     <string name="remote_folders_retry">Try again</string>
     <string name="remote_folders_dismiss">Dismiss</string>
-    <string name="remote_folders_unavailable">Update pi-remote on your Mac to open folders from here.</string>
+    <string name="remote_folders_unavailable">Update pi Remote on your Mac to open folders from here.</string>
     <string name="remote_folders_badge_git">Git</string>
     <string name="remote_folders_badge_shared">Shared</string>
     <string name="remote_folders_badge_pi_config">Brings its own pi extensions or skills</string>
@@ -47,7 +47,7 @@
     <string name="remote_folders_clone_repo_not_found">The repository was not found.</string>
     <string name="remote_folders_clone_network">The clone failed because of a network error.</string>
     <string name="remote_folders_clone_timeout">The clone took longer than ten minutes and was stopped.</string>
-    <string name="remote_folders_clone_cancelled">The clone stopped because pi-remote on your Mac shut down.</string>
+    <string name="remote_folders_clone_cancelled">The clone stopped because pi Remote on your Mac shut down.</string>
     <string name="remote_folders_clone_failed">The clone failed.</string>
     <string name="remote_folders_clone_unknown">Your Mac no longer knows this clone. Refresh the folder to see whether it finished.</string>
     <string name="remote_folders_trust_title">Trust this folder?</string>
@@ -63,7 +63,7 @@
     <string name="remote_folders_error_not_found">This folder no longer exists.</string>
     <string name="remote_folders_error_busy">Two clones are already running on your Mac. Wait for one to finish.</string>
     <string name="remote_folders_error_browse_busy">Your Mac took too long to list this folder. Try again.</string>
-    <string name="remote_folders_error_offline">pi-remote on your Mac is stopping. Try again in a moment.</string>
+    <string name="remote_folders_error_offline">pi Remote on your Mac is stopping. Try again in a moment.</string>
     <string name="remote_folders_error_forbidden">Your Mac denied access to this folder.</string>
     <string name="remote_folders_error_trust_required">This folder needs your trust before it can open.</string>
     <string name="remote_folders_error_trust_scope">This folder can\'t be trusted from here, because it\'s a top-level folder or is reached through a link. Open a subfolder inside it instead.</string>

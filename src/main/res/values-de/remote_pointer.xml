@@ -5,7 +5,7 @@
     <string name="remote_menu_copy">Kopieren</string>
     <string name="remote_menu_copy_markdown">Als Markdown kopieren</string>
     <string name="remote_menu_copy_session_id">Sitzungs-ID kopieren</string>
-    <string name="remote_menu_edit_retry">Ab hier bearbeiten und wiederholen</string>
+    <string name="remote_menu_edit_retry">Ab hier abzweigen und bearbeiten</string>
     <string name="remote_menu_ask_fix_prompt">Sieh dir diese Nachricht an, finde den Fehler und behebe ihn.</string>
     <string name="remote_menu_copy_command">Befehl kopieren</string>
     <string name="remote_menu_copy_output">Ausgabe kopieren</string>

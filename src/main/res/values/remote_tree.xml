@@ -29,7 +29,7 @@
     <string name="remote_tree_summarizing">Summarizing the branch…</string>
     <string name="remote_tree_cancel">Cancel</string>
     <string name="remote_tree_offline">The connection to your Mac is down.</string>
-    <string name="remote_tree_unsupported">This is not supported yet. Update pi Remote on your Mac and reload it in pi, then try again.</string>
+    <string name="remote_tree_unsupported">This is not supported yet. Update pi Remote on your Mac and reload the remote extension in pi, then try again.</string>
     <string name="remote_tree_busy">The session is busy. Try again in a moment.</string>
     <string name="remote_tree_cancelled">Cancelled. The session stayed where it was.</string>
     <string name="remote_tree_not_found">This step no longer exists. The tree was refreshed.</string>

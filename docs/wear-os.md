@@ -42,7 +42,7 @@ relay protocol changes are required.
 | Projects | List shared projects and stop sharing a project for all paired devices |
 | Sessions | List live, historical and child sessions; create, rename and close |
 | Chat | Read messages/tool activity, page history, quote and edit encrypted drafts |
-| Running work | Stop, steer or queue follow-up where the host advertises support |
+| Running work | Stop pi, Send now or Send when done where pi Remote on the Mac supports it |
 | Subagents | Open host-reported child sessions; stop or resume supported children |
 | Questions | Confirm, select, free text, plan approval/feedback and questionnaires |
 | Configuration | Select a model and thinking level using confirmed host state |
@@ -50,7 +50,7 @@ relay protocol changes are required.
 | Commands | Select from the host's command catalog; review the draft before dispatch |
 | Files | Browse folders, page text, select a line range and quote files/lines into a draft |
 | Git | Choose session/HEAD/dev base, read wrapped diffs and add line review comments |
-| Branches | Fork a stopped conversation to edit or explicitly resend a user message |
+| Forks | Fork a stopped session to edit or explicitly resend a user message |
 | Jobs | List supported background jobs, read live output and confirm a stop |
 | Mac folders | Browse, create, clone and open; disclose and confirm project trust |
 | Send journal | Inspect delivery status and confirm dismissal; never automatically resend |

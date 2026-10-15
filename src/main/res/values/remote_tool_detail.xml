@@ -8,7 +8,7 @@
     <string name="remote_tool_detail_offset">Starts at line %1$s</string>
     <string name="remote_tool_detail_limit">Reads at most %1$s lines</string>
     <string name="remote_tool_detail_no_arguments">No arguments</string>
-    <string name="remote_tool_detail_arguments_truncated">The host shortened these arguments, so they are shown as raw text.</string>
+    <string name="remote_tool_detail_arguments_truncated">These arguments arrived shortened, so they are shown as raw text.</string>
     <string name="remote_tool_detail_change">Change %1$d</string>
     <string name="remote_tool_detail_before">Before</string>
     <string name="remote_tool_detail_after">After</string>
@@ -41,9 +41,9 @@
     <string name="remote_tool_detail_loading_progress_percent">Loading full output: %1$d percent</string>
     <string name="remote_tool_detail_cancel_load">Cancel loading</string>
     <string name="remote_tool_detail_retry">Retry</string>
-    <string name="remote_tool_detail_failure_unsupported">This host or pi extension cannot send the full output. Reload the pi remote extension or update the host.</string>
+    <string name="remote_tool_detail_failure_unsupported">Your Mac cannot send the full output yet. Reload the remote extension in pi, or update pi Remote.</string>
     <string name="remote_tool_detail_failure_not_found">The full output is not saved yet. Try again once the tool has finished.</string>
-    <string name="remote_tool_detail_failure_offline">The host is offline. Try again once it is back.</string>
+    <string name="remote_tool_detail_failure_offline">Your Mac is offline. Try again once it is back.</string>
     <string name="remote_tool_detail_failure_failed">The full output could not be loaded.</string>
     <string name="remote_tool_detail_full_loaded">Showing the full output</string>
     <string name="remote_tool_detail_capped">The output was longer than 1 MiB and is cut off there.</string>

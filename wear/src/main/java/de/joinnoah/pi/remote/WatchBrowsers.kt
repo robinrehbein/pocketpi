@@ -161,7 +161,7 @@ internal fun WatchListScope.watchJobs(state: RemoteState, model: WatchViewModel,
     if (view == null) {
         items(jobs.jobs, key = { it.id }) { job ->
             WatchAction(job.command, { changePage(0); repository.openJob(job.id) }, ready,
-                stringResource(if (job.status == JobStatus.RUNNING) R.string.wear_running else R.string.wear_job_finished))
+                stringResource(if (job.status == JobStatus.RUNNING) R.string.remote_jobs_status_running else R.string.wear_job_finished))
         }
     } else {
         if (view.vanished) notice(R.string.wear_no_longer_available)

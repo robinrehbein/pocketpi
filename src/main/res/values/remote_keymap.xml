@@ -23,7 +23,7 @@
     <string name="remote_keymap_other_busy_action">Send with the other mode: now or when done</string>
     <string name="remote_keymap_refresh">Refresh</string>
     <string name="remote_keymap_rename">Rename session</string>
-    <string name="remote_keymap_fork">Rewind from the latest message</string>
+    <string name="remote_keymap_fork">Fork from the latest message</string>
     <string name="remote_keymap_escape">Close; press twice to stop pi</string>
     <!-- Shown beside the composer after the first Esc while pi runs. -->
     <string name="remote_escape_stop_hint">Press Esc again to stop pi</string>

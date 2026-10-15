@@ -45,7 +45,7 @@ class ForkControlUiTest {
     @Test
     fun retryAsksForConfirmationThatWarnsAboutFilesBeforeForking() {
         render(bubble())
-        compose.onNodeWithContentDescription("Rewind from this message").performClick()
+        compose.onNodeWithContentDescription("Fork from this message").performClick()
         compose.onNodeWithTag("forkRetry").performClick()
         assertTrue(forks.isEmpty())
         compose.onNodeWithText("Files on the Mac are not rewound", substring = true)
@@ -102,13 +102,13 @@ class ForkControlUiTest {
         val action =
             SemanticsMatcher("has rewind action") { node ->
                 node.config.getOrNull(SemanticsActions.CustomActions).orEmpty().any {
-                    it.label == "Rewind from this message"
+                    it.label == "Fork from this message"
                 }
             }
         val node = compose.onNode(action).fetchSemanticsNode()
         compose.runOnIdle {
             node.config[SemanticsActions.CustomActions]
-                .single { it.label == "Rewind from this message" }
+                .single { it.label == "Fork from this message" }
                 .action()
         }
         compose.onNodeWithTag("forkEdit").assertIsDisplayed()

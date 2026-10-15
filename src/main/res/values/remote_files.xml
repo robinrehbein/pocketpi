@@ -13,7 +13,7 @@
     <string name="remote_files_truncated">Not all files of this folder are listed.</string>
     <string name="remote_files_load_more">Load more</string>
     <string name="remote_files_not_a_repository">This session folder is not a git repository. The file browser shows only files git knows about.</string>
-    <string name="remote_files_git_unavailable">Git is not installed on the computer, or it is older than version 2.31.</string>
+    <string name="remote_files_git_unavailable">Git is not installed on your Mac, or it is older than version 2.31.</string>
     <string name="remote_files_kind_dir">Folder</string>
     <string name="remote_files_kind_file">File</string>
     <string name="remote_files_kind_symlink">Symbolic link</string>
@@ -30,7 +30,7 @@
     <string name="remote_files_submodule">Submodule, cannot be opened</string>
     <string name="remote_files_binary">Binary file. It cannot be shown as text.</string>
     <string name="remote_files_too_large">This file is larger than 1 MB and cannot be shown.</string>
-    <string name="remote_files_reopened">The file changed on the computer and was loaded again from the start.</string>
+    <string name="remote_files_reopened">The file changed on your Mac and was loaded again from the start.</string>
     <string name="remote_files_line_start">Start selection at line %1$d</string>
     <string name="remote_files_line_end">End selection at line %1$d</string>
     <string name="remote_files_line_clear">Clear selection</string>
@@ -50,14 +50,14 @@
     <string name="remote_files_reference_file">Look at `%1$s`.</string>
     <string name="remote_files_reference_line">Look at `%1$s` line %2$d.</string>
     <string name="remote_files_reference_lines">Look at `%1$s` lines %2$d–%3$d.</string>
-    <string name="remote_files_failure_unsupported">This computer cannot show files yet. Update pi Remote on the computer.</string>
+    <string name="remote_files_failure_unsupported">Your Mac cannot show files yet. Update pi Remote on your Mac.</string>
     <string name="remote_files_failure_offline">You are offline. Reconnect to load the files.</string>
     <string name="remote_files_failure_not_found">This file or folder is no longer there, or git does not know it.</string>
     <string name="remote_files_failure_invalid_path">This file cannot be opened from the phone.</string>
     <string name="remote_files_failure_forbidden">This project is no longer shared with this phone.</string>
-    <string name="remote_files_failure_busy">The computer is busy. Try again in a moment.</string>
+    <string name="remote_files_failure_busy">Your Mac is busy. Try again in a moment.</string>
     <string name="remote_files_failure_failed">The files could not be loaded.</string>
-    <string name="remote_files_failure_conflict">The file changed on the computer since it was opened.</string>
+    <string name="remote_files_failure_conflict">The file changed on your Mac since it was opened.</string>
     <string name="remote_files_edit">Edit</string>
     <string name="remote_files_editor_back">Leave editor</string>
     <string name="remote_files_editor_changed">Unsaved changes</string>
@@ -80,16 +80,16 @@
     <string name="remote_files_editor_discard_text">Your changes to %1$s are not saved.</string>
     <string name="remote_files_editor_discard">Discard</string>
     <string name="remote_files_editor_keep">Keep editing</string>
-    <string name="remote_files_editor_conflict_title">File changed on the computer</string>
+    <string name="remote_files_editor_conflict_title">File changed on your Mac</string>
     <string name="remote_files_editor_conflict_text">%1$s changed since you opened it, so your edit was not saved. Reload the file and lose your edit, or send your edit to the agent as a diff.</string>
     <string name="remote_files_editor_reload">Reload</string>
     <string name="remote_files_editor_indent">Indent</string>
     <string name="remote_files_editor_outdent">Outdent</string>
     <string name="remote_files_editor_keys">Code keys</string>
     <string name="remote_files_save_failed_offline">You are offline. Your edit is kept; save again after reconnecting.</string>
-    <string name="remote_files_save_failed_unsupported">Saving files is turned off on this computer. Turn it on with \"pi-remote config file-writes on\", or send the change to the agent.</string>
+    <string name="remote_files_save_failed_unsupported">Saving files is turned off on your Mac. Turn it on with \"pi-remote config file-writes on\", or send the change to the agent.</string>
     <string name="remote_files_save_failed_invalid_path">This file cannot be saved from pi Remote.</string>
-    <string name="remote_files_save_failed_too_large">The file is now over 192 KB, too large to save from pi Remote. Shorten it, or make the change on the computer.</string>
+    <string name="remote_files_save_failed_too_large">The file is now over 192 KB, too large to save from pi Remote. Shorten it, or make the change on your Mac.</string>
     <string name="remote_files_save_failed">The file could not be saved. Your edit is kept.</string>
     <string name="remote_files_editor_parked_dropped">An unsaved edit in another session was dropped. Only the four most recent unsaved edits are kept.</string>
 </resources>

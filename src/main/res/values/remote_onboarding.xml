@@ -5,14 +5,14 @@
     <string name="remote_pairing_time_left">Time left: %1$s</string>
     <string name="remote_pairing_cancel">Cancel pairing</string>
 
-    <!-- First run on the computers page. -->
+    <!-- First run on the Macs page. -->
     <string name="remote_onboarding_step_1">On your Mac, start pi and type /remote.</string>
     <string name="remote_onboarding_step_2">Scan the QR code pi shows, or copy its pairing code and paste it here.</string>
     <string name="remote_onboarding_step_3">Approve this phone on your Mac.</string>
     <string name="remote_onboarding_scan">Scan QR code</string>
     <string name="remote_onboarding_paste">Paste code</string>
     <string name="remote_onboarding_setup">Set up your Mac</string>
-    <string name="remote_onboarding_setup_body">PocketPi works with pi on your Mac through pi Remote. Your Mac needs pi with the pi Remote extension, and it has to stay awake and online while you use the app.</string>
+    <string name="remote_onboarding_setup_body">PocketPi works with pi on your Mac through pi Remote. Your Mac needs pi with the remote extension, and it has to stay awake and online while you use the app.</string>
     <string name="remote_onboarding_setup_projects">Only projects you share on the Mac appear here. You can remove a pairing at any time, here or on the Mac.</string>
     <string name="remote_onboarding_setup_done">Got it</string>
 
