@@ -15,7 +15,8 @@
     <string name="remote_shell_busy">The session is busy. Run the command again when pi is done.</string>
     <string name="remote_shell_connection">The connection to pi was lost. The command may not have finished.</string>
     <string name="remote_shell_failed">The shell command could not run.</string>
-    <string name="remote_shell_when_idle">%1$s, runs when pi is idle</string>
+    <string name="remote_shell_when_idle">%1$s, send it when pi is done</string>
     <string name="remote_shell_running">Running</string>
     <string name="remote_shell_stop">Stop shell command</string>
+    <string name="remote_shell_stop_sent">Stop sent.</string>
 </resources>

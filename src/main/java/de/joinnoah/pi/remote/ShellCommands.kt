@@ -90,16 +90,23 @@ data class BashRun(
     val stopping: Boolean = false,
     val result: BashResult? = null,
     val failure: BashFailure? = null,
+    /** The `session.bash` request went out, so the Mac may run the command. */
+    val sent: Boolean = false,
+    /** A Stop after the run ended without its result has finished, whatever its outcome. */
+    val stopAttempted: Boolean = false,
+    /** That Stop was accepted. */
+    val stopSent: Boolean = false,
 ) {
     val running: Boolean
         get() = result == null && failure == null
 
     /**
-     * Stop still makes sense: the command runs, or the app lost its request and the Mac may still
-     * run it. The abort names only the session, so it reaches the command either way.
+     * Stop still makes sense: the command runs, or the app lost a request that went out and the
+     * Mac may still run it. The abort names only the session, so it reaches the command either
+     * way. After a lost request one Stop is offered, once.
      */
     val stoppable: Boolean
-        get() = running || failure == BashFailure.CONNECTION
+        get() = running || (failure == BashFailure.CONNECTION && sent && !stopAttempted)
 }
 
 /** A validated `session.bash.output` event: [text] starts at the UTF-8 byte [offset] of the output. */
@@ -184,14 +191,14 @@ internal fun shellDraft(state: RemoteState): ShellDraft? {
 internal fun shellDraftSendable(shell: ShellDraft, state: RemoteState): Boolean =
     bashCommandFits(shell.command) && state.bash?.running != true
 
+/** Whether a sent draft feeds the prompt predictions; a shell command is no prompt to suggest. */
+internal fun recordsPrompt(state: RemoteState): Boolean = shellDraft(state) == null
+
 /**
  * Runs the composer's [text] as a shell command when it is one in [state], through [run], and
  * clears the draft once [run] started it. True whenever [text] is a shell draft, even one that did
  * not start: such a draft never goes to pi as a prompt. False leaves it for the normal send.
  */
-/** Whether a sent draft feeds the prompt predictions; a shell command is no prompt to suggest. */
-internal fun recordsPrompt(state: RemoteState): Boolean = shellDraft(state) == null
-
 internal fun runShellDraft(
     state: RemoteState,
     text: String,
@@ -305,7 +312,10 @@ internal fun ShellModeLabel(excludeFromContext: Boolean, idle: Boolean) {
 /** What ended [run]: its exit code, a stop or a refusal; "Running" while it runs. */
 @Composable
 private fun shellStatus(run: BashRun): String {
-    run.failure?.let { return stringResource(bashFailureText(it)) }
+    run.failure?.let {
+        val text = stringResource(bashFailureText(it))
+        return if (run.stopSent) text + " " + stringResource(R.string.remote_shell_stop_sent) else text
+    }
     val result = run.result ?: return stringResource(R.string.remote_shell_running)
     return when {
         result.cancelled -> stringResource(R.string.remote_shell_cancelled)
@@ -319,7 +329,7 @@ private fun shellStatus(run: BashRun): String {
  * Stop while it runs, and once it ended its status and Close.
  */
 @Composable
-internal fun ShellCommandPanel(run: BashRun, onStop: () -> Unit, onClose: () -> Unit) {
+internal fun ShellCommandPanel(run: BashRun, connected: Boolean, onStop: () -> Unit, onClose: () -> Unit) {
     Surface(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).testTag("shellPanel"),
         shape = MaterialTheme.shapes.medium,
@@ -352,7 +362,7 @@ internal fun ShellCommandPanel(run: BashRun, onStop: () -> Unit, onClose: () -> 
                 if (run.stoppable)
                     TextButton(
                         onClick = onStop,
-                        enabled = !run.stopping,
+                        enabled = !run.stopping && connected,
                         modifier = Modifier.semantics { contentDescription = stopLabel }.testTag("shellStop"),
                     ) {
                         Text(stringResource(if (run.stopping) R.string.remote_jobs_stopping else R.string.remote_jobs_stop))

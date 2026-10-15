@@ -3448,7 +3448,7 @@ internal fun RemoteScreen(
                     ChatPreviewHint(state)
                     val shellRun = state.bash?.takeIf { it.sessionId == state.selection.sessionId }
                     if (shellRun != null && chatModel != null)
-                        ShellCommandPanel(shellRun, onStop = chatModel::abortBash, onClose = chatModel::closeBash)
+                        ShellCommandPanel(shellRun, state.connected, onStop = chatModel::abortBash, onClose = chatModel::closeBash)
                     ChatComposerNotices(connectionStatusLine(state), state.uncertain)
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(

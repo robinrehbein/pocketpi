@@ -7526,6 +7526,8 @@ class DefaultRemoteRepository(
                         epoch,
                         *bashFields(sessionId, command, excludeFromContext),
                         requestId = requestId,
+                        // Set before the send: one that throws may still have reached the Mac.
+                        onSent = { updateBash(requestId) { it.copy(sent = true) } },
                         timeoutMillis = BASH_REQUEST_TIMEOUT_MILLIS,
                     )
                 result =
@@ -7575,14 +7577,21 @@ class DefaultRemoteRepository(
         if (!run.stoppable || run.stopping || !current.connected || run.sessionId != current.selection.sessionId) return
         val epoch = selectionEpoch
         updateBash(run.requestId) { it.copy(stopping = true) }
+        // A run that ended without its result waits for no result: the attempt itself ends the stop.
+        val ended = !run.running
         scope.launch {
+            var accepted = false
             try {
                 validatedBashAborted(request("session.bash.abort", epoch, "sessionId" to run.sessionId), run.sessionId)
+                accepted = true
             } catch (_: CancellationException) {
             } catch (e: Exception) {
                 Diagnostics.caught("repo.abortBash", e)
                 // `not_running`: the command ended meanwhile, and its result is on its way.
-                if (e.hostCode != "not_running") updateBash(run.requestId) { it.copy(stopping = false) }
+                if (!ended && e.hostCode != "not_running") updateBash(run.requestId) { it.copy(stopping = false) }
+            } finally {
+                if (ended)
+                    updateBash(run.requestId) { it.copy(stopping = false, stopAttempted = true, stopSent = accepted) }
             }
         }
     }

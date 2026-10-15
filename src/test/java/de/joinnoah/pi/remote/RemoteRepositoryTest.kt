@@ -5990,6 +5990,15 @@ class RemoteRepositoryTest {
         repository.abortBash()
         runCurrent()
         assertEquals("session", transport.sent.single { it.text("type") == "session.bash.abort" }.text("sessionId"))
+        // The attempt ends the stop: accepted, and nothing more to offer.
+        val stopped = checkNotNull(repository.state.value.bash)
+        assertFalse(stopped.stopping)
+        assertTrue(stopped.stopAttempted)
+        assertTrue(stopped.stopSent)
+        assertFalse(stopped.stoppable)
+        repository.abortBash()
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.bash.abort" })
         // Another refusal leaves nothing to stop.
         transport.failure = { if (it.text("type") == "session.bash") "busy" else null }
         assertTrue(repository.runBash("ls", false))
@@ -5998,6 +6007,23 @@ class RemoteRepositoryTest {
         repository.abortBash()
         runCurrent()
         assertEquals(1, transport.sent.count { it.text("type") == "session.bash.abort" })
+    }
+
+    @Test
+    fun aRunThatNeverLeftThePhoneOffersNoStop() = runTest {
+        val transport = Transport().also { bashing(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repository.runBash("sleep 60", false))
+        // The connection drops before the request goes out.
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        val lost = checkNotNull(repository.state.value.bash)
+        assertEquals(BashFailure.CONNECTION, lost.failure)
+        assertFalse(lost.sent)
+        assertFalse(lost.stoppable)
+        assertTrue(transport.bashRequests().isEmpty())
     }
 
     @Test

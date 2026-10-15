@@ -15,7 +15,8 @@
     <string name="remote_shell_busy">Die Sitzung ist beschäftigt. Führe den Befehl erneut aus, wenn pi fertig ist.</string>
     <string name="remote_shell_connection">Die Verbindung zu pi ist abgebrochen. Der Befehl ist vielleicht nicht fertig geworden.</string>
     <string name="remote_shell_failed">Der Shell-Befehl konnte nicht ausgeführt werden.</string>
-    <string name="remote_shell_when_idle">%1$s, läuft, sobald pi fertig ist</string>
+    <string name="remote_shell_when_idle">%1$s, sende ihn, wenn pi fertig ist</string>
     <string name="remote_shell_running">Läuft</string>
     <string name="remote_shell_stop">Shell-Befehl stoppen</string>
+    <string name="remote_shell_stop_sent">Stopp gesendet.</string>
 </resources>
