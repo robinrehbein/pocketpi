@@ -84,6 +84,48 @@ class PaletteSourcesTest {
     }
 
     @Test
+    fun aLiveSessionLeadsAnIdleOneWithTheSameKindOfMatch() {
+        val state =
+            paired.copy(
+                sessions = emptyList(),
+                projectSessions =
+                    mapOf(
+                        "p1" to
+                            projectSessions(
+                                "p1",
+                                "Alpha",
+                                listOf(row("idle", "Login"), row("live", "Login page redesign", "running")),
+                                verified = true,
+                            ),
+                    ),
+            )
+        // Both titles start with the text; the idle one is the closer spelling match.
+        assertTrue(fuzzyScore("login", "Login")!! > fuzzyScore("login", "Login page redesign")!!)
+        val listed = sessions(input(state, chat = true), "#login")
+        assertEquals(listOf("live", "idle"), listed.map { it.sessionId })
+    }
+
+    @Test
+    fun aPrefixMatchStillLeadsALiveScatteredMatch() {
+        val state =
+            paired.copy(
+                sessions = emptyList(),
+                projectSessions =
+                    mapOf(
+                        "p1" to
+                            projectSessions(
+                                "p1",
+                                "Alpha",
+                                listOf(row("idle", "Login"), row("live", "Long night", "running")),
+                                verified = true,
+                            ),
+                    ),
+            )
+        // "Login" starts with the text; "Long night" only has its letters scattered.
+        assertEquals(listOf("idle", "live"), sessions(input(state, chat = true), "#log").map { it.sessionId })
+    }
+
+    @Test
     fun sessionsBeyondTwelvePerProjectAreFound() {
         val many = (1..30).map { row("n$it", "Session $it") }
         val state =
@@ -280,6 +322,11 @@ class PaletteSourcesTest {
         assertTrue(ChatCommand.Action(ChatAction.NEW_SESSION) in idle)
         val busy = items(input(paired, chat = true, mutating = true), ">").map { (it as CommandItem).command }
         assertFalse(ChatCommand.Action(ChatAction.NEW_SESSION) in busy)
+        val ready = paired.copy(status = "idle")
+        val idleCommands = items(input(ready, chat = true), "/").map { (it as CommandItem).command }
+        assertTrue(ChatCommand.Local(LocalCommand.NEW) in idleCommands)
+        val busyCommands = items(input(ready, chat = true, mutating = true), "/").map { (it as CommandItem).command }
+        assertFalse(ChatCommand.Local(LocalCommand.NEW) in busyCommands)
     }
 
     @Test

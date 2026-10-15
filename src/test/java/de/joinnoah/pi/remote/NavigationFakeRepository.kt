@@ -290,9 +290,25 @@ internal class NavigationFakeRepository : RemoteRepository {
         RemoteSelection(routeId, projectId, "created")
     }
 
+    /** The create, model and prompt calls in the order they came, for the new-session steps. */
+    val sessionSteps = mutableListOf<String>()
+
     override suspend fun createSession(routeId: String, projectId: String): RemoteSelection {
         createdSessions++
+        sessionSteps += "create"
         return create(routeId, projectId)
+    }
+
+    /** Whether [setModel] applies the model to the selected chat's configuration, as the host would. */
+    var appliesModels = true
+
+    override fun setModel(provider: String, id: String) {
+        sessionSteps += "model:$provider/$id"
+        if (!appliesModels) return
+        state.value.configuration?.let { configuration ->
+            val model = configuration.models.firstOrNull { it.provider == provider && it.id == id } ?: return
+            state.value = state.value.copy(configuration = configuration.copy(model = model))
+        }
     }
 
     val notificationRequests = mutableListOf<Pair<String, String>>()
@@ -306,13 +322,42 @@ internal class NavigationFakeRepository : RemoteRepository {
 
     override suspend fun pair(text: String): RemoteSelection? = pairResult
 
+    var cancelledPairings = 0
+
+    override fun cancelPairing() {
+        cancelledPairings++
+    }
+
     override fun cancelSelection() {}
 
-    override fun remove(routeId: String) {}
+    val removed = mutableListOf<String>()
 
-    override fun disconnect() {}
+    override fun remove(routeId: String) {
+        removed += routeId
+    }
+
+    var disconnects = 0
+
+    override fun disconnect() {
+        disconnects++
+    }
+
+    var revalidations = 0
+
+    override fun revalidateLists() {
+        revalidations++
+    }
 
     var refreshes = 0
+
+    /** What `/reload` answers; the test may hold it open to see the running feedback. */
+    var reload: suspend (String) -> ReloadResult = { ReloadResult.Failed(ReloadFailure.Unsupported) }
+    val reloads = mutableListOf<String>()
+
+    override suspend fun reloadSession(sessionId: String): ReloadResult {
+        reloads += sessionId
+        return reload(sessionId)
+    }
 
     override fun refresh() {
         refreshes++
@@ -361,6 +406,7 @@ internal class NavigationFakeRepository : RemoteRepository {
 
     override fun prompt() {
         prompts++
+        sessionSteps += "prompt"
         if (sendsPrompts) {
             sentPrompts += state.value.draft
             state.value = state.value.copy(draft = "", sending = true)
@@ -391,8 +437,12 @@ internal class NavigationFakeRepository : RemoteRepository {
 internal class FakeSettingsRepository : SettingsRepository {
     override val state = kotlinx.coroutines.flow.MutableStateFlow(RemoteSettings())
 
-    override fun setTheme(theme: String) {
+    override fun setTheme(theme: ThemePalette) {
         state.value = state.value.copy(theme = theme)
+    }
+
+    override fun setThemeMode(mode: ThemeMode) {
+        state.value = state.value.copy(themeMode = mode)
     }
 
     override fun setPushEnabled(enabled: Boolean) {
@@ -403,7 +453,7 @@ internal class FakeSettingsRepository : SettingsRepository {
         state.value = state.value.copy(notificationPromptShown = true)
     }
 
-    override fun setThinkingDisplay(display: String) {
+    override fun setThinkingDisplay(display: ThinkingDisplay) {
         state.value = state.value.copy(thinkingDisplay = display)
     }
 
@@ -422,4 +472,15 @@ internal class FakeSettingsRepository : SettingsRepository {
     override fun setEnterSends(enabled: Boolean) {
         state.value = state.value.copy(enterSends = enabled)
     }
+
+    val recordedActions = mutableListOf<ChatAction>()
+
+    override fun recordChatAction(action: ChatAction, now: Long) {
+        recordedActions += action
+    }
+
+    /** What [chatActionUsage] answers, as if stored by earlier uses. */
+    val usage = mutableMapOf<ChatAction, ActionUsage>()
+
+    override fun chatActionUsage(): Map<ChatAction, ActionUsage> = usage.toMap()
 }

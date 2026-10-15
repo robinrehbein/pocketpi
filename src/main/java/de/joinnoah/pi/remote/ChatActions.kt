@@ -2,14 +2,25 @@ package de.joinnoah.pi.remote
 
 import kotlin.math.pow
 
-/** The actions of the chat header pill, in the order the pill shows them. */
+/**
+ * The actions of the chat header pill, in the order the pill and its menu show them. Usage is
+ * stored per name, so entries can be inserted anywhere without touching what was recorded.
+ */
 enum class ChatAction {
     CHANGES,
     FILES,
     /** The session's background jobs; offered while it has any. */
     JOBS,
+    /** The session tree sheet, as `/tree` opens it. */
+    TREE,
+    /** The session's artifacts, as `/artifacts` opens them. */
+    ARTIFACTS,
     RENAME,
+    /** Exports the session as an HTML file, as `/export` does. */
+    EXPORT,
     REFRESH,
+    /** Reloads pi's extensions, skills, prompts and context files, as `/reload` does. */
+    RELOAD,
     SETTINGS,
     NEW_SESSION,
     /** The session's pi settings sheet; [SETTINGS] is the app's own settings. */
@@ -25,17 +36,19 @@ enum class ChatAction {
 /** How often an action was used, decayed to [at]. */
 data class ActionUsage(val score: Double, val at: Long)
 
-/** Uses lose half their weight every 14 days, so the pill follows recent habits. */
+/** Uses lose half their weight every 14 days, so the command palette follows recent habits. */
 internal const val ACTION_USAGE_HALF_LIFE_MILLIS = 14L * 24 * 60 * 60 * 1000
 
 /**
- * The ranking without any use, and the tie-break: Changes and Refresh come first. [ChatAction.CLOSE]
- * is never ranked: a destructive action must not move into the pill. Usage is stored
- * per action name, so an action added later, like Files, New session or Jobs, simply starts without uses.
+ * Which available actions take the pill's buttons, first come first: Changes and Refresh. The order
+ * is fixed, so an action never jumps between the pill and the menu because of how often it was used;
+ * only the command palette ranks by [ActionUsage]. [ChatAction.CLOSE] is never listed: a destructive
+ * action must not move into the pill.
  */
 internal val DEFAULT_CHAT_ACTIONS =
     listOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.RENAME, ChatAction.NEW_SESSION,
-        ChatAction.SESSION_SETTINGS, ChatAction.SETTINGS, ChatAction.JOBS, ChatAction.HISTORY)
+        ChatAction.SESSION_SETTINGS, ChatAction.SETTINGS, ChatAction.JOBS, ChatAction.TREE, ChatAction.ARTIFACTS,
+        ChatAction.EXPORT, ChatAction.RELOAD, ChatAction.HISTORY)
 
 internal fun ActionUsage.decayed(now: Long): Double =
     score * 0.5.pow((now - at).coerceAtLeast(0L) / ACTION_USAGE_HALF_LIFE_MILLIS.toDouble())
@@ -44,20 +57,16 @@ internal fun ActionUsage.decayed(now: Long): Double =
 internal fun ActionUsage?.used(now: Long): ActionUsage =
     ActionUsage((this?.decayed(now) ?: 0.0) + 1.0, now)
 
-/** Every action, most used first; equal scores keep [DEFAULT_CHAT_ACTIONS] order. */
-internal fun rankChatActions(usage: Map<ChatAction, ActionUsage>, now: Long): List<ChatAction> =
-    DEFAULT_CHAT_ACTIONS.sortedByDescending { usage[it]?.decayed(now) ?: 0.0 }
-
 /** The pill's buttons and the chevron menu's entries. */
 internal data class ChatActionLayout(val shown: List<ChatAction>, val menu: List<ChatAction>)
 
 /**
- * The two highest-ranked [available] actions go into the pill and the rest into the menu, both in
- * [ChatAction] order so entries never swap places. When only one would be left for the menu, it
- * gets the chevron's place instead.
+ * The first two [available] actions of [priority] go into the pill and the rest into the menu,
+ * both in [ChatAction] order so entries never swap places. When only one would be left for the
+ * menu, it gets the chevron's place instead.
  */
-internal fun chatActionLayout(ranked: List<ChatAction>, available: Set<ChatAction>): ChatActionLayout {
-    val usable = ranked.filter { it in available }
+internal fun chatActionLayout(priority: List<ChatAction>, available: Set<ChatAction>): ChatActionLayout {
+    val usable = priority.filter { it in available }
     if (usable.size <= 3) return ChatActionLayout(usable.sortedBy { it.ordinal }, emptyList())
     return ChatActionLayout(usable.take(2).sortedBy { it.ordinal }, usable.drop(2).sortedBy { it.ordinal })
 }
@@ -86,3 +95,18 @@ internal fun ChatActionLayout.withClose(): ChatActionLayout {
     val moved = if (menu.isEmpty()) shown.filter { it != ChatAction.HISTORY }.drop(2) else emptyList()
     return ChatActionLayout(shown - moved.toSet(), (menu + moved + ChatAction.CLOSE).sortedBy { it.ordinal })
 }
+
+/** The slash command [this] runs; the menu offers these while the session supports them, see [chatMenuLocalCommands]. */
+internal val ChatAction.localCommand: LocalCommand?
+    get() =
+        when (this) {
+            ChatAction.TREE -> LocalCommand.TREE
+            ChatAction.ARTIFACTS -> LocalCommand.ARTIFACTS
+            ChatAction.EXPORT -> LocalCommand.EXPORT
+            ChatAction.RELOAD -> LocalCommand.RELOAD
+            else -> null
+        }
+
+/** The actions whose slash command is in [available]. */
+internal fun localCommandActions(available: List<LocalCommand>): Set<ChatAction> =
+    ChatAction.entries.filterTo(mutableSetOf()) { action -> action.localCommand?.let { it in available } == true }

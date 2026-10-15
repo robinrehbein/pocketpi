@@ -456,18 +456,42 @@ class GitChangesTest {
     // ---- Header pill --------------------------------------------------------------------
 
     @Test
-    fun actionsRankByDecayedUseWithChangesAndRefreshAsDefaults() {
-        assertEquals(DEFAULT_CHAT_ACTIONS, rankChatActions(emptyMap(), 0))
+    fun actionUsageDecaysForThePalette() {
         val day = 24L * 60 * 60 * 1000
         var settings: ActionUsage? = null
         repeat(3) { settings = settings.used(0) }
-        val rename = null.used(28 * day)
         // Three uses 28 days ago weigh 0.75, less than one use today.
         assertEquals(0.75, checkNotNull(settings).decayed(28 * day), 1e-9)
-        val ranked = rankChatActions(mapOf(ChatAction.SETTINGS to settings!!, ChatAction.RENAME to rename), 28 * day)
-        assertEquals(listOf(ChatAction.RENAME, ChatAction.SETTINGS, ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.NEW_SESSION, ChatAction.SESSION_SETTINGS, ChatAction.JOBS, ChatAction.HISTORY), ranked)
+        assertEquals(1.0, null.used(28 * day).decayed(28 * day), 1e-9)
         // One half-life halves a use.
         assertEquals(0.5, null.used(0).decayed(14 * day), 1e-9)
+    }
+
+    @Test
+    fun pillKeepsAFixedOrderWithChangesAndRefreshFirst() {
+        val all = ChatAction.entries.toSet() - ChatAction.CLOSE - ChatAction.STATUS
+        val layout = chatActionLayout(DEFAULT_CHAT_ACTIONS, all)
+        assertEquals(listOf(ChatAction.CHANGES, ChatAction.REFRESH), layout.shown)
+        assertEquals(
+            listOf(
+                ChatAction.FILES, ChatAction.JOBS, ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.RENAME,
+                ChatAction.EXPORT, ChatAction.RELOAD, ChatAction.SETTINGS, ChatAction.NEW_SESSION,
+                ChatAction.SESSION_SETTINGS, ChatAction.HISTORY,
+            ),
+            layout.menu,
+        )
+        // Every action the header offers can take a place.
+        assertEquals(all, DEFAULT_CHAT_ACTIONS.toSet())
+    }
+
+    @Test
+    fun treeArtifactsExportAndReloadFollowTheirSlashCommands() {
+        assertEquals(emptySet<ChatAction>(), localCommandActions(listOf(LocalCommand.NEW, LocalCommand.MODEL)))
+        assertEquals(
+            setOf(ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.EXPORT, ChatAction.RELOAD),
+            localCommandActions(LocalCommand.entries),
+        )
+        assertEquals(setOf(ChatAction.TREE), localCommandActions(listOf(LocalCommand.TREE)))
     }
 
     @Test

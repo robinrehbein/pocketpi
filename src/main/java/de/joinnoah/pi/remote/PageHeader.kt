@@ -9,10 +9,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -23,7 +24,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -40,15 +40,17 @@ internal const val PAGE_TITLE_KEY = "page-title"
  * Whether the large title of a list page has scrolled under the header. The title then lives in
  * the back pill, so it stays in view. The header and the sticky connection item cover the top of
  * the list; the title counts as gone once its bottom is above that cover. [headerPx] is the
- * header's height in pixels.
+ * header's height in pixels, measured like the cover from the list's top edge.
  */
 internal fun pageTitleScrolledAway(info: LazyListLayoutInfo, headerPx: Int): Boolean {
     val visible = info.visibleItemsInfo
     if (visible.isEmpty()) return false
     // Above the top of the list: the title is no longer among the visible items.
     val title = visible.firstOrNull { it.key == PAGE_TITLE_KEY } ?: return true
-    val covered = maxOf(visible.firstOrNull { it.key == CONNECTION_STATUS_KEY }?.size ?: 0, headerPx)
-    return title.offset + title.size <= covered
+    // Measured from the list's top edge: item offsets start after its top content padding.
+    val start = info.viewportStartOffset
+    val chip = visible.firstOrNull { it.key == CONNECTION_STATUS_KEY }?.let { it.offset + it.size - start } ?: 0
+    return title.offset + title.size - start <= maxOf(chip, headerPx)
 }
 
 /**
@@ -71,10 +73,9 @@ internal fun PageHeader(
     Column(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             // The back pill takes what the actions pill leaves, so a long title cuts off instead of
-            // pushing the actions out.
-            // The slot fills the row up to the actions pill, so the actions stay at the end.
-            if (onBack != null)
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            // pushing the actions out, and the actions stay at the end.
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                if (onBack != null)
                     FloatingSurface(Modifier.testTag("navigationPill"), shape = CircleShape) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             IconButton(onClick = onBack, Modifier.size(48.dp)) {
@@ -101,16 +102,32 @@ internal fun PageHeader(
                                 }
                         }
                     }
-                }
-            else Spacer(Modifier.weight(1f))
+                // A page without Back (Hosts, the list beside the projects column) still keeps its
+                // title in view: a pill of the title alone.
+                else
+                    // Qualified: the Row around this Box would otherwise pick RowScope's overload.
+                    androidx.compose.animation.AnimatedVisibility(visible = titleInPill, enter = fadeIn(), exit = fadeOut()) {
+                        FloatingSurface(Modifier.testTag("titlePill"), shape = CircleShape) {
+                            Text(
+                                title,
+                                Modifier.heightIn(min = 48.dp)
+                                    .wrapContentHeight(Alignment.CenterVertically)
+                                    .padding(horizontal = 16.dp)
+                                    .semantics { heading() }
+                                    .testTag("pageHeaderTitle"),
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+            }
             if (actions != null)
                 FloatingSurface(Modifier.testTag("headerActionsPill"), shape = CircleShape) {
                     Row(verticalAlignment = Alignment.CenterVertically, content = actions)
                 }
         }
         if (connection != null)
-            key(CONNECTION_STATUS_KEY) {
-                Box(Modifier.fillMaxWidth().padding(top = 8.dp)) { ConnectionStatusChip(connection) }
-            }
+            Box(Modifier.fillMaxWidth().padding(top = 8.dp)) { ConnectionStatusChip(connection) }
     }
 }

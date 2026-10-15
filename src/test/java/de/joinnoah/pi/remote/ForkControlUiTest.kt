@@ -37,7 +37,7 @@ class ForkControlUiTest {
     ) {
         compose.setContent {
             MaterialTheme {
-                ConversationMessage(item, "status", thinkingActive = false, onQuote = {}, fork = fork)
+                ConversationMessage(item, ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}, fork = fork)
             }
         }
     }
@@ -45,7 +45,7 @@ class ForkControlUiTest {
     @Test
     fun retryAsksForConfirmationThatWarnsAboutFilesBeforeForking() {
         render(bubble())
-        compose.onNodeWithContentDescription("Rewind from this message").performClick()
+        compose.onNodeWithContentDescription("Fork from this message").performClick()
         compose.onNodeWithTag("forkRetry").performClick()
         assertTrue(forks.isEmpty())
         compose.onNodeWithText("Files on the Mac are not rewound", substring = true)
@@ -71,7 +71,7 @@ class ForkControlUiTest {
     fun runningChatDisablesBothChoicesWithAStopFirstHint() {
         render(bubble(), MessageFork(ready = false, stopFirst = true) { id, mode -> forks += id to mode })
         compose.onNodeWithTag("forkControl").performClick()
-        compose.onNodeWithText("Stop first").assertIsDisplayed()
+        compose.onNodeWithText("Stop pi first").assertIsDisplayed()
         compose.onNodeWithTag("forkRetry").assertIsNotEnabled()
         compose.onNodeWithTag("forkEdit").assertIsNotEnabled()
     }
@@ -102,13 +102,13 @@ class ForkControlUiTest {
         val action =
             SemanticsMatcher("has rewind action") { node ->
                 node.config.getOrNull(SemanticsActions.CustomActions).orEmpty().any {
-                    it.label == "Rewind from this message"
+                    it.label == "Fork from this message"
                 }
             }
         val node = compose.onNode(action).fetchSemanticsNode()
         compose.runOnIdle {
             node.config[SemanticsActions.CustomActions]
-                .single { it.label == "Rewind from this message" }
+                .single { it.label == "Fork from this message" }
                 .action()
         }
         compose.onNodeWithTag("forkEdit").assertIsDisplayed()

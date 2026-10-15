@@ -27,20 +27,20 @@
         <item quantity="one">%d Zeile entfernt</item>
         <item quantity="other">%d Zeilen entfernt</item>
     </plurals>
-    <string name="remote_panel_files_title">Dateien in diesem Chat</string>
+    <string name="remote_panel_files_title">Dateien in dieser Sitzung</string>
     <string name="remote_panel_files_changed">Geändert</string>
     <string name="remote_panel_files_read">Gelesen</string>
     <plurals name="remote_panel_subagents_running">
-        <item quantity="one">%d Unteragent läuft</item>
-        <item quantity="other">%d Unteragenten laufen</item>
+        <item quantity="one">%d Subagent läuft</item>
+        <item quantity="other">%d Subagenten laufen</item>
     </plurals>
     <plurals name="remote_panel_subagents_queued">
-        <item quantity="one">%d Unteragent wartet</item>
-        <item quantity="other">%d Unteragenten warten</item>
+        <item quantity="one">%d Subagent wartet</item>
+        <item quantity="other">%d Subagenten warten</item>
     </plurals>
-    <string name="remote_panel_subagents_expand">Unteragenten anzeigen</string>
-    <string name="remote_panel_subagents_collapse">Unteragenten ausblenden</string>
-    <string name="remote_panel_subagent_abort">Unteragent stoppen</string>
+    <string name="remote_panel_subagents_expand">Subagenten anzeigen</string>
+    <string name="remote_panel_subagents_collapse">Subagenten ausblenden</string>
+    <string name="remote_panel_subagent_abort">Subagent stoppen</string>
     <string name="remote_panel_marker_error">Fehler</string>
     <string name="remote_panel_marker_question">Frage</string>
     <string name="remote_panel_marker_edit">Änderung</string>
@@ -54,8 +54,8 @@
     <string name="remote_panel_compaction_manual">Manuell gestartet</string>
     <string name="remote_panel_compaction_threshold">Automatisch, der Kontext ist fast voll</string>
     <string name="remote_panel_compaction_overflow">Erholung von einem Kontextüberlauf</string>
-    <string name="remote_panel_child_picker_title">Unteragent-Chat öffnen</string>
-    <string name="remote_panel_child_picker_hint">Dieser Unteragent ließ sich keinem Chat eindeutig zuordnen. Wähle den richtigen aus.</string>
+    <string name="remote_panel_child_picker_title">Subagent-Sitzung öffnen</string>
+    <string name="remote_panel_child_picker_hint">Dieser Subagent ließ sich keiner Sitzung eindeutig zuordnen. Wähle die richtige aus.</string>
     <string name="remote_panel_usage_title">Summe der Sitzung</string>
     <string name="remote_panel_usage_input">Eingabe-Tokens</string>
     <string name="remote_panel_usage_output">Ausgabe-Tokens</string>

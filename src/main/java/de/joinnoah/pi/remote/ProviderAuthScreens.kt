@@ -18,7 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -221,6 +221,8 @@ private fun ProviderScaffold(
     onRefresh: (() -> Unit)? = null,
     onSettings: (() -> Unit)? = null,
     connection: Int? = null,
+    /** A reload is under way: the refresh waits for it. */
+    refreshing: Boolean = false,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     Scaffold(
@@ -237,7 +239,11 @@ private fun ProviderScaffold(
                     else {
                         {
                             if (onRefresh != null)
-                                IconButton(onClick = onRefresh, modifier = Modifier.size(48.dp).testTag("providersRefresh")) {
+                                IconButton(
+                                    onClick = onRefresh,
+                                    enabled = !refreshing,
+                                    modifier = Modifier.size(48.dp).testTag("providersRefresh"),
+                                ) {
                                     Icon(Icons.Default.Refresh, stringResource(R.string.remote_refresh))
                                 }
                             if (onSettings != null)
@@ -310,6 +316,7 @@ private fun ProviderListScreen(
         onRefresh = onRefresh,
         onSettings = onSettings,
         connection = connectionStatusLine(connected, connection, hostChosen = true),
+        refreshing = auth.loading,
     ) { insets ->
         Column(
             Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).padding(horizontal = 20.dp),
@@ -511,7 +518,7 @@ private fun ProviderRow(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(provider.name, style = MaterialTheme.typography.titleMedium)
             Surface(
-                shape = RoundedCornerShape(50),
+                shape = CircleShape,
                 color =
                     if (provider.status.configured) MaterialTheme.colorScheme.secondaryContainer
                     else MaterialTheme.colorScheme.surfaceVariant,

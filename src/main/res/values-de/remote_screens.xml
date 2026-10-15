@@ -6,8 +6,8 @@
         <item quantity="other">Sitzungen · %d</item>
     </plurals>
     <string name="remote_disconnect_title">Verbindung zu %1$s trennen?</string>
-    <string name="remote_disconnect_title_generic">Verbindung zu diesem Rechner trennen?</string>
-    <string name="remote_disconnect_body">Die Kopplung bleibt gespeichert. Du kannst dich jederzeit über die Rechnerliste wieder verbinden.</string>
+    <string name="remote_disconnect_title_generic">Verbindung zu diesem Mac trennen?</string>
+    <string name="remote_disconnect_body">Die Kopplung bleibt gespeichert. Du kannst dich jederzeit über die Liste deiner Macs wieder verbinden.</string>
     <string name="remote_paste_from_clipboard">Aus Zwischenablage einfügen</string>
     <string name="remote_thinking_off">Aus</string>
     <string name="remote_thinking_minimal">Minimal</string>

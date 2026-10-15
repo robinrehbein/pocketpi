@@ -24,7 +24,7 @@ class ToolOutputGestureUiTest {
     @Test fun longPressOnCollapsedHeaderOpensPreviewWithoutNavigating() {
         var opened = 0
         compose.setContent { MaterialTheme {
-            ConversationMessage(activity(), "hidden", false, onQuote = {}, onOpenTool = { opened++ })
+            ConversationMessage(activity(), ThinkingDisplay.STATUS, false, onQuote = {}, onOpenTool = { opened++ })
         } }
         compose.onNodeWithTag("toolCardHeader").performTouchInput { longClick() }
         compose.onNodeWithText("Close").assertIsDisplayed()
@@ -35,7 +35,7 @@ class ToolOutputGestureUiTest {
     @Test fun shortTapOnHeaderStillNavigates() {
         var opened = 0
         compose.setContent { MaterialTheme {
-            ConversationMessage(activity(), "hidden", false, onQuote = {}, onOpenTool = { opened++ })
+            ConversationMessage(activity(), ThinkingDisplay.STATUS, false, onQuote = {}, onOpenTool = { opened++ })
         } }
         compose.onNodeWithTag("toolCardHeader").performTouchInput { click() }
         compose.runOnIdle { org.junit.Assert.assertEquals(1, opened) }
@@ -43,7 +43,7 @@ class ToolOutputGestureUiTest {
     }
 
     @Test fun longPressOnHeaderWithoutDetailCallbackOpensPreview() {
-        compose.setContent { MaterialTheme { ConversationMessage(activity(), "hidden", false, onQuote = {}) } }
+        compose.setContent { MaterialTheme { ConversationMessage(activity(), ThinkingDisplay.STATUS, false, onQuote = {}) } }
         compose.onNodeWithTag("toolCardHeader").performTouchInput { longClick() }
         compose.onNodeWithText("Close").assertIsDisplayed()
     }

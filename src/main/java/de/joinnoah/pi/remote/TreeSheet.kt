@@ -15,7 +15,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,7 +36,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -132,7 +130,7 @@ internal fun SessionTreeSheet(
 
     val sheetState =
         rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { !busy })
-    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.9f).dp
+    val maxHeight = windowHeightFraction(0.9f)
     ModalBottomSheet(
         onDismissRequest = { if (!busy) onDismiss() },
         sheetState = sheetState,
@@ -308,7 +306,7 @@ private fun TreeRow(
                 .padding(start = INDENT_STEP * indent)
                 .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
                 .testTag("treeRow"),
-        shape = RoundedCornerShape(14.dp),
+        shape = MaterialTheme.shapes.small,
         color =
             if (selected) MaterialTheme.colorScheme.primaryContainer
             else MaterialTheme.colorScheme.surfaceContainerHigh,

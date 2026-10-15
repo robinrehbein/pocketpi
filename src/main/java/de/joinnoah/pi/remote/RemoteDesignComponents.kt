@@ -1,21 +1,25 @@
 package de.joinnoah.pi.remote
 
+import android.animation.ValueAnimator
+import android.content.Context
+import android.text.format.DateUtils
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LaptopMac
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.automirrored.filled.NavigateNext
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -27,23 +31,51 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
 internal fun HostCard(
     host: PairedHost,
     connected: Boolean,
+    /** When the Mac was last opened, or null when it never was since it was paired. */
+    lastUsedAt: Long?,
     onOpen: () -> Unit,
     onRemove: () -> Unit,
 ) {
+    // "Last used" moves on, so the clock is read again: each minute during the first hour, then each hour.
+    // Otherwise a card that stays composed would keep "just now" or "2 hours ago" until it recomposes.
+    val now by
+        produceState(System.currentTimeMillis(), lastUsedAt) {
+            if (lastUsedAt == null) return@produceState
+            while (true) {
+                val young = System.currentTimeMillis() - lastUsedAt < DateUtils.HOUR_IN_MILLIS
+                delay(if (young) DateUtils.MINUTE_IN_MILLIS else DateUtils.HOUR_IN_MILLIS)
+                value = System.currentTimeMillis()
+            }
+        }
+    // The relay is in the Mac's connection details; the card says what the user can do with the Mac.
+    val context = LocalContext.current
+    val status =
+        when {
+            connected -> stringResource(R.string.remote_connected)
+            lastUsedAt == null -> stringResource(R.string.remote_host_tap_to_connect)
+            else -> lastUsedStatus(context, lastUsedAt, now)
+        }
     OutlinedCard(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(16.dp),
@@ -57,17 +89,78 @@ internal fun HostCard(
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(host.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(host.relay, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    stringResource(if (connected) R.string.remote_connected else R.string.remote_design_not_connected),
+                    status,
                     style = MaterialTheme.typography.labelMedium,
                     color = if (connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             IconButton(onClick = onRemove) {
                 Icon(Icons.Default.DeleteOutline, stringResource(R.string.remote_remove))
             }
         }
+    }
+}
+
+private const val MINUTES_PER_HOUR = 60
+
+/**
+ * When a Mac was last used, for a host card: "just now", then minutes, hours and days in words that fit
+ * mid-sentence (plurals per language, so German stays "vor 5 Minuten"), and the date once it is a week old.
+ * A time in the future (the clock moved back) reads as just now.
+ */
+internal fun lastUsedStatus(context: Context, lastUsedAt: Long, now: Long): String {
+    val resources = context.resources
+    val minutes = (now - lastUsedAt) / DateUtils.MINUTE_IN_MILLIS
+    val hours = minutes / MINUTES_PER_HOUR
+    val days = hours / 24
+    return when {
+        minutes < 1 -> resources.getString(R.string.remote_host_last_used_just_now)
+        minutes < MINUTES_PER_HOUR ->
+            resources.getQuantityString(R.plurals.remote_host_last_used_minutes, minutes.toInt(), minutes.toInt())
+        hours < 24 -> resources.getQuantityString(R.plurals.remote_host_last_used_hours, hours.toInt(), hours.toInt())
+        days < 7 -> resources.getQuantityString(R.plurals.remote_host_last_used_days, days.toInt(), days.toInt())
+        else ->
+            resources.getString(
+                R.string.remote_host_last_used,
+                DateUtils.formatDateTime(context, lastUsedAt, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_ABBREV_MONTH),
+            )
+    }
+}
+
+/**
+ * What an empty list shows instead of its rows: an icon, a headline that screen readers take as a heading,
+ * what to do next, and an optional [action] such as a button.
+ */
+@Composable
+internal fun EmptyState(
+    icon: ImageVector,
+    title: String,
+    body: String,
+    modifier: Modifier = Modifier,
+    action: (@Composable () -> Unit)? = null,
+) {
+    Column(
+        modifier.fillMaxWidth().padding(top = 32.dp, bottom = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.semantics { heading() },
+        )
+        Text(
+            body,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        action?.invoke()
     }
 }
 
@@ -137,9 +230,20 @@ internal fun ProjectRow(
     selected: Boolean? = null,
     /** Starts a session in this project, from the row's menu; null where none can start now. */
     onNewSession: (() -> Unit)? = null,
+    /**
+     * The project's waiting and running sessions, shown as badges; null for a row that is not
+     * confirmed by the Mac (a cached one), which shows none.
+     */
+    counts: SessionCounts? = null,
 ) {
     val context = LocalContext.current
     val regionChild = rememberRegionChild()
+    val waitingBadge =
+        counts?.waiting?.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.remote_mac_waiting_count, it, it) }
+    val workingBadge =
+        counts?.running?.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.remote_mac_working_count, it, it) }
+    // With badges the row reads them after its name, as one label.
+    val badgeDescription = listOfNotNull(waitingBadge, workingBadge).takeIf { it.isNotEmpty() }
     val unshareLabel = stringResource(R.string.remote_project_unshare)
     val updateNeededLabel = stringResource(R.string.remote_project_unshare_update_needed)
     val updateHint = stringResource(R.string.remote_project_unshare_update_host)
@@ -182,15 +286,18 @@ internal fun ProjectRow(
         Row(
             Modifier.fillMaxWidth()
                 .background(MaterialTheme.colorScheme.background)
+                // The press ripple follows the rounded selection instead of a square.
+                .clip(MaterialTheme.shapes.medium)
                 .then(
                     if (selected == true)
-                        Modifier.background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(16.dp))
+                        Modifier.background(MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.shapes.medium)
                     else Modifier
                 )
-                .semantics {
+                .semantics(mergeDescendants = badgeDescription != null) {
                     // In the column every row says whether it is the open project, so TalkBack
                     // reads the rows as a group of choices.
                     if (selected != null) this.selected = selected
+                    if (badgeDescription != null) contentDescription = (listOf(name) + badgeDescription).joinToString(", ")
                     if (action != null) customActions = listOf(
                         CustomAccessibilityAction(swipeActionLabel) {
                             action()
@@ -198,7 +305,7 @@ internal fun ProjectRow(
                         }
                     )
                 }
-                .focusRing(RoundedCornerShape(16.dp))
+                .focusRing(MaterialTheme.shapes.medium)
                 .then(regionChild)
                 .contextMenu { menu() }
                 .pointerHoverIcon(PointerIcon.Hand)
@@ -226,8 +333,37 @@ internal fun ProjectRow(
             }
             Spacer(Modifier.width(16.dp))
             Text(name, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            waitingBadge?.let {
+                ProjectCountBadge(it, waitingContainerColor(), onWaitingContainerColor(), "projectBadgeWaiting-$projectId")
+            }
+            workingBadge?.let {
+                ProjectCountBadge(
+                    it,
+                    MaterialTheme.colorScheme.primaryContainer,
+                    MaterialTheme.colorScheme.onPrimaryContainer,
+                    "projectBadgeWorking-$projectId",
+                )
+            }
+            Icon(Icons.AutoMirrored.Filled.NavigateNext, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+/** A count of a project's sessions in one status, as a small pill in the status's colours. */
+@Composable
+private fun ProjectCountBadge(text: String, container: Color, content: Color, tag: String) {
+    Surface(
+        shape = CircleShape,
+        color = container,
+        contentColor = content,
+        modifier = Modifier.padding(start = 8.dp).testTag(tag),
+    ) {
+        Text(
+            text,
+            Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+        )
     }
 }
 
@@ -245,7 +381,7 @@ internal fun SwipeActionBackground(
 ) {
     Row(
         Modifier.fillMaxSize()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(MaterialTheme.shapes.medium)
             .background(containerColor)
             .padding(horizontal = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp, if (atEnd) Alignment.End else Alignment.Start),
@@ -297,3 +433,21 @@ internal fun projectMenu(onOpen: () -> Unit, onNewSession: (() -> Unit)?, onUnsh
         }
     }
 }
+
+/**
+ * [fraction] of the window's height: the tallest a sheet or preview may grow. It comes from the
+ * window's container rather than the screen, so in a 50:50 split it is a share of the app's half.
+ */
+@Composable
+internal fun windowHeightFraction(fraction: Float): Dp {
+    val window = LocalWindowInfo.current.containerDpSize.height
+    // Before the window is first measured its size reads as zero: no limit until it is known.
+    return if (window > 0.dp) window * fraction else Dp.Infinity
+}
+
+/**
+ * The fade and slide of a list row that appears, leaves or moves, left out when the system's
+ * animations are off (Remove animations, or an animator duration scale of zero).
+ */
+internal fun Modifier.itemMotion(item: LazyItemScope): Modifier =
+    if (ValueAnimator.areAnimatorsEnabled()) with(item) { this@itemMotion.animateItem() } else this

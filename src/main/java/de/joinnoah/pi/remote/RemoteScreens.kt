@@ -12,6 +12,7 @@ import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.draganddrop.DragAndDropEvent
 import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.mimeTypes
@@ -33,18 +34,22 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.handwriting.handwritingDetector
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
+import androidx.annotation.StringRes
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -61,7 +66,11 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -84,7 +93,6 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
@@ -145,6 +153,8 @@ private const val CHILD_REFRESH_ATTEMPTS = 12
 private const val CHILD_REFRESH_INTERVAL_MILLIS = 5_000L
 private const val TOUCHED_LINES_STREAMING_MILLIS = 1_000L
 private const val JUMP_HIGHLIGHT_MILLIS = 2_000L
+// How long a pull's indicator stays: a pull reads the lists again, and they answer later.
+private const val PULL_REFRESH_INDICATOR_MILLIS = 1_200L
 private const val COMPACTION_TICK_MILLIS = 30_000L
 /** How long review mode waits for the Changes pane Ctrl+Shift+D opened for it. */
 private const val REVIEW_OPEN_GRACE_MILLIS = 2_000L
@@ -211,6 +221,10 @@ private val RETRYABLE_ERRORS =
         R.string.remote_device_paused,
     )
 
+/** A Projects or Sessions page has stopped loading and shows a list the Mac confirmed or the cache. */
+private fun listSettled(state: RemoteState): Boolean =
+    !state.loading && (state.connected || state.hostsLoaded)
+
 @Composable
 internal fun RemoteScreen(
     key: RemoteNavKey,
@@ -220,20 +234,34 @@ internal fun RemoteScreen(
     pushEnabled: Boolean,
     enablePush: () -> Unit,
     disablePush: () -> Unit = {},
+    /** Whether the user already answered for push (see [RemoteSettings.notificationsDecided]). */
+    pushDecided: Boolean = false,
+    /** Records a denial of the notification permission as the user's answer, so no card offers it again. */
+    onNotificationDenied: () -> Unit = {},
 ) {
     val state by model.state.collectAsStateWithLifecycle()
     // The first list the user came for is on screen: the time to full display that startup
     // benchmarks measure. A list from the caches is not it until the Mac confirms it.
     when (key) {
         RemoteNavKey.Hosts -> ReportDrawnWhen { state.hostsLoaded || state.hostsUnreadable || state.hosts.isNotEmpty() }
-        is RemoteNavKey.Projects, is RemoteNavKey.Sessions -> ReportDrawnWhen { state.connected && !state.loading }
+        // Offline or asleep, a Mac never confirms its lists: the cached page, settled, is what shows.
+        // Only once this page's own route (and project) is selected: on a cold start the state
+        // is settled and empty before the activation of the last Mac has even begun.
+        is RemoteNavKey.Projects -> ReportDrawnWhen {
+            state.selection.routeId == key.routeId && listSettled(state)
+        }
+        is RemoteNavKey.Sessions -> ReportDrawnWhen {
+            state.selection.routeId == key.routeId &&
+                state.selection.projectId == key.projectId &&
+                listSettled(state)
+        }
         else -> Unit
     }
     val context = LocalContext.current
     val settings = key == RemoteNavKey.Settings
     val preferences =
         (model as? SettingsViewModel)?.preferences?.collectAsStateWithLifecycle()?.value
-    val theme = preferences?.theme ?: "system"
+    val theme = preferences?.theme ?: ThemePalette.BRAND
     val chatPreferences =
         (model as? ChatViewModel)?.preferences?.collectAsStateWithLifecycle()?.value
     val sessionPreferences =
@@ -267,7 +295,7 @@ internal fun RemoteScreen(
     // The selection names the chat beside the list; the screen's state strips the chat's session.
     val shownSessionId = state.selection.sessionId
     val visibleSessions =
-        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds, routeMarks) {
+        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds, routeMarks, shownSessionId) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
@@ -316,7 +344,7 @@ internal fun RemoteScreen(
         remember(presentation, state.pendingSend) {
             state.pendingSend?.let { presentation.items + pendingSendItem(it) } ?: presentation.items
         }
-    val thinkingDisplay = chatPreferences?.thinkingDisplay ?: "status"
+    val thinkingDisplay = chatPreferences?.thinkingDisplay ?: ThinkingDisplay.STATUS
     val thinkingActive = state.connected && !state.loading && state.status == "running"
     val visibleConversation =
         remember(conversation, thinkingDisplay, thinkingActive) {
@@ -499,7 +527,9 @@ internal fun RemoteScreen(
     // restored position, and TalkBack keeps the header, whose actions it could no longer reach.
     var headerHidden by remember(key) { mutableStateOf(false) }
     val touchExploring = rememberTouchExploring()
-    val headerScroll = remember(listState) {
+    // Keyed on compactState too: a new layout or keyboard state makes a new one, which the old
+    // connection would no longer read.
+    val headerScroll = remember(listState, compactState) {
         HeaderHideConnection(
             position = { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset },
             active = { compactState.value && !touchExploring.value },
@@ -508,7 +538,12 @@ internal fun RemoteScreen(
         )
     }
     LaunchedEffect(compact, touchExploring.value) { if (!compact || touchExploring.value) headerHidden = false }
-    val headerLift by animateIntAsState(if (compact && headerHidden) -headerSize.height else 0, label = "headerLift")
+    // Hidden, the header also leaves the status bar's area, where it would still show through.
+    val headerTopInset = WindowInsets.safeDrawing.getTop(density)
+    val headerLift by animateIntAsState(
+        if (compact && headerHidden) -(headerSize.height + headerTopInset) else 0,
+        label = "headerLift",
+    )
     val listScope = rememberCoroutineScope()
     var autoFollow by rememberSaveable(key) { mutableStateOf(savedViewport?.following ?: true) }
     // The chat counts as read once it shows its end; a newer update after that is unread again.
@@ -1057,6 +1092,8 @@ internal fun RemoteScreen(
     var scan by rememberSaveable { mutableStateOf(false) }
     var paste by rememberSaveable(key) { mutableStateOf(false) }
     var qrText by remember { mutableStateOf("") }
+    // Nothing is paired yet: the page is the first-run card, which carries the ways to pair itself.
+    val firstRun = key == RemoteNavKey.Hosts && state.hosts.isEmpty() && state.hostsLoaded
     var removing by remember { mutableStateOf<PairedHost?>(null) }
     var unsharing by remember(key) { mutableStateOf<Pair<String, String>?>(null) }
     var closing by remember { mutableStateOf<SessionListItem?>(null) }
@@ -1076,6 +1113,17 @@ internal fun RemoteScreen(
     val bannersShown = compactionVisible(state.compaction, compactionNow) || exportState != null
     // The status sheet shows the banners only; it goes when they do, and does not return for the next ones.
     LaunchedEffect(bannersShown) { if (!bannersShown) statusSheet = false }
+    // Compact, a one-line chip leads the controls' row while a banner waits in the status sheet; a
+    // failed export shows in the header itself, which a failure brings back.
+    val statusChipLine: Int? =
+        when {
+            !compact -> null
+            compactionVisible(state.compaction, compactionNow) -> R.string.remote_panel_compacting
+            exportState == ExportState.Exporting -> R.string.remote_export_running
+            exportState is ExportState.Done -> R.string.remote_export_done
+            else -> null
+        }
+    LaunchedEffect(exportState is ExportState.Failed) { if (exportState is ExportState.Failed) headerHidden = false }
     // The large editor is a compact-chrome control: it closes with the compact rules, not when they return.
     LaunchedEffect(compact) { if (!compact) editorExpanded = false }
     val exportScope = rememberCoroutineScope()
@@ -1109,23 +1157,36 @@ internal fun RemoteScreen(
     }
     var reloading by remember(key) { mutableStateOf(false) }
     val resources = androidx.compose.ui.platform.LocalResources.current
-    fun showToast(@androidx.annotation.StringRes text: Int) {
-        Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+    val shownKey by rememberUpdatedState(key)
+    /**
+     * Feedback on a chat command in the chat's snackbar, replacing the one shown. It belongs to the
+     * chat that asked: a reload that ends after the user left that chat does not report elsewhere.
+     */
+    fun showFeedbackText(text: String, duration: SnackbarDuration = SnackbarDuration.Long) {
+        val askedIn = key
+        listScope.launch {
+            if (shownKey != askedIn) return@launch
+            snackbar.currentSnackbarData?.dismiss()
+            snackbar.showSnackbar(text, withDismissAction = true, duration = duration)
+        }
     }
+    fun showFeedback(@androidx.annotation.StringRes text: Int, duration: SnackbarDuration = SnackbarDuration.Long) =
+        showFeedbackText(resources.getString(text), duration)
     fun startReload(sessionId: String) {
         val chat = model as? ChatViewModel ?: return
         if (reloading) return
         reloading = true
-        showToast(R.string.remote_reload_running)
+        showFeedback(R.string.remote_reload_running)
         exportScope.launch {
             try {
                 when (val result = chat.reloadSession(sessionId)) {
-                    ReloadResult.Done -> showToast(R.string.remote_reload_done)
+                    // Long, so a result that lands while a sheet covers the chat is still there when it closes.
+                    ReloadResult.Done -> showFeedback(R.string.remote_reload_done)
                     is ReloadResult.Failed -> {
                         val failure = result.failure
                         val message = (failure as? ReloadFailure.Failed)?.message
-                        if (message == null) showToast(reloadFailureText(failure))
-                        else Toast.makeText(context, resources.getString(reloadFailureText(failure), message), Toast.LENGTH_LONG).show()
+                        if (message == null) showFeedback(reloadFailureText(failure))
+                        else showFeedbackText(resources.getString(reloadFailureText(failure), message))
                     }
                 }
             } finally {
@@ -1144,7 +1205,7 @@ internal fun RemoteScreen(
     /** Runs the local command [command] with its [argument], as a typed command would. */
     fun runLocal(command: LocalCommand, argument: String) {
         when (command) {
-            LocalCommand.NEW -> if (key is RemoteNavKey.Chat) newSessionOpen = true
+            LocalCommand.NEW -> if (key is RemoteNavKey.Chat && !navigator.mutating) newSessionOpen = true
             LocalCommand.COMPACT -> model.compactContext()
             LocalCommand.MODEL -> modelPickerRequested = true
             LocalCommand.SETTINGS -> settingsSheetRequested = true
@@ -1152,12 +1213,12 @@ internal fun RemoteScreen(
             LocalCommand.TREE -> treeSheetRequested = true
             LocalCommand.RELOAD ->
                 if (reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
-                    showToast(R.string.remote_reload_terminal_hint)
-                else if (reloading) showToast(R.string.remote_reload_running)
+                    showFeedback(R.string.remote_reload_terminal_hint)
+                else if (reloading) showFeedback(R.string.remote_reload_running)
                 else state.selection.sessionId?.let(::startReload)
             LocalCommand.ARTIFACTS ->
                 if (artifactsAvailable) openGallery()
-                else showToast(R.string.remote_artifacts_host_outdated)
+                else showFeedback(R.string.remote_artifacts_host_outdated)
             LocalCommand.NAME -> {
                 val session = state.session ?: return
                 if (argument.isEmpty()) startRename(session.text("id"), session.text("title"))
@@ -1202,6 +1263,15 @@ internal fun RemoteScreen(
             ChatAction.SESSION_SETTINGS -> settingsSheetRequested = true
             ChatAction.SETTINGS -> navigator.settings()
             ChatAction.HISTORY -> toggleHistory()
+            // The menu keeps Export and Reload while pi runs; they run only when `/` would offer them.
+            ChatAction.EXPORT ->
+                if (localCommandSendable(state)) runLocal(LocalCommand.EXPORT, "")
+                else showFeedback(R.string.remote_export_when_idle)
+            ChatAction.RELOAD ->
+                if (reloadAvailability(state) == ReloadAvailability.RUNS && !reloading && !localCommandSendable(state))
+                    showFeedback(R.string.remote_reload_busy)
+                else runLocal(LocalCommand.RELOAD, "")
+            ChatAction.TREE, ChatAction.ARTIFACTS -> action.localCommand?.let { runLocal(it, "") }
             ChatAction.CLOSE -> Unit
         }
     }
@@ -1229,6 +1299,25 @@ internal fun RemoteScreen(
     }
     var abortTarget by remember { mutableStateOf<AbortRunTarget?>(null) }
     var disconnecting by rememberSaveable(key) { mutableStateOf(false) }
+    var macDetails by rememberSaveable(key) { mutableStateOf(false) }
+    // A Projects page is its Mac: the Mac's name is the title, and the connection is under it.
+    val projectsPage = key as? RemoteNavKey.Projects
+    val macHost = projectsPage?.let { page -> state.hosts.firstOrNull { it.routeId == page.routeId } }
+    val macName = macHost?.name?.takeIf(String::isNotBlank)
+    // The Mac's status in words, as the connection chip above says it, so the title and the details
+    // dialog never disagree with it. Another Mac's page is not connected, whatever the chip says.
+    val macStatus: Int =
+        if (projectsPage == null || projectsPage.routeId != state.host?.routeId) R.string.remote_design_not_connected
+        else connectionStatusLine(state) ?: if (state.connected) R.string.remote_connected else R.string.remote_design_not_connected
+    // A pull refreshes the lists behind what they show, which answer later and change only when
+    // the Mac's state did. The indicator therefore stays for a moment rather than until they answer.
+    var pullRefreshing by remember(key) { mutableStateOf(false) }
+    LaunchedEffect(pullRefreshing) {
+        if (pullRefreshing) {
+            delay(PULL_REFRESH_INDICATOR_MILLIS)
+            pullRefreshing = false
+        }
+    }
     val abortTargetIsCurrent =
         abortTarget?.let { target ->
             state.selection.sessionId == target.sessionId &&
@@ -1258,7 +1347,10 @@ internal fun RemoteScreen(
     val notificationPermission =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             notificationGranted = granted
-            if (!granted) notificationDenied = true
+            if (!granted) {
+                notificationDenied = true
+                onNotificationDenied()
+            }
             if (granted) enablePush()
         }
     fun enableNotifications() {
@@ -1266,6 +1358,14 @@ internal fun RemoteScreen(
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         else enablePush()
     }
+    // "Not now" hides the card on this Mac's Projects page only, and stays until the pairing goes.
+    val cardRouteId = (key as? RemoteNavKey.Projects)?.routeId
+    var notificationCardDismissed by remember(cardRouteId) {
+        mutableStateOf(cardRouteId != null && navigator.notificationCardDismissed(cardRouteId))
+    }
+    // Quick access shows a few chats per group. Each group's "Show all" lifts that for its own group.
+    var runningShowAll by rememberSaveable { mutableStateOf(false) }
+    var recentShowAll by rememberSaveable { mutableStateOf(false) }
     val title =
         stringResource(
             if (settings) R.string.remote_settings
@@ -1297,10 +1397,10 @@ internal fun RemoteScreen(
             val hasTuiInfo =
                 state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
             val headerColor = floatingHeaderColor()
-            // History never competes for the pill's ranked places: it would push Settings into the menu.
+            // History never competes for the pill's places: it would push Settings into the menu.
             fun actionLayout(withHistory: Boolean) =
                 chatActionLayout(
-                    chatModel?.chatActions ?: DEFAULT_CHAT_ACTIONS,
+                    DEFAULT_CHAT_ACTIONS,
                     buildSet {
                         if (canViewChanges(state) && state.connected) add(ChatAction.CHANGES)
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
@@ -1312,6 +1412,9 @@ internal fun RemoteScreen(
                             add(ChatAction.SESSION_SETTINGS)
                         add(ChatAction.REFRESH)
                         add(ChatAction.SETTINGS)
+                        // Tree, artifacts, export and reload whenever the session supports them, also
+                        // while pi runs, so the open menu keeps its rows; runChatAction explains a busy one.
+                        addAll(localCommandActions(chatMenuLocalCommands(state)))
                     },
                 ).let { if (withHistory) it.withHistory() else it }
                     .let { if (closableSession != null) it.withClose() else it }
@@ -1344,7 +1447,7 @@ internal fun RemoteScreen(
                 val maxPillWidth =
                     maxWidth - 32.dp - if (narrow) 0.dp else actionsWidth + 8.dp
                 val maxTitleWidth =
-                    (maxPillWidth - 72.dp - (if (hasTuiInfo) 40.dp else 0.dp) -
+                    (maxPillWidth - 64.dp - CHAT_STATUS_MARK_SIZE - (if (hasTuiInfo) 40.dp else 0.dp) -
                         if (detailPane) 48.dp else 0.dp)
                         .coerceAtLeast(24.dp)
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -1381,14 +1484,11 @@ internal fun RemoteScreen(
                                         stringResource(R.string.remote_back),
                                     )
                                 }
-                                Box(
-                                    Modifier.padding(end = 8.dp).size(8.dp)
-                                        .background(statusColor, CircleShape)
-                                        .semantics {
-                                            contentDescription = statusLabel
-                                            liveRegion = LiveRegionMode.Polite
-                                        }
-                                        .testTag("chatStatusDot")
+                                ChatStatusMark(
+                                    chatStatusShape(state),
+                                    statusColor,
+                                    statusLabel,
+                                    Modifier.padding(end = 8.dp).testTag("chatStatusDot"),
                                 )
                                 val switchSession = stringResource(R.string.remote_palette_switch_session)
                                 Row(
@@ -1441,7 +1541,8 @@ internal fun RemoteScreen(
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             CompactionBanner(state.compaction, compactionNow)
                         }
-                    if (!compact && exportState != null)
+                    // A failed export always shows here: a failure must not wait behind a menu.
+                    if (exportState != null && (!compact || exportState is ExportState.Failed))
                         Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                             ExportStatus(exportState, ::shareExport) {
                                 if (exportState is ExportState.Done)
@@ -1933,39 +2034,85 @@ internal fun RemoteScreen(
                     enabled = !state.loading,
                     onClick = { navigator.openFolders(key.routeId) },
                 )
-            if (key is RemoteNavKey.Sessions || key is RemoteNavKey.Hosts) {
+            // An empty session list names its one action beside the list, so its button stands out; disabled, it is
+            // greyed. A list still loading keeps the small button: most projects have sessions, so the button
+            // changes its shape only for a list that turns out empty.
+            val newSessionEnabled = state.connected && !state.loading && !navigator.mutating
+            if (key is RemoteNavKey.Sessions && state.sessions.isEmpty() && !state.loading) {
+                val labelColor =
+                    if (newSessionEnabled) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                FloatingSurface(
+                    shape = MaterialTheme.shapes.extraLarge,
+                    color =
+                        if (newSessionEnabled) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.surfaceContainerHighest,
+                ) {
+                    Row(
+                        Modifier
+                            .testTag("extendedNewSession")
+                            .heightIn(min = 56.dp)
+                            .clickable(
+                                enabled = newSessionEnabled,
+                                role = Role.Button,
+                                onClick = { navigator.createSession(key.routeId, key.projectId) },
+                            )
+                            .padding(horizontal = 20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, tint = labelColor)
+                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                        Text(
+                            stringResource(R.string.remote_new_session),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = labelColor,
+                        )
+                    }
+                }
+            } else if (key is RemoteNavKey.Sessions) {
                 FloatingSurface(
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.primary,
                 ) {
                     IconButton(
-                        onClick = {
-                            if (key is RemoteNavKey.Sessions)
-                                navigator.createSession(key.routeId, key.projectId)
-                            else scan = true
-                        },
-                        enabled =
-                            if (key is RemoteNavKey.Sessions) state.connected && !state.loading && !navigator.mutating
-                            else true,
+                        onClick = { navigator.createSession(key.routeId, key.projectId) },
+                        enabled = newSessionEnabled,
                         modifier = Modifier.size(64.dp),
                     ) {
                         Icon(
-                            if (key is RemoteNavKey.Sessions) Icons.Default.Add
-                            else Icons.Default.QrCodeScanner,
-                            contentDescription =
-                                stringResource(
-                                    if (key is RemoteNavKey.Sessions) R.string.remote_new_session
-                                    else R.string.remote_scan
-                                ),
+                            Icons.Default.Add,
+                            contentDescription = stringResource(R.string.remote_new_session),
                             modifier = Modifier.size(28.dp),
                             tint = MaterialTheme.colorScheme.onPrimary,
+                        )
+                    }
+                }
+            } else if (key is RemoteNavKey.Hosts && !firstRun) {
+                // The first-run card holds both ways to pair; once a Mac is paired this button names its action.
+                FloatingSurface(
+                    shape = MaterialTheme.shapes.extraLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                ) {
+                    Row(
+                        Modifier.testTag("scanQrButton")
+                            .heightIn(min = 56.dp)
+                            .clickable(role = Role.Button, onClick = { scan = true })
+                            .padding(horizontal = 20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary)
+                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                        Text(
+                            stringResource(R.string.remote_onboarding_scan),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimary,
                         )
                     }
                 }
             }
         },
         bottomBar = {
-            if (!settings && key !is RemoteNavKey.Sessions && key !is RemoteNavKey.Chat)
+            if (!settings && key !is RemoteNavKey.Sessions && key !is RemoteNavKey.Chat && !firstRun)
                 Surface(color = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
                     Column(
                         Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(16.dp)
@@ -1973,39 +2120,34 @@ internal fun RemoteScreen(
                         when (key) {
                             RemoteNavKey.Settings -> Unit
                             RemoteNavKey.Hosts -> {
-                                TextButton(
-                                    onClick = { paste = true },
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    Text(stringResource(R.string.remote_paste))
-                                }
+                                if (!firstRun)
+                                    TextButton(
+                                        onClick = { paste = true },
+                                        modifier = Modifier.fillMaxWidth().testTag("pasteCodeButton"),
+                                    ) {
+                                        Icon(
+                                            Icons.Default.ContentPaste,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(ButtonDefaults.IconSize),
+                                        )
+                                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                                        Text(stringResource(R.string.remote_onboarding_paste))
+                                    }
                             }
                             is RemoteNavKey.Sessions -> Unit
                             is RemoteNavKey.Chat -> Unit
                             is RemoteNavKey.FolderBrowser -> Unit
                             is RemoteNavKey.Providers -> Unit
                             is RemoteNavKey.Activity -> Unit
+                            // Providers, Open folder, Disconnect and Remove pairing live in the Mac's
+                            // overflow in the header, so the list keeps the full height.
                             is RemoteNavKey.Projects -> {
-                                if (canManageProviders(state))
-                                    OutlinedButton(
-                                        onClick = { navigator.openProviders(key.routeId) },
-                                        enabled = !state.loading,
-                                        modifier = Modifier.fillMaxWidth().testTag("providersButton"),
-                                    ) {
-                                        Text(stringResource(R.string.providers_open))
-                                    }
                                 OutlinedButton(
-                                    onClick = { navigator.openActivity(key.routeId) },
+                                    onClick = { navigator.openActivity(key.routeId, twoPane) },
                                     enabled = state.host != null,
                                     modifier = Modifier.fillMaxWidth().testTag("activityButton"),
                                 ) {
                                     Text(stringResource(R.string.remote_activity_title))
-                                }
-                                OutlinedButton(
-                                    onClick = { disconnecting = true },
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    Text(stringResource(R.string.remote_disconnect))
                                 }
                             }
                         }
@@ -2022,15 +2164,13 @@ internal fun RemoteScreen(
         ) {
         // While the tool detail covers the chat, the chat below must not be reachable by TalkBack.
         val underlay = if (openTool != null && !panesBeside) Modifier.clearAndSetSemantics {} else Modifier
-        // A wide chat pane centres its bubbles in a reading column; phones never reach the limit.
-        val readingInset =
-            if (key is RemoteNavKey.Chat) ((maxWidth - 40.dp - MAX_READING_WIDTH) / 2).coerceAtLeast(0.dp)
-            else 0.dp
         // The inspector's resize handle reaches into the chat's end: the scrollbar lane starts
         // clear of it. Constant while the inspector is open, so scrolling never moves anything.
+        // Each chat item centres itself in its reading column (see readingColumn), so the list
+        // itself only keeps the gutters.
         val laneInset =
-            if (key is RemoteNavKey.Chat && inspectorShown && twoPane != null) maxOf(readingInset, PANE_RESIZE_HANDLE_OVERHANG)
-            else readingInset
+            if (key is RemoteNavKey.Chat && inspectorShown && twoPane != null) PANE_RESIZE_HANDLE_OVERHANG
+            else 0.dp
         // F6 reaches the project and session lists, and comes back to the row it left there.
         val listRegion =
             when (key) {
@@ -2038,426 +2178,508 @@ internal fun RemoteScreen(
                 is RemoteNavKey.Sessions -> rememberFocusRegion(FocusRegion.SESSIONS, children = regionChildren)
                 else -> Modifier
             }
-        LazyColumn(
-            if (key is RemoteNavKey.Chat)
-                Modifier.fillMaxSize().testTag("conversationList").then(underlay)
-                    .nestedScroll(headerScroll)
-                    .onFocusChanged { conversationFocused = it.hasFocus }
-            else Modifier.fillMaxSize().then(listRegion),
-            state = listState,
-            contentPadding =
-                PaddingValues(
-                    start = 20.dp + readingInset,
-                    // Constant, so nothing rewraps while scrolling; the scrollbar lives in this lane.
-                    end = CHAT_SCROLLBAR_LANE + laneInset,
-                    // A list page's connection chip brings the header's height itself (see
-                    // connectionStatusItem); with the spacing after it the page title starts where
-                    // it would at headerHeight + 48dp.
-                    top =
-                        if (key is RemoteNavKey.Chat) headerHeight + 16.dp
-                        else 48.dp - LIST_ITEM_SPACING,
-                    bottom =
-                        if (
-                            key is RemoteNavKey.Sessions || key is RemoteNavKey.Hosts ||
-                                (key is RemoteNavKey.Projects && canOpenFolders(state))
-                        ) 112.dp
-                        else if (key is RemoteNavKey.Chat) conversationEndPadding
-                        else 24.dp,
-                ),
-            verticalArrangement = Arrangement.spacedBy(LIST_ITEM_SPACING),
-        ) {
-            // Every item emitted before the conversation counts here, so a jump can turn an index
-            // in shownItems into a list index.
-            var leading = 0
-            // The chat shows the connection beside its composer instead. Beside an open chat or a
-            // project's sessions, that pane speaks for the connection (as with the error card
-            // below); the item stays, empty, so the indices after it do not move.
-            if (key !is RemoteNavKey.Chat)
-                connectionStatusItem(
-                    connectionStatusLine(state).takeIf { listPane?.selectedSessionId == null && !projectSelected },
-                    headerHeight,
-                )
-            if (key !is RemoteNavKey.Chat)
-                item(key = PAGE_TITLE_KEY) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        val projectName =
-                            if (key is RemoteNavKey.Sessions)
-                                state.project?.optionalText("name")?.takeIf(String::isNotBlank)
-                            else null
-                        if (projectName != null)
-                            Column(Modifier.weight(1f)) {
-                                if (!(state.loading && state.sessions.isEmpty()))
+        // The lists of projects and sessions pull to refresh: the lists are read again behind them.
+        val list: @Composable () -> Unit = {
+            LazyColumn(
+                if (key is RemoteNavKey.Chat)
+                    Modifier.fillMaxSize().testTag("conversationList").then(underlay)
+                        .nestedScroll(headerScroll)
+                        .onFocusChanged { conversationFocused = it.hasFocus }
+                else Modifier.fillMaxSize().then(listRegion),
+                state = listState,
+                contentPadding =
+                    PaddingValues(
+                        start = 20.dp,
+                        // Constant, so nothing rewraps while scrolling; the scrollbar lives in this lane.
+                        end = CHAT_SCROLLBAR_LANE + laneInset,
+                        // A list page's connection chip brings the header's height itself (see
+                        // connectionStatusItem); with the spacing after it the page title starts where
+                        // it would at headerHeight + 48dp.
+                        top =
+                            if (key is RemoteNavKey.Chat) headerHeight + 16.dp
+                            else 48.dp - LIST_ITEM_SPACING,
+                        bottom =
+                            if (
+                                key is RemoteNavKey.Sessions || key is RemoteNavKey.Hosts ||
+                                    (key is RemoteNavKey.Projects && canOpenFolders(state))
+                            ) 112.dp
+                            else if (key is RemoteNavKey.Chat) conversationEndPadding
+                            else 24.dp,
+                    ),
+                verticalArrangement = Arrangement.spacedBy(LIST_ITEM_SPACING),
+            ) {
+                // Every item emitted before the conversation counts here, so a jump can turn an index
+                // in shownItems into a list index.
+                var leading = 0
+                // The chat shows the connection beside its composer instead. Beside an open chat or a
+                // project's sessions, that pane speaks for the connection (as with the error card
+                // below); the item stays, empty, so the indices after it do not move.
+                if (key !is RemoteNavKey.Chat)
+                    connectionStatusItem(
+                        connectionStatusLine(state).takeIf { listPane?.selectedSessionId == null && !projectSelected },
+                        headerHeight,
+                    )
+                if (key !is RemoteNavKey.Chat)
+                    item(key = PAGE_TITLE_KEY) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            val projectName =
+                                if (key is RemoteNavKey.Sessions)
+                                    state.project?.optionalText("name")?.takeIf(String::isNotBlank)
+                                else null
+                            if (projectName != null)
+                                Column(Modifier.weight(1f)) {
+                                    if (!(state.loading && state.sessions.isEmpty()))
+                                        Text(
+                                            pluralStringResource(
+                                                R.plurals.remote_sessions_count,
+                                                sessionCount,
+                                                sessionCount,
+                                            ),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                        )
                                     Text(
-                                        pluralStringResource(
-                                            R.plurals.remote_sessions_count,
-                                            sessionCount,
-                                            sessionCount,
-                                        ),
+                                        projectName,
+                                        style = MaterialTheme.typography.headlineLarge,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        modifier = Modifier.testTag("sessionsProjectTitle").semantics { heading() },
+                                    )
+                                }
+                            else if (macName != null)
+                                Column(Modifier.weight(1f).testTag("projectsMacHeading")) {
+                                    Text(
+                                        stringResource(macStatus),
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
                                     )
+                                    Text(
+                                        macName,
+                                        style = MaterialTheme.typography.headlineLarge,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        modifier = Modifier.testTag("projectsMacTitle").semantics { heading() },
+                                    )
+                                }
+                            else
                                 Text(
-                                    projectName,
+                                    title,
+                                    modifier = Modifier.weight(1f).semantics { heading() },
                                     style = MaterialTheme.typography.headlineLarge,
                                     maxLines = 1,
                                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                    modifier = Modifier.testTag("sessionsProjectTitle").semantics { heading() },
                                 )
-                            }
-                        else
-                            Text(
-                                title,
-                                modifier = Modifier.weight(1f).semantics { heading() },
-                                style = MaterialTheme.typography.headlineLarge,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            )
-                        if (key is RemoteNavKey.Sessions && listPane == null && state.sessions.isNotEmpty()) {
-                            FloatingSurface(
-                                modifier = Modifier.offset(x = LIST_TO_HEADER_END_SHIFT).padding(end = 8.dp),
-                                shape = CircleShape,
-                            ) {
-                                IconButton(
-                                    onClick = {
-                                        if (sessionSearchOpen) sessionQuery = ""
-                                        else shortcutTargets?.requestSearch()
-                                        sessionSearchOpen = !sessionSearchOpen
-                                    },
-                                    modifier = Modifier.size(48.dp).testTag("sessionSearchToggle"),
-                                ) {
-                                    Icon(
-                                        if (sessionSearchOpen) Icons.Default.Close else Icons.Default.Search,
-                                        stringResource(
-                                            if (sessionSearchOpen) R.string.remote_session_search_close
-                                            else R.string.remote_session_search
-                                        ),
-                                    )
-                                }
-                            }
-                        }
-                        if (key is RemoteNavKey.Sessions) {
-                            val filterLabel = stringResource(R.string.remote_design_filter_sessions)
-                            val activeCountLabel =
-                                if (hideOfflineSessions)
-                                    stringResource(R.string.remote_design_filter_active_count, 1)
-                                else null
-                            BadgedBox(
-                                badge = {
-                                    if (hideOfflineSessions)
-                                        Badge(modifier = Modifier.testTag("sessionsFilterBadge")) {
-                                            Text("1")
-                                        }
-                                },
-                                // The list is inset 20dp and the header pills 16dp: shift the
-                                // filter so its end lines up with the actions pill above it.
-                                modifier = Modifier.offset(x = LIST_TO_HEADER_END_SHIFT),
-                            ) {
+                            if (key is RemoteNavKey.Sessions && listPane == null && state.sessions.isNotEmpty()) {
                                 FloatingSurface(
-                                    modifier = Modifier.testTag("sessionsFilterPill"),
+                                    modifier = Modifier.offset(x = LIST_TO_HEADER_END_SHIFT).padding(end = 8.dp),
                                     shape = CircleShape,
                                 ) {
                                     IconButton(
-                                        onClick = { filterSheet = true },
-                                        modifier = Modifier.size(48.dp).semantics {
-                                            contentDescription =
-                                                listOfNotNull(filterLabel, activeCountLabel)
-                                                    .joinToString(", ")
-                                        },
-                                    ) {
-                                        Icon(Icons.Default.FilterAlt, contentDescription = null)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            // Chat feedback belongs beside the composer, not above the conversation.
-            // Do not carry an unavailable-command warning into the session overview.
-            // Beside a project's sessions, the session list shows the error, not both columns.
-            if (state.error != null && key !is RemoteNavKey.Chat &&
-                state.error != R.string.remote_command_unknown &&
-                listPane?.selectedSessionId == null &&
-                !projectSelected
-            ) {
-                leading++
-                item(key = "error-card") {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().testTag("errorCard"),
-                        colors =
-                            CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                            ),
-                    ) {
-                        Column(
-                            Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalAlignment = Alignment.Top,
-                            ) {
-                                Icon(Icons.Default.ErrorOutline, contentDescription = null)
-                                Text(stringResource(state.error!!), Modifier.weight(1f))
-                            }
-                            ReconnectCountdown(state.reconnectAt)
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement =
-                                    Arrangement.spacedBy(8.dp, Alignment.End),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                TextButton(
-                                    onClick = model::dismissError,
-                                    colors =
-                                        ButtonDefaults.textButtonColors(
-                                            contentColor = MaterialTheme.colorScheme.onErrorContainer
-                                        ),
-                                ) {
-                                    Text(stringResource(R.string.remote_error_close))
-                                }
-                                if (state.error == R.string.remote_device_revoked)
-                                    state.hosts.find { it.routeId == state.deniedRouteId }?.let { host ->
-                                        FilledTonalButton(
-                                            onClick = { removing = host },
-                                            modifier = Modifier.testTag("removePairing"),
-                                        ) {
-                                            Text(stringResource(R.string.remote_remove))
-                                        }
-                                    }
-                                if (!state.loading && state.error in RETRYABLE_ERRORS)
-                                    FilledTonalButton(
                                         onClick = {
-                                            model.dismissError()
-                                            model.refresh()
+                                            if (sessionSearchOpen) sessionQuery = ""
+                                            else shortcutTargets?.requestSearch()
+                                            sessionSearchOpen = !sessionSearchOpen
                                         },
-                                        modifier = Modifier.testTag("reconnectNow"),
+                                        modifier = Modifier.size(48.dp).testTag("sessionSearchToggle"),
                                     ) {
                                         Icon(
-                                            Icons.Default.Refresh,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(ButtonDefaults.IconSize),
+                                            if (sessionSearchOpen) Icons.Default.Close else Icons.Default.Search,
+                                            stringResource(
+                                                if (sessionSearchOpen) R.string.remote_session_search_close
+                                                else R.string.remote_session_search
+                                            ),
                                         )
-                                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                                        Text(retryLabel(state.reconnectAt))
                                     }
+                                }
                             }
-                        }
-                    }
-                }
-            }
-            if (settings) {
-                item {
-                    Section(stringResource(R.string.remote_thinking_setting)) {
-                        Text(
-                            stringResource(R.string.remote_design_thinking_help),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        val showThinking = preferences?.thinkingDisplay == "text"
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .toggleable(value = showThinking, role = Role.Switch) {
-                                    (model as SettingsViewModel).setThinkingDisplay(
-                                        if (it) "text" else "status"
-                                    )
-                                }
-                                .testTag("thinkingSwitch")
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                stringResource(R.string.remote_design_show_thinking),
-                                Modifier.weight(1f),
-                            )
-                            Switch(checked = showThinking, onCheckedChange = null)
-                        }
-                    }
-                }
-                item {
-                    Section(stringResource(R.string.remote_appearance)) {
-                        Text(
-                            stringResource(R.string.remote_design_appearance_help),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .toggleable(value = theme == "synthwave", role = Role.Switch) {
-                                    (model as SettingsViewModel).setTheme(if (it) "synthwave" else "system")
-                                }
-                                .testTag("themeSynthwaveSwitch")
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(stringResource(R.string.remote_theme_system))
-                            Switch(
-                                checked = theme == "synthwave",
-                                onCheckedChange = null,
-                                modifier = Modifier.padding(horizontal = 12.dp),
-                            )
-                            Text(stringResource(R.string.remote_theme_synthwave))
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            listOf(false, true).forEach { dark ->
-                                Column(
-                                    Modifier.weight(1f),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                            if (key is RemoteNavKey.Sessions) {
+                                val filterLabel = stringResource(R.string.remote_design_filter_sessions)
+                                val activeCountLabel =
+                                    if (hideOfflineSessions)
+                                        stringResource(R.string.remote_design_filter_active_count, 1)
+                                    else null
+                                BadgedBox(
+                                    badge = {
+                                        if (hideOfflineSessions)
+                                            Badge(modifier = Modifier.testTag("sessionsFilterBadge")) {
+                                                Text("1")
+                                            }
+                                    },
+                                    // The list is inset 20dp and the header pills 16dp: shift the
+                                    // filter so its end lines up with the actions pill above it.
+                                    modifier = Modifier.offset(x = LIST_TO_HEADER_END_SHIFT),
                                 ) {
-                                    ThemePreview(
-                                        if (theme == "synthwave") {
-                                            if (dark) "synthwave" else "synthwave-light"
-                                        } else if (dark) "dark" else "light"
-                                    )
-                                    Text(
-                                        stringResource(if (dark) R.string.remote_theme_dark else R.string.remote_theme_light),
-                                        style = MaterialTheme.typography.labelLarge,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                item {
-                    Section(stringResource(R.string.remote_swipe_title)) {
-                        Text(
-                            stringResource(R.string.remote_swipe_help),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        SwipeActionChoice(
-                            label = R.string.remote_swipe_end_to_start,
-                            tagPrefix = "swipeEndToStart",
-                            selected = preferences?.swipeEndToStart,
-                            onSelect = { (model as SettingsViewModel).setSwipeEndToStart(it) },
-                        )
-                        SwipeActionChoice(
-                            label = R.string.remote_swipe_start_to_end,
-                            tagPrefix = "swipeStartToEnd",
-                            selected = preferences?.swipeStartToEnd,
-                            onSelect = { (model as SettingsViewModel).setSwipeStartToEnd(it) },
-                        )
-                    }
-                }
-                // Only where a keyboard can be in use: one is attached, or the wide layout of a
-                // tablet, which usually has one nearby.
-                if (keyboardSettingsShown(hardwareKeyboard, paneLayout.twoPane))
-                    item {
-                        Section(stringResource(R.string.remote_keyboard_title), Modifier.testTag("keyboardSettings")) {
-                            val helpKeys =
-                                chordText(
-                                    checkNotNull(tooltipChord(Shortcut.HELP)),
-                                    androidx.compose.ui.platform.LocalResources.current,
-                                    rememberKeyCaps(),
-                                )
-                            Text(
-                                stringResource(R.string.remote_keyboard_help, helpKeys),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            val enterSends = preferences?.enterSends ?: true
-                            Row(
-                                Modifier.fillMaxWidth()
-                                    .toggleable(value = enterSends, role = Role.Switch) {
-                                        (model as SettingsViewModel).setEnterSends(it)
+                                    FloatingSurface(
+                                        modifier = Modifier.testTag("sessionsFilterPill"),
+                                        shape = CircleShape,
+                                    ) {
+                                        IconButton(
+                                            onClick = { filterSheet = true },
+                                            modifier = Modifier.size(48.dp).semantics {
+                                                contentDescription =
+                                                    listOfNotNull(filterLabel, activeCountLabel)
+                                                        .joinToString(", ")
+                                            },
+                                        ) {
+                                            Icon(Icons.Default.FilterAlt, contentDescription = null)
+                                        }
                                     }
-                                    .testTag("enterSendsSwitch")
-                                    .padding(vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(stringResource(R.string.remote_keyboard_enter_sends), Modifier.weight(1f))
-                                Switch(checked = enterSends, onCheckedChange = null)
+                                }
                             }
-                            ShortcutList(null, Modifier.testTag("keyboardShortcuts"))
                         }
                     }
-                item { PredictionSettingsSection() }
-                // Only the wide layout has widths and columns to reset.
-                twoPane?.let { item { LayoutSettingsSection(it) } }
-                item {
-                    Section(stringResource(R.string.remote_notifications)) {
-                        val hint =
-                            stringResource(
-                                when {
-                                    !pushConfigured -> R.string.remote_notification_unconfigured
-                                    !notificationGranted -> R.string.remote_notification_denied
-                                    !pushEnabled -> R.string.remote_notification_toggle_off
-                                    else -> R.string.remote_notification_help
-                                }
-                            )
-                        if (pushConfigured) {
-                            // One focusable row: TalkBack reads the label, the state and the hint.
+                // Chat feedback belongs beside the composer, not above the conversation.
+                // Do not carry an unavailable-command warning into the session overview.
+                // Beside a project's sessions, the session list shows the error, not both columns.
+                if (state.error != null && key !is RemoteNavKey.Chat &&
+                    state.error != R.string.remote_command_unknown &&
+                    listPane?.selectedSessionId == null &&
+                    !projectSelected
+                ) {
+                    leading++
+                    item(key = "error-card") {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().testTag("errorCard"),
+                            colors =
+                                CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                                ),
+                        ) {
                             Column(
-                                Modifier.fillMaxWidth()
-                                    .toggleable(value = pushEnabled, role = Role.Switch) {
-                                        if (it) enableNotifications() else disablePush()
-                                    }
-                                    .testTag("pushSwitch")
-                                    .padding(vertical = 8.dp)
+                                Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Notifications, contentDescription = null)
-                                    Spacer(Modifier.width(14.dp))
-                                    Text(
-                                        stringResource(R.string.remote_notification_toggle),
-                                        Modifier.weight(1f),
-                                        style = MaterialTheme.typography.titleSmall,
-                                    )
-                                    Switch(checked = pushEnabled, onCheckedChange = null)
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    verticalAlignment = Alignment.Top,
+                                ) {
+                                    Icon(Icons.Default.ErrorOutline, contentDescription = null)
+                                    Text(stringResource(state.error!!), Modifier.weight(1f))
                                 }
+                                ReconnectCountdown(state.reconnectAt)
+                                // Three buttons do not fit a phone's card in one row; they wrap, kept to the end.
+                                FlowRow(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement =
+                                        Arrangement.spacedBy(8.dp, Alignment.End),
+                                    itemVerticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    TextButton(
+                                        onClick = model::dismissError,
+                                        colors =
+                                            ButtonDefaults.textButtonColors(
+                                                contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                            ),
+                                    ) {
+                                        Text(stringResource(R.string.remote_error_close))
+                                    }
+                                    if (state.error == R.string.remote_device_revoked)
+                                        state.hosts.find { it.routeId == state.deniedRouteId }?.let { host ->
+                                            FilledTonalButton(
+                                                onClick = { removing = host },
+                                                modifier = Modifier.testTag("removePairing"),
+                                            ) {
+                                                Text(stringResource(R.string.remote_remove))
+                                            }
+                                        }
+                                    // The Mac removed this phone: only a new code from /remote brings it back.
+                                    if (state.error == R.string.remote_device_revoked)
+                                        FilledTonalButton(
+                                            onClick = {
+                                                model.dismissError()
+                                                scan = true
+                                            },
+                                            modifier = Modifier.testTag("pairAgain"),
+                                        ) {
+                                            Text(stringResource(R.string.remote_pair_again))
+                                        }
+                                    if (!state.loading && state.error in RETRYABLE_ERRORS)
+                                        FilledTonalButton(
+                                            onClick = {
+                                                model.dismissError()
+                                                model.refresh()
+                                            },
+                                            modifier = Modifier.testTag("reconnectNow"),
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Refresh,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(ButtonDefaults.IconSize),
+                                            )
+                                            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                                            Text(retryLabel(state.reconnectAt))
+                                        }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (settings) {
+                    // Grouped by what people change, the most consequential first.
+                    item(key = SETTINGS_GROUP_KEY_PREFIX + "general") {
+                        SettingsGroupHeading(stringResource(R.string.remote_settings_general), "general")
+                    }
+                    item(key = "settings-notifications") {
+                        Section(stringResource(R.string.remote_notifications), Modifier.testTag("settingsNotifications")) {
+                            val hint =
+                                stringResource(
+                                    when {
+                                        !pushConfigured -> R.string.remote_notification_unconfigured
+                                        !notificationGranted -> R.string.remote_notification_denied
+                                        !pushEnabled -> R.string.remote_notification_toggle_off
+                                        else -> R.string.remote_notification_help
+                                    }
+                                )
+                            if (pushConfigured) {
+                                // One focusable row: TalkBack reads the label, the state and the hint.
+                                Column(
+                                    Modifier.fillMaxWidth()
+                                        .toggleable(value = pushEnabled, role = Role.Switch) {
+                                            if (it) enableNotifications() else disablePush()
+                                        }
+                                        .testTag("pushSwitch")
+                                        .padding(vertical = 8.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Notifications, contentDescription = null)
+                                        Spacer(Modifier.width(14.dp))
+                                        Text(
+                                            stringResource(R.string.remote_notification_toggle),
+                                            Modifier.weight(1f),
+                                            style = MaterialTheme.typography.titleSmall,
+                                        )
+                                        Switch(checked = pushEnabled, onCheckedChange = null)
+                                    }
+                                    Text(
+                                        hint,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                if (
+                                    Build.VERSION.SDK_INT >= 33 &&
+                                        !notificationGranted &&
+                                        (notificationDenied || preferences?.notificationPromptShown == true)
+                                ) {
+                                    // After a denial or two Android no longer shows its own prompt.
+                                    TextButton(
+                                        onClick = {
+                                            // Some OEM builds have no per-app notification screen.
+                                            runCatching {
+                                                context.startActivity(
+                                                    Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                                        .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                )
+                                            }
+                                        }
+                                    ) {
+                                        Text(stringResource(R.string.remote_notification_open_settings))
+                                    }
+                                }
+                            } else {
                                 Text(
                                     hint,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            if (
-                                Build.VERSION.SDK_INT >= 33 &&
-                                    !notificationGranted &&
-                                    (notificationDenied || preferences?.notificationPromptShown == true)
-                            ) {
-                                // After a denial or two Android no longer shows its own prompt.
-                                TextButton(
-                                    onClick = {
-                                        // Some OEM builds have no per-app notification screen.
-                                        runCatching {
-                                            context.startActivity(
-                                                Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                                                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
-                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                            )
-                                        }
-                                    }
-                                ) {
-                                    Text(stringResource(R.string.remote_notification_open_settings))
-                                }
-                            }
-                        } else {
+                            LiveRunSettingRow()
+                        }
+                    }
+                    item(key = "settings-appearance") {
+                        Section(stringResource(R.string.remote_appearance)) {
                             Text(
-                                hint,
+                                stringResource(R.string.remote_design_appearance_help),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            val mode = preferences?.themeMode ?: ThemeMode.SYSTEM
+                            val dark = mode.isDark(isSystemInDarkTheme())
+                            Text(
+                                stringResource(R.string.remote_theme_mode),
+                                Modifier.semantics { heading() },
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                                ThemeMode.entries.forEachIndexed { index, option ->
+                                    SegmentedButton(
+                                        selected = mode == option,
+                                        onClick = { (model as SettingsViewModel).setThemeMode(option) },
+                                        shape = SegmentedButtonDefaults.itemShape(index, ThemeMode.entries.size),
+                                        modifier = Modifier.testTag("themeMode-${option.stored}"),
+                                        icon = {},
+                                    ) {
+                                        Text(
+                                            stringResource(
+                                                when (option) {
+                                                    ThemeMode.SYSTEM -> R.string.remote_theme_system
+                                                    ThemeMode.LIGHT -> R.string.remote_theme_light
+                                                    ThemeMode.DARK -> R.string.remote_theme_dark
+                                                }
+                                            ),
+                                            maxLines = 1,
+                                        )
+                                    }
+                                }
+                            }
+                            Text(
+                                stringResource(R.string.remote_theme_palette),
+                                Modifier.semantics { heading() },
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                            // A stored Dynamic the device cannot draw shows, and is selected, as the brand palette.
+                            val shownPalette = theme.effective(Build.VERSION.SDK_INT)
+                            Column(
+                                Modifier.selectableGroup(),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                // Wallpaper colours need Android 12; without it the choice is not offered at all.
+                                ThemePalette.available(Build.VERSION.SDK_INT).forEach { palette ->
+                                    PaletteChoice(
+                                        label =
+                                            stringResource(
+                                                when (palette) {
+                                                    ThemePalette.BRAND -> R.string.remote_theme_brand
+                                                    ThemePalette.SYNTHWAVE -> R.string.remote_theme_synthwave
+                                                    ThemePalette.DYNAMIC -> R.string.remote_theme_dynamic
+                                                }
+                                            ),
+                                        palette = palette,
+                                        selected = shownPalette == palette,
+                                        dark = dark,
+                                        onSelect = { (model as SettingsViewModel).setTheme(palette) },
+                                    )
+                                }
+                            }
                         }
-                        LiveRunSettingRow()
                     }
-                }
-                item {
-                    val uriHandler = LocalUriHandler.current
-                    val unavailable = stringResource(R.string.remote_settings_privacy_unavailable)
-                    Section(stringResource(R.string.remote_settings_privacy_title)) {
-                        Text(
-                            stringResource(R.string.remote_settings_privacy_help),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    // Only the wide layout has widths and columns to reset.
+                    twoPane?.let { item(key = "settings-layout") { LayoutSettingsSection(it) } }
+                    item(key = SETTINGS_GROUP_KEY_PREFIX + "chat") {
+                        SettingsGroupHeading(stringResource(R.string.remote_settings_chat), "chat")
+                    }
+                    item(key = "settings-thinking") {
+                        Section(stringResource(R.string.remote_thinking_setting)) {
+                            Text(
+                                stringResource(R.string.remote_design_thinking_help),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            val showThinking = preferences?.thinkingDisplay == ThinkingDisplay.TEXT
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .toggleable(value = showThinking, role = Role.Switch) {
+                                        (model as SettingsViewModel).setThinkingDisplay(
+                                            if (it) ThinkingDisplay.TEXT else ThinkingDisplay.STATUS
+                                        )
+                                    }
+                                    .testTag("thinkingSwitch")
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    stringResource(R.string.remote_design_show_thinking),
+                                    Modifier.weight(1f),
+                                )
+                                Switch(checked = showThinking, onCheckedChange = null)
+                            }
+                        }
+                    }
+                    item(key = "settings-predictions") { PredictionSettingsSection() }
+                    // Only where a keyboard can be in use: one is attached, or the wide layout of a
+                    // tablet, which usually has one nearby.
+                    if (keyboardSettingsShown(hardwareKeyboard, paneLayout.twoPane))
+                        item(key = "settings-keyboard") {
+                            Section(stringResource(R.string.remote_keyboard_title), Modifier.testTag("keyboardSettings")) {
+                                val helpKeys =
+                                    chordText(
+                                        checkNotNull(tooltipChord(Shortcut.HELP)),
+                                        androidx.compose.ui.platform.LocalResources.current,
+                                        rememberKeyCaps(),
+                                    )
+                                Text(
+                                    stringResource(R.string.remote_keyboard_help, helpKeys),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                val enterSends = preferences?.enterSends ?: true
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .toggleable(value = enterSends, role = Role.Switch) {
+                                            (model as SettingsViewModel).setEnterSends(it)
+                                        }
+                                        .testTag("enterSendsSwitch")
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(stringResource(R.string.remote_keyboard_enter_sends), Modifier.weight(1f))
+                                    Switch(checked = enterSends, onCheckedChange = null)
+                                }
+                                ShortcutList(null, Modifier.testTag("keyboardShortcuts"))
+                            }
+                        }
+                    item(key = SETTINGS_GROUP_KEY_PREFIX + "session-list") {
+                        SettingsGroupHeading(stringResource(R.string.remote_settings_session_list), "session-list")
+                    }
+                    item(key = "settings-swipe") {
+                        Section(stringResource(R.string.remote_swipe_title)) {
+                            Text(
+                                stringResource(R.string.remote_swipe_help),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            SwipeActionChoice(
+                                label = R.string.remote_swipe_end_to_start,
+                                tagPrefix = "swipeEndToStart",
+                                selected = preferences?.swipeEndToStart,
+                                onSelect = { (model as SettingsViewModel).setSwipeEndToStart(it) },
+                            )
+                            SwipeActionChoice(
+                                label = R.string.remote_swipe_start_to_end,
+                                tagPrefix = "swipeStartToEnd",
+                                selected = preferences?.swipeStartToEnd,
+                                onSelect = { (model as SettingsViewModel).setSwipeStartToEnd(it) },
+                            )
+                        }
+                    }
+                    item(key = "settings-offline") {
+                        HideOfflineSessionsSection(
+                            hide = preferences?.hideOfflineSessions ?: false,
+                            onChange = { (model as SettingsViewModel).setHideOfflineSessions(it) },
                         )
-                        TextButton(
-                            onClick = {
+                    }
+                    item(key = SETTINGS_GROUP_KEY_PREFIX + "devices") {
+                        SettingsGroupHeading(stringResource(R.string.remote_settings_devices), "devices")
+                    }
+                    item(key = "settings-devices") {
+                        DevicesSection(
+                            pairedMacs = state.hosts.size,
+                            // The hosts list itself, where Macs are paired, opened and removed.
+                            onPairedMacs = { navigator.open(RemoteNavKey.Hosts) },
+                        )
+                    }
+                    item(key = SETTINGS_GROUP_KEY_PREFIX + "privacy") {
+                        SettingsGroupHeading(stringResource(R.string.remote_settings_privacy), "privacy")
+                    }
+                    item(key = "settings-app-lock") {
+                        // The lock's row brings its own title; the group's heading names the card.
+                        Section(null, Modifier.testTag("settingsAppLock")) { AppLockSettingRow() }
+                    }
+                    item(key = SETTINGS_GROUP_KEY_PREFIX + "about") {
+                        SettingsGroupHeading(stringResource(R.string.remote_settings_about), "about")
+                    }
+                    item(key = "settings-about") {
+                        val uriHandler = LocalUriHandler.current
+                        val unavailable = stringResource(R.string.remote_settings_privacy_unavailable)
+                        AboutSection(
+                            onPrivacyPolicy = {
                                 try {
                                     uriHandler.openUri(PRIVACY_POLICY_URL)
                                 } catch (_: IllegalArgumentException) {
@@ -2465,333 +2687,407 @@ internal fun RemoteScreen(
                                     Toast.makeText(context, unavailable, Toast.LENGTH_SHORT).show()
                                 }
                             },
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
-                            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                            Text(stringResource(R.string.remote_settings_privacy_open))
-                        }
-                        AppLockSettingRow()
-                    }
-                }
-                item {
-                    var diagnosticsOpen by rememberSaveable { mutableStateOf(false) }
-                    Section(stringResource(R.string.remote_diagnostics_title)) {
-                        Text(
-                            stringResource(R.string.remote_diagnostics_help),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        TextButton(
-                            onClick = { diagnosticsOpen = true },
-                            modifier = Modifier.testTag("openDiagnostics"),
-                        ) {
-                            Icon(Icons.Default.Speed, contentDescription = null)
-                            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                            Text(stringResource(R.string.remote_diagnostics_open))
-                        }
                     }
-                    if (diagnosticsOpen) DiagnosticsDialog(onDismiss = { diagnosticsOpen = false })
-                }
-            } else {
-                when (key) {
-                    RemoteNavKey.Settings -> Unit
-                    is RemoteNavKey.FolderBrowser -> Unit
-                    is RemoteNavKey.Providers -> Unit
-                    // The board is its own screen (ActivityBoardScreen), never a RemoteScreen page.
-                    is RemoteNavKey.Activity -> Unit
-                    RemoteNavKey.Hosts -> {
-                        // Until the pairings are read, no list is no news: the first-run text
-                        // would flash before the Macs appear. A read that failed says so instead.
-                        if (state.hosts.isEmpty() && state.hostsUnreadable) {
-                            item { Text(stringResource(R.string.remote_storage_error)) }
-                            item { Text(stringResource(R.string.remote_pair_help)) }
-                        } else if (state.hosts.isEmpty() && !state.hostsLoaded) {
-                            item(key = "hosts_loading") { HostListSkeleton() }
-                        } else if (state.hosts.isEmpty()) {
-                            item {
-                                Text(
-                                    stringResource(R.string.remote_welcome),
-                                    style = MaterialTheme.typography.headlineSmall,
-                                )
-                            }
-                            item { Text(stringResource(R.string.remote_pair_help)) }
-                            item { Text(stringResource(R.string.remote_empty_hosts)) }
-                        }
-                        items(state.hosts, key = { it.routeId }) { host ->
-                            HostCard(
-                                host,
-                                connected = state.connected && state.host?.routeId == host.routeId,
-                                onOpen = { navigator.open(RemoteNavKey.Projects(host.routeId)) },
-                                onRemove = { removing = host },
+                    item(key = "settings-diagnostics") {
+                        var diagnosticsOpen by rememberSaveable { mutableStateOf(false) }
+                        Section(stringResource(R.string.remote_diagnostics_title), Modifier.testTag("settingsDiagnostics")) {
+                            Text(
+                                stringResource(R.string.remote_diagnostics_help),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                        }
-                    }
-                    is RemoteNavKey.Projects -> {
-                        if (state.projects.isEmpty()) {
-                            // Only a list read on the live connection says there are no projects.
-                            if (state.loading) item(key = "projects_loading") { ProjectListSkeleton() }
-                            else if (state.connected) item { Text(stringResource(R.string.remote_empty_projects)) }
-                            else item { Text(stringResource(R.string.remote_projects_unread)) }
-                        } else {
-                            item(key = "shared_projects_heading") {
-                                Text(
-                                    stringResource(R.string.remote_projects_shared),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(top = 28.dp, bottom = 4.dp)
-                                        .semantics { heading() },
-                                )
-                            }
-                            items(state.projects, key = { it.text("id") }) { project ->
-                                val projectId = project.text("id")
-                                ProjectRow(
-                                    projectId = projectId,
-                                    name = project.text("name"),
-                                    // The host only unshares while no project is open.
-                                    unshare =
-                                        if (projectSelected) ProjectUnshare.NONE
-                                        else projectUnshare(state.connected, state.loading, state.capabilities),
-                                    onClick = { openProject(navigator, twoPane, key.routeId, projectId) },
-                                    onUnshare = { unsharing = projectId to project.text("name") },
-                                    selected = projectsColumn?.let { projectId == it.selectedProjectId },
-                                    onNewSession =
-                                        if (state.connected && !state.loading && !navigator.mutating) {
-                                            { navigator.createSession(key.routeId, projectId) }
-                                        } else null,
-                                )
-                            }
-                        }
-                        // Quick chats only refresh while no project is open; beside one they hide.
-                        if (state.projectChats.isNotEmpty() && !projectSelected) {
-                            item(key = "project_chats_heading") {
-                                Text(
-                                    stringResource(R.string.remote_projects_quick_chats),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(top = 28.dp, bottom = 4.dp)
-                                        .semantics { heading() },
-                                )
-                            }
-                            val featuredChats = state.projectChats.take(3)
-                            val groups = listOf(
-                                R.string.remote_projects_waiting to featuredChats.filter {
-                                    it.verified && state.connected && it.session.text("status") == "waiting"
-                                },
-                                R.string.remote_projects_running to featuredChats.filter {
-                                    it.verified && state.connected && it.session.text("status") == "running"
-                                },
-                                R.string.remote_projects_recent to featuredChats.filter {
-                                    !it.verified || !state.connected ||
-                                        it.session.text("status") !in setOf("waiting", "running")
-                                },
-                            )
-                            groups.forEach { (label, chats) ->
-                                if (chats.isNotEmpty()) {
-                                    item(key = "project_chats_group_$label") {
-                                        Text(
-                                            stringResource(label),
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.padding(top = 12.dp),
-                                        )
-                                    }
-                                    items(
-                                        chats,
-                                        key = { "chat:${it.projectId}:${it.session.text("id")}" },
-                                    ) { chat ->
-                                        ProjectChatRow(
-                                            mark = chat.session.optionalText("id")?.let(routeMarks::get),
-                                            chat = chat,
-                                            connected = state.connected,
-                                            enabled = !state.loading,
-                                            onClick = {
-                                                navigator.open(RemoteNavKey.Chat(
-                                                    key.routeId,
-                                                    chat.projectId,
-                                                    chat.session.text("id"),
-                                                ))
-                                            },
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        if (pushConfigured && !pushEnabled) item {
-                            Section(stringResource(R.string.remote_notifications)) {
-                                Text(stringResource(R.string.remote_notification_help))
-                                Button(onClick = { enableNotifications() }) {
-                                    Text(stringResource(R.string.remote_notification_allow))
-                                }
-                            }
-                        }
-                    }
-                    is RemoteNavKey.Sessions -> {
-                        if (sessionSearchShown && state.sessions.isNotEmpty())
-                            item(key = "session-search") {
-                                SessionSearchField(
-                                    query = sessionQuery,
-                                    onQuery = { sessionQuery = it },
-                                    onSearch = {
-                                        listedSessions.firstOrNull()?.let { first ->
-                                            navigator.open(RemoteNavKey.Chat(key.routeId, key.projectId, first.id))
-                                        }
-                                    },
-                                    focusRequester = sessionSearchFocus,
-                                )
-                            }
-                        if (state.sessions.isEmpty()) {
-                            if (state.loading) item { SessionListSkeleton() }
-                            else item { Text(stringResource(R.string.remote_empty_sessions)) }
-                        }
-                        else if (visibleSessions.isEmpty() && (state.connected || state.stale) && !state.loading)
-                            item { Text(stringResource(R.string.remote_offline_sessions_hidden)) }
-                        else if (listedSessions.isEmpty() && visibleSessions.isNotEmpty())
-                            item { Text(stringResource(R.string.remote_session_search_empty)) }
-                        items(listedSessions, key = SessionListItem::id) { session ->
-                            SessionListRow(
-                                item = session,
-                                selected = session.id == listPane?.selectedSessionId,
-                                onTogglePin = {
-                                    sessionMarkStore?.setPinned(key.routeId, session.id, !session.pinned)
-                                },
-                                onMarkRead =
-                                    if (!session.unread) null
-                                    else {
-                                        {
-                                            sessionMarkStore?.markSeen(key.routeId, session.id, session.updatedAt, System.currentTimeMillis())
-                                        }
-                                    },
-                                enabled = !state.connected || !state.loading,
-                                closeAvailable =
-                                    canCloseSession(
-                                        session,
-                                        state.connected,
-                                        state.loading,
-                                        state.capabilities,
-                                    ),
-                                onClick = {
-                                    navigator.open(
-                                        RemoteNavKey.Chat(
-                                            key.routeId,
-                                            key.projectId,
-                                            session.id,
-                                        )
-                                    )
-                                },
-                                onRename =
-                                    if (
-                                        state.connected && !state.loading &&
-                                        RENAME_CAPABILITY in state.capabilities &&
-                                        session.availability != SessionAvailability.OFFLINE &&
-                                        !session.continuesAsCopy
-                                    ) {
-                                        {
-                                            startRename(session.id, session.title)
-                                        }
-                                    } else null,
-                                onClose = { closing = session },
-                                onForkLatest =
-                                    if (
-                                        state.connected && !state.loading && !navigator.mutating &&
-                                            SESSION_FORK_CAPABILITY in state.capabilities &&
-                                            session.parentSessionId == null
-                                    ) {
-                                        { navigator.openAndForkLatest(RemoteNavKey.Chat(key.routeId, key.projectId, session.id)) }
-                                    } else null,
-                                swipe =
-                                    (sessionPreferences?.swipeEndToStart ?: SwipeAction.CLOSE) to
-                                        (sessionPreferences?.swipeStartToEnd ?: SwipeAction.RENAME),
-                                childrenExpanded = session.id !in collapsedIds,
-                                onToggleChildren =
-                                    if (session.hasChildren) {
-                                        {
-                                            collapsedSessionIds = ArrayList(
-                                                if (session.id in collapsedIds)
-                                                    collapsedSessionIds.filterNot { it == session.id }
-                                                else collapsedSessionIds + session.id
-                                            )
-                                        }
-                                    } else null,
-                            )
-                        }
-                    }
-
-                    is RemoteNavKey.Chat -> {
-                        if (conversation.isEmpty() && state.questions.isEmpty() && state.loading) {
-                            leading++
-                            item(key = CHAT_SKELETON_KEY, contentType = CHAT_SKELETON_KEY) { ChatSkeleton() }
-                        }
-                        if (state.nextCursor != null) {
-                            leading++
-                            item(key = LOAD_OLDER_KEY, contentType = LOAD_OLDER_KEY) {
-                                TextButton(
-                                    onClick = model::older,
-                                    enabled = state.connected,
-                                ) {
-                                    Text(stringResource(R.string.remote_load_older))
-                                }
-                            }
-                        }
-                        leadingItems.count = leading
-                        val copyButtonId =
-                            shownItems.lastOrNull {
-                                it is ConversationItem.Bubble && it.role == "assistant"
-                            }?.id
-                        items(shownItems, key = { it.id }, contentType = ::conversationContentType) { item ->
-                            val highlighted = item.id == highlightedId
-                            Box(
-                                if (highlighted)
-                                    Modifier.testTag("jumpTarget").focusRequester(jumpFocus).focusable()
-                                else Modifier
+                            TextButton(
+                                onClick = { diagnosticsOpen = true },
+                                modifier = Modifier.testTag("openDiagnostics"),
                             ) {
-                                ConversationMessage(
-                                    item,
-                                    thinkingDisplay,
-                                    thinkingActive = thinkingActive,
-                                    onQuote = model::quote,
-                                    onOpenTool = {
-                                        openToolId = it.id
-                                        showTab(InspectorTab.TOOL)
-                                    },
-                                    onOpenAgent = ::openAgent,
-                                    onAskToFix = if (acceptsPrompts) { id -> askToFix(id) } else null,
-                                    onAskToFixMessage = if (acceptsPrompts) { id -> askToFix(id, askFixMessagePrompt) } else null,
-                                    highlighted = highlighted,
-                                    fork = messageFork?.takeIf { item.id in forkableIds },
-                                    images = sentImages,
-                                    projectImages = projectImages,
-                                    copyButton = item.id == copyButtonId,
-                                    forkMenuRequested = item.id == forkMenuRequest,
-                                    onForkMenuRequestHandled = { forkMenuRequest = null },
+                                Icon(Icons.Default.Speed, contentDescription = null)
+                                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                                Text(stringResource(R.string.remote_diagnostics_open))
+                            }
+                        }
+                        if (diagnosticsOpen) DiagnosticsDialog(onDismiss = { diagnosticsOpen = false })
+                    }
+                } else {
+                    when (key) {
+                        RemoteNavKey.Settings -> Unit
+                        is RemoteNavKey.FolderBrowser -> Unit
+                        is RemoteNavKey.Providers -> Unit
+                        // The board is its own screen (ActivityBoardScreen), never a RemoteScreen page.
+                        is RemoteNavKey.Activity -> Unit
+                        RemoteNavKey.Hosts -> {
+                            // While the Mac asks its user, the wait leads the page, above any Macs.
+                            state.pairingDeadline?.let { deadline ->
+                                item(key = "pairing_wait") {
+                                    PairingWaitCard(deadline, onCancel = { (model as? HostsViewModel)?.cancelPairing() })
+                                }
+                            }
+                            // Until the pairings are read, no list is no news: the first-run text
+                            // would flash before the Macs appear. A read that failed says so instead.
+                            if (state.hosts.isEmpty() && state.hostsUnreadable) {
+                                item { Text(stringResource(R.string.remote_storage_error)) }
+                                item { Text(stringResource(R.string.remote_pair_help)) }
+                            } else if (state.hosts.isEmpty() && !state.hostsLoaded) {
+                                item(key = "hosts_loading") { HostListSkeleton() }
+                            } else if (state.hosts.isEmpty() && state.pairingDeadline == null) {
+                                item(key = "first_run") { FirstRunCard(onScan = { scan = true }, onPaste = { paste = true }) }
+                            }
+                            items(state.hosts, key = { it.routeId }) { host ->
+                                HostCard(
+                                    host,
+                                    connected = state.connected && state.host?.routeId == host.routeId,
+                                    lastUsedAt = navigator.lastUsedAt(host.routeId),
+                                    onOpen = { navigator.open(RemoteNavKey.Projects(host.routeId)) },
+                                    onRemove = { removing = host },
                                 )
                             }
                         }
-                        if (
-                            !onlyErrorsShown && waitingForOutput && sessionActive &&
-                                conversation.lastOrNull().let {
-                                    it !is ConversationItem.Thinking || !it.streaming
+                        is RemoteNavKey.Projects -> {
+                            // What needs the user leads the page: the featured chats waiting for an answer, then
+                            // the running ones. Then the shared projects, then the recent chats. Beside an open
+                            // project the chats hide, as before.
+                            // Every waiting chat leads, since the heading promises all of them; running and recent
+                            // chats are capped at three each until their "Show all" (see quickChats).
+                            val quick =
+                                quickChats(
+                                    if (projectSelected) emptyList() else state.projectChats,
+                                    state.connected,
+                                    showRunningAll = runningShowAll,
+                                    showRecentAll = recentShowAll,
+                                )
+                            val waitingChats = quick.waiting
+                            val runningChats = quick.running
+                            val recentChats = quick.recent
+                            if (waitingChats.isNotEmpty()) {
+                                item(key = "project_chats_waiting_heading") {
+                                    ProjectsSectionHeading(stringResource(R.string.remote_status_needs_you))
                                 }
-                        )
-                            item(key = "waiting-for-output") {
-                                Row(
-                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                                    Text(
-                                        stringResource(R.string.remote_waiting_for_output),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                projectChatRows(waitingChats, routeMarks, state.connected, !state.loading) { chat ->
+                                    navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
+                                }
+                            }
+                            if (runningChats.isNotEmpty()) {
+                                item(key = "project_chats_running_heading") {
+                                    ProjectsSectionHeading(stringResource(R.string.remote_status_working))
+                                }
+                                projectChatRows(runningChats, routeMarks, state.connected, !state.loading) { chat ->
+                                    navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
+                                }
+                                // Directly under the group it expands, so it is not far down the page.
+                                if (quick.runningExpandable) item(key = "project_chats_running_show_all") {
+                                    QuickChatsShowAll(
+                                        expanded = runningShowAll,
+                                        tag = "quickChatsShowAllRunning",
+                                        onClick = { runningShowAll = !runningShowAll },
                                     )
                                 }
                             }
+                            if (state.projects.isEmpty()) {
+                                // Only a list read on the live connection says there are no projects.
+                                if (state.loading) item(key = "projects_loading") { ProjectListSkeleton() }
+                                else if (state.connected) item(key = "projects_empty") {
+                                    val folders = canOpenFolders(state)
+                                    EmptyState(
+                                        icon = Icons.Outlined.Folder,
+                                        title = stringResource(R.string.remote_empty_projects_title),
+                                        body =
+                                            stringResource(
+                                                if (folders) R.string.remote_empty_projects_open_folder
+                                                else R.string.remote_empty_projects,
+                                            ),
+                                        action = {
+                                            if (folders) {
+                                                Button(
+                                                    onClick = { navigator.openFolders(key.routeId) },
+                                                    modifier = Modifier.testTag("emptyOpenFolder"),
+                                                ) {
+                                                    Icon(Icons.Default.FolderOpen, contentDescription = null)
+                                                    Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                                                    Text(stringResource(R.string.remote_folders_open_folder))
+                                                }
+                                            }
+                                        },
+                                    )
+                                }
+                                else item { Text(stringResource(R.string.remote_projects_unread)) }
+                            } else {
+                                item(key = "shared_projects_heading") {
+                                    ProjectsSectionHeading(stringResource(R.string.remote_projects_shared))
+                                }
+                                items(state.projects, key = { it.text("id") }) { project ->
+                                    val projectId = project.text("id")
+                                    ProjectRow(
+                                        projectId = projectId,
+                                        name = project.text("name"),
+                                        // The host only unshares while no project is open.
+                                        unshare =
+                                            if (projectSelected) ProjectUnshare.NONE
+                                            else projectUnshare(state.connected, state.loading, state.capabilities),
+                                        onClick = { openProject(navigator, twoPane, key.routeId, projectId) },
+                                        onUnshare = { unsharing = projectId to project.text("name") },
+                                        selected = projectsColumn?.let { projectId == it.selectedProjectId },
+                                        onNewSession =
+                                            if (state.connected && !state.loading && !navigator.mutating) {
+                                                { navigator.createSession(key.routeId, projectId) }
+                                            } else null,
+                                        // Only a list the Mac confirmed has counts; a cached row has none.
+                                        counts = state.projectSessions[projectId]?.counts,
+                                    )
+                                }
+                            }
+                            // Quick chats only refresh while no project is open; beside one they hide.
+                            if (recentChats.isNotEmpty()) {
+                                item(key = "project_chats_heading") {
+                                    ProjectsSectionHeading(stringResource(R.string.remote_projects_quick_chats))
+                                }
+                                projectChatRows(recentChats, routeMarks, state.connected, !state.loading) { chat ->
+                                    navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
+                                }
+                                if (quick.recentExpandable) item(key = "project_chats_recent_show_all") {
+                                    QuickChatsShowAll(
+                                        expanded = recentShowAll,
+                                        tag = "quickChatsShowAllRecent",
+                                        onClick = { recentShowAll = !recentShowAll },
+                                    )
+                                }
+                            }
+                            if (
+                                showsNotificationCard(
+                                    pushConfigured,
+                                    pushEnabled,
+                                    pushDecided,
+                                    notificationCardDismissed,
+                                )
+                            ) item(key = "notification_card") {
+                                Section(stringResource(R.string.remote_notifications)) {
+                                    Text(stringResource(R.string.remote_notification_help))
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(onClick = { enableNotifications() }) {
+                                            Text(stringResource(R.string.remote_notification_allow))
+                                        }
+                                        TextButton(
+                                            onClick = {
+                                                cardRouteId?.let(navigator::dismissNotificationCard)
+                                                notificationCardDismissed = true
+                                            },
+                                            modifier = Modifier.testTag("notificationNotNow"),
+                                        ) {
+                                            Text(stringResource(R.string.remote_notification_not_now))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        is RemoteNavKey.Sessions -> {
+                            if (sessionSearchShown && state.sessions.isNotEmpty())
+                                item(key = "session-search") {
+                                    SessionSearchField(
+                                        query = sessionQuery,
+                                        onQuery = { sessionQuery = it },
+                                        onSearch = {
+                                            listedSessions.firstOrNull()?.let { first ->
+                                                navigator.open(RemoteNavKey.Chat(key.routeId, key.projectId, first.id))
+                                            }
+                                        },
+                                        focusRequester = sessionSearchFocus,
+                                    )
+                                }
+                            if (state.sessions.isEmpty()) {
+                                if (state.loading) item { SessionListSkeleton() }
+                                // Only a list read from the Mac, now or before, says there are no sessions.
+                                else if (!state.connected && !state.stale)
+                                    item(key = "sessions_unread") { Text(stringResource(R.string.remote_sessions_unread)) }
+                                else item(key = "sessions_empty") {
+                                    EmptyState(
+                                        icon = Icons.Outlined.ChatBubbleOutline,
+                                        title = stringResource(R.string.remote_empty_sessions_title),
+                                        body = stringResource(R.string.remote_empty_sessions),
+                                        action = {
+                                            Button(
+                                                onClick = { navigator.createSession(key.routeId, key.projectId) },
+                                                enabled = state.connected && !state.loading && !navigator.mutating,
+                                                modifier = Modifier.testTag("emptyNewSession"),
+                                            ) {
+                                                Icon(Icons.Default.Add, contentDescription = null)
+                                                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                                                Text(stringResource(R.string.remote_new_session))
+                                            }
+                                        },
+                                    )
+                                }
+                            }
+                            else if (visibleSessions.isEmpty() && (state.connected || state.stale) && !state.loading)
+                                item { Text(stringResource(R.string.remote_offline_sessions_hidden)) }
+                            else if (listedSessions.isEmpty() && visibleSessions.isNotEmpty())
+                                item { Text(stringResource(R.string.remote_session_search_empty)) }
+                            items(listedSessions, key = SessionListItem::id) { session ->
+                                Box(Modifier.itemMotion(this)) {
+                                    SessionListRow(
+                                        item = session,
+                                        selected = session.id == listPane?.selectedSessionId,
+                                        onTogglePin = {
+                                            sessionMarkStore?.setPinned(key.routeId, session.id, !session.pinned)
+                                        },
+                                        onMarkRead =
+                                            if (!session.unread) null
+                                            else {
+                                                {
+                                                    sessionMarkStore?.markSeen(key.routeId, session.id, session.updatedAt, System.currentTimeMillis())
+                                                }
+                                            },
+                                        enabled = !state.connected || !state.loading,
+                                        closeAvailable =
+                                            canCloseSession(
+                                                session,
+                                                state.connected,
+                                                state.loading,
+                                                state.capabilities,
+                                            ),
+                                        onClick = {
+                                            navigator.open(
+                                                RemoteNavKey.Chat(
+                                                    key.routeId,
+                                                    key.projectId,
+                                                    session.id,
+                                                )
+                                            )
+                                        },
+                                        onRename =
+                                            if (
+                                                state.connected && !state.loading &&
+                                                RENAME_CAPABILITY in state.capabilities &&
+                                                session.availability != SessionAvailability.OFFLINE &&
+                                                !session.continuesAsCopy
+                                            ) {
+                                                {
+                                                    startRename(session.id, session.title)
+                                                }
+                                            } else null,
+                                        onClose = { closing = session },
+                                        onForkLatest =
+                                            if (
+                                                state.connected && !state.loading && !navigator.mutating &&
+                                                    SESSION_FORK_CAPABILITY in state.capabilities &&
+                                                    session.parentSessionId == null
+                                            ) {
+                                                { navigator.openAndForkLatest(RemoteNavKey.Chat(key.routeId, key.projectId, session.id)) }
+                                            } else null,
+                                        swipe =
+                                            (sessionPreferences?.swipeEndToStart ?: SwipeAction.CLOSE) to
+                                                (sessionPreferences?.swipeStartToEnd ?: SwipeAction.RENAME),
+                                        childrenExpanded = session.id !in collapsedIds,
+                                        onToggleChildren =
+                                            if (session.hasChildren) {
+                                                {
+                                                    collapsedSessionIds = ArrayList(
+                                                        if (session.id in collapsedIds)
+                                                            collapsedSessionIds.filterNot { it == session.id }
+                                                        else collapsedSessionIds + session.id
+                                                    )
+                                                }
+                                            } else null,
+                                    )
+                                }
+                            }
+                        }
+
+                        is RemoteNavKey.Chat -> {
+                            if (conversation.isEmpty() && state.questions.isEmpty() && state.loading) {
+                                leading++
+                                item(key = CHAT_SKELETON_KEY, contentType = CHAT_SKELETON_KEY) {
+                                    Box(Modifier.readingColumn(PROSE_READING_WIDTH)) { ChatSkeleton() }
+                                }
+                            }
+                            if (state.nextCursor != null) {
+                                leading++
+                                item(key = LOAD_OLDER_KEY, contentType = LOAD_OLDER_KEY) {
+                                    Box(Modifier.readingColumn(PROSE_READING_WIDTH)) {
+                                        TextButton(
+                                            onClick = model::older,
+                                            enabled = state.connected,
+                                        ) {
+                                            Text(stringResource(R.string.remote_load_older))
+                                        }
+                                    }
+                                }
+                            }
+                            leadingItems.count = leading
+                            val copyButtonId =
+                                shownItems.lastOrNull {
+                                    it is ConversationItem.Bubble && it.role == "assistant"
+                                }?.id
+                            items(shownItems, key = { it.id }, contentType = ::conversationContentType) { item ->
+                                val highlighted = item.id == highlightedId
+                                ConversationItemColumn(
+                                    item,
+                                    Modifier.itemMotion(this).then(
+                                        if (highlighted)
+                                            Modifier.testTag("jumpTarget").focusRequester(jumpFocus).focusable()
+                                        else Modifier
+                                    ),
+                                ) {
+                                    ConversationMessage(
+                                        item,
+                                        thinkingDisplay,
+                                        thinkingActive = thinkingActive,
+                                        onQuote = model::quote,
+                                        onOpenTool = {
+                                            openToolId = it.id
+                                            showTab(InspectorTab.TOOL)
+                                        },
+                                        onOpenAgent = ::openAgent,
+                                        onAskToFix = if (acceptsPrompts) { id -> askToFix(id) } else null,
+                                        onAskToFixMessage = if (acceptsPrompts) { id -> askToFix(id, askFixMessagePrompt) } else null,
+                                        highlighted = highlighted,
+                                        fork = messageFork?.takeIf { item.id in forkableIds },
+                                        images = sentImages,
+                                        projectImages = projectImages,
+                                        copyButton = item.id == copyButtonId,
+                                        forkMenuRequested = item.id == forkMenuRequest,
+                                        onForkMenuRequestHandled = { forkMenuRequest = null },
+                                    )
+                                }
+                            }
+                            if (
+                                !onlyErrorsShown && waitingForOutput && sessionActive &&
+                                    conversation.lastOrNull().let {
+                                        it !is ConversationItem.Thinking || !it.streaming
+                                    }
+                            )
+                                item(key = "waiting-for-output") {
+                                    Row(
+                                        Modifier.readingColumn(PROSE_READING_WIDTH),
+                                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                        Text(
+                                            stringResource(R.string.remote_waiting_for_output),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                        }
                     }
                 }
             }
         }
+        if (key is RemoteNavKey.Projects || key is RemoteNavKey.Sessions)
+            PullToRefreshBox(
+                isRefreshing = pullRefreshing,
+                onRefresh = {
+                    pullRefreshing = true
+                    model.revalidateLists()
+                },
+                modifier = Modifier.fillMaxSize().testTag("listPullRefresh"),
+            ) {
+                list()
+            }
+        else list()
         if (key !is RemoteNavKey.Chat) {
             // The title of a Sessions page is its project's name, as in the list's large title.
-            val pageTitle = if (key is RemoteNavKey.Sessions) state.project?.optionalText("name")?.takeIf(String::isNotBlank) ?: title else title
+            val pageTitle = if (key is RemoteNavKey.Sessions) state.project?.optionalText("name")?.takeIf(String::isNotBlank) ?: title else macName ?: title
             // The beside-projects column of the wide layout keeps its own Back pill, and the strip
             // beside a chat has no refresh and settings: the full projects column has them already.
             val ownBack = key != RemoteNavKey.Hosts && listPane?.besideProjects != true
@@ -2819,36 +3115,58 @@ internal fun RemoteScreen(
                                         ).value
                                     } else 0f
                                 val refreshing = stringResource(R.string.remote_refreshing)
-                                IconButton(
-                                    onClick = model::refresh,
-                                    modifier = Modifier.size(48.dp).semantics {
-                                        if (state.loading) stateDescription = refreshing
-                                    },
-                                ) {
-                                    Icon(
-                                        Icons.Default.Refresh,
-                                        stringResource(R.string.remote_refresh),
-                                        modifier = Modifier.graphicsLayer { rotationZ = rotation },
-                                    )
-                                }
+                                // The projects column is too narrow for a refresh button beside the
+                                // Mac's own actions; its Mac overflow refreshes instead.
+                                if (projectsColumn == null)
+                                    IconButton(
+                                        onClick = model::refresh,
+                                        modifier = Modifier.size(48.dp).semantics {
+                                            if (state.loading) stateDescription = refreshing
+                                        },
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Refresh,
+                                            stringResource(R.string.remote_refresh),
+                                            modifier = Modifier.graphicsLayer { rotationZ = rotation },
+                                        )
+                                    }
                             }
+                            // The Mac's own actions, for the page that is the Mac.
+                            if (projectsPage != null && macHost != null)
+                                MacOverflow(
+                                    enabled = !state.loading,
+                                    providers =
+                                        if (canManageProviders(state)) {
+                                            { navigator.openProviders(projectsPage.routeId) }
+                                        } else null,
+                                    folders =
+                                        if (canOpenFolders(state)) {
+                                            { navigator.openFolders(projectsPage.routeId) }
+                                        } else null,
+                                    // The narrow column has no refresh button of its own; the overflow keeps the full reload.
+                                    refresh = if (projectsColumn != null) model::refresh else null,
+                                    onDetails = { macDetails = true },
+                                    onDisconnect = { disconnecting = true },
+                                    onRemove = { removing = macHost },
+                                )
                             IconButton(onClick = navigator::settings, modifier = Modifier.size(48.dp)) {
                                 Icon(
                                     Icons.Default.Settings,
                                     stringResource(R.string.remote_settings),
                                 )
                             }
-                                // The full projects column kept beside a chat shrinks back to the strip.
-                                if (projectsColumn?.canCollapse == true && twoPane != null)
-                                    IconButton(
-                                        onClick = { twoPane.projectsExpanded = false },
-                                        modifier = Modifier.size(48.dp).testTag("collapseProjects"),
-                                    ) {
-                                        Icon(
-                                            Icons.AutoMirrored.Filled.MenuOpen,
-                                            stringResource(R.string.remote_projects_collapse),
-                                        )
-                                    }
+                            // The full projects column kept beside a chat shrinks back to the strip. It
+                            // is outside the host guard: the column can collapse whether or not the host is known.
+                            if (projectsColumn?.canCollapse == true && twoPane != null)
+                                IconButton(
+                                    onClick = { twoPane.projectsExpanded = false },
+                                    modifier = Modifier.size(48.dp).testTag("collapseProjects"),
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.MenuOpen,
+                                        stringResource(R.string.remote_projects_collapse),
+                                    )
+                                }
                         }
                     } else null,
             )
@@ -2874,7 +3192,8 @@ internal fun RemoteScreen(
                 Modifier.align(Alignment.TopCenter).fillMaxWidth()
                     .onSizeChanged { headerSize = it }
                     .offset { IntOffset(0, headerLift) }
-                    .then(underlay),
+                    .then(underlay)
+                    .testTag("chatHeader"),
             ) {
                 chatHeader()
             }
@@ -2910,7 +3229,7 @@ internal fun RemoteScreen(
         if (key is RemoteNavKey.Chat) {
             Box(
                 Modifier.align(Alignment.BottomCenter)
-                    .widthIn(max = MAX_READING_WIDTH + 32.dp)
+                    .widthIn(max = PROSE_READING_WIDTH + 32.dp)
                     .fillMaxWidth()
                     .onSizeChanged { composerSize = it }.testTag("floatingComposer")
                     .then(underlay)
@@ -2934,10 +3253,11 @@ internal fun RemoteScreen(
                                     Text(stringResource(error), Modifier.weight(1f))
                                 }
                                 ReconnectCountdown(state.reconnectAt)
-                                Row(
+                                // Close, Remove and Pair again do not fit a phone's card in one row; they wrap.
+                                FlowRow(
                                     Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                                    verticalAlignment = Alignment.CenterVertically,
+                                    itemVerticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     TextButton(
                                         onClick = model::dismissError,
@@ -2955,6 +3275,17 @@ internal fun RemoteScreen(
                                             ) {
                                                 Text(stringResource(R.string.remote_remove))
                                             }
+                                        }
+                                    // As on the list pages: the scanned code pairs from the computers page.
+                                    if (error == R.string.remote_device_revoked)
+                                        FilledTonalButton(
+                                            onClick = {
+                                                model.dismissError()
+                                                scan = true
+                                            },
+                                            modifier = Modifier.testTag("pairAgain"),
+                                        ) {
+                                            Text(stringResource(R.string.remote_pair_again))
                                         }
                                     if (!state.loading && error in RETRYABLE_ERRORS)
                                         FilledTonalButton(
@@ -3070,6 +3401,11 @@ internal fun RemoteScreen(
                                 Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 24.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
+                                Text(
+                                    stringResource(R.string.remote_chat_status),
+                                    Modifier.semantics { heading() },
+                                    style = MaterialTheme.typography.titleLarge,
+                                )
                                 if (compactionVisible(state.compaction, compactionNow))
                                     CompactionBanner(state.compaction, compactionNow)
                                 if (exportState != null)
@@ -3141,14 +3477,14 @@ internal fun RemoteScreen(
                                         if (composer.text.trimStart().startsWith("/")) composer.replace("")
                                         if (command == LocalCommand.TREE) treeSheetRequested = true
                                         else if (artifactsAvailable) openGallery()
-                                        else showToast(R.string.remote_artifacts_host_outdated)
+                                        else showFeedback(R.string.remote_artifacts_host_outdated)
                                     }
                                     // A terminal session only explains itself; nothing to send.
                                     else if (command == LocalCommand.RELOAD &&
                                         (reloading || reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
                                     ) {
                                         if (composer.text.trimStart().startsWith("/")) composer.replace("")
-                                        showToast(
+                                        showFeedback(
                                             if (reloading) R.string.remote_reload_running
                                             else R.string.remote_reload_terminal_hint
                                         )
@@ -3164,7 +3500,17 @@ internal fun RemoteScreen(
                                 settingsSheetRequested = settingsSheetRequested,
                                 onSettingsSheetRequestHandled = { settingsSheetRequested = false },
                                 slashSuggestions = !composer.suggestionsClosed,
-                                leadingChips = if (compact && insightsShown) insightChips else null,
+                                leadingChips =
+                                    if (compact && (insightsShown || statusChipLine != null)) {
+                                        {
+                                            statusChipLine?.let { line ->
+                                                ChatStatusChip(line, running = line != R.string.remote_export_done) {
+                                                    statusSheet = true
+                                                }
+                                            }
+                                            if (insightsShown) insightChips()
+                                        }
+                                    } else null,
                                 onManageProviders = state.selection.routeId?.let { route -> { navigator.openProviders(route) } },
                             )
                         },
@@ -3208,7 +3554,7 @@ internal fun RemoteScreen(
             }
             SnackbarHost(
                 snackbar,
-                Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp),
+                Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp).testTag("chatSnackbar"),
             )
             Box(Modifier.fillMaxSize().then(overlayRegion)) {
             CompositionLocalProvider(LocalFocusRegionChildren provides overlayChildren) {
@@ -3405,66 +3751,17 @@ internal fun RemoteScreen(
                 paste = true
             },
         )
-    if (paste) {
-        val clipboard = LocalClipboardManager.current
-        AlertDialog(
-            onDismissRequest = { paste = false },
-            title = { Text(stringResource(R.string.remote_pair)) },
-            text = {
-                OutlinedTextField(
-                    value = qrText,
-                    onValueChange = { if (it.length <= 8192) qrText = it },
-                    label = { Text(stringResource(R.string.remote_pair_code)) },
-                    placeholder = { Text(stringResource(R.string.remote_design_pair_input_hint)) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions =
-                        KeyboardActions(onDone = {
-                            if (qrText.isNotBlank()) {
-                                paste = false
-                                navigator.pair(qrText)
-                                qrText = ""
-                            }
-                        }),
-                    trailingIcon = {
-                        IconButton(
-                            onClick = {
-                                clipboard.getText()?.text?.trim()?.takeIf { it.length <= 8192 }
-                                    ?.let { qrText = it }
-                            },
-                        ) {
-                            Icon(
-                                Icons.Default.ContentPaste,
-                                stringResource(R.string.remote_paste_from_clipboard),
-                            )
-                        }
-                    },
-                    colors =
-                        OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        ),
-                )
+    if (paste)
+        PairingCodeDialog(
+            text = qrText,
+            onTextChange = { qrText = it },
+            onPair = {
+                paste = false
+                navigator.pair(qrText)
+                qrText = ""
             },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        paste = false
-                        navigator.pair(qrText)
-                        qrText = ""
-                    },
-                    enabled = qrText.isNotBlank(),
-                ) {
-                    Text(stringResource(R.string.remote_pair))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { paste = false }) {
-                    Text(stringResource(R.string.remote_cancel))
-                }
-            },
+            onDismiss = { paste = false },
         )
-    }
     if (disconnecting && key is RemoteNavKey.Projects)
         AlertDialog(
             onDismissRequest = { disconnecting = false },
@@ -3480,6 +3777,9 @@ internal fun RemoteScreen(
                 TextButton(
                     onClick = {
                         disconnecting = false
+                        // Disconnect keeps the pairing; a cold launch no longer prefers this Mac. With
+                        // several Macs it opens the hosts list; a lone paired Mac still opens itself.
+                        projectsPage?.routeId?.let(navigator::forgetLastRoute)
                         navigator.disconnect()
                     },
                     modifier = Modifier.testTag("confirmDisconnect"),
@@ -3493,6 +3793,12 @@ internal fun RemoteScreen(
                 }
             },
         )
+    if (macDetails && projectsPage != null && macHost != null)
+        MacConnectionDetailsDialog(
+            host = macHost,
+            status = stringResource(macStatus),
+            onDismiss = { macDetails = false },
+        )
     removing?.let { host ->
         AlertDialog(
             onDismissRequest = { removing = null },
@@ -3501,6 +3807,10 @@ internal fun RemoteScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
+                        // The Mac's own Projects page is on screen: leave it first. A removed Mac cannot stay
+                        // open, and an offline Mac's selection would otherwise outlive its pairing.
+                        if (projectsPage?.routeId == host.routeId) navigator.disconnect()
+                        navigator.forgetLastRoute(host.routeId)
                         model.remove(host.routeId)
                         removing = null
                     }
@@ -3609,22 +3919,50 @@ private fun SwipeActionChoice(
     }
 }
 
+/** A palette as a radio card: the whole card is the target, and its preview shows the chosen mode. */
 @Composable
-private fun ThemePreview(value: String) {
-    val colors = remoteColorScheme(dark = value != "light" && value != "synthwave-light", synthwave = value.startsWith("synthwave"))
+private fun PaletteChoice(
+    label: String,
+    palette: ThemePalette,
+    selected: Boolean,
+    dark: Boolean,
+    onSelect: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scheme = remember(context, dark, palette) { appColorScheme(context, dark, palette) }
+    Surface(
+        Modifier.fillMaxWidth()
+            .selectable(selected = selected, onClick = onSelect, role = Role.RadioButton)
+            .testTag("themePalette-${palette.stored}"),
+        shape = MaterialTheme.shapes.medium,
+        color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                RadioButton(selected = selected, onClick = null)
+                Spacer(Modifier.width(8.dp))
+                Text(label, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+            }
+            ThemePreview(scheme, palette)
+        }
+    }
+}
+
+@Composable
+private fun ThemePreview(colors: ColorScheme, palette: ThemePalette) {
     val shell = colors.background
     val panel = colors.surfaceContainerHigh
     val line = colors.onSurfaceVariant
     val dot = colors.primary
     Box(
         Modifier.fillMaxWidth().height(92.dp)
-            .background(shell, RoundedCornerShape(12.dp))
+            .background(shell, MaterialTheme.shapes.small)
             .clearAndSetSemantics {}
             .padding(10.dp),
         contentAlignment = androidx.compose.ui.Alignment.Center,
     ) {
         Column(
-            Modifier.fillMaxWidth().background(panel, RoundedCornerShape(8.dp)).padding(10.dp),
+            Modifier.fillMaxWidth().background(panel, MaterialTheme.shapes.extraSmall).padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             repeat(2) { index ->
@@ -3634,17 +3972,119 @@ private fun ThemePreview(value: String) {
                 ) {
                     Box(
                         Modifier.size(8.dp).background(
-                            if (value.startsWith("synthwave") && index == 1) colors.secondary else dot,
+                            if (palette == ThemePalette.SYNTHWAVE && index == 1) colors.secondary else dot,
                             CircleShape,
                         )
                     )
                     Box(
                         Modifier.fillMaxWidth(if (index == 0) 0.82f else 0.6f)
-                            .height(5.dp).background(line, RoundedCornerShape(3.dp))
+                            .height(5.dp).background(line, MaterialTheme.shapes.extraSmall)
                     )
                 }
             }
         }
+    }
+}
+
+/**
+ * The Mac's own actions, in the header of its Projects page: sign-in and folders, the connection
+ * details, and the two ways of letting go of the Mac, disconnecting (the pairing stays) or removing it.
+ */
+@Composable
+private fun MacOverflow(
+    enabled: Boolean,
+    providers: (() -> Unit)?,
+    folders: (() -> Unit)?,
+    refresh: (() -> Unit)?,
+    onDetails: () -> Unit,
+    onDisconnect: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    val label = stringResource(R.string.remote_mac_menu)
+    Box {
+        IconButton(onClick = { open = true }, modifier = Modifier.size(48.dp).testTag("macOverflow")) {
+            Icon(Icons.Default.MoreVert, label)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            refresh?.let { action ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.remote_refresh)) },
+                    onClick = { open = false; action() },
+                    modifier = Modifier.testTag("macRefresh"),
+                )
+            }
+            providers?.let { action ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.providers_open)) },
+                    onClick = { open = false; action() },
+                    enabled = enabled,
+                    modifier = Modifier.testTag("macProviders"),
+                )
+            }
+            folders?.let { action ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.remote_folders_open_folder)) },
+                    onClick = { open = false; action() },
+                    enabled = enabled,
+                    modifier = Modifier.testTag("macOpenFolder"),
+                )
+            }
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.remote_mac_details)) },
+                onClick = { open = false; onDetails() },
+                modifier = Modifier.testTag("macDetails"),
+            )
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.remote_mac_disconnect)) },
+                onClick = { open = false; onDisconnect() },
+                modifier = Modifier.testTag("macDisconnect"),
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.remote_remove)) },
+                onClick = { open = false; onRemove() },
+                modifier = Modifier.testTag("macRemove"),
+            )
+        }
+    }
+}
+
+/** Under a quick-chat group: lifts its three-chat limit, or folds it back. */
+@Composable
+private fun QuickChatsShowAll(expanded: Boolean, tag: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.testTag(tag)) {
+        Text(stringResource(if (expanded) R.string.remote_projects_show_fewer else R.string.remote_projects_show_all))
+    }
+}
+
+/** The heading of a section of the Projects page; the rows under it belong to it. */
+@Composable
+private fun ProjectsSectionHeading(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 28.dp, bottom = 4.dp).semantics { heading() },
+    )
+}
+
+/** One row per featured chat of a Projects section, in the order given. */
+private fun LazyListScope.projectChatRows(
+    chats: List<ProjectChatSummary>,
+    marks: Map<String, SessionMark>,
+    connected: Boolean,
+    enabled: Boolean,
+    onOpen: (ProjectChatSummary) -> Unit,
+) {
+    items(chats, key = { "chat:${it.projectId}:${it.session.text("id")}" }) { chat ->
+        ProjectChatRow(
+            chat = chat,
+            connected = connected,
+            enabled = enabled,
+            mark = chat.session.optionalText("id")?.let(marks::get),
+            onClick = { onOpen(chat) },
+        )
     }
 }
 
@@ -3704,7 +4144,7 @@ private fun HostListSkeleton() {
     val label = stringResource(R.string.remote_hosts_loading)
     Row(
         Modifier.fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerLow, RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
             .padding(16.dp)
             .clearAndSetSemantics { contentDescription = label },
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -3745,7 +4185,7 @@ private fun ChatSkeleton() {
             ) {
                 Column(
                     Modifier.fillMaxWidth(if (index == 1) 0.66f else 0.78f)
-                        .background(placeholder, RoundedCornerShape(16.dp))
+                        .background(placeholder, MaterialTheme.shapes.medium)
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
@@ -3762,19 +4202,20 @@ private fun ChatSkeleton() {
 private fun SkeletonBar(modifier: Modifier) {
     Box(
         modifier.height(10.dp)
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(5.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.shapes.extraSmall)
     )
 }
 
 @Composable
-internal fun Section(title: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+internal fun Section(title: String?, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Card(modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.semantics { heading() },
-            )
+            if (title != null)
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.semantics { heading() },
+                )
             content()
         }
     }
@@ -3894,6 +4335,25 @@ internal fun headerHiddenAfterScroll(hidden: Boolean, previous: Pair<Int, Int>, 
         up -> false
         else -> hidden
     }
+}
+
+/**
+ * The compact chat's status in one line, at the start of the controls' row while a banner waits in
+ * the status sheet: what runs ([running] spins) or what is done. A tap opens the sheet; the line is
+ * read out as it changes.
+ */
+@Composable
+private fun ChatStatusChip(@StringRes line: Int, running: Boolean, onClick: () -> Unit) {
+    AssistChip(
+        onClick = onClick,
+        label = { Text(stringResource(line), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+        leadingIcon = {
+            if (running && ValueAnimator.areAnimatorsEnabled())
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            else Icon(Icons.Outlined.Info, contentDescription = null, modifier = Modifier.size(18.dp))
+        },
+        modifier = Modifier.testTag("chatStatusChip").semantics { liveRegion = LiveRegionMode.Polite },
+    )
 }
 
 /** Whether TalkBack or another touch-exploration service is on; follows the setting while shown. */

@@ -1,12 +1,19 @@
 package de.joinnoah.pi.remote
 
+import android.content.Context
+import android.os.Build
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.unit.dp
 
 // Status and state colors outside the Material color roles. Each picks its tone from the
 // surface luminance so it stays legible in both the light and the dark scheme.
@@ -128,7 +135,8 @@ internal fun remoteColorScheme(dark: Boolean, synthwave: Boolean = false): Color
             onSecondary = Color.White,
             secondaryContainer = Color(0xFFDAE2F9),
             onSecondaryContainer = Color(0xFF131C2F),
-            tertiary = Color(0xFFB45309),
+            // Darker than the waiting amber: strings and warnings on the light surfaces reach 4.5:1.
+            tertiary = Color(0xFF9A4306),
             onTertiary = Color.White,
             tertiaryContainer = Color(0xFFFDEBD3),
             onTertiaryContainer = Color(0xFF8A3B0B),
@@ -153,6 +161,31 @@ internal fun remoteColorScheme(dark: Boolean, synthwave: Boolean = false): Color
             surfaceContainerHigh = Color(0xFFE4E7EF),
             surfaceContainerHighest = Color(0xFFDDE1EA),
         )
+
+/**
+ * The one shape scale of the app; components take their corners from here. Every MaterialTheme in
+ * the app (main window, share sheet, lock screen) uses it, so a component looks the same in each.
+ */
+internal val RemoteShapes =
+    Shapes(
+        extraSmall = RoundedCornerShape(8.dp),
+        small = RoundedCornerShape(12.dp),
+        medium = RoundedCornerShape(20.dp),
+        large = RoundedCornerShape(24.dp),
+        extraLarge = RoundedCornerShape(28.dp),
+    )
+
+/**
+ * The scheme for [palette] in the given light or dark mode. [ThemePalette.DYNAMIC] takes the wallpaper
+ * colours on Android 12 and later; below that, and for the other palettes, it is the app's own scheme.
+ */
+internal fun appColorScheme(context: Context, dark: Boolean, palette: ThemePalette): ColorScheme =
+    // Spelled out rather than via ThemePalette.isAvailable so lint sees the API check.
+    if (palette == ThemePalette.DYNAMIC && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    } else {
+        remoteColorScheme(dark, synthwave = palette == ThemePalette.SYNTHWAVE)
+    }
 
 /** Marks a folder that brings its own pi resources, which would run on the Mac once trusted. */
 @Composable

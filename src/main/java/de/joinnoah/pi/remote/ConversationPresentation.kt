@@ -250,12 +250,12 @@ internal fun parsedToolArguments(arguments: String): JsonObject? =
 /** False for items that render nothing, so the list does not reserve a slot for them. */
 internal fun conversationItemVisible(
     item: ConversationItem,
-    thinkingDisplay: String,
+    thinkingDisplay: ThinkingDisplay,
     thinkingActive: Boolean,
 ): Boolean =
     when (item) {
         is ConversationItem.Thinking ->
-            (thinkingDisplay == "text" && item.text.isNotEmpty()) ||
+            (thinkingDisplay == ThinkingDisplay.TEXT && item.text.isNotEmpty()) ||
                 (item.streaming && thinkingActive)
         else -> true
     }

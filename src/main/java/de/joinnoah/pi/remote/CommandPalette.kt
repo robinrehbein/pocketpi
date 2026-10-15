@@ -42,7 +42,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
@@ -177,7 +176,6 @@ internal fun CommandPalette(
                     PaletteRow(
                         item,
                         selected = position == index,
-                        current = labels.current.takeIf { item.isCurrent() },
                         onClick = { onChoose(item) },
                     )
                 }
@@ -200,7 +198,7 @@ internal fun CommandPalette(
 }
 
 @Composable
-private fun PaletteRow(item: PaletteItem, selected: Boolean, current: String?, onClick: () -> Unit) {
+private fun PaletteRow(item: PaletteItem, selected: Boolean, onClick: () -> Unit) {
     Column(
         Modifier.fillMaxWidth()
             .background(
@@ -208,10 +206,8 @@ private fun PaletteRow(item: PaletteItem, selected: Boolean, current: String?, o
                 MaterialTheme.shapes.medium,
             )
             .clickable(role = Role.Button, onClick = onClick)
-            .semantics {
-                this.selected = selected
-                if (current != null) stateDescription = current
-            }
+            // The current session or host says so in its detail line, which TalkBack reads already.
+            .semantics { this.selected = selected }
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .testTag("paletteRow"),
     ) {
@@ -227,13 +223,6 @@ private fun PaletteRow(item: PaletteItem, selected: Boolean, current: String?, o
         }
     }
 }
-
-private fun PaletteItem.isCurrent(): Boolean =
-    when (this) {
-        is SessionItem -> current
-        is HostItem -> current
-        else -> false
-    }
 
 /** Scrolls only as far as it takes to show row [index] whole, so the rows the user reads stay put. */
 private suspend fun LazyListState.scrollIntoView(index: Int) {
@@ -267,7 +256,7 @@ internal fun CommandPaletteHost(
 ) {
     val state by repository.state.collectAsStateWithLifecycle()
     val snapshot by home.collectAsStateWithLifecycle()
-    val chat = navigator.topChat
+    val chat = navigator.chatInView(LocalTwoPane.current)
     val mutating = navigator.mutating
     val labels = rememberPaletteLabels()
     val marks by sessionMarksState()

@@ -115,7 +115,7 @@ class PointerMenusUiTest {
             ConversationItem.Activity(
                 "tool-1", "tool-1", "bash", """{"command":"git status\ngit diff"}""", "clean", "complete", false,
             )
-        host { ConversationMessage(tool, "status", thinkingActive = false, onQuote = {}, onOpenTool = { opened += it.id }) }
+        host { ConversationMessage(tool, ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}, onOpenTool = { opened += it.id }) }
         compose.onNodeWithTag("toolCard").performMouseInput { rightClick() }
         compose.onNodeWithTag("menu_tool_open").assertIsDisplayed()
         compose.onNodeWithTag("menu_tool_peek").assertIsDisplayed()
@@ -180,7 +180,7 @@ class PointerMenusUiTest {
         val forks = mutableListOf<Pair<String, ForkMode>>()
         host {
             ConversationMessage(
-                userBubble(), "status", thinkingActive = false, onQuote = { quotes += it },
+                userBubble(), ThinkingDisplay.STATUS, thinkingActive = false, onQuote = { quotes += it },
                 fork = MessageFork(ready = true, stopFirst = false) { id, mode -> forks += id to mode },
             )
         }
@@ -199,7 +199,7 @@ class PointerMenusUiTest {
     fun retryIsDisabledWhileTheChatCannotFork() {
         host {
             ConversationMessage(
-                userBubble(), "status", thinkingActive = false, onQuote = {},
+                userBubble(), ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {},
                 fork = MessageFork(ready = false, stopFirst = true) { _, _ -> },
             )
         }
@@ -212,7 +212,7 @@ class PointerMenusUiTest {
         val quotes = mutableListOf<String>()
         host {
             ConversationMessage(
-                userBubble(), "status", thinkingActive = false, onQuote = { quotes += it },
+                userBubble(), ThinkingDisplay.STATUS, thinkingActive = false, onQuote = { quotes += it },
                 fork = MessageFork(ready = true, stopFirst = false) { _, _ -> },
             )
         }
@@ -232,7 +232,7 @@ class PointerMenusUiTest {
         host {
             ConversationMessage(
                 ConversationItem.Bubble("a-1-text-0", "a-1", "assistant", "pi", "Selectable words here", null, false, null),
-                "status",
+                ThinkingDisplay.STATUS,
                 thinkingActive = false,
                 onQuote = {},
             )
@@ -254,7 +254,7 @@ class PointerMenusUiTest {
 
     @Test
     fun aClickOnTheTextLeavesTheMessageMenuAvailable() {
-        host { ConversationMessage(assistantBubble(), "status", thinkingActive = false, onQuote = {}) }
+        host { ConversationMessage(assistantBubble(), ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}) }
         // A plain click puts a collapsed selection, and focus, into the text: nothing is selected.
         compose.onNodeWithText("Selectable words here", useUnmergedTree = true).performMouseInput { click(center) }
         compose.waitForIdle()
@@ -264,7 +264,7 @@ class PointerMenusUiTest {
 
     @Test
     fun theMessageMenuReturnsOnceASelectionIsCleared() {
-        host { ConversationMessage(assistantBubble(), "status", thinkingActive = false, onQuote = {}) }
+        host { ConversationMessage(assistantBubble(), ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}) }
         val text = compose.onNodeWithText("Selectable words here", useUnmergedTree = true)
         text.performMouseInput {
             moveTo(centerLeft)
@@ -284,7 +284,7 @@ class PointerMenusUiTest {
 
     @Test
     fun shiftF10OpensTheMenuOfABubbleWhoseTextHasFocus() {
-        host { ConversationMessage(assistantBubble(), "status", thinkingActive = false, onQuote = {}) }
+        host { ConversationMessage(assistantBubble(), ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}) }
         compose.onNodeWithText("Selectable words here", useUnmergedTree = true).performMouseInput { click(center) }
         compose.waitForIdle()
         compose.onNodeWithTag("messageBubble-a-1-text-0").performKeyInput { withKeyDown(Key.ShiftLeft) { pressKey(Key.F10) } }
@@ -297,7 +297,7 @@ class PointerMenusUiTest {
         host {
             ConversationMessage(
                 ConversationItem.Bubble("user-1-text-0", "user-1", "user", null, "ok", null, false, null),
-                "status", thinkingActive = false, onQuote = { quotes += it },
+                ThinkingDisplay.STATUS, thinkingActive = false, onQuote = { quotes += it },
                 fork = MessageFork(ready = true, stopFirst = false) { _, _ -> },
             )
         }
@@ -320,7 +320,7 @@ class PointerMenusUiTest {
     @Test
     fun aMenuClosesWhenItsElementLeaves() {
         var shown by mutableStateOf(true)
-        host { if (shown) ConversationMessage(assistantBubble(), "status", thinkingActive = false, onQuote = {}) }
+        host { if (shown) ConversationMessage(assistantBubble(), ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}) }
         compose.onNodeWithTag("messageBubble-a-1-text-0").performMouseInput { rightClick() }
         compose.onNodeWithTag("pointerMenu").assertExists()
         shown = false
@@ -407,7 +407,7 @@ class PointerMenusUiTest {
                     PointerMenuHost {
                         ConversationMessage(
                             ConversationItem.Bubble("a-1-text-0", "a-1", "assistant", "pi", "[docs](https://example.com/docs)", null, false, null),
-                            "status",
+                            ThinkingDisplay.STATUS,
                             thinkingActive = false,
                             onQuote = {},
                         )

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="remote_inspector_tab_gallery">Artefakte</string>
-    <string name="remote_inspector_tab_touched">Chat-Dateien</string>
+    <string name="remote_inspector_tab_touched">Sitzungsdateien</string>
     <string name="remote_inspector_pop_out">Herauslösen</string>
     <string name="remote_artifact_changed">Diese Seite hat sich auf deinem Mac geändert.</string>
     <string name="remote_artifact_changed_reload">Neu laden</string>

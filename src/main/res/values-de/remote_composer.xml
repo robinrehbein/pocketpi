@@ -4,8 +4,8 @@
     <string name="remote_send_mode">Sendemodus</string>
     <string name="remote_suggestion_use">Vorschlag übernehmen: %1$s</string>
     <string name="remote_stop_queued_title">pi anhalten?</string>
-    <string name="remote_stop_queued_body">Beim Anhalten werden auch die Nachrichten verworfen, die du für diesen Run vorgemerkt hast.</string>
-    <string name="remote_stop_queued_answers_body">Beim Anhalten werden auch die Nachrichten verworfen, die du für diesen Run vorgemerkt hast, und ausstehende Antworten werden nicht gesendet.</string>
+    <string name="remote_stop_queued_body">Beim Anhalten werden auch die Nachrichten verworfen, die du für diesen Lauf vorgemerkt hast.</string>
+    <string name="remote_stop_queued_answers_body">Beim Anhalten werden auch die Nachrichten verworfen, die du für diesen Lauf vorgemerkt hast, und ausstehende Antworten werden nicht gesendet.</string>
     <string name="remote_stop_queued_confirm">Anhalten und verwerfen</string>
     <string name="remote_stop_queued_dismiss">Weiterlaufen lassen</string>
 </resources>

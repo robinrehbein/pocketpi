@@ -470,7 +470,7 @@ class RemoteNavigationUiTest {
     @Suppress("DEPRECATION")
     @LargeScreen
     fun systemBarIconsFollowDeviceAppearanceForBothDesigns() {
-        for (theme in listOf("system", "synthwave", "system")) {
+        for (theme in listOf(ThemePalette.BRAND, ThemePalette.SYNTHWAVE, ThemePalette.BRAND)) {
             compose.runOnIdle { uiSettings.setTheme(theme) }
             compose.waitForIdle()
             compose.runOnIdle {
@@ -513,6 +513,33 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    fun forcedModeDrivesSystemBarIcons() {
+        val systemDark =
+            compose.activity.resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+        try {
+            for (mode in listOf(ThemeMode.LIGHT, ThemeMode.DARK, ThemeMode.SYSTEM)) {
+                compose.runOnIdle { uiSettings.setThemeMode(mode) }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    val controller =
+                        androidx.core.view.WindowCompat.getInsetsController(
+                            compose.activity.window,
+                            compose.activity.window.decorView,
+                        )
+                    // Light icons on a dark app, whatever the device is set to.
+                    val dark = mode.isDark(systemDark)
+                    assertEquals("Status bar icons for $mode", !dark, controller.isAppearanceLightStatusBars)
+                    assertEquals("Navigation bar icons for $mode", !dark, controller.isAppearanceLightNavigationBars)
+                }
+            }
+        } finally {
+            compose.runOnIdle { uiSettings.setThemeMode(ThemeMode.SYSTEM) }
+        }
+    }
+
+    @Test
     fun chatHeaderUsesFloatingControlsAndAccessibleStatusDot() {
         openChat()
         val longTitle = "A very long session title that must fit beside all the header controls without wrapping"
@@ -530,6 +557,7 @@ class RemoteNavigationUiTest {
         compose.onNodeWithText(longTitle).assertIsDisplayed()
         val dot = { compose.onNodeWithTag("chatStatusDot") }
         dot().assertIsDisplayed().assertContentDescriptionEquals(label(R.string.remote_status_idle))
+            .assert(SemanticsMatcher.expectValue(ChatStatusShapeKey, ChatStatusShape.READY))
         compose.onNodeWithText(label(R.string.remote_status_idle)).assertDoesNotExist()
         val back = compose.onNodeWithContentDescription(label(R.string.remote_back))
         val rename = compose.onNodeWithContentDescription(label(R.string.remote_rename_session))
@@ -548,17 +576,20 @@ class RemoteNavigationUiTest {
 
         compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "running") }
         dot().assertContentDescriptionEquals(label(R.string.remote_status_running))
+            .assert(SemanticsMatcher.expectValue(ChatStatusShapeKey, ChatStatusShape.RUNNING))
         compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "waiting") }
         dot().assertContentDescriptionEquals(label(R.string.remote_status_waiting))
+            .assert(SemanticsMatcher.expectValue(ChatStatusShapeKey, ChatStatusShape.WAITING))
         compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "unrecognized") }
         dot().assertContentDescriptionEquals(label(R.string.remote_status_unknown))
         compose.runOnIdle { repository.state.value = repository.state.value.copy(connected = false) }
         dot().assertContentDescriptionEquals(label(R.string.remote_status_offline))
+            .assert(SemanticsMatcher.expectValue(ChatStatusShapeKey, ChatStatusShape.OFFLINE))
         rename.assertDoesNotExist()
         refresh.assertIsDisplayed()
         // Offline leaves only Refresh and Settings, so Settings moves back into the pill.
         compose.onNodeWithContentDescription(label(R.string.remote_settings)).performClick()
-        compose.onNodeWithText(label(R.string.remote_appearance)).assertIsDisplayed()
+        compose.onNodeWithTag(SETTINGS_GROUP_KEY_PREFIX + "general").assertIsDisplayed()
     }
 
     @Test
@@ -614,7 +645,7 @@ class RemoteNavigationUiTest {
             more.performClick()
             compose.onNodeWithTag("chatActionMenu_new_session").assertIsDisplayed()
             compose.onNodeWithTag("chatActionMenu_settings").performClick()
-            compose.onNodeWithText(label(R.string.remote_appearance)).assertIsDisplayed()
+            compose.onNodeWithTag(SETTINGS_GROUP_KEY_PREFIX + "general").assertIsDisplayed()
         } finally {
             device.executeShellCommand(if (overrideSize == null) "wm size reset" else "wm size $overrideSize")
             device.waitForIdle()
@@ -797,7 +828,8 @@ class RemoteNavigationUiTest {
         compose.onNodeWithText("│ A │").assertIsDisplayed()
         compose.onNodeWithText("After art").assertIsDisplayed()
         compose.onNodeWithText("Plain explanation").assertIsDisplayed()
-        compose.onNodeWithText(label(R.string.remote_copy_code)).performClick()
+        // The code block copies through its icon button, named for TalkBack.
+        compose.onNodeWithContentDescription(label(R.string.remote_copy_code)).performClick()
         compose.onNodeWithText("Drawn choice").assertIsNotSelected()
         compose.onNodeWithText("Drawn choice").performClick().assertIsSelected()
     }
@@ -1361,9 +1393,9 @@ class RemoteNavigationUiTest {
                         }
                 )
         }
-        for (theme in listOf("light", "dark")) {
-            compose.runOnIdle { uiSettings.setTheme(theme) }
-            captureFixture("sessions-$theme")
+        for (mode in listOf(ThemeMode.LIGHT, ThemeMode.DARK)) {
+            compose.runOnIdle { uiSettings.setThemeMode(mode) }
+            captureFixture("sessions-${mode.stored}")
         }
 
         compose
@@ -1373,7 +1405,7 @@ class RemoteNavigationUiTest {
             .performClick()
         compose.onNodeWithText("Message for created").assertIsDisplayed()
         compose.runOnIdle {
-            uiSettings.setThinkingDisplay("text")
+            uiSettings.setThinkingDisplay(ThinkingDisplay.TEXT)
             repository.state.value =
                 repository.state.value.copy(
                     capabilities =
@@ -1429,9 +1461,9 @@ class RemoteNavigationUiTest {
                             .map { it.jsonObject },
                 )
         }
-        for (theme in listOf("light", "dark")) {
-            compose.runOnIdle { uiSettings.setTheme(theme) }
-            captureFixture("chat-$theme")
+        for (mode in listOf(ThemeMode.LIGHT, ThemeMode.DARK)) {
+            compose.runOnIdle { uiSettings.setThemeMode(mode) }
+            captureFixture("chat-${mode.stored}")
         }
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         val previousIme =
@@ -1641,9 +1673,9 @@ class RemoteNavigationUiTest {
                     super.getSharedPreferences(preferenceName, mode)
             }
         try {
-            assertFalse(DefaultSettingsRepository(context).state.value.hideOfflineSessions)
-            DefaultSettingsRepository(context).setHideOfflineSessions(true)
-            assertTrue(DefaultSettingsRepository(context).state.value.hideOfflineSessions)
+            assertFalse(DefaultSettingsRepository(context) {}.state.value.hideOfflineSessions)
+            DefaultSettingsRepository(context) {}.setHideOfflineSessions(true)
+            assertTrue(DefaultSettingsRepository(context) {}.state.value.hideOfflineSessions)
         } finally {
             context
                 .getSharedPreferences(preferenceName, android.content.Context.MODE_PRIVATE)
@@ -1656,6 +1688,9 @@ class RemoteNavigationUiTest {
     @Test
     fun settingsSwitchesExposeOneToggleTargetEach() {
         settings()
+        // Thinking display is in the Chat group, below General's notifications and appearance.
+        val list = compose.onNode(hasScrollToIndexAction())
+        list.performScrollToNode(hasTestTag("thinkingSwitch"))
         val thinking = { compose.onNodeWithTag("thinkingSwitch") }
         thinking().assert(hasClickAction()).assertIsOff()
             .assertTextContains(label(R.string.remote_design_show_thinking))
@@ -1666,23 +1701,31 @@ class RemoteNavigationUiTest {
         ).assertCountEquals(0)
         thinking().performClick()
         thinking().assertIsOn()
-        compose.runOnIdle { assertEquals("text", uiSettings.state.value.thinkingDisplay) }
+        compose.runOnIdle { assertEquals(ThinkingDisplay.TEXT, uiSettings.state.value.thinkingDisplay) }
         thinking().performClick()
         thinking().assertIsOff()
-        compose.runOnIdle { assertEquals("status", uiSettings.state.value.thinkingDisplay) }
+        compose.runOnIdle { assertEquals(ThinkingDisplay.STATUS, uiSettings.state.value.thinkingDisplay) }
 
-        val themeSwitch = compose.onNodeWithTag("themeSynthwaveSwitch")
-        themeSwitch.performScrollTo().assertIsOff()
-            .assert(hasClickAction())
-            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
-        compose.onAllNodes(
-            hasClickAction() and hasAnyAncestor(hasTestTag("themeSynthwaveSwitch")),
-            useUnmergedTree = true,
-        ).assertCountEquals(0)
-        themeSwitch.performClick().assertIsOn()
-        compose.runOnIdle { assertEquals("synthwave", uiSettings.state.value.theme) }
-        themeSwitch.performClick().assertIsOff()
-        compose.runOnIdle { assertEquals("system", uiSettings.state.value.theme) }
+        // Mode and palette are two pickers: each shows one selection and changes only its own setting.
+        list.performScrollToNode(hasTestTag("themeMode-dark"))
+        compose.onNodeWithTag("themeMode-dark").performScrollTo().performClick().assertIsSelected()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
+        compose.runOnIdle { assertEquals(ThemeMode.DARK, uiSettings.state.value.themeMode) }
+        compose.onNodeWithTag("themeMode-system").assertIsNotSelected()
+        compose.onNodeWithTag("themePalette-synthwave").performScrollTo().performClick().assertIsSelected()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
+        compose.runOnIdle {
+            assertEquals(ThemePalette.SYNTHWAVE, uiSettings.state.value.theme)
+            assertEquals(ThemeMode.DARK, uiSettings.state.value.themeMode)
+        }
+        compose.onNodeWithTag("themePalette-system").assertIsNotSelected()
+        // Scrolling up just far enough would leave the mode row at the list's top edge, under the
+        // floating header that takes the tap; the whole Appearance card comes back into view instead.
+        list.performScrollToKey("settings-appearance")
+        compose.onNodeWithTag("themeMode-system").assertIsDisplayed().performClick().assertIsSelected()
+        compose.runOnIdle { assertEquals(ThemeMode.SYSTEM, uiSettings.state.value.themeMode) }
+        compose.onNodeWithTag("themePalette-system").performScrollTo().performClick().assertIsSelected()
+        compose.runOnIdle { assertEquals(ThemePalette.BRAND, uiSettings.state.value.theme) }
     }
 
     @Test
@@ -1694,34 +1737,47 @@ class RemoteNavigationUiTest {
                     super.getSharedPreferences(preferenceName, mode)
             }
         val preferences = context.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
+        // Persistence only: the real night mode call would force the app dark for every later test.
+        val newSettings = { DefaultSettingsRepository(context) {} }
         try {
-            assertEquals("status", DefaultSettingsRepository(context).state.value.thinkingDisplay)
+            assertEquals(ThinkingDisplay.STATUS, newSettings().state.value.thinkingDisplay)
             preferences.edit().putString("thinking_display", "status").commit()
-            assertEquals("status", DefaultSettingsRepository(context).state.value.thinkingDisplay)
+            assertEquals(ThinkingDisplay.STATUS, newSettings().state.value.thinkingDisplay)
             preferences.edit().putString("thinking_display", "unknown").commit()
-            assertEquals("status", DefaultSettingsRepository(context).state.value.thinkingDisplay)
+            assertEquals(ThinkingDisplay.STATUS, newSettings().state.value.thinkingDisplay)
             preferences.edit()
                 .putString("thinking_display", "text")
                 .putBoolean("hide_offline_sessions", true)
                 .commit()
-            for (theme in listOf("system", "synthwave")) {
-                DefaultSettingsRepository(context).setTheme(theme)
-                assertEquals(theme, preferences.getString("theme", null))
-                val restored = DefaultSettingsRepository(context).state.value
-                assertEquals(theme, restored.theme)
-                assertEquals("text", restored.thinkingDisplay)
+            for (palette in ThemePalette.entries) {
+                newSettings().setTheme(palette)
+                assertEquals(palette.stored, preferences.getString("theme", null))
+                val restored = newSettings().state.value
+                assertEquals(palette, restored.theme)
+                assertEquals(ThinkingDisplay.TEXT, restored.thinkingDisplay)
                 assertTrue(restored.hideOfflineSessions)
             }
-            for (legacyTheme in listOf("light", "dark")) {
-                preferences.edit().putString("theme", legacyTheme).commit()
-                assertEquals("system", DefaultSettingsRepository(context).state.value.theme)
+            for (mode in ThemeMode.entries) {
+                newSettings().setThemeMode(mode)
+                assertEquals(mode.stored, preferences.getString("theme_mode", null))
+                assertEquals(mode, newSettings().state.value.themeMode)
             }
-            val repository = DefaultSettingsRepository(context)
-            repository.setTheme("synthwave")
-            repository.setThinkingDisplay("status")
-            val restored = DefaultSettingsRepository(context).state.value
-            assertEquals("status", restored.thinkingDisplay)
-            assertEquals("synthwave", restored.theme)
+            // A forced mode that older builds stored as the palette moves to the mode, once.
+            for ((legacyTheme, mode) in mapOf("light" to ThemeMode.LIGHT, "dark" to ThemeMode.DARK)) {
+                preferences.edit().remove("theme_mode").putString("theme", legacyTheme).commit()
+                val migrated = newSettings().state.value
+                assertEquals(ThemePalette.BRAND, migrated.theme)
+                assertEquals(mode, migrated.themeMode)
+                assertEquals(mode.stored, preferences.getString("theme_mode", null))
+            }
+            val settings = newSettings()
+            settings.setTheme(ThemePalette.SYNTHWAVE)
+            settings.setThemeMode(ThemeMode.DARK)
+            settings.setThinkingDisplay(ThinkingDisplay.STATUS)
+            val restored = newSettings().state.value
+            assertEquals(ThinkingDisplay.STATUS, restored.thinkingDisplay)
+            assertEquals(ThemePalette.SYNTHWAVE, restored.theme)
+            assertEquals(ThemeMode.DARK, restored.themeMode)
             assertTrue(restored.hideOfflineSessions)
         } finally {
             preferences.edit().clear().commit()
@@ -1780,14 +1836,17 @@ class RemoteNavigationUiTest {
         compose.onNodeWithText("Test computer").performClick()
         compose.onNodeWithText("Project one").assertIsDisplayed()
         val title = compose.activity.getString(R.string.remote_disconnect_title, "Test computer")
-        click(R.string.remote_disconnect)
+        // Disconnect lives in the Mac's overflow on its Projects page.
+        compose.onNodeWithTag("macOverflow").performClick()
+        click(R.string.remote_mac_disconnect)
         compose.onNodeWithText(title).assertIsDisplayed()
         compose.onNode(hasText(label(R.string.remote_cancel)) and hasAnyAncestor(isDialog()))
             .performClick()
         compose.onNodeWithText(title).assertDoesNotExist()
         compose.runOnIdle { assertNotNull(repository.state.value.host) }
 
-        click(R.string.remote_disconnect)
+        compose.onNodeWithTag("macOverflow").performClick()
+        click(R.string.remote_mac_disconnect)
         compose.onNodeWithTag("confirmDisconnect").performClick()
         compose.runOnIdle {
             assertEquals(1, repository.disconnects)
@@ -1819,7 +1878,7 @@ class RemoteNavigationUiTest {
         compose.onNodeWithText("Message for live").assertIsDisplayed()
         val activations = repository.activations.size
         settings()
-        compose.onNodeWithText(label(R.string.remote_appearance)).assertIsDisplayed()
+        compose.onNodeWithTag(SETTINGS_GROUP_KEY_PREFIX + "general").assertIsDisplayed()
         back()
         assertEquals(activations, repository.activations.size)
         compose.onNodeWithText("Message for live").assertIsDisplayed()
@@ -2052,13 +2111,18 @@ class RemoteNavigationUiTest {
                     compaction = SessionCompaction("threshold", System.currentTimeMillis())
                 )
         }
-        // A compact chat (always, on a phone) keeps the banner out of the conversation: the header
-        // menu offers Status while it shows, and the banner is in the sheet that opens.
+        // A compact chat (always, on a phone) keeps the banner out of the conversation: a one-line
+        // status chip says what runs, the header menu offers Status while it shows, and the banner
+        // is in the sheet that opens.
         compose.onNodeWithTag("compactionBanner").assertDoesNotExist()
+        // The chip merges its label into itself, as a button does.
+        compose.onNode(hasTestTag("chatStatusChip") and hasText(label(R.string.remote_panel_compacting)))
+            .assertIsDisplayed()
         compose.onNodeWithTag("chatActionsMore").performClick()
         compose.onNodeWithTag("chatActionMenu_status").performClick()
         compose.onNodeWithTag("compactionBanner").assertIsDisplayed()
-        compose.onNodeWithText(label(R.string.remote_panel_compacting)).assertIsDisplayed()
+        compose.onNode(hasText(label(R.string.remote_panel_compacting)) and hasAnyAncestor(hasTestTag("compactionBanner")))
+            .assertIsDisplayed()
         compose.runOnIdle {
             repository.state.value = repository.state.value.copy(compaction = null)
         }
@@ -2313,15 +2377,19 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
 private class UiSettingsRepository : SettingsRepository {
     override val state = MutableStateFlow(RemoteSettings())
 
-    override fun setTheme(theme: String) {
+    override fun setTheme(theme: ThemePalette) {
         state.value = state.value.copy(theme = theme)
+    }
+
+    override fun setThemeMode(mode: ThemeMode) {
+        state.value = state.value.copy(themeMode = mode)
     }
 
     override fun setPushEnabled(enabled: Boolean) {
         state.value = state.value.copy(pushEnabled = enabled)
     }
 
-    override fun setThinkingDisplay(display: String) {
+    override fun setThinkingDisplay(display: ThinkingDisplay) {
         state.value = state.value.copy(thinkingDisplay = display)
     }
 

@@ -48,27 +48,27 @@ release signing keys, Play credentials or Firebase release configuration.
 
 Start `/remote` in pi on the Mac, scan the QR code and approve the device on the Mac. You can also
 paste the complete pairing code. The code expires after two minutes. Projects must be shared by the
-Mac before they appear in the app. Historical sessions continue as copies through the host.
+Mac before they appear in the app. Historical sessions continue in a fork that pi Remote starts on the Mac.
 
 Swipe left on a project row to reveal the unshare action. Confirming stops sharing only that
 project from the Mac for all paired devices. It leaves the project files and other shared projects
-in place. The action requires a connected host that supports project unsharing.
+in place. The action requires a connected Mac whose pi Remote supports project unsharing.
 
 Pairings are encrypted with an Android Keystore key in the application's no-backup directory. The
 manifest disables cloud backup and device transfer. Removing a pairing deletes its local credentials.
-Use the Mac's device revocation command to invalidate the device key at the host too.
+Use the Mac's device revocation command to invalidate the device key on the Mac too.
 
-## Conversations
+## Sessions
 
-The session list shows each conversation's title, available preview and last update. A green dot
-means the session is ready; a gray dot means it is offline or requires opening a historical copy.
+The session list shows each session's title, available preview and last update. A green dot
+means the session is ready; a gray dot means it is offline or is a historical session that opens as a fork.
 Subagent sessions appear below their parent and keep their own status, preview and controls.
-The floating plus button starts a conversation in the selected shared project.
+The floating plus button starts a session in the selected shared project.
 
 Swipe a message to the left, or tap its quote icon, to reference it in your reply. The
 composer shows the selected excerpt and lets you remove it. Quotes belong to the current session's
 draft and survive app restarts. Sending includes the excerpt in ordinary prompt text, so pi and the
-saved history retain the reference. It does not grant access to another conversation or branch.
+saved history retain the reference. It does not grant access to another session or branch.
 Messages with a timestamp from pi show the device's local date and time. Older messages without a
 valid timestamp show no time.
 
@@ -79,14 +79,14 @@ transcription in the editable draft and never sends it automatically. It prefers
 recognizer when available. A system recognizer may use a network connection, and the composer shows
 that before recording starts.
 
-PocketPi does not store or relay microphone audio. Canceling dictation, leaving the conversation, or
+PocketPi does not store or relay microphone audio. Canceling dictation, leaving the session, or
 putting the app in the background stops recognition. Typing while recognition is active keeps the
 keyboard draft and discards the later transcription. Test the selected recognizer on a physical device
 before relying on it, because Android's recognition services vary by device.
 
 Assistant messages show their recorded model identity when available. Tool calls and results appear
 as expandable activity cards. The **Show thinking** switch in Settings is off by default and shows
-only the thinking status. Turn it on to see thinking text when the host streams it. Hidden or
+only the thinking status. Turn it on to see thinking text when the model provides it. Hidden or
 redacted provider reasoning is not exposed.
 
 Model and thinking controls read the selected session's actual configuration. A change applies only
@@ -96,7 +96,7 @@ credentials stay there. The app waits for the confirmed configuration before sho
 The Advisor pill shows the selected session's Advisor, activity and remaining consultations. Tap it
 to choose an authenticated model and thinking level or turn the Advisor off for that session.
 Context sharing is offered separately. Selecting it opens the Advisor's disclosure and requires
-confirmation before the active conversation can be sent to the second model. The permission stays
+confirmation before the active session can be sent to the second model. The permission stays
 in the Mac runtime and is revoked when the Advisor or session changes.
 
 Type `/` to find the selected session's advertised extension commands, prompt templates and skills.
@@ -105,8 +105,8 @@ not executed remotely. Remove a quote before sending a slash command. A dispatch
 means pi received the command; it does not mean the command finished. Some terminal dialogs still
 require input on the Mac.
 
-These controls require an updated host and remote extension. Restart the host after installing an
-update, and run `/reload` in terminal sessions. Older hosts can still provide basic conversations;
+These controls require an updated pi Remote and remote extension on the Mac. Restart pi Remote after
+installing an update, and run `/reload` in terminal sessions. Older versions still provide basic sessions;
 unsupported controls remain unavailable.
 
 ## Photos and files
@@ -123,17 +123,17 @@ sending slash commands.
 Uploads use the existing encrypted connection in bounded chunks. The Mac stores files in a private
 attachment directory and checks their digest and session ownership before sending the prompt.
 Images become native image input; other files appear as local paths in the prompt so pi can read
-them. The conversation shows attachment metadata, not embedded file contents.
+them. The session shows attachment metadata, not embedded file contents.
 
 Unsubmitted uploads expire after one hour. Submitted files remain on the Mac for seven days. A
-saved conversation retains the reference after expiry, but the temporary file may no longer exist.
+saved session retains the reference after expiry, but the temporary file may no longer exist.
 The phone keeps local copies while an encrypted draft or an uncertain send still references them.
 Disconnecting does not automatically resubmit a prompt.
 
 ## Editing project files
 
-The file browser opens text files in an editor when the Mac's pi Remote host offers
-`session.files.write.v1`. Hosts offer it by default; it can be turned off on the Mac. The editor has
+The file browser opens text files in an editor when pi Remote on the Mac offers
+`session.files.write.v1`. pi Remote offers it by default; it can be turned off on the Mac. The editor has
 line numbers, syntax colours, find, undo and redo, and Tab or Shift+Tab indenting. With a hardware
 keyboard, Ctrl+S saves, Ctrl+Z and Ctrl+Shift+Z or Ctrl+Y undo and redo, Ctrl+F finds and Esc closes
 find. While the editor has focus, the app's own shortcuts are off. Without a hardware keyboard, a
@@ -165,7 +165,7 @@ these values into tracked files or print them in release logs.
 The app initializes Firebase programmatically and does not require `google-services.json`. The relay
 needs the matching server credentials. Enable notifications after pairing. Declining permission does
 not disable remote control. Notifications contain generic completion or question text and opaque
-routing identifiers. The app only opens notification targets associated with a saved host.
+routing identifiers. The app only opens notification targets associated with a saved Mac.
 Notifications are grouped per Mac and show as conversations with pi. From Android 12, a completion
 notification offers Reply on an unlocked phone: the text goes to the Mac over the encrypted channel
 as the session's next prompt, and a reply without an acknowledgement is reported, never resent.
@@ -175,23 +175,23 @@ as the session's next prompt, and a reply without an acknowledgement is reported
 Drafts and unresolved prompt acknowledgments are encrypted with Android Keystore in the no-backup
 directory, separately from pairing credentials. Writes are serialized, and a prompt is sent only
 after its unresolved acknowledgment marker has been saved. An acknowledgment clears the submitted
-text only if the user has not edited it since sending. Removing a host also removes its drafts.
+text only if the user has not edited it since sending. Removing a Mac also removes its drafts.
 
 A reconnect validates the selected project and session and reads a fresh snapshot. PocketPi checks
 again when the app returns to the foreground on a validated network, and after the default network
 changes. It keeps the socket while the app is in the background and stops automatic retries there.
 It never opens or forks a historical session, and never retries prompts or answers automatically.
-After an uncertain prompt result, read the conversation before sending the draft again. In a
+After an uncertain prompt result, check the session before sending the draft again. In a
 running host-owned RPC session, the busy row offers two send modes: Send now (interrupt step) sends
 the draft as a steer, and Send when done submits it to pi's follow-up queue. The journal
 distinguishes queued messages from uncertain outcomes. Stop, from the busy row, Esc Esc, Ctrl+. or a
 question's abort, asks first when queued messages would be discarded. Once confirmed, it clears the
 RPC queue before aborting, but pi does not return request IDs for removed messages, so PocketPi
 cannot claim that a particular follow-up was discarded. The journal keeps up to 64 entries per session; dismiss an
-uncertain entry after checking the conversation to make room without resending it. Ordinary prompts
+uncertain entry after checking the session to make room without resending it. Ordinary prompts
 and slash commands remain idle-only. Interactive Mac TUI sessions do not accept remote follow-up
 while busy; the information icon next to the chat title explains their local controls. Refresh
-reconnects an offline saved host. The Mac must remain awake with the host service running.
+reconnects an offline saved Mac. The Mac must remain awake with pi Remote running.
 
 With a host that advertises `provider.auth.v1`, the Projects screen has a Providers screen. It lists
 the Mac's pi providers and signs them in (OAuth device code, OAuth link plus a pasted address, API

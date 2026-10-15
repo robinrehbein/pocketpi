@@ -185,7 +185,10 @@ internal open class DestinationViewModel(
 }
 
 internal class HostsViewModel(repository: RemoteRepository) :
-    DestinationViewModel(repository, RemoteNavKey.Hosts)
+    DestinationViewModel(repository, RemoteNavKey.Hosts) {
+    /** Gives up the pairing waiting for the Mac's approval; see [RemoteRepository.cancelPairing]. */
+    fun cancelPairing() = repository.cancelPairing()
+}
 
 internal class ActivityViewModel(repository: RemoteRepository, key: RemoteNavKey.Activity) :
     DestinationViewModel(repository, key)
@@ -272,9 +275,6 @@ internal class ChatViewModel(
     private val settings: SettingsRepository,
 ) : DestinationViewModel(repository, key) {
     val preferences = settings.state
-
-    /** Header actions by use, ranked once per opened chat so the pill does not shift while shown. */
-    val chatActions: List<ChatAction> = settings.rankedChatActions()
 
     fun recordChatAction(action: ChatAction) = settings.recordChatAction(action)
 
@@ -540,15 +540,20 @@ internal class SettingsViewModel(
 ) : DestinationViewModel(repository, RemoteNavKey.Settings) {
     val preferences = settings.state
 
-    fun setTheme(theme: String) = settings.setTheme(theme)
+    fun setTheme(theme: ThemePalette) = settings.setTheme(theme)
 
-    fun setThinkingDisplay(display: String) = settings.setThinkingDisplay(display)
+    fun setThemeMode(mode: ThemeMode) = settings.setThemeMode(mode)
+
+    fun setThinkingDisplay(display: ThinkingDisplay) = settings.setThinkingDisplay(display)
 
     fun setSwipeEndToStart(action: SwipeAction) = settings.setSwipeEndToStart(action)
 
     fun setSwipeStartToEnd(action: SwipeAction) = settings.setSwipeStartToEnd(action)
 
     fun setEnterSends(enabled: Boolean) = settings.setEnterSends(enabled)
+
+    /** The same setting as the session filter's switch ([SessionsViewModel.setHideOfflineSessions]). */
+    fun setHideOfflineSessions(hide: Boolean) = settings.setHideOfflineSessions(hide)
 }
 
 /** Where [ChatViewModel.askNow] put a prompt. */

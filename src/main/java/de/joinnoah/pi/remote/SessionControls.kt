@@ -12,7 +12,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Info
@@ -30,6 +29,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -422,6 +422,8 @@ internal fun SessionControls(
                         val dimmed = hint ||
                             command == LocalCommand.RELOAD &&
                                 (reloading || reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
+                        // The dimming says it to the eye; TalkBack hears it as the row's state.
+                        val unavailable = stringResource(R.string.remote_slash_command_unavailable)
                         ListItem(
                             headlineContent = { Text("/" + command.commandName) },
                             supportingContent = {
@@ -433,8 +435,9 @@ internal fun SessionControls(
                             },
                             colors = suggestionColors(index == highlight),
                             modifier = Modifier.alpha(if (dimmed) 0.6f else 1f)
+                                .then(if (dimmed) Modifier.semantics { stateDescription = unavailable } else Modifier)
                                 .suggestionHighlight(index == highlight)
-                                .focusRing()
+                                .focusRing(MaterialTheme.shapes.small)
                                 .clickable { selectLocalCommand(command) },
                         )
                     }
@@ -448,7 +451,7 @@ internal fun SessionControls(
                                 }
                             },
                             colors = suggestionColors(index == highlight),
-                            modifier = Modifier.suggestionHighlight(index == highlight).focusRing().clickable { selectCommand(command) },
+                            modifier = Modifier.suggestionHighlight(index == highlight).focusRing(MaterialTheme.shapes.small).clickable { selectCommand(command) },
                         )
                     }
                 }
@@ -552,7 +555,7 @@ internal fun SessionControls(
                         .padding(horizontal = 16.dp, vertical = 4.dp)
                         .background(
                             MaterialTheme.colorScheme.surfaceContainerHigh,
-                            RoundedCornerShape(12.dp),
+                            MaterialTheme.shapes.small,
                         )
                         .padding(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -564,56 +567,62 @@ internal fun SessionControls(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
-                        stringResource(R.string.remote_busy),
+                        stringResource(
+                            if (picker == "model") R.string.remote_model_busy_note
+                            else R.string.remote_thinking_busy_note
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             if (state.configurationLoading || state.configurationChanging)
                 LinearProgressIndicator(Modifier.fillMaxWidth())
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp).navigationBarsPadding()) {
-                if (picker == "model") {
-                    items(confirmed?.models ?: emptyList(), key = { it.provider + ":" + it.id }) {
-                        model ->
-                        val chosen =
-                            confirmed?.model?.let {
-                                it.provider == model.provider && it.id == model.id
-                            } == true
-                        PickerRow(
-                            chosen = chosen,
-                            enabled = canChange,
-                            onSelect = { selectModel(model.provider, model.id) },
-                        ) {
-                            Column {
-                                Text(model.name)
-                                Text(
-                                    model.provider + " · " + model.id,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
+            // The navigation bar pads the list and the providers row under it together.
+            Column(Modifier.navigationBarsPadding()) {
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
+                    if (picker == "model") {
+                        items(confirmed?.models ?: emptyList(), key = { it.provider + ":" + it.id }) {
+                            model ->
+                            val chosen =
+                                confirmed?.model?.let {
+                                    it.provider == model.provider && it.id == model.id
+                                } == true
+                            PickerRow(
+                                chosen = chosen,
+                                enabled = canChange,
+                                onSelect = { selectModel(model.provider, model.id) },
+                            ) {
+                                Column {
+                                    Text(model.name)
+                                    Text(
+                                        model.provider + " · " + model.id,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
                             }
                         }
-                    }
-                    if (confirmed?.modelsTruncated == true)
-                        item {
-                            Text(
-                                stringResource(R.string.remote_catalog_truncated),
-                                Modifier.padding(24.dp),
-                            )
+                        if (confirmed?.modelsTruncated == true)
+                            item {
+                                Text(
+                                    stringResource(R.string.remote_catalog_truncated),
+                                    Modifier.padding(24.dp),
+                                )
+                            }
+                    } else
+                        items(confirmed?.thinkingLevels ?: emptyList()) { level ->
+                            PickerRow(
+                                chosen = confirmed?.thinkingLevel == level,
+                                enabled = canChange,
+                                onSelect = { selectThinking(level) },
+                            ) {
+                                Text(thinkingLevelLabel(level))
+                            }
                         }
-                } else
-                    items(confirmed?.thinkingLevels ?: emptyList()) { level ->
-                        PickerRow(
-                            chosen = confirmed?.thinkingLevel == level,
-                            enabled = canChange,
-                            onSelect = { selectThinking(level) },
-                        ) {
-                            Text(thinkingLevelLabel(level))
-                        }
-                    }
+                }
+                // A model the host lacks is signed in to on the providers page; the thinking picker has none.
+                if (picker == "model")
+                    manageProviders?.let { manage -> ManageProvidersRow { closePicker(); manage() } }
             }
-            // A model the host lacks is signed in to on the providers page; the thinking picker has none.
-            if (picker == "model")
-                manageProviders?.let { manage -> ManageProvidersRow { closePicker(); manage() } }
         }
 }
 
@@ -753,7 +762,16 @@ internal fun SessionSettingsSheetBody(
             .testTag("sessionSettingsSheet"),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(stringResource(R.string.remote_session_settings_title), style = MaterialTheme.typography.titleLarge)
+        // Under the title: what this sheet changes is read before any control is used.
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(stringResource(R.string.remote_session_settings_title), style = MaterialTheme.typography.titleLarge)
+            Text(
+                stringResource(R.string.remote_session_settings_scope),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("sessionSettingsScope"),
+            )
+        }
         if (working || (!enabled && !busy))
             Text(
                 stringResource(
@@ -794,11 +812,6 @@ internal fun SessionSettingsSheetBody(
             selected = settings.followUpMode,
             enabled = enabled,
             onSelect = { onChange(null, null, it) },
-        )
-        Text(
-            stringResource(R.string.remote_session_settings_scope),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(8.dp))
     }
@@ -865,12 +878,12 @@ private fun PickerRow(
     Row(
         Modifier.fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(MaterialTheme.shapes.small)
             .then(
                 if (chosen)
                     Modifier.background(
                         MaterialTheme.colorScheme.primaryContainer,
-                        RoundedCornerShape(12.dp),
+                        MaterialTheme.shapes.small,
                     )
                 else Modifier
             )

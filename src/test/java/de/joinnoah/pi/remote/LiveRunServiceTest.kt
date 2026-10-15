@@ -268,7 +268,7 @@ class LiveRunServiceTest {
         assertEquals("Read file: README.md", shownNotification()?.text())
         state.value = liveState("waiting")
         idle()
-        assertEquals("Waiting for your answer", shownNotification()?.text())
+        assertEquals("Needs you", shownNotification()?.text())
         assertNull(LiveRun.lastStop)
     }
 

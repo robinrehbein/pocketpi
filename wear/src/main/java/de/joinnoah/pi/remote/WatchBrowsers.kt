@@ -161,7 +161,7 @@ internal fun WatchListScope.watchJobs(state: RemoteState, model: WatchViewModel,
     if (view == null) {
         items(jobs.jobs, key = { it.id }) { job ->
             WatchAction(job.command, { changePage(0); repository.openJob(job.id) }, ready,
-                stringResource(if (job.status == JobStatus.RUNNING) R.string.wear_running else R.string.wear_job_finished))
+                stringResource(if (job.status == JobStatus.RUNNING) R.string.remote_jobs_status_running else R.string.wear_job_finished))
         }
     } else {
         if (view.vanished) notice(R.string.wear_no_longer_available)
@@ -223,8 +223,10 @@ internal fun WatchListScope.watchFolders(state: RemoteState, model: WatchViewMod
 internal fun WatchListScope.watchConfirmation(model: WatchViewModel, ready: Boolean) {
     val confirmation = model.confirmation ?: return
     val kind = confirmation.kind
+    val state = model.repository.state.value
+    val child = kind == WatchConfirmationKind.STOP && childControlsAvailable(state)
     val body = when (kind) {
-        WatchConfirmationKind.STOP -> R.string.wear_confirm_stop
+        WatchConfirmationKind.STOP -> if (child) R.string.remote_child_stop_title else R.string.wear_confirm_stop
         WatchConfirmationKind.UNPAIR -> R.string.wear_confirm_unpair
         WatchConfirmationKind.UNSHARE -> R.string.wear_confirm_unshare
         WatchConfirmationKind.CLOSE -> R.string.wear_confirm_close
@@ -235,7 +237,7 @@ internal fun WatchListScope.watchConfirmation(model: WatchViewModel, ready: Bool
         WatchConfirmationKind.TRUST -> R.string.wear_confirm_trust
     }
     notice(body)
-    val state = model.repository.state.value
+    if (child) notice(R.string.remote_child_stop_body)
     val targetLabel = when (kind) {
         WatchConfirmationKind.UNPAIR -> state.host?.name
         WatchConfirmationKind.UNSHARE -> state.projects.find { it.text("id") == confirmation.target }?.optionalText("name")

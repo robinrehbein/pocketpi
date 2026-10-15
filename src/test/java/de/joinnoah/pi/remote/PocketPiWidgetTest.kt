@@ -117,8 +117,8 @@ class PocketPiWidgetTest {
         // Three columns of six rows: the 18 most recent of the 20 running sessions.
         val titles = shown.filter { it.startsWith("Session ") }
         assertEquals((20 downTo 3).map { "Session $it" }.toSet(), titles.toSet())
-        assertTrue(shown.contains("Project 20 · Running"))
-        assertTrue(shown.contains("Project 3 · Running"))
+        assertTrue(shown.contains("Project 20 · Working"))
+        assertTrue(shown.contains("Project 3 · Working"))
     }
 
     @Test

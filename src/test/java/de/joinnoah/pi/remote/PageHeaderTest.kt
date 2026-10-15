@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListItemInfo
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -100,6 +102,47 @@ class PageHeaderTest {
         compose.waitForIdle()
         compose.onAllNodesWithTag("pageHeaderTitle").assertCountEquals(0)
         headings().assertCountEquals(1)
+    }
+
+    private fun layout(titleOffset: Int, titleSize: Int, topPadding: Int): LazyListLayoutInfo {
+        val title =
+            object : LazyListItemInfo {
+                override val index = 1
+                override val key: Any = PAGE_TITLE_KEY
+                override val offset = titleOffset
+                override val size = titleSize
+            }
+        return object : LazyListLayoutInfo {
+            override val visibleItemsInfo = listOf<LazyListItemInfo>(title)
+            override val viewportStartOffset = -topPadding
+            override val viewportEndOffset = 1000
+            override val totalItemsCount = 10
+            override val beforeContentPadding = topPadding
+        }
+    }
+
+    @Test
+    fun theTitleCountsAsGoneOnlyOnceItsBottomIsUnderTheHeaderPastTheTopPadding() {
+        // The list starts 48 px below its top: an item offset of 0 is 48 px down the screen.
+        // A 100 px header covers the title once its bottom, offset + size + 48, is at most 100.
+        assertEquals(true, pageTitleScrolledAway(layout(titleOffset = 12, titleSize = 40, topPadding = 48), headerPx = 100))
+        assertEquals(false, pageTitleScrolledAway(layout(titleOffset = 13, titleSize = 40, topPadding = 48), headerPx = 100))
+        // Without padding the header alone decides.
+        assertEquals(true, pageTitleScrolledAway(layout(titleOffset = 60, titleSize = 40, topPadding = 0), headerPx = 100))
+        assertEquals(false, pageTitleScrolledAway(layout(titleOffset = 61, titleSize = 40, topPadding = 0), headerPx = 100))
+    }
+
+    @Test
+    fun aPageWithoutBackKeepsItsTitleInAPillOfItsOwn() {
+        var inPill by mutableStateOf(false)
+        compose.setContent { MaterialTheme { PageHeader(title = "Hosts", titleInPill = inPill, onBack = null) } }
+        compose.onAllNodesWithTag("pageHeaderTitle").assertCountEquals(0)
+        compose.onAllNodesWithTag("navigationPill").assertCountEquals(0)
+        inPill = true
+        compose.waitForIdle()
+        compose.onNodeWithTag("titlePill").assertIsDisplayed()
+        compose.onNodeWithTag("pageHeaderTitle").assertIsDisplayed().assertTextEquals("Hosts")
+        compose.onAllNodesWithTag("navigationPill").assertCountEquals(0)
     }
 
     @Test

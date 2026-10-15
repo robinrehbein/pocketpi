@@ -164,5 +164,22 @@ class QuestionCardUiTest {
         compose.onNodeWithText("Submit answer").assertIsEnabled()
     }
 
+    @Test fun questionnaireSendsTheSharedEncodingTheWatchUses() {
+        render(questionnaire)
+        val questions = parse(questionnaire).array("questions")
+        val defaults = QuestionnaireAnswers.defaults(questions)
+        compose.onNodeWithText("Submit answer").performScrollTo().performClick()
+        assertEquals(defaults.wire(questions), answers.single())
+        // On a single choice the typed text replaces the custom default, by the rule the watch
+        // applies too (WatchQuestionAnswers.editOther).
+        compose.onNode(hasSetTextAction()).performScrollTo().performTextInput("more")
+        compose.onNodeWithText("Submit answer").performScrollTo().performClick()
+        assertEquals(defaults.other(questions[1], "more").wire(questions), answers.last())
+        assertEquals(
+            listOf("more"),
+            answers.last().array("answers")[1].array("selections").map { it.text("value") },
+        )
+    }
+
     private val questionnaire = """{"id":"form","kind":"questionnaire","questions":[{"id":"required","prompt":"Required","multiSelect":false,"required":true,"allowOther":false,"defaults":["a"],"options":[{"value":"a","label":"Alpha"}]},{"id":"optional","prompt":"Optional","multiSelect":false,"required":false,"allowOther":true,"defaults":["custom default"],"options":[]}]}"""
 }

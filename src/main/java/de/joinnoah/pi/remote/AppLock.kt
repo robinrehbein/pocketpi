@@ -212,7 +212,7 @@ internal fun AppLockGate(locked: Boolean, onUnlock: () -> Unit, colors: ColorSch
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(locked) { if (locked) keyboard?.hide() }
     val saved = rememberSaveableStateHolder()
-    if (locked) MaterialTheme(colorScheme = colors, typography = RemoteTypography) { AppLockScreen(onUnlock) }
+    if (locked) MaterialTheme(colorScheme = colors, typography = RemoteTypography, shapes = RemoteShapes) { AppLockScreen(onUnlock) }
     else saved.SaveableStateProvider("app") { content() }
 }
 

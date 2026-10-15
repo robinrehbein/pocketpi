@@ -1,14 +1,14 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.Edit
@@ -16,14 +16,22 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,21 +41,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 
 private fun ChatAction.icon(): ImageVector =
     when (this) {
         ChatAction.CHANGES -> Icons.Default.Difference
         ChatAction.FILES -> Icons.Default.FolderOpen
         ChatAction.JOBS -> Icons.Outlined.Terminal
+        ChatAction.TREE -> Icons.Default.AccountTree
+        ChatAction.ARTIFACTS -> Icons.Default.Collections
         ChatAction.RENAME -> Icons.Default.Edit
+        ChatAction.EXPORT -> Icons.Default.Share
         ChatAction.REFRESH -> Icons.Default.Refresh
+        ChatAction.RELOAD -> Icons.Default.RestartAlt
         ChatAction.SETTINGS -> Icons.Default.Settings
         ChatAction.NEW_SESSION -> Icons.Default.Add
         ChatAction.SESSION_SETTINGS -> Icons.Outlined.Tune
@@ -66,10 +74,9 @@ private fun ChatAction.shortcut(): Shortcut? =
         ChatAction.REFRESH -> Shortcut.REFRESH
         ChatAction.SETTINGS -> Shortcut.SETTINGS
         ChatAction.NEW_SESSION -> Shortcut.NEW_SESSION
-        ChatAction.SESSION_SETTINGS -> null
         ChatAction.HISTORY -> Shortcut.HISTORY
-        ChatAction.STATUS -> null
-        ChatAction.CLOSE -> null
+        ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.EXPORT, ChatAction.RELOAD,
+        ChatAction.SESSION_SETTINGS, ChatAction.STATUS, ChatAction.CLOSE -> null
     }
 
 internal fun ChatAction.label(): Int =
@@ -77,8 +84,12 @@ internal fun ChatAction.label(): Int =
         ChatAction.CHANGES -> R.string.remote_changes_open
         ChatAction.FILES -> R.string.remote_files_open
         ChatAction.JOBS -> R.string.remote_jobs_title
+        ChatAction.TREE -> R.string.remote_tree_title
+        ChatAction.ARTIFACTS -> R.string.remote_artifacts_title
         ChatAction.RENAME -> R.string.remote_rename_session
+        ChatAction.EXPORT -> R.string.remote_chat_action_export
         ChatAction.REFRESH -> R.string.remote_refresh
+        ChatAction.RELOAD -> R.string.remote_chat_action_reload
         ChatAction.SETTINGS -> R.string.remote_settings
         ChatAction.NEW_SESSION -> R.string.remote_new_session
         ChatAction.SESSION_SETTINGS -> R.string.remote_session_settings_title
@@ -87,7 +98,10 @@ internal fun ChatAction.label(): Int =
         ChatAction.CLOSE -> R.string.remote_session_close
     }
 
-/** The chat header pill: the most used actions as buttons, the rest behind a chevron. */
+/**
+ * The chat header pill: the first actions as buttons, the rest in a menu behind a chevron. The menu
+ * names every entry next to its icon and opens under the chevron wherever the pill sits.
+ */
 @Composable
 internal fun ChatActionPill(
     layout: ChatActionLayout,
@@ -128,35 +142,49 @@ internal fun ChatActionPill(
                             else Icon(if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore, moreLabel)
                         }
                     }
-                    if (open) {
-                        Popup(
-                            alignment = Alignment.TopEnd,
-                            offset = IntOffset(0, with(LocalDensity.current) { 56.dp.roundToPx() }),
-                            onDismissRequest = { open = false },
-                            properties = PopupProperties(focusable = true),
-                        ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                for (action in layout.menu)
-                                    FloatingSurface(
-                                        modifier = Modifier.size(48.dp),
-                                        shape = CircleShape,
-                                        color = color,
-                                    ) {
-                                        IconButton(
-                                            onClick = {
-                                                open = false
-                                                onAction(action)
-                                            },
-                                            modifier = Modifier.size(48.dp).testTag("chatActionMenu_${action.name.lowercase()}"),
-                                        ) {
-                                            Icon(action.icon(), stringResource(action.label()))
-                                        }
-                                    }
-                            }
-                        }
-                    }
+                    ChatActionMenu(
+                        layout.menu,
+                        open = open,
+                        badge = badge,
+                        onDismiss = { open = false },
+                        onAction = { action ->
+                            open = false
+                            onAction(action)
+                        },
+                    )
                 }
             }
+        }
+    }
+}
+
+/**
+ * The pill's menu: one labelled row per action, in [ChatAction] order. Close, the only destructive
+ * entry, sits apart at the end in the error colour; the status entry carries the chevron's [badge].
+ */
+@Composable
+private fun ChatActionMenu(
+    actions: List<ChatAction>,
+    open: Boolean,
+    badge: Boolean,
+    onDismiss: () -> Unit,
+    onAction: (ChatAction) -> Unit,
+) {
+    DropdownMenu(expanded = open, onDismissRequest = onDismiss, modifier = Modifier.testTag("chatActionsMenu")) {
+        for (action in actions) {
+            val destructive = action == ChatAction.CLOSE
+            if (destructive && actions.size > 1) HorizontalDivider()
+            val error = MaterialTheme.colorScheme.error
+            DropdownMenuItem(
+                text = { Text(stringResource(action.label())) },
+                onClick = { onAction(action) },
+                leadingIcon = { Icon(action.icon(), contentDescription = null) },
+                trailingIcon = if (badge && action == ChatAction.STATUS) ({ Badge() }) else null,
+                colors =
+                    if (destructive) MenuDefaults.itemColors(textColor = error, leadingIconColor = error)
+                    else MenuDefaults.itemColors(),
+                modifier = Modifier.testTag("chatActionMenu_${action.name.lowercase()}"),
+            )
         }
     }
 }

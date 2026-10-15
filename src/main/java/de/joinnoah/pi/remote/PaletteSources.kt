@@ -158,8 +158,8 @@ internal class PaletteInput(
 
 /**
  * The rows [query] matches, best first. Without text they list the pinned sessions, then the live
- * sessions, then the rest by recency; with text the match score leads, then pinned and live rows,
- * then recency. In the session mode the open chat's project ranks right after the live rows, so
+ * sessions, then the rest by recency; with text the kind of match leads, then pinned and live
+ * rows, then recency, then the exact match score. In the session mode the open chat's project ranks right after the live rows, so
  * the switcher offers its siblings first.
  */
 internal fun paletteItems(input: PaletteInput, labels: PaletteLabels, query: String): List<PaletteItem> {
@@ -177,23 +177,47 @@ internal fun paletteItems(input: PaletteInput, labels: PaletteLabels, query: Str
                 .thenByDescending { it.preferredNow() }
                 .thenByDescending { it.recency },
         )
+    // The kind of match (prefix, word, scattered letters) leads; within one kind a pinned, live
+    // or recent row beats a slightly better spelling match, which only breaks the remaining ties.
     return candidates
-        .mapNotNull { item -> matchScore(parsed.text, item)?.let { item to it } }
+        .mapNotNull { item -> match(parsed.text, item)?.let { item to it } }
         .sortedWith(
-            compareByDescending<Pair<PaletteItem, Int>> { it.second }
+            compareByDescending<Pair<PaletteItem, PaletteMatch>> { it.second.tier }
                 .thenByDescending { it.first.pinned }
                 .thenByDescending { it.first.live }
                 .thenByDescending { it.first.preferredNow() }
-                .thenByDescending { it.first.recency },
+                .thenByDescending { it.first.recency }
+                .thenByDescending { it.second.score },
         )
         .map { it.first }
 }
 
-/** A row matches on its title, or on its detail, which ranks lower. */
-private fun matchScore(text: String, item: PaletteItem): Int? {
-    val title = fuzzyScore(text, item.title)
-    val detail = item.detail?.let { fuzzyScore(text, it) }?.minus(DETAIL_MATCH_PENALTY)
-    return listOfNotNull(title, detail).maxOrNull()
+/** How a row matched: the kind of match ([tier], higher is better) and its [fuzzyScore]. */
+private class PaletteMatch(val tier: Int, val score: Int)
+
+/** A row matches on its title, or on its detail, which ranks below a title match of the same kind. */
+private fun match(text: String, item: PaletteItem): PaletteMatch? {
+    val title = fuzzyScore(text, item.title)?.let { PaletteMatch(2 * matchKind(text, item.title), it) }
+    val detail =
+        item.detail?.let { detail ->
+            fuzzyScore(text, detail)?.let { PaletteMatch(2 * matchKind(text, detail) - 1, it - DETAIL_MATCH_PENALTY) }
+        }
+    return listOfNotNull(title, detail).maxWithOrNull(compareBy<PaletteMatch> { it.tier }.thenBy { it.score })
+}
+
+/**
+ * The weakest kind of match among the words of [query] in [text], which must match: 3 for a
+ * prefix, 2 for a word inside the text, 1 for letters scattered through it.
+ */
+private fun matchKind(query: String, text: String): Int {
+    val target = text.lowercase()
+    return query.lowercase().split(' ').filter(String::isNotEmpty).minOfOrNull { word ->
+        when {
+            target.startsWith(word) -> 3
+            target.indexOf(word) > 0 -> 2
+            else -> 1
+        }
+    } ?: 3
 }
 
 private const val DETAIL_MATCH_PENALTY = 1500
@@ -374,6 +398,8 @@ internal fun chatActionAvailable(action: ChatAction, state: RemoteState, mutatin
         ChatAction.REFRESH, ChatAction.SETTINGS, ChatAction.HISTORY -> true
         // The banners' entry belongs to the compact header's menu only, where the banners show.
         ChatAction.STATUS, ChatAction.CLOSE -> false
+        // The palette lists these as their slash commands, which say more than the menu's label.
+        ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.EXPORT, ChatAction.RELOAD -> false
     }
 
 private fun chatItems(input: PaletteInput, labels: PaletteLabels): List<PaletteItem> {
@@ -403,7 +429,8 @@ private fun chatItems(input: PaletteInput, labels: PaletteLabels): List<PaletteI
         else emptyList()
     val (local, host) = mergeCommandSuggestions(availableLocalCommands(state, inChat = true, nowMillis = input.now), hostCommands, "")
     val commands =
-        local.map { command ->
+        // /new waits while another change runs, like the New session action.
+        local.filterNot { it == LocalCommand.NEW && input.mutating }.map { command ->
             val chat = ChatCommand.Local(command)
             CommandItem(chat, "/${command.commandName}", labels.command(chat), PaletteCategory.COMMAND)
         } + host.map { command ->

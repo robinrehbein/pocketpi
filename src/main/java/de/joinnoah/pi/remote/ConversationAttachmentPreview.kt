@@ -3,7 +3,6 @@ package de.joinnoah.pi.remote
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
@@ -14,7 +13,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -72,7 +70,7 @@ internal fun ConversationAttachmentPreview(
                 Box(
                     (if (item.thumbnail is ConversationAttachmentImageState.Ready) Modifier.size(128.dp)
                     else Modifier.widthIn(max = 240.dp).heightIn(min = 128.dp))
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(MaterialTheme.shapes.small)
                         .then(if (item.thumbnail is ConversationAttachmentImageState.Ready)
                             Modifier.clickable(role = Role.Button, onClickLabel = label) {
                                 openId = item.id
@@ -88,6 +86,8 @@ internal fun ConversationAttachmentPreview(
             }
         }
     }
+    // Read outside the dialog: its own window is not the app's.
+    val maxHeight = windowHeightFraction(0.6f)
     selected?.let { item ->
         Dialog(
             onDismissRequest = {
@@ -96,10 +96,9 @@ internal fun ConversationAttachmentPreview(
             },
             properties = DialogProperties(usePlatformDefaultWidth = false),
         ) {
-            val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.6f).dp
             Surface(
                 Modifier.fillMaxWidth().padding(16.dp),
-                shape = RoundedCornerShape(24.dp),
+                shape = MaterialTheme.shapes.large,
             ) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {

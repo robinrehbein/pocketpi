@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_chat_action_export">Als HTML exportieren</string>
+    <string name="remote_chat_action_reload">pi-Ressourcen neu laden</string>
+    <string name="remote_export_when_idle">Du kannst exportieren, sobald pi bereit ist.</string>
+    <string name="remote_model_busy_note">Du kannst das Modell ändern, sobald pi bereit ist.</string>
+    <string name="remote_thinking_busy_note">Du kannst die Denkstufe ändern, sobald pi bereit ist.</string>
+    <string name="remote_slash_command_unavailable">Gerade nicht verfügbar</string>
+</resources>

@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
@@ -38,7 +37,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -92,10 +90,10 @@ private fun PhotoThumbnail(
     onRemove: () -> Unit,
 ) {
     val photo by rememberPhoto(attachment, storage, maxSide = 192)
-    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainerHighest) {
+    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.size(64.dp).clip(RoundedCornerShape(12.dp))
+                Modifier.size(64.dp).clip(MaterialTheme.shapes.small)
                     .clickable(role = Role.Button, onClickLabel = stringResource(R.string.remote_preview_attachment, attachment.name), onClick = onOpen)
                     .testTag("attachmentPreview-${attachment.id}"),
                 contentAlignment = Alignment.Center,
@@ -120,7 +118,7 @@ private fun PhotoThumbnail(
 
 @Composable
 private fun FileThumbnail(attachment: LocalAttachment, onRemove: () -> Unit) {
-    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainerHighest) {
+    Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.Description, null, Modifier.padding(start = 12.dp))
             Column(Modifier.padding(start = 8.dp).widthIn(max = 160.dp)) {
@@ -146,11 +144,11 @@ private fun PhotoDialog(
     onDismiss: () -> Unit,
 ) {
     val photo by rememberPhoto(attachment, storage, maxSide = 2048)
-    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.75f).dp
+    val maxHeight = windowHeightFraction(0.75f)
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
             Modifier.fillMaxWidth().padding(16.dp),
-            shape = RoundedCornerShape(24.dp),
+            shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surface,
         ) {
             Column(Modifier.padding(12.dp)) {

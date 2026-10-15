@@ -1,0 +1,11 @@
+<resources>
+    <!-- English fallback for all unsupported locales. -->
+    <string name="remote_theme_mode">Mode</string>
+    <string name="remote_theme_palette">Colors</string>
+    <string name="remote_theme_system">System</string>
+    <string name="remote_theme_light">Light</string>
+    <string name="remote_theme_dark">Dark</string>
+    <string name="remote_theme_brand">PocketPi</string>
+    <string name="remote_theme_synthwave">Synthwave</string>
+    <string name="remote_theme_dynamic">Dynamic color</string>
+</resources>
