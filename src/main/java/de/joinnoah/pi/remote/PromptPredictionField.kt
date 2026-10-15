@@ -20,6 +20,18 @@ private val noHistory = MutableStateFlow(PromptHistory())
  * is sent to pi as typed. The Mac's own suggestion for an idle session ([RemoteState.suggestion])
  * comes first; it is untrusted plain text that reaches pi only when the user takes it and sends.
  */
+/**
+ * The Mac's suggestion while it applies: the session is idle with no question open and no plain
+ * send of the phone's own is in flight or waiting for the timeline. Until the host's `running`
+ * status or its new suggestion arrives, the old suggestion would otherwise come back as the
+ * placeholder right after it was sent, ready to be sent twice.
+ */
+internal fun hostSuggestion(state: RemoteState): String? {
+    val inFlight = state.sending ||
+        state.pendingSend?.state.let { it == PendingSendState.SENDING || it == PendingSendState.CONFIRMED }
+    return state.suggestion?.takeIf { !inFlight && state.status == "idle" && state.questions.isEmpty() }
+}
+
 @Composable
 internal fun rememberPromptPrediction(state: RemoteState): String? {
     val predictions = LocalPromptPredictions.current
@@ -29,7 +41,7 @@ internal fun rememberPromptPrediction(state: RemoteState): String? {
     val project = state.selection.projectId
     val session = state.selection.sessionId
     val active = enabled && state.connected && route != null && session != null
-    val hostSuggestion = state.suggestion?.takeIf { active && state.status == "idle" && state.questions.isEmpty() }
+    val hostSuggestion = if (active) hostSuggestion(state) else null
     val prediction =
         remember(active, state.messages, state.status, state.questions.isEmpty(), history, route, project, session) {
             if (!active) null
