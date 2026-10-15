@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -24,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -259,9 +261,10 @@ internal fun SubagentStrip(
     onOpen: (SubagentStripEntry) -> Unit,
     onAbort: (SubagentStripEntry) -> Unit,
     sessionId: String? = null,
+    expandedState: MutableState<Boolean> = rememberSaveable(sessionId) { mutableStateOf(false) },
 ) {
-    if (strip.entries.isEmpty()) return
-    var expanded by rememberSaveable(sessionId) { mutableStateOf(false) }
+    var expanded by expandedState
+    if (!subagentChipShown(strip, expanded)) return
     val queued = strip.entries.count { it.state == "queued" }
     val summary =
         when {
@@ -272,7 +275,7 @@ internal fun SubagentStrip(
         }
     StatusPopover(
         summary = summary,
-        running = strip.running > 0,
+        icon = Icons.Outlined.SmartToy,
         expanded = expanded,
         onExpandedChange = { expanded = it },
         expandDescription = stringResource(R.string.remote_panel_subagents_expand),
@@ -291,11 +294,21 @@ internal fun SubagentStrip(
     }
 }
 
-/** Shared status chip and anchored, dismissible overview used above the composer. */
+/**
+ * The subagent chip shows while an agent runs or waits; an open overview stays until closed, even
+ * once they all finish.
+ */
+internal fun subagentChipShown(strip: SubagentStrip, expanded: Boolean): Boolean =
+    strip.entries.isNotEmpty() && (expanded || strip.running > 0 || strip.entries.any { it.state == "queued" })
+
+/**
+ * Shared status chip and anchored, dismissible overview used above the composer, in the touched
+ * files pill's style.
+ */
 @Composable
 internal fun StatusPopover(
     summary: String,
-    running: Boolean,
+    icon: ImageVector,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     expandDescription: String,
@@ -308,10 +321,9 @@ internal fun StatusPopover(
     content: @Composable () -> Unit,
 ) {
     Box {
-        Surface(
+        FloatingSurface(
             shape = CircleShape,
-            color = if (expanded) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
-            border = if (expanded) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+            color = if (expanded) MaterialTheme.colorScheme.primaryContainer else floatingHeaderColor(),
         ) {
             Row(
                 Modifier.clickable(role = Role.Button) { onExpandedChange(!expanded) }
@@ -321,10 +333,13 @@ internal fun StatusPopover(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                StatusDot(
-                    sessionStatusColor(
-                        if (running) SessionAvailability.RUNNING else SessionAvailability.IDLE
-                    )
+                // Expanded, the icons take the container's content color like the text.
+                val iconTint = if (expanded) LocalContentColor.current else MaterialTheme.colorScheme.onSurfaceVariant
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(18.dp),
                 )
                 Text(
                     summary,
@@ -335,7 +350,8 @@ internal fun StatusPopover(
                     if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription =
                         if (expanded) collapseDescription else expandDescription,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = iconTint,
+                    modifier = Modifier.size(18.dp),
                 )
             }
         }

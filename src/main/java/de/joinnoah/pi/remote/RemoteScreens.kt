@@ -3301,9 +3301,15 @@ internal fun RemoteScreen(
                             }
                         }
                     }
+                    // Held here so the row knows whether a chip shows; finished jobs stay behind the Jobs action.
+                    val jobsExpanded = rememberSaveable(statusJobs?.sessionId) { mutableStateOf(false) }
+                    // Emptied entries close it, so returning ones never reopen the overview untapped.
+                    val subagentsExpanded =
+                        rememberSaveable(chatKey?.sessionId, strip.entries.isEmpty()) { mutableStateOf(false) }
                     val insightsShown =
-                        touched.total > 0 || errorCount > 0 || onlyErrorsShown || strip.entries.isNotEmpty() ||
-                            statusJobs != null
+                        touched.total > 0 || errorCount > 0 || onlyErrorsShown ||
+                            subagentChipShown(strip, subagentsExpanded.value) ||
+                            jobsChipShown(statusJobs, jobsExpanded.value)
                     // The chips sit in their own row, or merged into the controls' row while the chat is compact.
                     val chipOrder = insightChipOrder(compact)
                     val insightChips: @Composable RowScope.() -> Unit = {
@@ -3330,7 +3336,7 @@ internal fun RemoteScreen(
                                                     chat::stopJob,
                                                     onOpenList = { openJobs() },
                                                 )
-                                            })
+                                            }, jobsExpanded)
                                         }
                                     }
                                 InsightChip.SUBAGENTS ->
@@ -3344,6 +3350,7 @@ internal fun RemoteScreen(
                                         },
                                         onAbort = { entry -> if (entry.sessionId != null) abortChild = entry },
                                         sessionId = chatKey?.sessionId,
+                                        expandedState = subagentsExpanded,
                                     )
                                 InsightChip.TOUCHED ->
                                     TouchedFilesSummary(touched, touchedLines) {
