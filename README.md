@@ -248,9 +248,8 @@ byte-for-byte copy from noah-monorepo commit `9cb687aa9d6ad55d605669d59ca9d6bacc
 of pull request #721. `session-bash-v1.json` (shell commands run from the phone with `!` and
 `!!`) is a byte-for-byte copy from noah-monorepo commit `5b9bc88eedda8b0ae9e425e88d613a4fe2dfae9f`,
 the merge of pull request #739. `session-suggestion-v1.json` (the Mac's suggested next prompt
-as a session event and an optional snapshot key) is a byte-for-byte copy from noah-monorepo branch
-`ccr-3f09a6d6-8oanp9` at `a517522b7ee1617f3d42aad20cb9efeb417a4498`, the head of pull request
-#746, which is not merged yet; re-point it to the merge commit once it lands. When the
+as a session event and an optional snapshot key) is a byte-for-byte copy from noah-monorepo commit
+`1faf283797d9484c02568beff4586d49490a0137`, the merge of pull request #746. When the
 upstream protocol fixtures change, copy the changed files into
 `src/test/resources/`, compare their bytes with the upstream source, and run
 `./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and
