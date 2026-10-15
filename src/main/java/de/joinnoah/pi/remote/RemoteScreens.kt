@@ -1157,23 +1157,35 @@ internal fun RemoteScreen(
     }
     var reloading by remember(key) { mutableStateOf(false) }
     val resources = androidx.compose.ui.platform.LocalResources.current
-    fun showToast(@androidx.annotation.StringRes text: Int) {
-        Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+    val shownKey by rememberUpdatedState(key)
+    /**
+     * Feedback on a chat command in the chat's snackbar, replacing the one shown. It belongs to the
+     * chat that asked: a reload that ends after the user left that chat does not report elsewhere.
+     */
+    fun showFeedbackText(text: String, duration: SnackbarDuration = SnackbarDuration.Long) {
+        val askedIn = key
+        listScope.launch {
+            if (shownKey != askedIn) return@launch
+            snackbar.currentSnackbarData?.dismiss()
+            snackbar.showSnackbar(text, withDismissAction = true, duration = duration)
+        }
     }
+    fun showFeedback(@androidx.annotation.StringRes text: Int, duration: SnackbarDuration = SnackbarDuration.Long) =
+        showFeedbackText(resources.getString(text), duration)
     fun startReload(sessionId: String) {
         val chat = model as? ChatViewModel ?: return
         if (reloading) return
         reloading = true
-        showToast(R.string.remote_reload_running)
+        showFeedback(R.string.remote_reload_running)
         exportScope.launch {
             try {
                 when (val result = chat.reloadSession(sessionId)) {
-                    ReloadResult.Done -> showToast(R.string.remote_reload_done)
+                    ReloadResult.Done -> showFeedback(R.string.remote_reload_done, SnackbarDuration.Short)
                     is ReloadResult.Failed -> {
                         val failure = result.failure
                         val message = (failure as? ReloadFailure.Failed)?.message
-                        if (message == null) showToast(reloadFailureText(failure))
-                        else Toast.makeText(context, resources.getString(reloadFailureText(failure), message), Toast.LENGTH_LONG).show()
+                        if (message == null) showFeedback(reloadFailureText(failure))
+                        else showFeedbackText(resources.getString(reloadFailureText(failure), message))
                     }
                 }
             } finally {
@@ -1200,12 +1212,12 @@ internal fun RemoteScreen(
             LocalCommand.TREE -> treeSheetRequested = true
             LocalCommand.RELOAD ->
                 if (reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
-                    showToast(R.string.remote_reload_terminal_hint)
-                else if (reloading) showToast(R.string.remote_reload_running)
+                    showFeedback(R.string.remote_reload_terminal_hint)
+                else if (reloading) showFeedback(R.string.remote_reload_running)
                 else state.selection.sessionId?.let(::startReload)
             LocalCommand.ARTIFACTS ->
                 if (artifactsAvailable) openGallery()
-                else showToast(R.string.remote_artifacts_host_outdated)
+                else showFeedback(R.string.remote_artifacts_host_outdated)
             LocalCommand.NAME -> {
                 val session = state.session ?: return
                 if (argument.isEmpty()) startRename(session.text("id"), session.text("title"))
@@ -1250,6 +1262,8 @@ internal fun RemoteScreen(
             ChatAction.SESSION_SETTINGS -> settingsSheetRequested = true
             ChatAction.SETTINGS -> navigator.settings()
             ChatAction.HISTORY -> toggleHistory()
+            ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.EXPORT, ChatAction.RELOAD ->
+                action.localCommand?.let { runLocal(it, "") }
             ChatAction.CLOSE -> Unit
         }
     }
@@ -1375,10 +1389,10 @@ internal fun RemoteScreen(
             val hasTuiInfo =
                 state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
             val headerColor = floatingHeaderColor()
-            // History never competes for the pill's ranked places: it would push Settings into the menu.
+            // History never competes for the pill's places: it would push Settings into the menu.
             fun actionLayout(withHistory: Boolean) =
                 chatActionLayout(
-                    chatModel?.chatActions ?: DEFAULT_CHAT_ACTIONS,
+                    DEFAULT_CHAT_ACTIONS,
                     buildSet {
                         if (canViewChanges(state) && state.connected) add(ChatAction.CHANGES)
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
@@ -1390,6 +1404,12 @@ internal fun RemoteScreen(
                             add(ChatAction.SESSION_SETTINGS)
                         add(ChatAction.REFRESH)
                         add(ChatAction.SETTINGS)
+                        // Tree, artifacts, export and reload, whenever `/` offers their commands.
+                        addAll(
+                            localCommandActions(
+                                availableLocalCommands(state, true, System.currentTimeMillis(), reloading)
+                            )
+                        )
                     },
                 ).let { if (withHistory) it.withHistory() else it }
                     .let { if (closableSession != null) it.withClose() else it }
@@ -1422,7 +1442,7 @@ internal fun RemoteScreen(
                 val maxPillWidth =
                     maxWidth - 32.dp - if (narrow) 0.dp else actionsWidth + 8.dp
                 val maxTitleWidth =
-                    (maxPillWidth - 72.dp - (if (hasTuiInfo) 40.dp else 0.dp) -
+                    (maxPillWidth - 64.dp - CHAT_STATUS_MARK_SIZE - (if (hasTuiInfo) 40.dp else 0.dp) -
                         if (detailPane) 48.dp else 0.dp)
                         .coerceAtLeast(24.dp)
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -1459,14 +1479,11 @@ internal fun RemoteScreen(
                                         stringResource(R.string.remote_back),
                                     )
                                 }
-                                Box(
-                                    Modifier.padding(end = 8.dp).size(8.dp)
-                                        .background(statusColor, CircleShape)
-                                        .semantics {
-                                            contentDescription = statusLabel
-                                            liveRegion = LiveRegionMode.Polite
-                                        }
-                                        .testTag("chatStatusDot")
+                                ChatStatusMark(
+                                    chatStatusShape(state),
+                                    statusColor,
+                                    statusLabel,
+                                    Modifier.padding(end = 8.dp).testTag("chatStatusDot"),
                                 )
                                 val switchSession = stringResource(R.string.remote_palette_switch_session)
                                 Row(
@@ -3447,14 +3464,14 @@ internal fun RemoteScreen(
                                         if (composer.text.trimStart().startsWith("/")) composer.replace("")
                                         if (command == LocalCommand.TREE) treeSheetRequested = true
                                         else if (artifactsAvailable) openGallery()
-                                        else showToast(R.string.remote_artifacts_host_outdated)
+                                        else showFeedback(R.string.remote_artifacts_host_outdated)
                                     }
                                     // A terminal session only explains itself; nothing to send.
                                     else if (command == LocalCommand.RELOAD &&
                                         (reloading || reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
                                     ) {
                                         if (composer.text.trimStart().startsWith("/")) composer.replace("")
-                                        showToast(
+                                        showFeedback(
                                             if (reloading) R.string.remote_reload_running
                                             else R.string.remote_reload_terminal_hint
                                         )
@@ -3524,7 +3541,7 @@ internal fun RemoteScreen(
             }
             SnackbarHost(
                 snackbar,
-                Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp),
+                Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp).testTag("chatSnackbar"),
             )
             Box(Modifier.fillMaxSize().then(overlayRegion)) {
             CompositionLocalProvider(LocalFocusRegionChildren provides overlayChildren) {

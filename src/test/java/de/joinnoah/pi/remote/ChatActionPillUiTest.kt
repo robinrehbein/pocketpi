@@ -5,11 +5,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,8 +25,12 @@ import org.robolectric.annotation.Config
 class ChatActionPillUiTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
+    private fun label(id: Int) = compose.activity.getString(id)
+
+    private fun menuItem(action: ChatAction) = compose.onNodeWithTag("chatActionMenu_${action.name.lowercase()}")
+
     @Test
-    fun extraActionsOpenAsIconButtonsAndCloseAfterSelection() {
+    fun extraActionsOpenAsALabelledMenuAndCloseAfterSelection() {
         val selected = mutableListOf<ChatAction>()
         compose.setContent {
             MaterialTheme {
@@ -37,23 +45,50 @@ class ChatActionPillUiTest {
             }
         }
 
-        compose.onNodeWithTag("chatActionMenu_rename").assertDoesNotExist()
-        compose.onNodeWithTag("chatActionsMore").performClick()
-        compose.onNodeWithTag("chatActionMenu_rename").assertIsDisplayed()
-        compose.onNodeWithTag("chatActionMenu_refresh").assertIsDisplayed()
-        compose.onNodeWithTag("chatActionMenu_settings").assertIsDisplayed()
-        compose.onNodeWithTag("chatActionMenu_rename")
-            .assertContentDescriptionEquals(compose.activity.getString(R.string.remote_rename_session))
-        compose.onNodeWithText(compose.activity.getString(R.string.remote_rename_session))
-            .assertDoesNotExist()
+        menuItem(ChatAction.RENAME).assertDoesNotExist()
+        compose.onNodeWithTag("chatActionsMore")
+            .assertContentDescriptionEquals(label(R.string.remote_chat_actions_more))
+            .performClick()
+        // Every entry names itself in words next to its icon.
+        for (action in listOf(ChatAction.RENAME, ChatAction.REFRESH, ChatAction.SETTINGS)) {
+            menuItem(action).assertIsDisplayed()
+            compose.onNode(
+                hasText(label(action.label())).and(hasAnyAncestor(hasTestTag("chatActionMenu_${action.name.lowercase()}"))),
+                useUnmergedTree = true,
+            ).assertIsDisplayed()
+        }
+        compose.onNodeWithTag("chatActionsMore")
+            .assertContentDescriptionEquals(label(R.string.remote_chat_actions_close))
 
-        compose.onNodeWithTag("chatActionMenu_refresh").performClick()
+        menuItem(ChatAction.REFRESH).performClick()
         assertEquals(listOf(ChatAction.REFRESH), selected)
-        compose.onNodeWithTag("chatActionMenu_rename").assertDoesNotExist()
+        menuItem(ChatAction.RENAME).assertDoesNotExist()
         compose.onNodeWithTag("chatActionsMore").performClick()
-        compose.onNodeWithTag("chatActionMenu_settings").assertIsDisplayed()
+        menuItem(ChatAction.SETTINGS).assertIsDisplayed()
         compose.onNodeWithTag("chatActionsMore").performClick()
-        compose.onNodeWithTag("chatActionMenu_settings").assertDoesNotExist()
+        menuItem(ChatAction.SETTINGS).assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun menuOpensBelowTheChevronInAFixedOrder() {
+        val offered = ChatAction.entries.toSet() - ChatAction.STATUS - ChatAction.CLOSE
+        val layout = chatActionLayout(DEFAULT_CHAT_ACTIONS, offered).withClose()
+        // Export, Tree, Artifacts and Reload join the menu, in [ChatAction] order with Close last.
+        assertTrue(layout.menu.containsAll(listOf(ChatAction.EXPORT, ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.RELOAD)))
+        assertEquals(layout.menu.sortedBy { it.ordinal }, layout.menu)
+        assertEquals(ChatAction.CLOSE, layout.menu.last())
+        compose.setContent {
+            MaterialTheme { ChatActionPill(layout, Color.DarkGray, {}) }
+        }
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        val tops = layout.menu.map { action -> menuItem(action).fetchSemanticsNode().boundsInWindow.top }
+        assertEquals(tops.sorted(), tops)
+        // The menu opens under the chevron, not at an offset of its own.
+        val chevron = compose.onNodeWithTag("chatActionsMore").fetchSemanticsNode()
+        val chevronBottom = chevron.positionOnScreen.y + chevron.size.height
+        val menuTop = menuItem(layout.menu.first()).fetchSemanticsNode().positionOnScreen.y
+        assertTrue("menu starts at $menuTop, chevron ends at $chevronBottom", menuTop >= chevronBottom)
     }
 
     @Test
@@ -70,9 +105,8 @@ class ChatActionPillUiTest {
         }
         compose.onNodeWithTag("chatAction_close").assertDoesNotExist()
         compose.onNodeWithTag("chatActionsMore").performClick()
-        compose.onNodeWithTag("chatActionMenu_close")
-            .assertContentDescriptionEquals(compose.activity.getString(R.string.remote_session_close))
-            .performClick()
+        compose.onNodeWithText(label(R.string.remote_session_close)).assertIsDisplayed()
+        menuItem(ChatAction.CLOSE).performClick()
         assertEquals(listOf(ChatAction.CLOSE), selected)
     }
 }

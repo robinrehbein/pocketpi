@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_chat_action_export">Export as HTML</string>
+    <string name="remote_chat_action_reload">Reload extensions</string>
+    <string name="remote_model_busy_note">You can change the model when pi is idle.</string>
+    <string name="remote_thinking_busy_note">You can change the thinking level when pi is idle.</string>
+    <string name="remote_slash_command_unavailable">Not available now</string>
+</resources>

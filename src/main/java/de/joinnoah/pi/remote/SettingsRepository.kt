@@ -113,10 +113,7 @@ interface SettingsRepository {
 
     fun setEnterSends(enabled: Boolean)
 
-    /** The chat header actions, most used first; read once when a chat opens. */
-    fun rankedChatActions(now: Long = System.currentTimeMillis()): List<ChatAction> = DEFAULT_CHAT_ACTIONS
-
-    /** Counts one use of [action] on this device. */
+    /** Counts one use of [action] on this device; the command palette ranks its actions by these. */
     fun recordChatAction(action: ChatAction, now: Long = System.currentTimeMillis()) {}
 
     /** The stored uses of each chat action, undecayed; the palette decays them to its own time. */
@@ -203,8 +200,6 @@ class DefaultSettingsRepository(
         preferences.edit().putBoolean("enter_sends", enabled).apply()
         mutable.value = mutable.value.copy(enterSends = enabled)
     }
-
-    override fun rankedChatActions(now: Long): List<ChatAction> = rankChatActions(chatActionUsage(), now)
 
     override fun chatActionUsage(): Map<ChatAction, ActionUsage> =
         ChatAction.entries.mapNotNull { action -> actionUsage(action)?.let { action to it } }.toMap()

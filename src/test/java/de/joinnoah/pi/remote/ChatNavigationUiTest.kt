@@ -118,8 +118,9 @@ class ChatNavigationUiTest {
         if (compose.onAllNodesWithContentDescription(label(R.string.remote_chat_history)).fetchSemanticsNodes().isEmpty()) {
             compose.onNodeWithTag("chatActionsMore").performClick()
             compose.waitForIdle()
-        }
-        compose.onNodeWithContentDescription(label(R.string.remote_chat_history)).performClick()
+            // The menu names its entries in words.
+            compose.onNodeWithTag("chatActionMenu_history").performClick()
+        } else compose.onNodeWithContentDescription(label(R.string.remote_chat_history)).performClick()
         compose.waitForIdle()
     }
 
