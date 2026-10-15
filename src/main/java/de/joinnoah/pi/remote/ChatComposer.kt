@@ -46,6 +46,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
@@ -524,7 +525,7 @@ internal fun ChatComposer(
     val recordPrompt = {
         val route = state.selection.routeId
         val project = state.selection.projectId
-        if (route != null && project != null) predictions?.record(route, project, state.draft)
+        if (route != null && project != null && recordsPrompt(state)) predictions?.record(route, project, state.draft)
     }
     var addMenu by remember { mutableStateOf(false) }
     val clipboardEmpty = stringResource(R.string.remote_drop_clipboard_empty)
@@ -540,14 +541,12 @@ internal fun ChatComposer(
         else -> BusyComposerAction.FollowUp
     }
     val hasDraft = state.draft.isNotBlank() || state.attachments.isNotEmpty()
+    val shell = shellDraft(state)
     val childResume = offersChildResume(state)
     val childStatus = if (childControls) childControlStatus(state) else null
-    val canQueue = state.connected && !state.loading && !state.sending &&
-        !state.importingAttachments && !state.configurationChanging &&
-        state.questions.isEmpty() && hasDraft &&
-        !state.draft.trimStart().startsWith("/") && state.followUps.size < 64 &&
-        !(childControls && state.attachments.isNotEmpty())
+    val canQueue = canQueueDraft(state)
     val canResumeChild = childResume && state.connected && !state.loading && !state.sending &&
+        state.bash?.running != true &&
         !childBusy && state.draft.isNotBlank() && state.attachments.isEmpty() && state.quote == null &&
         !state.draft.trimStart().startsWith("/")
     val send: () -> Unit = if (childResume) onResumeChild else onSend
@@ -813,7 +812,7 @@ internal fun ChatComposer(
                     }
                 }
             // Send runs a `!` draft as a shell command; the label says so before it is sent.
-            shellDraft(state)?.let { ShellModeLabel(it.excludeFromContext) }
+            shell?.let { ShellModeLabel(it.excludeFromContext, idle = state.status == "idle") }
             Row(
                 // Writing with the S Pen anywhere on the row, beside the field too, writes into it.
                 Modifier.handwritingDetector { focusRequester?.let { runCatching { it.requestFocus() } } },
@@ -873,6 +872,7 @@ internal fun ChatComposer(
                         }
                     }
                 val promptLabel = stringResource(R.string.remote_prompt)
+                val shellLabel = stringResource(R.string.remote_shell_command)
                 // TalkBack names what the button does; the suggestion alone would not say it fills the field.
                 val useSuggestion = prediction?.let { stringResource(R.string.remote_suggestion_use, it) }
                 TextField(
@@ -931,6 +931,8 @@ internal fun ChatComposer(
                                 if (draft.textState.text.isEmpty()) Modifier.semantics { contentDescription = promptLabel }
                                 else Modifier
                             )
+                            // The field itself says that Send runs a shell command, not only the label above it.
+                            .then(if (shell != null) Modifier.semantics { stateDescription = shellLabel } else Modifier)
                             .handwritingHandler()
                             .onFocusChanged { keyTarget?.composerFocused = it.isFocused }
                             .onPreviewKeyEvent { event ->
@@ -1082,8 +1084,22 @@ internal fun canSendDraft(state: RemoteState): Boolean =
         !state.sending &&
         !state.importingAttachments &&
         !state.configurationChanging &&
+        // Nothing goes out while this phone's shell command runs; the session answers busy.
+        state.bash?.running != true &&
         (shellDraft(state)?.let { shellDraftSendable(it, state) }
             ?: (state.draft.isNotBlank() || state.attachments.isNotEmpty()))
+
+/**
+ * The draft can go out as a steer, a follow-up or a queued prompt: never a `/` command, nor a shell
+ * draft, which runs only through Send once pi is idle, nor anything while a shell command runs.
+ */
+internal fun canQueueDraft(state: RemoteState): Boolean =
+    state.connected && !state.loading && !state.sending &&
+        !state.importingAttachments && !state.configurationChanging &&
+        state.questions.isEmpty() && (state.draft.isNotBlank() || state.attachments.isNotEmpty()) &&
+        !state.draft.trimStart().startsWith("/") && state.followUps.size < 64 &&
+        !(childControlsAvailable(state) && state.attachments.isNotEmpty()) &&
+        shellDraft(state) == null && state.bash?.running != true
 
 /** What the child control row says about the selected subagent child, or null for nothing. */
 internal fun childControlStatus(state: RemoteState): Int? {

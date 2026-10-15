@@ -145,4 +145,44 @@ class ShellCommandTest {
         // Without the gate, `!` is ordinary text.
         assertTrue(canSendDraft(shellState(capable = false).copy(draft = "!")))
     }
+
+    @Test
+    fun noBusyActionSendsAShellDraft() {
+        val running = shellState().copy(status = "running", draft = "!ls")
+        assertNotNull(shellDraft(running))
+        assertFalse(canQueueDraft(running))
+        assertFalse(canSendDraft(running))
+        // Ordinary text still queues while pi runs.
+        assertTrue(canQueueDraft(running.copy(draft = "ls")))
+    }
+
+    @Test
+    fun nothingGoesOutWhileAShellCommandRuns() {
+        val busy = shellState().copy(draft = "hello", bash = BashRun("session", "r", "sleep 9", false))
+        assertFalse(canSendDraft(busy))
+        assertFalse(canQueueDraft(busy.copy(status = "running")))
+        assertTrue(canSendDraft(busy.copy(bash = busy.bash?.copy(result = BashResult(0, false, false, "")))))
+    }
+
+    @Test
+    fun aChildThatOffersAResumeTakesABangDraftAsText() {
+        val child =
+            shellState().copy(
+                draft = "!ls",
+                capabilities = setOf(SESSION_BASH_CAPABILITY, SUBAGENT_CONTROL_CAPABILITY),
+                session = Wire.objectOf("id" to "session", "origin" to "rpc", "status" to "idle", "parentSessionId" to "parent"),
+            )
+        assertTrue(offersChildResume(child))
+        assertNull(shellDraft(child))
+        assertFalse(runShellDraft(child, "!ls", { _, _ -> error("not a shell command") }) {})
+        assertTrue(canSendDraft(child))
+    }
+
+    @Test
+    fun aShellDraftFeedsNoPromptPrediction() {
+        assertFalse(recordsPrompt(shellState().copy(draft = "!ls")))
+        assertTrue(recordsPrompt(shellState().copy(draft = "list the files")))
+        // Without the gate `!ls` is a prompt like any other.
+        assertTrue(recordsPrompt(shellState(capable = false).copy(draft = "!ls")))
+    }
 }

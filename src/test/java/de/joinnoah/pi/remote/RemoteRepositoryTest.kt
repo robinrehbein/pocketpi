@@ -5970,6 +5970,37 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun abortBashStillReachesACommandWhoseRequestWasLost() = runTest {
+        val transport = Transport().also { bashing(it) }
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.bash.abort")
+                Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        transport.failure = { if (it.text("type") == "session.bash") "offline" else null }
+        assertTrue(repository.runBash("sleep 60", false))
+        runCurrent()
+        val lost = checkNotNull(repository.state.value.bash)
+        assertEquals(BashFailure.CONNECTION, lost.failure)
+        assertTrue(lost.stoppable)
+        repository.abortBash()
+        runCurrent()
+        assertEquals("session", transport.sent.single { it.text("type") == "session.bash.abort" }.text("sessionId"))
+        // Another refusal leaves nothing to stop.
+        transport.failure = { if (it.text("type") == "session.bash") "busy" else null }
+        assertTrue(repository.runBash("ls", false))
+        runCurrent()
+        assertFalse(checkNotNull(repository.state.value.bash).stoppable)
+        repository.abortBash()
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.bash.abort" })
+    }
+
+    @Test
     fun runBashMapsTheHostRefusals() = runTest {
         val transport = Transport().also { bashing(it) }
         val repository = repository(transport)

@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -32,8 +33,9 @@ private const val MAX_BASH_OUTPUT_TEXT_BYTES = 32_768
 
 /**
  * The host sets no timeout on `session.bash`: a command runs until it ends, is stopped or pi exits.
- * [withTimeoutOrNull][kotlinx.coroutines.withTimeoutOrNull] never schedules a timer this long, so
- * the request waits for its result or a lost connection.
+ * The production executors never fire a timeout this long, so the request waits for its result or
+ * a lost connection. A TestCoroutineScheduler does fire it: tests must not `advanceUntilIdle` while
+ * a command runs.
  */
 internal const val BASH_REQUEST_TIMEOUT_MILLIS = Long.MAX_VALUE
 
@@ -91,6 +93,13 @@ data class BashRun(
 ) {
     val running: Boolean
         get() = result == null && failure == null
+
+    /**
+     * Stop still makes sense: the command runs, or the app lost its request and the Mac may still
+     * run it. The abort names only the session, so it reaches the command either way.
+     */
+    val stoppable: Boolean
+        get() = running || failure == BashFailure.CONNECTION
 }
 
 /** A validated `session.bash.output` event: [text] starts at the UTF-8 byte [offset] of the output. */
@@ -161,7 +170,10 @@ internal data class ShellDraft(val command: String, val excludeFromContext: Bool
  * attachments, which only a prompt carries. The command may be empty; it is then not sendable.
  */
 internal fun shellDraft(state: RemoteState): ShellDraft? {
-    if (state.attachments.isNotEmpty() || state.quote != null || !canRunShellCommands(state)) return null
+    // A child that offers a resume takes the draft as the resume's text, `!` included.
+    if (state.attachments.isNotEmpty() || state.quote != null || !canRunShellCommands(state) ||
+        offersChildResume(state))
+        return null
     val text = state.draft.trimStart()
     if (!text.startsWith("!")) return null
     val exclude = text.startsWith("!!")
@@ -177,6 +189,9 @@ internal fun shellDraftSendable(shell: ShellDraft, state: RemoteState): Boolean 
  * clears the draft once [run] started it. True whenever [text] is a shell draft, even one that did
  * not start: such a draft never goes to pi as a prompt. False leaves it for the normal send.
  */
+/** Whether a sent draft feeds the prompt predictions; a shell command is no prompt to suggest. */
+internal fun recordsPrompt(state: RemoteState): Boolean = shellDraft(state) == null
+
 internal fun runShellDraft(
     state: RemoteState,
     text: String,
@@ -263,30 +278,35 @@ internal fun bashResultLines(result: BashResult): List<JobOutputLine> =
 
 // ---- UI --------------------------------------------------------------------------------------
 
-/** Says above the field that Send runs the draft as a shell command, and whether pi sees its output. */
+/**
+ * Says above the field that Send runs the draft as a shell command, and whether pi sees its output.
+ * While pi works ([idle] false) it adds that the command waits: no busy action sends it.
+ */
 @Composable
-internal fun ShellModeLabel(excludeFromContext: Boolean) {
+internal fun ShellModeLabel(excludeFromContext: Boolean, idle: Boolean) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp).testTag("shellMode"),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Icon(Icons.Outlined.Terminal, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
-        Text(
+        val mode =
             stringResource(
                 if (excludeFromContext) R.string.remote_shell_command_private else R.string.remote_shell_command
-            ),
+            )
+        Text(
+            if (idle) mode else stringResource(R.string.remote_shell_when_idle, mode),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary,
         )
     }
 }
 
-/** What ended [run]: its exit code, a stop or a refusal; null while it runs. */
+/** What ended [run]: its exit code, a stop or a refusal; "Running" while it runs. */
 @Composable
-private fun shellStatus(run: BashRun): String? {
+private fun shellStatus(run: BashRun): String {
     run.failure?.let { return stringResource(bashFailureText(it)) }
-    val result = run.result ?: return null
+    val result = run.result ?: return stringResource(R.string.remote_shell_running)
     return when {
         result.cancelled -> stringResource(R.string.remote_shell_cancelled)
         result.exitCode != null -> stringResource(R.string.remote_shell_exit_code, result.exitCode)
@@ -328,11 +348,16 @@ internal fun ShellCommandPanel(run: BashRun, onStop: () -> Unit, onClose: () -> 
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                 }
-                if (run.running)
-                    TextButton(onClick = onStop, enabled = !run.stopping, modifier = Modifier.testTag("shellStop")) {
+                val stopLabel = stringResource(R.string.remote_shell_stop)
+                if (run.stoppable)
+                    TextButton(
+                        onClick = onStop,
+                        enabled = !run.stopping,
+                        modifier = Modifier.semantics { contentDescription = stopLabel }.testTag("shellStop"),
+                    ) {
                         Text(stringResource(if (run.stopping) R.string.remote_jobs_stopping else R.string.remote_jobs_stop))
                     }
-                else
+                if (!run.running)
                     TextButton(onClick = onClose, modifier = Modifier.testTag("shellClose")) {
                         Text(stringResource(R.string.remote_shell_close))
                     }
@@ -348,19 +373,18 @@ internal fun ShellCommandPanel(run: BashRun, onStop: () -> Unit, onClose: () -> 
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            val status = shellStatus(run)
-            if (status != null)
-                Text(
-                    status,
-                    Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                        .semantics { liveRegion = LiveRegionMode.Polite }
-                        .testTag("shellStatus"),
-                    style = MaterialTheme.typography.bodySmall,
-                    color =
-                        if (run.failure != null || run.result?.let { it.cancelled || it.exitCode != 0 } == true)
-                            MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            // One node for the whole run, so a screen reader hears each change of it.
+            Text(
+                shellStatus(run),
+                Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    .semantics { liveRegion = LiveRegionMode.Polite }
+                    .testTag("shellStatus"),
+                style = MaterialTheme.typography.bodySmall,
+                color =
+                    if (run.failure != null || run.result?.let { it.cancelled || it.exitCode != 0 } == true)
+                        MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             if (run.result?.truncated == true)
                 Text(
                     stringResource(R.string.remote_shell_truncated),

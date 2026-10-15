@@ -7572,7 +7572,7 @@ class DefaultRemoteRepository(
     override fun abortBash() {
         val current = state.value
         val run = current.bash ?: return
-        if (!run.running || run.stopping || !current.connected || run.sessionId != current.selection.sessionId) return
+        if (!run.stoppable || run.stopping || !current.connected || run.sessionId != current.selection.sessionId) return
         val epoch = selectionEpoch
         updateBash(run.requestId) { it.copy(stopping = true) }
         scope.launch {

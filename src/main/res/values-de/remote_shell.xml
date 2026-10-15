@@ -8,11 +8,14 @@
     <string name="remote_shell_ended">Ohne Exit-Code beendet</string>
     <string name="remote_shell_truncated">Nur das Ende der Ausgabe wird angezeigt.</string>
     <string name="remote_shell_no_output">Keine Ausgabe</string>
-    <string name="remote_shell_switched_off">Shell-Befehle sind auf diesem Mac ausgeschaltet. Schalte sie mit `pi-remote config bash-commands on` ein.</string>
+    <string name="remote_shell_switched_off">Shell-Befehle sind auf diesem Mac ausgeschaltet. Schalte sie mit pi-remote config bash-commands on ein.</string>
     <string name="remote_shell_terminal_session">Shell-Befehle laufen nur in Sitzungen, die auf dem Handy gestartet wurden.</string>
     <string name="remote_shell_update_pi">Aktualisiere pi auf deinem Mac, um Shell-Befehle auszuführen.</string>
     <string name="remote_shell_unsupported">Dein Mac kann in dieser Sitzung keine Shell-Befehle ausführen.</string>
     <string name="remote_shell_busy">Die Sitzung ist beschäftigt. Führe den Befehl erneut aus, wenn pi fertig ist.</string>
     <string name="remote_shell_connection">Die Verbindung zu pi ist abgebrochen. Der Befehl ist vielleicht nicht fertig geworden.</string>
     <string name="remote_shell_failed">Der Shell-Befehl konnte nicht ausgeführt werden.</string>
+    <string name="remote_shell_when_idle">%1$s, läuft, sobald pi fertig ist</string>
+    <string name="remote_shell_running">Läuft</string>
+    <string name="remote_shell_stop">Shell-Befehl stoppen</string>
 </resources>
