@@ -1113,7 +1113,7 @@ internal fun RemoteScreen(
     val bannersShown = compactionVisible(state.compaction, compactionNow) || exportState != null
     // The status sheet shows the banners only; it goes when they do, and does not return for the next ones.
     LaunchedEffect(bannersShown) { if (!bannersShown) statusSheet = false }
-    // Compact, a one-line chip leads the controls' row while a banner waits in the status sheet; a
+    // Compact, a one-line chip leads the insights row above the composer while a banner waits in the status sheet; a
     // failed export shows in the header itself, which a failure brings back.
     val statusChipLine: Int? =
         when {
@@ -3362,14 +3362,13 @@ internal fun RemoteScreen(
                                     }
                             }
                     }
-                    val compactStatusLine = statusChipLine.takeIf { compact }
-                    if (insightsShown || compactStatusLine != null)
+                    if (insightsShown || statusChipLine != null)
                         Row(
                             Modifier.fillMaxWidth().testTag("chatInsights").horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            compactStatusLine?.let { line ->
+                            statusChipLine?.let { line ->
                                 ChatStatusChip(line, running = line != R.string.remote_export_done) { statusSheet = true }
                             }
                             if (insightsShown) insightChips()
@@ -4334,7 +4333,7 @@ internal fun headerHiddenAfterScroll(hidden: Boolean, previous: Pair<Int, Int>, 
 }
 
 /**
- * The compact chat's status in one line, at the start of the controls' row while a banner waits in
+ * The compact chat's status in one line, at the start of the insights row while a banner waits in
  * the status sheet: what runs ([running] spins) or what is done. A tap opens the sheet; the line is
  * read out as it changes.
  */

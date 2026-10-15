@@ -882,7 +882,8 @@ internal fun ChatComposer(
                     placeholder = {
                         Text(
                             prediction ?: promptLabel,
-                            maxLines = 3,
+                            // One line for a suggestion, so the empty field keeps its height when one comes or goes.
+                            maxLines = if (prediction != null) 1 else 3,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.testTag("composerPlaceholder"),
                         )
@@ -892,7 +893,7 @@ internal fun ChatComposer(
                             {
                                 // TalkBack names what a tap does and the suggestion it takes.
                                 val useSuggestion = stringResource(R.string.remote_suggestion_use, suggestion)
-                                ShortcutTooltip(useSuggestion) {
+                                ShortcutTooltip(useSuggestion, chord = KeyChord(Key.Tab)) {
                                     IconButton(
                                         onClick = {
                                             acceptPrediction()
