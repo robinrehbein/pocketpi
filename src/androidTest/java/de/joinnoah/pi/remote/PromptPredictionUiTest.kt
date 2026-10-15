@@ -9,6 +9,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.performKeyInput
@@ -35,9 +36,11 @@ class PromptPredictionUiTest {
     private val suggestion get() = context.getString(R.string.remote_prediction_run_tests)
 
     @Test
-    fun emptyComposerShowsTheSuggestionAsAChipAndOneTapAcceptsIt() {
+    fun emptyComposerShowsTheSuggestionAsThePlaceholderAndOneTapAcceptsIt() {
         val harness = show()
-        compose.onNodeWithTag("promptSuggestion").assertTextContains(suggestion)
+        compose.onNodeWithTag("composerPlaceholder", useUnmergedTree = true).assertTextEquals(suggestion)
+        compose.onNodeWithTag("promptSuggestion")
+            .assertContentDescriptionEquals(context.getString(R.string.remote_suggestion_use, suggestion))
         compose.onNodeWithTag("promptSuggestion").performClick()
         compose.waitForIdle()
         // An accepted suggestion reaches the repository after the composer's pause.
@@ -71,7 +74,7 @@ class PromptPredictionUiTest {
     }
 
     @Test
-    fun turningPredictionsOffRemovesTheChipAndKeepsThePlainLabel() {
+    fun turningPredictionsOffRemovesTheSuggestionAndKeepsThePlainLabel() {
         val harness = show()
         compose.runOnIdle { harness.source.enabled.value = false }
         compose.onNodeWithTag("promptSuggestion").assertDoesNotExist()

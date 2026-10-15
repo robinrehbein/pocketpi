@@ -174,43 +174,36 @@ class ComposerStopUiTest {
     }
 
     @Test
-    fun suggestionIsATapTargetChipAndTheFieldKeepsItsLabel() {
+    fun suggestionIsTheGreyPlaceholderWithAnAcceptButtonAndTheFieldKeepsItsLabel() {
         val source = FakePredictions()
-        val messages =
-            listOf(
-                Wire.objectOf("id" to "u", "role" to "user", "text" to "Change it", "state" to "complete"),
-                Wire.objectOf(
-                    "id" to "a",
-                    "role" to "assistant",
-                    "text" to "",
-                    "state" to "complete",
-                    "parts" to JsonArray(
-                        listOf(Wire.objectOf("type" to "toolCall", "id" to "c", "name" to "edit", "arguments" to "{}"))
-                    ),
-                ),
-                Wire.objectOf(
-                    "id" to "t",
-                    "role" to "tool",
-                    "text" to "ok",
-                    "state" to "complete",
-                    "toolName" to "edit",
-                    "toolCallId" to "c",
-                ),
-            )
+        val messages = editedFileMessages()
         val suggestion = label(R.string.remote_prediction_run_tests)
         render(state(status = "idle", messages = messages), predictions = source)
-        compose.onNodeWithTag("promptSuggestion").assertTextContains(suggestion)
         compose.onNodeWithTag("promptSuggestion").assertContentDescriptionEquals(
             RuntimeEnvironment.getApplication().getString(R.string.remote_suggestion_use, suggestion)
         )
-        // The field keeps the plain prompt as its name while the suggestion waits in the chip.
-        compose.onNodeWithTag("composerPlaceholder", useUnmergedTree = true)
-            .assertTextEquals(label(R.string.remote_prompt))
+        // The suggestion is the grey placeholder; the field keeps the plain prompt as its name.
+        compose.onNodeWithTag("composerPlaceholder", useUnmergedTree = true).assertTextEquals(suggestion)
+        compose.onNodeWithTag("composerField").assertContentDescriptionEquals(label(R.string.remote_prompt))
 
         compose.mainClock.autoAdvance = false
         compose.onNodeWithTag("promptSuggestion").performClick()
         compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
         compose.onNode(hasSetTextAction()).assertTextContains(suggestion)
+    }
+
+    @Test
+    fun theSuggestionButtonGoesWithTheFirstTypedCharacterBeforeTheDraftIsSaved() {
+        val source = FakePredictions()
+        val messages = editedFileMessages()
+        render(state(status = "idle", messages = messages), predictions = source)
+        compose.onNodeWithTag("promptSuggestion").assertExists()
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag("composerField").performTextInput("a")
+        compose.mainClock.advanceTimeByFrame()
+        // The draft reaches the state only after the pause, so a button still shown here would
+        // replace the typed "a" with the suggestion.
+        compose.onNodeWithTag("promptSuggestion").assertDoesNotExist()
     }
 
     @Test
@@ -244,4 +237,27 @@ class ComposerStopUiTest {
 
         override fun recordPlanApproval(routeId: String, sessionId: String) = Unit
     }
+
+    /** A finished turn that edited a file, so the prediction is "Run the tests". */
+    private fun editedFileMessages() =
+        listOf(
+            Wire.objectOf("id" to "u", "role" to "user", "text" to "Change it", "state" to "complete"),
+            Wire.objectOf(
+                "id" to "a",
+                "role" to "assistant",
+                "text" to "",
+                "state" to "complete",
+                "parts" to JsonArray(
+                    listOf(Wire.objectOf("type" to "toolCall", "id" to "c", "name" to "edit", "arguments" to "{}"))
+                ),
+            ),
+            Wire.objectOf(
+                "id" to "t",
+                "role" to "tool",
+                "text" to "ok",
+                "state" to "complete",
+                "toolName" to "edit",
+                "toolCallId" to "c",
+            ),
+        )
 }
