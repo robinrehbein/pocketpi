@@ -3,7 +3,6 @@ package de.joinnoah.pi.remote
 import android.text.format.DateFormat
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
@@ -309,12 +308,10 @@ internal fun StatusPopover(
     content: @Composable () -> Unit,
 ) {
     Box {
-        // Collapsed it floats like the other insight chips, translucent over the chat.
-        FloatingSurface(
-            modifier =
-                if (expanded) Modifier.border(1.dp, MaterialTheme.colorScheme.primary, CircleShape) else Modifier,
+        Surface(
             shape = CircleShape,
-            color = if (expanded) MaterialTheme.colorScheme.primaryContainer else floatingHeaderColor(),
+            color = if (expanded) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+            border = if (expanded) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
         ) {
             Row(
                 Modifier.clickable(role = Role.Button) { onExpandedChange(!expanded) }

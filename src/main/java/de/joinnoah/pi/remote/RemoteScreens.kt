@@ -1113,8 +1113,8 @@ internal fun RemoteScreen(
     val bannersShown = compactionVisible(state.compaction, compactionNow) || exportState != null
     // The status sheet shows the banners only; it goes when they do, and does not return for the next ones.
     LaunchedEffect(bannersShown) { if (!bannersShown) statusSheet = false }
-    // Compact, a one-line chip leads the insights row above the composer while a banner waits in the status sheet; a
-    // failed export shows in the header itself, which a failure brings back.
+    // Compact, a one-line chip leads the insights row above the composer while a banner waits in the
+    // status sheet; a failed export shows in the header itself, which a failure brings back.
     val statusChipLine: Int? =
         when {
             !compact -> null

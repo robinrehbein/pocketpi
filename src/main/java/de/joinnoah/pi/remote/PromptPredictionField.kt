@@ -11,8 +11,8 @@ private val disabled = MutableStateFlow(false)
 private val noHistory = MutableStateFlow(PromptHistory())
 
 /**
- * The suggested next prompt for the open chat, or null. The composer shows it in place of the
- * field's placeholder, where Tab or the field's trailing button takes it.
+ * The suggested next prompt for the open chat, or null. The composer shows it as a chip above the
+ * field, where a tap or Tab takes it.
  */
 @Composable
 internal fun rememberPromptPrediction(state: RemoteState): String? {

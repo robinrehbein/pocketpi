@@ -13,7 +13,6 @@ import androidx.compose.foundation.content.contentReceiver
 import androidx.compose.foundation.text.handwriting.handwritingDetector
 import androidx.compose.foundation.text.handwriting.handwritingHandler
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardTab
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloseFullscreen
@@ -762,6 +761,23 @@ internal fun ChatComposer(
                     }
                 }
             }
+            // The suggestion is a chip above the field; a tap or Tab takes it.
+            prediction?.let { suggestion ->
+                // TalkBack names what a tap does; the chip's text alone would not say it fills the field.
+                val useSuggestion = stringResource(R.string.remote_suggestion_use, suggestion)
+                SuggestionChip(
+                    onClick = {
+                        acceptPrediction()
+                        // A tap lands in the field, as a Tab does, so the next keystroke goes into it.
+                        focusRequester?.let { runCatching { it.requestFocus() } }
+                    },
+                    label = { Text(suggestion, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    modifier =
+                        Modifier.padding(start = 4.dp)
+                            .semantics { contentDescription = useSuggestion }
+                            .testTag("promptSuggestion"),
+                )
+            }
             draft.longPaste?.let { held ->
                 LongPasteOffer(
                     onAttach = {
@@ -877,36 +893,16 @@ internal fun ChatComposer(
                     inputTransformation = draft.inputTransformation,
                     // The visible hint stays a placeholder: a floating label would grow the field and
                     // shift the chat when the first character arrives. The name for TalkBack is the
-                    // field's description below, and only while the field is empty. A suggestion takes
-                    // the placeholder's place, grey like it; Tab or the trailing button takes it.
+                    // field's description below, and only while the field is empty; the suggestion is
+                    // a chip above the field.
                     placeholder = {
                         Text(
-                            prediction ?: promptLabel,
-                            // One line for a suggestion, so the empty field keeps its height when one comes or goes.
-                            maxLines = if (prediction != null) 1 else 3,
+                            promptLabel,
+                            maxLines = 3,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.testTag("composerPlaceholder"),
                         )
                     },
-                    trailingIcon =
-                        prediction?.let { suggestion ->
-                            {
-                                // TalkBack names what a tap does and the suggestion it takes.
-                                val useSuggestion = stringResource(R.string.remote_suggestion_use, suggestion)
-                                ShortcutTooltip(useSuggestion, chord = KeyChord(Key.Tab)) {
-                                    IconButton(
-                                        onClick = {
-                                            acceptPrediction()
-                                            // The tap lands in the field, as a Tab does, so the next keystroke goes into it.
-                                            focusRequester?.let { runCatching { it.requestFocus() } }
-                                        },
-                                        modifier = Modifier.testTag("promptSuggestion"),
-                                    ) {
-                                        Icon(Icons.AutoMirrored.Filled.KeyboardTab, useSuggestion)
-                                    }
-                                }
-                            }
-                        },
                     colors =
                         TextFieldDefaults.colors(
                             focusedContainerColor = Color.Transparent,

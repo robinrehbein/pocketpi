@@ -174,7 +174,7 @@ class ComposerStopUiTest {
     }
 
     @Test
-    fun suggestionIsThePlaceholderWithATapTargetAndTheFieldKeepsItsLabel() {
+    fun suggestionIsATapTargetChipAndTheFieldKeepsItsLabel() {
         val source = FakePredictions()
         val messages =
             listOf(
@@ -199,12 +199,13 @@ class ComposerStopUiTest {
             )
         val suggestion = label(R.string.remote_prediction_run_tests)
         render(state(status = "idle", messages = messages), predictions = source)
-        // The suggestion takes the placeholder's place; the field keeps the plain prompt as its name.
-        compose.onNodeWithTag("composerPlaceholder", useUnmergedTree = true).assertTextEquals(suggestion)
-        compose.onNodeWithTag("composerField").assertContentDescriptionEquals(label(R.string.remote_prompt))
+        compose.onNodeWithTag("promptSuggestion").assertTextContains(suggestion)
         compose.onNodeWithTag("promptSuggestion").assertContentDescriptionEquals(
             RuntimeEnvironment.getApplication().getString(R.string.remote_suggestion_use, suggestion)
         )
+        // The field keeps the plain prompt as its name while the suggestion waits in the chip.
+        compose.onNodeWithTag("composerPlaceholder", useUnmergedTree = true)
+            .assertTextEquals(label(R.string.remote_prompt))
 
         compose.mainClock.autoAdvance = false
         compose.onNodeWithTag("promptSuggestion").performClick()
