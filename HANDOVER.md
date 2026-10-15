@@ -1,4 +1,4 @@
-# PocketPi – Handover (Stand 2026-10-14, ~20:45 UTC)
+# PocketPi – Handover (Stand 2026-10-15, ~02:00 UTC)
 
 Repo: `robinrehbein/pocketpi`. Regeln stehen in `CLAUDE.md`; dazu:
 - Robin auf Deutsch antworten; Code, Commits und PRs auf Englisch.
@@ -21,15 +21,10 @@ Robin hat erlaubt, selbstständig zu mergen. Melden soll man sich nur bei Proble
 - `main` steht auf `887d5b4` (Merge von #137). Die CI dafür lief bei der Übergabe noch; die letzte sicher grüne Push-CI war `6f9411e`.
 
 ## Offen / als Nächstes
-Gemerged seit dem letzten Stand: #138 (B22), #139 (B15), #140 (Minified-Smoke-Fix), #143 (Review-Fixes für B12/B13/B14/A16/B22). `main` war grün bis a44b1d8; CI für cc14faa (#143) lief.
-1. Offene PRs, jeweils mergen wenn ALLE Jobs grün sind:
-   - #141 B23 `claude/markdown` (Opus-Review-Fixes inkl. 2 blockierender gepusht, a6d07e1)
-   - #142 B16 `claude/list-empty-states` (Review-Fixes gepusht, db405c3)
-   Reihenfolge: #142, dann #141. Vorher jeweils `main` hineinmergen, wenn veraltet.
-2. Lanes (Workflows nur in der alten Session):
-   - Lane B (Opus seit 20:45): B17 theme (Ship läuft; impl war Haiku → vor Merge Opus-Review!), dann B18, B19, B25 (Copy-Sweep zuletzt).
-   - Lane C (Opus): B24 chat-a11y.
-   - Opus-Review-Findings + Status: scratchpad haiku_review_findings.md (nicht im Repo). Regel von Robin: Haiku-Arbeit wird vor dem Merge von Opus geprüft.
+ALLE Plan-Items sind gemerged (A1–A16, B1–B25, C1–C11) plus Review-Fixes (#143) und Test-Fixes (#135, #140, #150). `main` = 15420a6, Push-CI komplett GRÜN.
+1. Finales Release: auf Robins Go `release.yml` per workflow_dispatch auf main starten, Lauf beobachten (bei Play-503 einmal neu starten).
+2. Danach #88 (firebase-bom 35): main hineinmergen, lokale Checks, mergen, kleines separates Release.
+3. Aufräumen: alte Branches löschen (Robins OK nötig) inkl. wip/page-headers, wip/composer-content; Host-Roadmap-Notizen (unten) an Robin.
 3. **Merge-Regel für Lane-PRs (verschärft):**
    - Erst mergen, wenn ALLE Jobs grün sind: Unit, Lint, Emulator, Tablet emulator, Minified smoke, Benchmark isolation.
    - Liegt der Branch weit hinter `main` oder hat er Konflikte: vorher `main` hineinmergen, kompilieren, pushen.
