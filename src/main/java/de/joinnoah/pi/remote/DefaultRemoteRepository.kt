@@ -262,6 +262,8 @@ class DefaultRemoteRepository(
             FILES_ARTIFACT_CAPABILITY,
             RELOAD_CAPABILITY,
             ARTIFACTS_CAPABILITY,
+            // Only on the capabilities.v2 route, and only while the Mac's switch is on.
+            SESSION_BASH_CAPABILITY,
         )
     /** The request ID prefix of `projects.list`; falls back to v1 once for a host without v2. */
     private var capabilityRoute = CAPABILITIES_V2_ROUTE
@@ -1867,6 +1869,7 @@ class DefaultRemoteRepository(
                         } else {
                             cloneEvent(payload)?.let(::applyCloneUpdate)
                                 ?: jobEvent(payload)?.let(jobsController::onEvent)
+                                ?: bashOutputEvent(payload)?.let(::receiveBashOutput)
                         }
                     } catch (dropped: Exception) {
                         Diagnostics.caught("repo.receive.hostEvent", dropped)
@@ -2543,6 +2546,8 @@ class DefaultRemoteRepository(
                     },
                 // A reconnect keeps the open jobs view; the refresh after it watches again.
                 jobs = it.jobs?.takeIf { jobs -> sameSession && jobs.sessionId == selection.sessionId },
+                // Another chat drops the panel, not the command: the Mac runs it to its end.
+                bash = it.bash?.takeIf { run -> sameSession && run.sessionId == selection.sessionId },
                 host = host,
                 projects = projects,
                 projectChats = cachedProjectChats
@@ -7491,6 +7496,99 @@ class DefaultRemoteRepository(
         commandsVersion++
         update { it.copy(commandsLoading = false) }
         refreshCommands()
+    }
+
+    // ---- Shell commands (session.bash.v1) -------------------------------------------------
+
+    /** The streamed output of [RemoteState.bash] while it runs. */
+    private var bashStream = BashOutputStream()
+
+    private fun updateBash(requestId: String, block: (BashRun) -> BashRun) =
+        update { state -> state.bash?.takeIf { it.requestId == requestId }?.let { state.copy(bash = block(it)) } ?: state }
+
+    override fun runBash(command: String, excludeFromContext: Boolean): Boolean {
+        val current = state.value
+        val sessionId = current.selection.sessionId ?: return false
+        if (!canRunShellCommands(current) || !bashCommandFits(command) || current.bash?.running == true ||
+            activeHost?.routeId != current.selection.routeId)
+            return false
+        val requestId = Wire.random()
+        val epoch = selectionEpoch
+        bashStream = BashOutputStream()
+        update { it.copy(bash = BashRun(sessionId, requestId, command, excludeFromContext)) }
+        scope.launch {
+            var result: BashResult? = null
+            var failure: BashFailure? = null
+            try {
+                val data =
+                    request(
+                        "session.bash",
+                        epoch,
+                        *bashFields(sessionId, command, excludeFromContext),
+                        requestId = requestId,
+                        timeoutMillis = BASH_REQUEST_TIMEOUT_MILLIS,
+                    )
+                result =
+                    try {
+                        parseBashResult(data, sessionId)
+                    } catch (malformed: Exception) {
+                        Diagnostics.caught("repo.runBash.result", malformed)
+                        failure = BashFailure.FAILED
+                        null
+                    }
+            } catch (e: CancellationException) {
+                // A selection change or a lost connection cancels the request, not this coroutine.
+                currentCoroutineContext().ensureActive()
+                failure = BashFailure.CONNECTION
+            } catch (e: Exception) {
+                Diagnostics.caught("repo.runBash", e)
+                failure = bashFailure(e)
+            }
+            val ended = result
+            val reason = failure ?: BashFailure.FAILED
+            val lines = ended?.let(::bashResultLines).orEmpty()
+            updateBash(requestId) { run ->
+                when {
+                    !run.running -> run
+                    ended != null -> run.copy(result = ended, lines = lines, firstLine = 0, stopping = false)
+                    else -> run.copy(failure = reason, stopping = false)
+                }
+            }
+        }
+        return true
+    }
+
+    /** Output of this phone's running command; another request's, or any after the result, is dropped. */
+    private fun receiveBashOutput(event: BashOutput) {
+        val run = state.value.bash ?: return
+        if (!run.running || run.requestId != event.requestId || run.sessionId != event.sessionId) return
+        if (!bashStream.append(event)) return
+        val stream = bashStream
+        updateBash(run.requestId) {
+            if (it.running) it.copy(lines = stream.lines, firstLine = stream.firstLine, shownBytes = stream.bytes) else it
+        }
+    }
+
+    override fun abortBash() {
+        val current = state.value
+        val run = current.bash ?: return
+        if (!run.running || run.stopping || !current.connected || run.sessionId != current.selection.sessionId) return
+        val epoch = selectionEpoch
+        updateBash(run.requestId) { it.copy(stopping = true) }
+        scope.launch {
+            try {
+                validatedBashAborted(request("session.bash.abort", epoch, "sessionId" to run.sessionId), run.sessionId)
+            } catch (_: CancellationException) {
+            } catch (e: Exception) {
+                Diagnostics.caught("repo.abortBash", e)
+                // `not_running`: the command ended meanwhile, and its result is on its way.
+                if (e.hostCode != "not_running") updateBash(run.requestId) { it.copy(stopping = false) }
+            }
+        }
+    }
+
+    override fun closeBash() {
+        update { if (it.bash?.running == false) it.copy(bash = null) else it }
     }
 
     // ---- Session tree (session.tree.v1) ---------------------------------------------------

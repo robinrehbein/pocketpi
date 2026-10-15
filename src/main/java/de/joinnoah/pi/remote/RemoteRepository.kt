@@ -202,6 +202,8 @@ data class RemoteState(
     val files: FilesState? = null,
     /** Background jobs of the selected session (`session.background_jobs.v1`); null until listed. */
     val jobs: JobsState? = null,
+    /** The shell command run from this phone in the selected session (`session.bash.v1`), if any. */
+    val bash: BashRun? = null,
     val folders: FolderBrowserState = FolderBrowserState(),
     /** The provider list and login flow of the host shown on the Providers screen. */
     val providerAuth: ProviderAuthState = ProviderAuthState(),
@@ -407,6 +409,20 @@ interface RemoteRepository {
 
     /** Stops [jobId] through `session.jobs.kill`; the caller confirmed it with the user. */
     fun stopJob(jobId: String) {}
+
+    /**
+     * Runs [command] in the selected session's folder (`session.bash`, only with
+     * [SESSION_BASH_CAPABILITY] and for host-owned sessions) and streams its output into
+     * [RemoteState.bash]. [excludeFromContext] keeps the output from pi, like `!!`. False when it
+     * did not start: refused locally, or another command still runs.
+     */
+    fun runBash(command: String, excludeFromContext: Boolean): Boolean = false
+
+    /** Asks pi to stop the running shell command (`session.bash.abort`); its result follows. */
+    fun abortBash() {}
+
+    /** Dismisses a finished shell command; a running one stays. */
+    fun closeBash() {}
 
     fun answer(questionId: String, answer: JsonObject)
 

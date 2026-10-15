@@ -812,6 +812,8 @@ internal fun ChatComposer(
                         Text(stringResource(if (editorExpanded) R.string.remote_editor_collapse else R.string.remote_editor_expand))
                     }
                 }
+            // Send runs a `!` draft as a shell command; the label says so before it is sent.
+            shellDraft(state)?.let { ShellModeLabel(it.excludeFromContext) }
             Row(
                 // Writing with the S Pen anywhere on the row, beside the field too, writes into it.
                 Modifier.handwritingDetector { focusRequester?.let { runCatching { it.requestFocus() } } },
@@ -1069,7 +1071,10 @@ private const val EXPAND_OFFER_CHARS = 80
 private const val COMPOSER_MIN_LINES = 3
 private const val COMPOSER_MAX_LINES = 14
 
-/** The draft can be sent now; the same rule the primary button follows. */
+/**
+ * The draft can be sent now; the same rule the primary button follows. A shell draft (see
+ * [shellDraft]) needs a command and no other one running.
+ */
 internal fun canSendDraft(state: RemoteState): Boolean =
     state.connected &&
         !state.loading &&
@@ -1077,7 +1082,8 @@ internal fun canSendDraft(state: RemoteState): Boolean =
         !state.sending &&
         !state.importingAttachments &&
         !state.configurationChanging &&
-        (state.draft.isNotBlank() || state.attachments.isNotEmpty())
+        (shellDraft(state)?.let { shellDraftSendable(it, state) }
+            ?: (state.draft.isNotBlank() || state.attachments.isNotEmpty()))
 
 /** What the child control row says about the selected subagent child, or null for nothing. */
 internal fun childControlStatus(state: RemoteState): Int? {

@@ -1180,8 +1180,9 @@ private fun ColumnScope.JobDetail(view: JobView, actions: JobsActions) {
         )
 }
 
+/** Live output lines that follow the tail; [modifier] sizes the list, the whole pane by default. */
 @Composable
-private fun JobOutput(lines: List<JobOutputLine>, firstLine: Long) {
+internal fun JobOutput(lines: List<JobOutputLine>, firstLine: Long, modifier: Modifier = Modifier.fillMaxSize()) {
     // One item per line, and per JOB_LINE_CHUNK_CHARS of a long line; keys are absolute line indexes.
     val items = remember(lines, firstLine) {
         buildList {
@@ -1222,7 +1223,7 @@ private fun JobOutput(lines: List<JobOutputLine>, firstLine: Long) {
         if (follow && items.isNotEmpty()) listState.scrollToItem(items.lastIndex, Int.MAX_VALUE / 2)
     }
     LazyColumn(
-        Modifier.fillMaxSize().padding(horizontal = 12.dp).testTag("jobOutput"),
+        modifier.padding(horizontal = 12.dp).testTag("jobOutput"),
         state = listState,
         contentPadding = PaddingValues(vertical = 8.dp),
     ) {
