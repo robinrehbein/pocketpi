@@ -3,6 +3,7 @@
     <string name="remote_send_when_done">Nach Abschluss senden</string>
     <string name="remote_send_mode">Sendemodus</string>
     <string name="remote_suggestion_use">Vorschlag übernehmen: %1$s</string>
+    <string name="remote_suggestion_take">Vorschlag übernehmen</string>
     <string name="remote_stop_queued_title">pi anhalten?</string>
     <string name="remote_stop_queued_body">Beim Anhalten werden auch die Nachrichten verworfen, die du für diesen Lauf vorgemerkt hast.</string>
     <string name="remote_stop_queued_answers_body">Beim Anhalten werden auch die Nachrichten verworfen, die du für diesen Lauf vorgemerkt hast, und ausstehende Antworten werden nicht gesendet.</string>

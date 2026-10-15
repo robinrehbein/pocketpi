@@ -4,6 +4,7 @@
     <string name="remote_send_when_done">Send when done</string>
     <string name="remote_send_mode">Send mode</string>
     <string name="remote_suggestion_use">Use suggestion: %1$s</string>
+    <string name="remote_suggestion_take">Use suggestion</string>
     <string name="remote_stop_queued_title">Stop pi?</string>
     <string name="remote_stop_queued_body">Stopping also discards the messages you queued for this run.</string>
     <string name="remote_stop_queued_answers_body">Stopping also discards the messages you queued for this run, and your pending answers will not be sent.</string>

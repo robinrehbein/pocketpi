@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertContentDescriptionEquals
@@ -20,6 +21,7 @@ import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTextInput
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.JsonArray
@@ -68,12 +70,17 @@ class ComposerStopUiTest {
                 else emptyList(),
         )
 
-    private fun render(initial: RemoteState, predictions: PromptPredictionSource? = null) {
+    private fun render(
+        initial: RemoteState,
+        predictions: PromptPredictionSource? = null,
+        hardwareKeyboard: Boolean = false,
+    ) {
         current.value = initial
         compose.setContent {
             CompositionLocalProvider(
                 LocalChatKeyTarget provides keys,
                 LocalPromptPredictions provides predictions,
+                LocalHardwareKeyboard provides hardwareKeyboard,
             ) {
                 MaterialTheme {
                     ChatComposer(
@@ -190,6 +197,24 @@ class ComposerStopUiTest {
         compose.onNodeWithTag("promptSuggestion").performClick()
         compose.mainClock.advanceTimeBy(COMPOSER_DRAFT_DEBOUNCE_MILLIS)
         compose.onNode(hasSetTextAction()).assertTextContains(suggestion)
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun withAKeyboardHoveringTheSuggestionButtonNamesTab() {
+        render(
+            state(status = "idle", messages = editedFileMessages()),
+            predictions = FakePredictions(),
+            hardwareKeyboard = true,
+        )
+        compose.onNodeWithTag("promptSuggestion").performMouseInput { moveTo(center) }
+        compose.waitForIdle()
+        val tooltip = RuntimeEnvironment.getApplication().getString(
+            R.string.remote_shortcut_tooltip,
+            label(R.string.remote_suggestion_take),
+            label(R.string.remote_key_tab),
+        )
+        compose.onNodeWithText(tooltip).assertExists()
     }
 
     @Test
