@@ -15,10 +15,10 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Tune
@@ -53,7 +53,7 @@ private fun ChatAction.icon(): ImageVector =
         ChatAction.TREE -> Icons.Default.AccountTree
         ChatAction.ARTIFACTS -> Icons.Default.Collections
         ChatAction.RENAME -> Icons.Default.Edit
-        ChatAction.EXPORT -> Icons.Default.IosShare
+        ChatAction.EXPORT -> Icons.Default.Share
         ChatAction.REFRESH -> Icons.Default.Refresh
         ChatAction.RELOAD -> Icons.Default.RestartAlt
         ChatAction.SETTINGS -> Icons.Default.Settings

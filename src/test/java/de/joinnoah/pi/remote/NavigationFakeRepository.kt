@@ -478,4 +478,9 @@ internal class FakeSettingsRepository : SettingsRepository {
     override fun recordChatAction(action: ChatAction, now: Long) {
         recordedActions += action
     }
+
+    /** What [chatActionUsage] answers, as if stored by earlier uses. */
+    val usage = mutableMapOf<ChatAction, ActionUsage>()
+
+    override fun chatActionUsage(): Map<ChatAction, ActionUsage> = usage.toMap()
 }

@@ -13,6 +13,7 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import kotlinx.coroutines.CompletableDeferred
@@ -20,6 +21,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -175,6 +177,47 @@ class ChatActionsUiTest {
         expect(ChatStatusShape.UNKNOWN, R.string.remote_status_unknown)
         compose.runOnIdle { repository.state.value = repository.state.value.copy(connected = false) }
         expect(ChatStatusShape.OFFLINE, R.string.remote_status_offline)
-        assertEquals(ChatStatusShape.entries.size, ChatStatusShape.entries.toSet().size)
+    }
+
+    private fun menuEntries(): List<String> {
+        compose.waitForIdle()
+        return ChatAction.entries.map { "chatActionMenu_${it.name.lowercase()}" }
+            .filter { compose.onAllNodesWithTag(it).fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    @Test
+    fun theOpenMoreActionsKeepTheirEntriesWhenPiStartsRunning() {
+        render()
+        compose.onNodeWithTag("chatActionsMore").performClick()
+        val idle = menuEntries()
+        assertTrue(idle.containsAll(listOf("chatActionMenu_export", "chatActionMenu_reload")))
+        compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "running") }
+        assertEquals(idle, menuEntries())
+    }
+
+    @Test
+    fun exportAndReloadExplainThemselvesWhilePiRuns() {
+        repository.state.value = repository.state.value.copy(status = "running")
+        render()
+        runFromMenu(ChatAction.EXPORT)
+        snackbarShows(label(R.string.remote_export_when_idle)).assertIsDisplayed()
+        compose.onNodeWithTag("exportStatus").assertDoesNotExist()
+        runFromMenu(ChatAction.RELOAD)
+        snackbarShows(label(R.string.remote_reload_busy)).assertIsDisplayed()
+        assertEquals(emptyList<String>(), repository.reloads)
+    }
+
+    @Test
+    fun storedUsageDoesNotMoveActionsIntoThePill() {
+        val now = System.currentTimeMillis()
+        settings.usage[ChatAction.SETTINGS] = ActionUsage(500.0, now)
+        settings.usage[ChatAction.FILES] = ActionUsage(400.0, now)
+        repository.state.value =
+            repository.state.value.copy(capabilities = repository.state.value.capabilities + GIT_CAPABILITY + FILES_CAPABILITY)
+        render()
+        compose.onNodeWithTag("chatAction_changes").assertIsDisplayed()
+        compose.onNodeWithTag("chatAction_refresh").assertIsDisplayed()
+        compose.onNodeWithTag("chatAction_settings").assertDoesNotExist()
+        compose.onNodeWithTag("chatAction_files").assertDoesNotExist()
     }
 }

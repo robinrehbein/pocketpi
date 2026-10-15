@@ -1180,7 +1180,8 @@ internal fun RemoteScreen(
         exportScope.launch {
             try {
                 when (val result = chat.reloadSession(sessionId)) {
-                    ReloadResult.Done -> showFeedback(R.string.remote_reload_done, SnackbarDuration.Short)
+                    // Long, so a result that lands while a sheet covers the chat is still there when it closes.
+                    ReloadResult.Done -> showFeedback(R.string.remote_reload_done)
                     is ReloadResult.Failed -> {
                         val failure = result.failure
                         val message = (failure as? ReloadFailure.Failed)?.message
@@ -1262,8 +1263,15 @@ internal fun RemoteScreen(
             ChatAction.SESSION_SETTINGS -> settingsSheetRequested = true
             ChatAction.SETTINGS -> navigator.settings()
             ChatAction.HISTORY -> toggleHistory()
-            ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.EXPORT, ChatAction.RELOAD ->
-                action.localCommand?.let { runLocal(it, "") }
+            // The menu keeps Export and Reload while pi runs; they run only when `/` would offer them.
+            ChatAction.EXPORT ->
+                if (localCommandSendable(state)) runLocal(LocalCommand.EXPORT, "")
+                else showFeedback(R.string.remote_export_when_idle)
+            ChatAction.RELOAD ->
+                if (reloadAvailability(state) == ReloadAvailability.RUNS && !reloading && !localCommandSendable(state))
+                    showFeedback(R.string.remote_reload_busy)
+                else runLocal(LocalCommand.RELOAD, "")
+            ChatAction.TREE, ChatAction.ARTIFACTS -> action.localCommand?.let { runLocal(it, "") }
             ChatAction.CLOSE -> Unit
         }
     }
@@ -1404,12 +1412,9 @@ internal fun RemoteScreen(
                             add(ChatAction.SESSION_SETTINGS)
                         add(ChatAction.REFRESH)
                         add(ChatAction.SETTINGS)
-                        // Tree, artifacts, export and reload, whenever `/` offers their commands.
-                        addAll(
-                            localCommandActions(
-                                availableLocalCommands(state, true, System.currentTimeMillis(), reloading)
-                            )
-                        )
+                        // Tree, artifacts, export and reload whenever the session supports them, also
+                        // while pi runs, so the open menu keeps its rows; runChatAction explains a busy one.
+                        addAll(localCommandActions(chatMenuLocalCommands(state)))
                     },
                 ).let { if (withHistory) it.withHistory() else it }
                     .let { if (closableSession != null) it.withClose() else it }

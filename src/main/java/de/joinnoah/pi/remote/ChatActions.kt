@@ -96,7 +96,7 @@ internal fun ChatActionLayout.withClose(): ChatActionLayout {
     return ChatActionLayout(shown - moved.toSet(), (menu + moved + ChatAction.CLOSE).sortedBy { it.ordinal })
 }
 
-/** The slash command [this] runs; the menu offers these as their commands are offered in `/`. */
+/** The slash command [this] runs; the menu offers these while the session supports them, see [chatMenuLocalCommands]. */
 internal val ChatAction.localCommand: LocalCommand?
     get() =
         when (this) {
