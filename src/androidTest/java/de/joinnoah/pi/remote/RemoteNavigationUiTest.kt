@@ -585,7 +585,7 @@ class RemoteNavigationUiTest {
         refresh.assertIsDisplayed()
         // Offline leaves only Refresh and Settings, so Settings moves back into the pill.
         compose.onNodeWithContentDescription(label(R.string.remote_settings)).performClick()
-        compose.onNodeWithText(label(R.string.remote_appearance)).assertIsDisplayed()
+        compose.onNodeWithTag(SETTINGS_GROUP_KEY_PREFIX + "general").assertIsDisplayed()
     }
 
     @Test
@@ -641,7 +641,7 @@ class RemoteNavigationUiTest {
             more.performClick()
             compose.onNodeWithTag("chatActionMenu_new_session").assertIsDisplayed()
             compose.onNodeWithTag("chatActionMenu_settings").performClick()
-            compose.onNodeWithText(label(R.string.remote_appearance)).assertIsDisplayed()
+            compose.onNodeWithTag(SETTINGS_GROUP_KEY_PREFIX + "general").assertIsDisplayed()
         } finally {
             device.executeShellCommand(if (overrideSize == null) "wm size reset" else "wm size $overrideSize")
             device.waitForIdle()
@@ -1684,6 +1684,9 @@ class RemoteNavigationUiTest {
     @Test
     fun settingsSwitchesExposeOneToggleTargetEach() {
         settings()
+        // Thinking display is in the Chat group, below General's notifications and appearance.
+        val list = compose.onNode(hasScrollToIndexAction())
+        list.performScrollToNode(hasTestTag("thinkingSwitch"))
         val thinking = { compose.onNodeWithTag("thinkingSwitch") }
         thinking().assert(hasClickAction()).assertIsOff()
             .assertTextContains(label(R.string.remote_design_show_thinking))
@@ -1700,6 +1703,7 @@ class RemoteNavigationUiTest {
         compose.runOnIdle { assertEquals(ThinkingDisplay.STATUS, uiSettings.state.value.thinkingDisplay) }
 
         // Mode and palette are two pickers: each shows one selection and changes only its own setting.
+        list.performScrollToNode(hasTestTag("themeMode-dark"))
         compose.onNodeWithTag("themeMode-dark").performScrollTo().performClick().assertIsSelected()
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
         compose.runOnIdle { assertEquals(ThemeMode.DARK, uiSettings.state.value.themeMode) }
@@ -1867,7 +1871,7 @@ class RemoteNavigationUiTest {
         compose.onNodeWithText("Message for live").assertIsDisplayed()
         val activations = repository.activations.size
         settings()
-        compose.onNodeWithText(label(R.string.remote_appearance)).assertIsDisplayed()
+        compose.onNodeWithTag(SETTINGS_GROUP_KEY_PREFIX + "general").assertIsDisplayed()
         back()
         assertEquals(activations, repository.activations.size)
         compose.onNodeWithText("Message for live").assertIsDisplayed()

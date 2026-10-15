@@ -93,7 +93,6 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
@@ -1093,6 +1092,8 @@ internal fun RemoteScreen(
     var scan by rememberSaveable { mutableStateOf(false) }
     var paste by rememberSaveable(key) { mutableStateOf(false) }
     var qrText by remember { mutableStateOf("") }
+    // Nothing is paired yet: the page is the first-run card, which carries the ways to pair itself.
+    val firstRun = key == RemoteNavKey.Hosts && state.hosts.isEmpty() && state.hostsLoaded
     var removing by remember { mutableStateOf<PairedHost?>(null) }
     var unsharing by remember(key) { mutableStateOf<Pair<String, String>?>(null) }
     var closing by remember { mutableStateOf<SessionListItem?>(null) }
@@ -2046,37 +2047,50 @@ internal fun RemoteScreen(
                         )
                     }
                 }
-            } else if (key is RemoteNavKey.Sessions || key is RemoteNavKey.Hosts) {
+            } else if (key is RemoteNavKey.Sessions) {
                 FloatingSurface(
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.primary,
                 ) {
                     IconButton(
-                        onClick = {
-                            if (key is RemoteNavKey.Sessions)
-                                navigator.createSession(key.routeId, key.projectId)
-                            else scan = true
-                        },
-                        enabled = if (key is RemoteNavKey.Sessions) newSessionEnabled else true,
+                        onClick = { navigator.createSession(key.routeId, key.projectId) },
+                        enabled = newSessionEnabled,
                         modifier = Modifier.size(64.dp),
                     ) {
                         Icon(
-                            if (key is RemoteNavKey.Sessions) Icons.Default.Add
-                            else Icons.Default.QrCodeScanner,
-                            contentDescription =
-                                stringResource(
-                                    if (key is RemoteNavKey.Sessions) R.string.remote_new_session
-                                    else R.string.remote_scan
-                                ),
+                            Icons.Default.Add,
+                            contentDescription = stringResource(R.string.remote_new_session),
                             modifier = Modifier.size(28.dp),
                             tint = MaterialTheme.colorScheme.onPrimary,
+                        )
+                    }
+                }
+            } else if (key is RemoteNavKey.Hosts && !firstRun) {
+                // The first-run card holds both ways to pair; once a Mac is paired this button names its action.
+                FloatingSurface(
+                    shape = MaterialTheme.shapes.extraLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                ) {
+                    Row(
+                        Modifier.testTag("scanQrButton")
+                            .heightIn(min = 56.dp)
+                            .clickable(role = Role.Button, onClick = { scan = true })
+                            .padding(horizontal = 20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary)
+                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                        Text(
+                            stringResource(R.string.remote_onboarding_scan),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimary,
                         )
                     }
                 }
             }
         },
         bottomBar = {
-            if (!settings && key !is RemoteNavKey.Sessions && key !is RemoteNavKey.Chat)
+            if (!settings && key !is RemoteNavKey.Sessions && key !is RemoteNavKey.Chat && !firstRun)
                 Surface(color = MaterialTheme.colorScheme.background, tonalElevation = 0.dp) {
                     Column(
                         Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(16.dp)
@@ -2084,12 +2098,19 @@ internal fun RemoteScreen(
                         when (key) {
                             RemoteNavKey.Settings -> Unit
                             RemoteNavKey.Hosts -> {
-                                TextButton(
-                                    onClick = { paste = true },
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    Text(stringResource(R.string.remote_paste))
-                                }
+                                if (!firstRun)
+                                    TextButton(
+                                        onClick = { paste = true },
+                                        modifier = Modifier.fillMaxWidth().testTag("pasteCodeButton"),
+                                    ) {
+                                        Icon(
+                                            Icons.Default.ContentPaste,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(ButtonDefaults.IconSize),
+                                        )
+                                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                                        Text(stringResource(R.string.remote_onboarding_paste))
+                                    }
                             }
                             is RemoteNavKey.Sessions -> Unit
                             is RemoteNavKey.Chat -> Unit
@@ -2320,11 +2341,12 @@ internal fun RemoteScreen(
                                     Text(stringResource(state.error!!), Modifier.weight(1f))
                                 }
                                 ReconnectCountdown(state.reconnectAt)
-                                Row(
+                                // Three buttons do not fit a phone's card in one row; they wrap, kept to the end.
+                                FlowRow(
                                     Modifier.fillMaxWidth(),
                                     horizontalArrangement =
                                         Arrangement.spacedBy(8.dp, Alignment.End),
-                                    verticalAlignment = Alignment.CenterVertically,
+                                    itemVerticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     TextButton(
                                         onClick = model::dismissError,
@@ -2343,6 +2365,17 @@ internal fun RemoteScreen(
                                             ) {
                                                 Text(stringResource(R.string.remote_remove))
                                             }
+                                        }
+                                    // The Mac removed this phone: only a new code from /remote brings it back.
+                                    if (state.error == R.string.remote_device_revoked)
+                                        FilledTonalButton(
+                                            onClick = {
+                                                model.dismissError()
+                                                scan = true
+                                            },
+                                            modifier = Modifier.testTag("pairAgain"),
+                                        ) {
+                                            Text(stringResource(R.string.remote_pair_again))
                                         }
                                     if (!state.loading && state.error in RETRYABLE_ERRORS)
                                         FilledTonalButton(
@@ -2366,158 +2399,12 @@ internal fun RemoteScreen(
                     }
                 }
                 if (settings) {
-                    item {
-                        Section(stringResource(R.string.remote_thinking_setting)) {
-                            Text(
-                                stringResource(R.string.remote_design_thinking_help),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            val showThinking = preferences?.thinkingDisplay == ThinkingDisplay.TEXT
-                            Row(
-                                Modifier.fillMaxWidth()
-                                    .toggleable(value = showThinking, role = Role.Switch) {
-                                        (model as SettingsViewModel).setThinkingDisplay(
-                                            if (it) ThinkingDisplay.TEXT else ThinkingDisplay.STATUS
-                                        )
-                                    }
-                                    .testTag("thinkingSwitch")
-                                    .padding(vertical = 8.dp),
-                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    stringResource(R.string.remote_design_show_thinking),
-                                    Modifier.weight(1f),
-                                )
-                                Switch(checked = showThinking, onCheckedChange = null)
-                            }
-                        }
+                    // Grouped by what people change, the most consequential first.
+                    item(key = SETTINGS_GROUP_KEY_PREFIX + "general") {
+                        SettingsGroupHeading(stringResource(R.string.remote_settings_general), "general")
                     }
-                    item {
-                        Section(stringResource(R.string.remote_appearance)) {
-                            Text(
-                                stringResource(R.string.remote_design_appearance_help),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            val mode = preferences?.themeMode ?: ThemeMode.SYSTEM
-                            val dark = mode.isDark(isSystemInDarkTheme())
-                            Text(
-                                stringResource(R.string.remote_theme_mode),
-                                Modifier.semantics { heading() },
-                                style = MaterialTheme.typography.labelLarge,
-                            )
-                            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                                ThemeMode.entries.forEachIndexed { index, option ->
-                                    SegmentedButton(
-                                        selected = mode == option,
-                                        onClick = { (model as SettingsViewModel).setThemeMode(option) },
-                                        shape = SegmentedButtonDefaults.itemShape(index, ThemeMode.entries.size),
-                                        modifier = Modifier.testTag("themeMode-${option.stored}"),
-                                        icon = {},
-                                    ) {
-                                        Text(
-                                            stringResource(
-                                                when (option) {
-                                                    ThemeMode.SYSTEM -> R.string.remote_theme_system
-                                                    ThemeMode.LIGHT -> R.string.remote_theme_light
-                                                    ThemeMode.DARK -> R.string.remote_theme_dark
-                                                }
-                                            ),
-                                            maxLines = 1,
-                                        )
-                                    }
-                                }
-                            }
-                            Text(
-                                stringResource(R.string.remote_theme_palette),
-                                Modifier.semantics { heading() },
-                                style = MaterialTheme.typography.labelLarge,
-                            )
-                            // A stored Dynamic the device cannot draw shows, and is selected, as the brand palette.
-                            val shownPalette = theme.effective(Build.VERSION.SDK_INT)
-                            Column(
-                                Modifier.selectableGroup(),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                // Wallpaper colours need Android 12; without it the choice is not offered at all.
-                                ThemePalette.available(Build.VERSION.SDK_INT).forEach { palette ->
-                                    PaletteChoice(
-                                        label =
-                                            stringResource(
-                                                when (palette) {
-                                                    ThemePalette.BRAND -> R.string.remote_theme_brand
-                                                    ThemePalette.SYNTHWAVE -> R.string.remote_theme_synthwave
-                                                    ThemePalette.DYNAMIC -> R.string.remote_theme_dynamic
-                                                }
-                                            ),
-                                        palette = palette,
-                                        selected = shownPalette == palette,
-                                        dark = dark,
-                                        onSelect = { (model as SettingsViewModel).setTheme(palette) },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    item {
-                        Section(stringResource(R.string.remote_swipe_title)) {
-                            Text(
-                                stringResource(R.string.remote_swipe_help),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            SwipeActionChoice(
-                                label = R.string.remote_swipe_end_to_start,
-                                tagPrefix = "swipeEndToStart",
-                                selected = preferences?.swipeEndToStart,
-                                onSelect = { (model as SettingsViewModel).setSwipeEndToStart(it) },
-                            )
-                            SwipeActionChoice(
-                                label = R.string.remote_swipe_start_to_end,
-                                tagPrefix = "swipeStartToEnd",
-                                selected = preferences?.swipeStartToEnd,
-                                onSelect = { (model as SettingsViewModel).setSwipeStartToEnd(it) },
-                            )
-                        }
-                    }
-                    // Only where a keyboard can be in use: one is attached, or the wide layout of a
-                    // tablet, which usually has one nearby.
-                    if (keyboardSettingsShown(hardwareKeyboard, paneLayout.twoPane))
-                        item {
-                            Section(stringResource(R.string.remote_keyboard_title), Modifier.testTag("keyboardSettings")) {
-                                val helpKeys =
-                                    chordText(
-                                        checkNotNull(tooltipChord(Shortcut.HELP)),
-                                        androidx.compose.ui.platform.LocalResources.current,
-                                        rememberKeyCaps(),
-                                    )
-                                Text(
-                                    stringResource(R.string.remote_keyboard_help, helpKeys),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                val enterSends = preferences?.enterSends ?: true
-                                Row(
-                                    Modifier.fillMaxWidth()
-                                        .toggleable(value = enterSends, role = Role.Switch) {
-                                            (model as SettingsViewModel).setEnterSends(it)
-                                        }
-                                        .testTag("enterSendsSwitch")
-                                        .padding(vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(stringResource(R.string.remote_keyboard_enter_sends), Modifier.weight(1f))
-                                    Switch(checked = enterSends, onCheckedChange = null)
-                                }
-                                ShortcutList(null, Modifier.testTag("keyboardShortcuts"))
-                            }
-                        }
-                    item { PredictionSettingsSection() }
-                    // Only the wide layout has widths and columns to reset.
-                    twoPane?.let { item { LayoutSettingsSection(it) } }
-                    item {
-                        Section(stringResource(R.string.remote_notifications)) {
+                    item(key = "settings-notifications") {
+                        Section(stringResource(R.string.remote_notifications), Modifier.testTag("settingsNotifications")) {
                             val hint =
                                 stringResource(
                                     when {
@@ -2584,35 +2471,205 @@ internal fun RemoteScreen(
                             LiveRunSettingRow()
                         }
                     }
-                    item {
-                        val uriHandler = LocalUriHandler.current
-                        val unavailable = stringResource(R.string.remote_settings_privacy_unavailable)
-                        Section(stringResource(R.string.remote_settings_privacy_title)) {
+                    item(key = "settings-appearance") {
+                        Section(stringResource(R.string.remote_appearance)) {
                             Text(
-                                stringResource(R.string.remote_settings_privacy_help),
+                                stringResource(R.string.remote_design_appearance_help),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            TextButton(
-                                onClick = {
-                                    try {
-                                        uriHandler.openUri(PRIVACY_POLICY_URL)
-                                    } catch (_: IllegalArgumentException) {
-                                        // No app opens the link; the URI handler wraps ActivityNotFoundException.
-                                        Toast.makeText(context, unavailable, Toast.LENGTH_SHORT).show()
+                            val mode = preferences?.themeMode ?: ThemeMode.SYSTEM
+                            val dark = mode.isDark(isSystemInDarkTheme())
+                            Text(
+                                stringResource(R.string.remote_theme_mode),
+                                Modifier.semantics { heading() },
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                                ThemeMode.entries.forEachIndexed { index, option ->
+                                    SegmentedButton(
+                                        selected = mode == option,
+                                        onClick = { (model as SettingsViewModel).setThemeMode(option) },
+                                        shape = SegmentedButtonDefaults.itemShape(index, ThemeMode.entries.size),
+                                        modifier = Modifier.testTag("themeMode-${option.stored}"),
+                                        icon = {},
+                                    ) {
+                                        Text(
+                                            stringResource(
+                                                when (option) {
+                                                    ThemeMode.SYSTEM -> R.string.remote_theme_system
+                                                    ThemeMode.LIGHT -> R.string.remote_theme_light
+                                                    ThemeMode.DARK -> R.string.remote_theme_dark
+                                                }
+                                            ),
+                                            maxLines = 1,
+                                        )
                                     }
-                                },
-                            ) {
-                                Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
-                                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                                Text(stringResource(R.string.remote_settings_privacy_open))
+                                }
                             }
-                            AppLockSettingRow()
+                            Text(
+                                stringResource(R.string.remote_theme_palette),
+                                Modifier.semantics { heading() },
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                            // A stored Dynamic the device cannot draw shows, and is selected, as the brand palette.
+                            val shownPalette = theme.effective(Build.VERSION.SDK_INT)
+                            Column(
+                                Modifier.selectableGroup(),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                // Wallpaper colours need Android 12; without it the choice is not offered at all.
+                                ThemePalette.available(Build.VERSION.SDK_INT).forEach { palette ->
+                                    PaletteChoice(
+                                        label =
+                                            stringResource(
+                                                when (palette) {
+                                                    ThemePalette.BRAND -> R.string.remote_theme_brand
+                                                    ThemePalette.SYNTHWAVE -> R.string.remote_theme_synthwave
+                                                    ThemePalette.DYNAMIC -> R.string.remote_theme_dynamic
+                                                }
+                                            ),
+                                        palette = palette,
+                                        selected = shownPalette == palette,
+                                        dark = dark,
+                                        onSelect = { (model as SettingsViewModel).setTheme(palette) },
+                                    )
+                                }
+                            }
                         }
                     }
-                    item {
+                    // Only the wide layout has widths and columns to reset.
+                    twoPane?.let { item(key = "settings-layout") { LayoutSettingsSection(it) } }
+                    item(key = SETTINGS_GROUP_KEY_PREFIX + "chat") {
+                        SettingsGroupHeading(stringResource(R.string.remote_settings_chat), "chat")
+                    }
+                    item(key = "settings-thinking") {
+                        Section(stringResource(R.string.remote_thinking_setting)) {
+                            Text(
+                                stringResource(R.string.remote_design_thinking_help),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            val showThinking = preferences?.thinkingDisplay == ThinkingDisplay.TEXT
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .toggleable(value = showThinking, role = Role.Switch) {
+                                        (model as SettingsViewModel).setThinkingDisplay(
+                                            if (it) ThinkingDisplay.TEXT else ThinkingDisplay.STATUS
+                                        )
+                                    }
+                                    .testTag("thinkingSwitch")
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    stringResource(R.string.remote_design_show_thinking),
+                                    Modifier.weight(1f),
+                                )
+                                Switch(checked = showThinking, onCheckedChange = null)
+                            }
+                        }
+                    }
+                    item(key = "settings-predictions") { PredictionSettingsSection() }
+                    // Only where a keyboard can be in use: one is attached, or the wide layout of a
+                    // tablet, which usually has one nearby.
+                    if (keyboardSettingsShown(hardwareKeyboard, paneLayout.twoPane))
+                        item(key = "settings-keyboard") {
+                            Section(stringResource(R.string.remote_keyboard_title), Modifier.testTag("keyboardSettings")) {
+                                val helpKeys =
+                                    chordText(
+                                        checkNotNull(tooltipChord(Shortcut.HELP)),
+                                        androidx.compose.ui.platform.LocalResources.current,
+                                        rememberKeyCaps(),
+                                    )
+                                Text(
+                                    stringResource(R.string.remote_keyboard_help, helpKeys),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                val enterSends = preferences?.enterSends ?: true
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .toggleable(value = enterSends, role = Role.Switch) {
+                                            (model as SettingsViewModel).setEnterSends(it)
+                                        }
+                                        .testTag("enterSendsSwitch")
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(stringResource(R.string.remote_keyboard_enter_sends), Modifier.weight(1f))
+                                    Switch(checked = enterSends, onCheckedChange = null)
+                                }
+                                ShortcutList(null, Modifier.testTag("keyboardShortcuts"))
+                            }
+                        }
+                    item(key = SETTINGS_GROUP_KEY_PREFIX + "session-list") {
+                        SettingsGroupHeading(stringResource(R.string.remote_settings_session_list), "session-list")
+                    }
+                    item(key = "settings-swipe") {
+                        Section(stringResource(R.string.remote_swipe_title)) {
+                            Text(
+                                stringResource(R.string.remote_swipe_help),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            SwipeActionChoice(
+                                label = R.string.remote_swipe_end_to_start,
+                                tagPrefix = "swipeEndToStart",
+                                selected = preferences?.swipeEndToStart,
+                                onSelect = { (model as SettingsViewModel).setSwipeEndToStart(it) },
+                            )
+                            SwipeActionChoice(
+                                label = R.string.remote_swipe_start_to_end,
+                                tagPrefix = "swipeStartToEnd",
+                                selected = preferences?.swipeStartToEnd,
+                                onSelect = { (model as SettingsViewModel).setSwipeStartToEnd(it) },
+                            )
+                        }
+                    }
+                    item(key = "settings-offline") {
+                        HideOfflineSessionsSection(
+                            hide = preferences?.hideOfflineSessions ?: false,
+                            onChange = { (model as SettingsViewModel).setHideOfflineSessions(it) },
+                        )
+                    }
+                    item(key = SETTINGS_GROUP_KEY_PREFIX + "devices") {
+                        SettingsGroupHeading(stringResource(R.string.remote_settings_devices), "devices")
+                    }
+                    item(key = "settings-devices") {
+                        DevicesSection(
+                            pairedMacs = state.hosts.size,
+                            // The hosts list itself, where Macs are paired, opened and removed.
+                            onPairedMacs = { navigator.open(RemoteNavKey.Hosts) },
+                        )
+                    }
+                    item(key = SETTINGS_GROUP_KEY_PREFIX + "privacy") {
+                        SettingsGroupHeading(stringResource(R.string.remote_settings_privacy), "privacy")
+                    }
+                    item(key = "settings-app-lock") {
+                        // The lock's row brings its own title; the group's heading names the card.
+                        Section(null, Modifier.testTag("settingsAppLock")) { AppLockSettingRow() }
+                    }
+                    item(key = SETTINGS_GROUP_KEY_PREFIX + "about") {
+                        SettingsGroupHeading(stringResource(R.string.remote_settings_about), "about")
+                    }
+                    item(key = "settings-about") {
+                        val uriHandler = LocalUriHandler.current
+                        val unavailable = stringResource(R.string.remote_settings_privacy_unavailable)
+                        AboutSection(
+                            onPrivacyPolicy = {
+                                try {
+                                    uriHandler.openUri(PRIVACY_POLICY_URL)
+                                } catch (_: IllegalArgumentException) {
+                                    // No app opens the link; the URI handler wraps ActivityNotFoundException.
+                                    Toast.makeText(context, unavailable, Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                        )
+                    }
+                    item(key = "settings-diagnostics") {
                         var diagnosticsOpen by rememberSaveable { mutableStateOf(false) }
-                        Section(stringResource(R.string.remote_diagnostics_title)) {
+                        Section(stringResource(R.string.remote_diagnostics_title), Modifier.testTag("settingsDiagnostics")) {
                             Text(
                                 stringResource(R.string.remote_diagnostics_help),
                                 style = MaterialTheme.typography.bodySmall,
@@ -2637,6 +2694,12 @@ internal fun RemoteScreen(
                         // The board is its own screen (ActivityBoardScreen), never a RemoteScreen page.
                         is RemoteNavKey.Activity -> Unit
                         RemoteNavKey.Hosts -> {
+                            // While the Mac asks its user, the wait leads the page, above any Macs.
+                            state.pairingDeadline?.let { deadline ->
+                                item(key = "pairing_wait") {
+                                    PairingWaitCard(deadline, onCancel = { (model as? HostsViewModel)?.cancelPairing() })
+                                }
+                            }
                             // Until the pairings are read, no list is no news: the first-run text
                             // would flash before the Macs appear. A read that failed says so instead.
                             if (state.hosts.isEmpty() && state.hostsUnreadable) {
@@ -2644,15 +2707,8 @@ internal fun RemoteScreen(
                                 item { Text(stringResource(R.string.remote_pair_help)) }
                             } else if (state.hosts.isEmpty() && !state.hostsLoaded) {
                                 item(key = "hosts_loading") { HostListSkeleton() }
-                            } else if (state.hosts.isEmpty()) {
-                                item {
-                                    Text(
-                                        stringResource(R.string.remote_welcome),
-                                        style = MaterialTheme.typography.headlineSmall,
-                                    )
-                                }
-                                item { Text(stringResource(R.string.remote_pair_help)) }
-                                item { Text(stringResource(R.string.remote_empty_hosts)) }
+                            } else if (state.hosts.isEmpty() && state.pairingDeadline == null) {
+                                item(key = "first_run") { FirstRunCard(onScan = { scan = true }, onPaste = { paste = true }) }
                             }
                             items(state.hosts, key = { it.routeId }) { host ->
                                 HostCard(
@@ -3175,10 +3231,11 @@ internal fun RemoteScreen(
                                     Text(stringResource(error), Modifier.weight(1f))
                                 }
                                 ReconnectCountdown(state.reconnectAt)
-                                Row(
+                                // Close, Remove and Pair again do not fit a phone's card in one row; they wrap.
+                                FlowRow(
                                     Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                                    verticalAlignment = Alignment.CenterVertically,
+                                    itemVerticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     TextButton(
                                         onClick = model::dismissError,
@@ -3196,6 +3253,17 @@ internal fun RemoteScreen(
                                             ) {
                                                 Text(stringResource(R.string.remote_remove))
                                             }
+                                        }
+                                    // As on the list pages: the scanned code pairs from the computers page.
+                                    if (error == R.string.remote_device_revoked)
+                                        FilledTonalButton(
+                                            onClick = {
+                                                model.dismissError()
+                                                scan = true
+                                            },
+                                            modifier = Modifier.testTag("pairAgain"),
+                                        ) {
+                                            Text(stringResource(R.string.remote_pair_again))
                                         }
                                     if (!state.loading && error in RETRYABLE_ERRORS)
                                         FilledTonalButton(
@@ -3661,66 +3729,17 @@ internal fun RemoteScreen(
                 paste = true
             },
         )
-    if (paste) {
-        val clipboard = LocalClipboardManager.current
-        AlertDialog(
-            onDismissRequest = { paste = false },
-            title = { Text(stringResource(R.string.remote_pair)) },
-            text = {
-                OutlinedTextField(
-                    value = qrText,
-                    onValueChange = { if (it.length <= 8192) qrText = it },
-                    label = { Text(stringResource(R.string.remote_pair_code)) },
-                    placeholder = { Text(stringResource(R.string.remote_design_pair_input_hint)) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions =
-                        KeyboardActions(onDone = {
-                            if (qrText.isNotBlank()) {
-                                paste = false
-                                navigator.pair(qrText)
-                                qrText = ""
-                            }
-                        }),
-                    trailingIcon = {
-                        IconButton(
-                            onClick = {
-                                clipboard.getText()?.text?.trim()?.takeIf { it.length <= 8192 }
-                                    ?.let { qrText = it }
-                            },
-                        ) {
-                            Icon(
-                                Icons.Default.ContentPaste,
-                                stringResource(R.string.remote_paste_from_clipboard),
-                            )
-                        }
-                    },
-                    colors =
-                        OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        ),
-                )
+    if (paste)
+        PairingCodeDialog(
+            text = qrText,
+            onTextChange = { qrText = it },
+            onPair = {
+                paste = false
+                navigator.pair(qrText)
+                qrText = ""
             },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        paste = false
-                        navigator.pair(qrText)
-                        qrText = ""
-                    },
-                    enabled = qrText.isNotBlank(),
-                ) {
-                    Text(stringResource(R.string.remote_pair))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { paste = false }) {
-                    Text(stringResource(R.string.remote_cancel))
-                }
-            },
+            onDismiss = { paste = false },
         )
-    }
     if (disconnecting && key is RemoteNavKey.Projects)
         AlertDialog(
             onDismissRequest = { disconnecting = false },
@@ -4166,14 +4185,15 @@ private fun SkeletonBar(modifier: Modifier) {
 }
 
 @Composable
-internal fun Section(title: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+internal fun Section(title: String?, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Card(modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.semantics { heading() },
-            )
+            if (title != null)
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.semantics { heading() },
+                )
             content()
         }
     }

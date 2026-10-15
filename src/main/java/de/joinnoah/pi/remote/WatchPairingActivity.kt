@@ -4,6 +4,8 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -28,22 +30,63 @@ class WatchPairingActivity : ComponentActivity() {
             nodeName = nodes.find { it.id == request.nodeId }?.displayName
             if (nodeName == null) failure = true
         }.addOnFailureListener { failure = true }
+        enableEdgeToEdge()
         setContent {
             var scan by remember { mutableStateOf(false) }
-            MaterialTheme {
+            // The app's palette and mode, like every other PocketPi screen.
+            val preferences by (application as RemoteApplication).settings.state.collectAsState()
+            val dark = preferences.themeMode.isDark(isSystemInDarkTheme())
+            SystemBarsAppearance(dark)
+            MaterialTheme(
+                colorScheme =
+                    remember(dark, preferences.theme) { appColorScheme(this@WatchPairingActivity, dark, preferences.theme) },
+                typography = RemoteTypography,
+                shapes = RemoteShapes,
+            ) {
                 Surface(Modifier.fillMaxSize()) {
-                    Column(Modifier.safeDrawingPadding().padding(24.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Text(stringResource(R.string.wear_phone_pair_title), style = MaterialTheme.typography.headlineMedium)
-                        Text(stringResource(R.string.wear_phone_pair_intro))
-                        nodeName?.let { Text(it) }
-                        if (failure) Text(stringResource(R.string.wear_phone_unavailable))
-                        Button(onClick = { scan = true }, enabled = nodeName != null && !sending) { Text(stringResource(R.string.remote_scan)) }
-                        OutlinedTextField(code, { code = it.take(8192) }, label = { Text(stringResource(R.string.wear_pair_code)) }, enabled = !sending, modifier = Modifier.fillMaxWidth())
-                        val valid = runCatching { Wire.pairing(code) }.isSuccess
-                        Button(onClick = { send(request) }, enabled = nodeName != null && !sending && valid) { Text(stringResource(R.string.wear_send_pair_code)) }
-                        TextButton(onClick = { finish() }, enabled = !sending) { Text(stringResource(R.string.remote_cancel)) }
+                    Column(Modifier.safeDrawingPadding()) {
+                        val close = stringResource(R.string.remote_cancel)
+                        PaneHeader(
+                            title = stringResource(R.string.wear_phone_pair_title),
+                            subtitle = nodeName,
+                            nested = false,
+                            busy = sending,
+                            tag = "watchPairing",
+                            backLabel = stringResource(R.string.remote_back),
+                            closeLabel = close,
+                            reloadLabel = stringResource(R.string.remote_refresh),
+                            onBack = { if (!sending) finish() },
+                            onClose = { if (!sending) finish() },
+                            onReload = null,
+                            // The code is on its way: the screen closes by itself once it arrived.
+                            leaveEnabled = !sending,
+                        )
+                        Column(
+                            Modifier.padding(horizontal = 24.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            Text(stringResource(R.string.wear_phone_pair_intro))
+                            if (failure)
+                                Text(stringResource(R.string.wear_phone_unavailable), color = MaterialTheme.colorScheme.error)
+                            Button(onClick = { scan = true }, enabled = nodeName != null && !sending, modifier = Modifier.fillMaxWidth()) {
+                                Text(stringResource(R.string.remote_scan))
+                            }
+                            OutlinedTextField(
+                                code,
+                                { code = it.take(PAIRING_CODE_MAX_LENGTH) },
+                                label = { Text(stringResource(R.string.wear_pair_code)) },
+                                enabled = !sending,
+                                singleLine = true,
+                                keyboardOptions = PAIRING_CODE_KEYBOARD,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            val valid = runCatching { Wire.pairing(code) }.isSuccess
+                            Button(onClick = { send(request) }, enabled = nodeName != null && !sending && valid, modifier = Modifier.fillMaxWidth()) {
+                                Text(stringResource(R.string.wear_send_pair_code))
+                            }
+                        }
                     }
-                    if (scan) QrScanner({ value -> code = value.take(8192); scan = false }, { scan = false }, { scan = false })
+                    if (scan) QrScanner({ value -> code = value.take(PAIRING_CODE_MAX_LENGTH); scan = false }, { scan = false }, { scan = false })
                 }
             }
         }

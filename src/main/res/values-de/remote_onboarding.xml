@@ -1,0 +1,43 @@
+<resources>
+    <string name="remote_pairing_wait_title">Warte auf deinen Mac</string>
+    <string name="remote_pairing_time_left">Noch %1$s</string>
+    <string name="remote_pairing_cancel">Kopplung abbrechen</string>
+
+    <string name="remote_onboarding_step_1">Starte pi auf deinem Mac und tippe /remote.</string>
+    <string name="remote_onboarding_step_2">Scanne den QR-Code, den pi anzeigt, oder kopiere den Kopplungscode und füge ihn hier ein.</string>
+    <string name="remote_onboarding_step_3">Bestätige dieses Handy auf deinem Mac.</string>
+    <string name="remote_onboarding_scan">QR-Code scannen</string>
+    <string name="remote_onboarding_paste">Code einfügen</string>
+    <string name="remote_onboarding_setup">Mac einrichten</string>
+    <string name="remote_onboarding_setup_body">PocketPi arbeitet über pi Remote mit pi auf deinem Mac. Dein Mac braucht pi mit der Erweiterung pi Remote und muss wach und online bleiben, solange du die App nutzt.</string>
+    <string name="remote_onboarding_setup_projects">Hier erscheinen nur Projekte, die du auf dem Mac teilst. Eine Kopplung kannst du jederzeit entfernen, hier oder auf dem Mac.</string>
+    <string name="remote_onboarding_setup_done">Verstanden</string>
+
+    <string name="remote_pair_again">Erneut koppeln</string>
+
+    <string name="remote_camera_error_title">Kamera nicht verfügbar</string>
+    <string name="remote_camera_error">Die Kamera konnte nicht starten. Schließe andere Apps, die sie nutzen, und versuche es erneut, oder füge den Code ein.</string>
+    <string name="remote_camera_settings">Der Kamerazugriff ist für PocketPi ausgeschaltet. Schalte ihn in den App-Einstellungen ein oder füge den Code ein.</string>
+
+    <string name="remote_settings_general">Allgemein</string>
+    <string name="remote_settings_chat">Chat</string>
+    <string name="remote_settings_session_list">Sitzungsliste</string>
+    <string name="remote_settings_devices">Geräte</string>
+    <string name="remote_settings_privacy">Datenschutz</string>
+    <string name="remote_settings_about">Über die App</string>
+
+    <string name="remote_settings_offline_title">Offline-Sitzungen</string>
+    <string name="remote_settings_hide_offline">Offline-Sitzungen ausblenden</string>
+    <string name="remote_settings_hide_offline_help">Gilt für die Sitzungslisten aller Projekte, wie der Schalter in ihrem Filter.</string>
+
+    <string name="remote_settings_paired_macs">Gekoppelte Macs</string>
+    <string name="remote_settings_paired_none">Noch kein Mac gekoppelt</string>
+    <plurals name="remote_settings_paired_count">
+        <item quantity="one">%d Mac gekoppelt</item>
+        <item quantity="other">%d Macs gekoppelt</item>
+    </plurals>
+    <string name="remote_settings_watch">Uhr</string>
+    <string name="remote_settings_watch_help">Öffne PocketPi auf deiner Uhr und tippe auf „%1$s“. Dieses Handy scannt dann den QR-Code des Macs für die Uhr, und die Uhr bekommt eine eigene Kopplung.</string>
+
+    <string name="remote_settings_version">Version %1$s (%2$d)</string>
+</resources>
