@@ -1113,8 +1113,8 @@ internal fun RemoteScreen(
     val bannersShown = compactionVisible(state.compaction, compactionNow) || exportState != null
     // The status sheet shows the banners only; it goes when they do, and does not return for the next ones.
     LaunchedEffect(bannersShown) { if (!bannersShown) statusSheet = false }
-    // Compact, a one-line chip leads the controls' row while a banner waits in the status sheet; a
-    // failed export shows in the header itself, which a failure brings back.
+    // Compact, a one-line chip leads the insights row above the composer while a banner waits in the
+    // status sheet; a failed export shows in the header itself, which a failure brings back.
     val statusChipLine: Int? =
         when {
             !compact -> null
@@ -3310,7 +3310,8 @@ internal fun RemoteScreen(
                         touched.total > 0 || errorCount > 0 || onlyErrorsShown ||
                             subagentChipShown(strip, subagentsExpanded.value) ||
                             jobsChipShown(statusJobs, jobsExpanded.value)
-                    // The chips sit in their own row, or merged into the controls' row while the chat is compact.
+                    // The chips sit in their own row above the composer, never inside it. While the chat is
+                    // compact the row also holds the status chip that stands in for the banners.
                     val chipOrder = insightChipOrder(compact)
                     val insightChips: @Composable RowScope.() -> Unit = {
                         for (chip in chipOrder)
@@ -3368,12 +3369,17 @@ internal fun RemoteScreen(
                                     }
                             }
                     }
-                    if (insightsShown && !compact)
+                    if (insightsShown || statusChipLine != null)
                         Row(
                             Modifier.fillMaxWidth().testTag("chatInsights").horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                        ) { insightChips() }
+                        ) {
+                            statusChipLine?.let { line ->
+                                ChatStatusChip(line, running = line != R.string.remote_export_done) { statusSheet = true }
+                            }
+                            if (insightsShown) insightChips()
+                        }
                     val treeSessionId = state.selection.sessionId
                     val treeChat = model as? ChatViewModel
                     if (treeSheetRequested && chatKey != null && treeSessionId != null && treeChat != null)
@@ -3507,17 +3513,6 @@ internal fun RemoteScreen(
                                 settingsSheetRequested = settingsSheetRequested,
                                 onSettingsSheetRequestHandled = { settingsSheetRequested = false },
                                 slashSuggestions = !composer.suggestionsClosed,
-                                leadingChips =
-                                    if (compact && (insightsShown || statusChipLine != null)) {
-                                        {
-                                            statusChipLine?.let { line ->
-                                                ChatStatusChip(line, running = line != R.string.remote_export_done) {
-                                                    statusSheet = true
-                                                }
-                                            }
-                                            if (insightsShown) insightChips()
-                                        }
-                                    } else null,
                                 onManageProviders = state.selection.routeId?.let { route -> { navigator.openProviders(route) } },
                             )
                         },
@@ -4345,7 +4340,7 @@ internal fun headerHiddenAfterScroll(hidden: Boolean, previous: Pair<Int, Int>, 
 }
 
 /**
- * The compact chat's status in one line, at the start of the controls' row while a banner waits in
+ * The compact chat's status in one line, at the start of the insights row while a banner waits in
  * the status sheet: what runs ([running] spins) or what is done. A tap opens the sheet; the line is
  * read out as it changes.
  */
@@ -4382,9 +4377,9 @@ private fun rememberTouchExploring(): State<Boolean> {
 internal enum class InsightChip { TOUCHED, ERRORS, JOBS, SUBAGENTS }
 
 /**
- * The order of the insights chips: the touched files first in their own row, as they always were.
- * Merged into the controls' row, the chips that need attention (errors, jobs, subagents) come first
- * and the touched files after them, ahead of the controls.
+ * The order of the insights chips: the touched files first, as they always were. On a compact chat,
+ * where the narrow row scrolls, the chips that need attention (errors, jobs, subagents) come first
+ * and the touched files after them, behind the status chip.
  */
 internal fun insightChipOrder(compact: Boolean): List<InsightChip> =
     if (compact) listOf(InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS, InsightChip.TOUCHED)
