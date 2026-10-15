@@ -15,8 +15,9 @@ private val noHistory = MutableStateFlow(PromptHistory())
 
 /**
  * The suggested next prompt for the open chat, or null. The composer shows it as the empty field's
- * grey placeholder; the button at the end of the field or Tab takes it. A rule's text follows the language of the user's recent
- * prompts, falling back to the app's language, since the suggestion is sent to pi as typed.
+ * grey placeholder; the button at the end of the field or Tab takes it. A rule's text follows the
+ * language of the user's recent prompts, falling back to the app's language, since the suggestion
+ * is sent to pi as typed.
  */
 @Composable
 internal fun rememberPromptPrediction(state: RemoteState): String? {

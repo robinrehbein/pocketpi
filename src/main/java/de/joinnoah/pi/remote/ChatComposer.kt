@@ -881,11 +881,12 @@ internal fun ChatComposer(
                     // shift the chat when the first character arrives. The name for TalkBack is the
                     // field's description below, and only while the field is empty. A suggestion takes
                     // the placeholder's place, grey behind the cursor as in pi's terminal; the button at
-                    // the end of the field or Tab takes it.
+                    // the end of the field or Tab takes it. It keeps to one line, so the empty field is
+                    // no taller than a typed line and the chat does not jump on the first character.
                     placeholder = {
                         Text(
                             prediction ?: promptLabel,
-                            maxLines = 3,
+                            maxLines = if (prediction != null) 1 else 3,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.testTag("composerPlaceholder"),
                         )
