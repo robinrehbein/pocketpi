@@ -325,9 +325,7 @@ internal fun availableLocalCommands(
     nowMillis: Long,
     reloading: Boolean = false,
 ): List<LocalCommand> {
-    val sendable =
-        state.connected && !state.loading && state.status == "idle" && !state.sending &&
-            !state.importingAttachments && !state.configurationChanging
+    val sendable = localCommandSendable(state)
     return LocalCommand.entries.filter { command ->
         // /tree and /artifacts only read, so they are also offered while the session runs.
         if (command == LocalCommand.TREE) canShowTree(state)
@@ -341,6 +339,27 @@ internal fun availableLocalCommands(
         else sendable && localCommandAvailable(command, state, inChat, nowMillis)
     }
 }
+
+/** A command draft would be sent now: the session is connected, idle and not busy otherwise. */
+internal fun localCommandSendable(state: RemoteState): Boolean =
+    state.connected && !state.loading && state.status == "idle" && !state.sending &&
+        !state.importingAttachments && !state.configurationChanging
+
+/**
+ * The [LocalCommand]s the chat's More actions list for the selected session: Tree, Artifacts,
+ * Export and Reload whenever the session supports them, whether or not pi is running. The menu must
+ * not gain and lose rows while it is open; an entry that cannot run yet explains itself when tapped.
+ */
+internal fun chatMenuLocalCommands(state: RemoteState): List<LocalCommand> =
+    LocalCommand.entries.filter { command ->
+        when (command) {
+            LocalCommand.TREE -> canShowTree(state)
+            LocalCommand.ARTIFACTS -> canShowArtifacts(state) || artifactsNeedNewerHost(state)
+            LocalCommand.EXPORT -> canExportSession(state)
+            LocalCommand.RELOAD -> reloadAvailability(state) != ReloadAvailability.NONE
+            else -> false
+        }
+    }
 
 private fun localCommandAvailable(
     command: LocalCommand,

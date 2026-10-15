@@ -350,6 +350,15 @@ internal class NavigationFakeRepository : RemoteRepository {
 
     var refreshes = 0
 
+    /** What `/reload` answers; the test may hold it open to see the running feedback. */
+    var reload: suspend (String) -> ReloadResult = { ReloadResult.Failed(ReloadFailure.Unsupported) }
+    val reloads = mutableListOf<String>()
+
+    override suspend fun reloadSession(sessionId: String): ReloadResult {
+        reloads += sessionId
+        return reload(sessionId)
+    }
+
     override fun refresh() {
         refreshes++
     }
@@ -463,4 +472,15 @@ internal class FakeSettingsRepository : SettingsRepository {
     override fun setEnterSends(enabled: Boolean) {
         state.value = state.value.copy(enterSends = enabled)
     }
+
+    val recordedActions = mutableListOf<ChatAction>()
+
+    override fun recordChatAction(action: ChatAction, now: Long) {
+        recordedActions += action
+    }
+
+    /** What [chatActionUsage] answers, as if stored by earlier uses. */
+    val usage = mutableMapOf<ChatAction, ActionUsage>()
+
+    override fun chatActionUsage(): Map<ChatAction, ActionUsage> = usage.toMap()
 }

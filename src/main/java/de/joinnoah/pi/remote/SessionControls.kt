@@ -29,6 +29,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -421,6 +422,8 @@ internal fun SessionControls(
                         val dimmed = hint ||
                             command == LocalCommand.RELOAD &&
                                 (reloading || reloadAvailability(state) == ReloadAvailability.TERMINAL_ONLY)
+                        // The dimming says it to the eye; TalkBack hears it as the row's state.
+                        val unavailable = stringResource(R.string.remote_slash_command_unavailable)
                         ListItem(
                             headlineContent = { Text("/" + command.commandName) },
                             supportingContent = {
@@ -432,6 +435,7 @@ internal fun SessionControls(
                             },
                             colors = suggestionColors(index == highlight),
                             modifier = Modifier.alpha(if (dimmed) 0.6f else 1f)
+                                .then(if (dimmed) Modifier.semantics { stateDescription = unavailable } else Modifier)
                                 .suggestionHighlight(index == highlight)
                                 .focusRing(MaterialTheme.shapes.small)
                                 .clickable { selectLocalCommand(command) },
@@ -563,7 +567,10 @@ internal fun SessionControls(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
-                        stringResource(R.string.remote_busy),
+                        stringResource(
+                            if (picker == "model") R.string.remote_model_busy_note
+                            else R.string.remote_thinking_busy_note
+                        ),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -755,7 +762,16 @@ internal fun SessionSettingsSheetBody(
             .testTag("sessionSettingsSheet"),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(stringResource(R.string.remote_session_settings_title), style = MaterialTheme.typography.titleLarge)
+        // Under the title: what this sheet changes is read before any control is used.
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(stringResource(R.string.remote_session_settings_title), style = MaterialTheme.typography.titleLarge)
+            Text(
+                stringResource(R.string.remote_session_settings_scope),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("sessionSettingsScope"),
+            )
+        }
         if (working || (!enabled && !busy))
             Text(
                 stringResource(
@@ -796,11 +812,6 @@ internal fun SessionSettingsSheetBody(
             selected = settings.followUpMode,
             enabled = enabled,
             onSelect = { onChange(null, null, it) },
-        )
-        Text(
-            stringResource(R.string.remote_session_settings_scope),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(8.dp))
     }

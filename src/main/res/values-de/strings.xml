@@ -21,12 +21,12 @@
     <string name="remote_copied">Kopiert</string>
     <string name="remote_advisor_title">Advisor</string>
     <string name="remote_advisor_busy">Advisor arbeitet</string>
-    <string name="remote_advisor_error">Advisor blockiert</string>
+    <string name="remote_advisor_error">Advisor-Fehler</string>
     <string name="remote_advisor_off">Advisor aus</string>
     <string name="remote_advisor_unavailable_label">Advisor nicht verfügbar</string>
     <string name="remote_advisor_disconnected">Verbinde dich mit deinem Mac, um den Advisor einzurichten.</string>
     <string name="remote_advisor_host_unsupported">Dieser Host meldet keine Advisor-Unterstützung. Aktualisiere pi Remote auf deinem Mac und verbinde dich erneut.</string>
-    <string name="remote_advisor_extension_required">Diese Sitzung unterstützt den Advisor nicht. Lade die Advisor-Erweiterung in pi auf deinem Mac, damit der Befehl /advisor verfügbar ist, und prüfe dann erneut. Sobald die Unterstützung verfügbar ist, kannst du den Advisor hier einschalten, ohne ihn vorher auf dem Mac zu aktivieren.</string>
+    <string name="remote_advisor_extension_required">Diese Sitzung hat keinen Advisor. Lade die Advisor-Erweiterung in pi auf deinem Mac und prüfe dann erneut.</string>
     <string name="remote_advisor_retry">Erneut prüfen</string>
     <string name="remote_advisor_remaining">%1$d von %2$d Beratungen übrig</string>
     <string name="remote_advisor_unavailable">Advisor ist in dieser Sitzung nicht verfügbar.</string>
@@ -140,7 +140,6 @@
     <string name="remote_stop">pi anhalten</string>
     <string name="remote_abort_run">Run abbrechen</string>
     <string name="remote_abort_run_confirmation">Den aktuellen Run abbrechen? Ausstehende Antworten werden nicht gesendet.</string>
-    <string name="remote_busy">pi arbeitet. Dein Entwurf bleibt hier erhalten.</string>
     <string name="remote_draft_uncertain">Verbindung unterbrochen. Prüfe das Gespräch, bevor du deinen Entwurf erneut sendest.</string>
     <string name="remote_tui_info_title">Mac-Terminalsitzung</string>
     <string name="remote_tui_info_body">Während diese Sitzung arbeitet, sind Follow-up und Steer nur lokal am Mac verfügbar. Sende eine Nachricht, sobald sie inaktiv ist, oder unterbrich sie mit Stop.</string>

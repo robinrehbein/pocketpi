@@ -276,9 +276,6 @@ internal class ChatViewModel(
 ) : DestinationViewModel(repository, key) {
     val preferences = settings.state
 
-    /** Header actions by use, ranked once per opened chat so the pill does not shift while shown. */
-    val chatActions: List<ChatAction> = settings.rankedChatActions()
-
     fun recordChatAction(action: ChatAction) = settings.recordChatAction(action)
 
     /** A picked, dropped or pasted batch waiting for its chat; identity matters, so not a data class. */

@@ -557,6 +557,7 @@ class RemoteNavigationUiTest {
         compose.onNodeWithText(longTitle).assertIsDisplayed()
         val dot = { compose.onNodeWithTag("chatStatusDot") }
         dot().assertIsDisplayed().assertContentDescriptionEquals(label(R.string.remote_status_idle))
+            .assert(SemanticsMatcher.expectValue(ChatStatusShapeKey, ChatStatusShape.READY))
         compose.onNodeWithText(label(R.string.remote_status_idle)).assertDoesNotExist()
         val back = compose.onNodeWithContentDescription(label(R.string.remote_back))
         val rename = compose.onNodeWithContentDescription(label(R.string.remote_rename_session))
@@ -575,12 +576,15 @@ class RemoteNavigationUiTest {
 
         compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "running") }
         dot().assertContentDescriptionEquals(label(R.string.remote_status_running))
+            .assert(SemanticsMatcher.expectValue(ChatStatusShapeKey, ChatStatusShape.RUNNING))
         compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "waiting") }
         dot().assertContentDescriptionEquals(label(R.string.remote_status_waiting))
+            .assert(SemanticsMatcher.expectValue(ChatStatusShapeKey, ChatStatusShape.WAITING))
         compose.runOnIdle { repository.state.value = repository.state.value.copy(status = "unrecognized") }
         dot().assertContentDescriptionEquals(label(R.string.remote_status_unknown))
         compose.runOnIdle { repository.state.value = repository.state.value.copy(connected = false) }
         dot().assertContentDescriptionEquals(label(R.string.remote_status_offline))
+            .assert(SemanticsMatcher.expectValue(ChatStatusShapeKey, ChatStatusShape.OFFLINE))
         rename.assertDoesNotExist()
         refresh.assertIsDisplayed()
         // Offline leaves only Refresh and Settings, so Settings moves back into the pill.

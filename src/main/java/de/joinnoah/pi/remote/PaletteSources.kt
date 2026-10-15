@@ -398,6 +398,8 @@ internal fun chatActionAvailable(action: ChatAction, state: RemoteState, mutatin
         ChatAction.REFRESH, ChatAction.SETTINGS, ChatAction.HISTORY -> true
         // The banners' entry belongs to the compact header's menu only, where the banners show.
         ChatAction.STATUS, ChatAction.CLOSE -> false
+        // The palette lists these as their slash commands, which say more than the menu's label.
+        ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.EXPORT, ChatAction.RELOAD -> false
     }
 
 private fun chatItems(input: PaletteInput, labels: PaletteLabels): List<PaletteItem> {
