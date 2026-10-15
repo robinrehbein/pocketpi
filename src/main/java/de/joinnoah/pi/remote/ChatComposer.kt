@@ -896,15 +896,19 @@ internal fun ChatComposer(
                     trailingIcon =
                         prediction?.takeIf { draft.textState.text.isEmpty() }?.let {
                             {
-                                IconButton(
-                                    onClick = {
-                                        acceptPrediction()
-                                        // The field takes focus, as with Tab, so the next keystroke goes into it.
-                                        focusRequester?.let { runCatching { it.requestFocus() } }
-                                    },
-                                    modifier = Modifier.testTag("promptSuggestion"),
-                                ) {
-                                    Icon(Icons.AutoMirrored.Filled.KeyboardTab, useSuggestion)
+                                // With a hardware keyboard the tooltip names Tab, the key that does the same. It
+                                // stays short: the suggestion itself is already the grey text beside it.
+                                ShortcutTooltip(stringResource(R.string.remote_suggestion_take), chord = KeyChord(Key.Tab)) {
+                                    IconButton(
+                                        onClick = {
+                                            acceptPrediction()
+                                            // The field takes focus, as with Tab, so the next keystroke goes into it.
+                                            focusRequester?.let { runCatching { it.requestFocus() } }
+                                        },
+                                        modifier = Modifier.testTag("promptSuggestion"),
+                                    ) {
+                                        Icon(Icons.AutoMirrored.Filled.KeyboardTab, useSuggestion)
+                                    }
                                 }
                             }
                         },
