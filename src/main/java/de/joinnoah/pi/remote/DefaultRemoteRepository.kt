@@ -238,6 +238,9 @@ class DefaultRemoteRepository(
     private val routeCapabilities =
         setOf(
             STEER_CAPABILITY,
+            // Compact and session settings, too, arrive only here: the host's handshake list is frozen at eight.
+            COMPACT_CAPABILITY,
+            SETTINGS_CAPABILITY,
             FOLLOW_UP_CAPABILITY,
             TOOL_OUTPUT_CAPABILITY,
             BACKGROUND_JOBS_CAPABILITY,

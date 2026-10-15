@@ -4966,6 +4966,17 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun routeCapabilitiesEnableCompactAndSessionSettings() = runTest {
+        // The host announces both only on the projects.list route, never at authentication.
+        val transport = Transport().also(::configure)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(COMPACT_CAPABILITY), JsonPrimitive(SETTINGS_CAPABILITY))))
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        assertTrue(compactAvailable(repository.state.value))
+        assertTrue(SETTINGS_CAPABILITY in repository.state.value.capabilities)
+    }
+
+    @Test
     fun routeCapabilitiesIgnoreUnknownAndOversizedLists() = runTest {
         val transport = Transport().also(::configure)
         advertising(
