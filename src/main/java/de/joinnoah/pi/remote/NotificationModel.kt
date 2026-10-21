@@ -153,6 +153,8 @@ internal data class QuestionNotification(
     val title: String?,
     val body: String?,
     val actions: List<NotificationAction>,
+    /** What auto mode blocked, when a `confirm` asks whether to run it once anyway. */
+    val escalation: ConfirmEscalation? = null,
 )
 
 internal const val MAX_OPTION_ACTIONS = 3
@@ -220,7 +222,8 @@ private fun mapQuestion(question: JsonObject): QuestionNotification? =
         val id = question.text("id")
         require(id.isNotBlank() && id.length <= 256)
         when (val kind = question.text("kind")) {
-            "confirm" ->
+            "confirm" -> {
+                val escalation = confirmEscalation(question)
                 QuestionNotification(
                     id,
                     kind,
@@ -228,7 +231,10 @@ private fun mapQuestion(question: JsonObject): QuestionNotification? =
                     bounded(question.optionalText("message"), MAX_NOTIFICATION_TEXT),
                     listOf(
                         NotificationAction.Answer(
-                            ActionLabel.Resource(R.string.remote_yes),
+                            // An escalation's yes runs the call once; there is no session allow.
+                            ActionLabel.Resource(
+                                if (escalation != null) R.string.remote_escalation_yes else R.string.remote_yes
+                            ),
                             Wire.objectOf("kind" to "confirm", "value" to true),
                         ),
                         NotificationAction.Answer(
@@ -236,7 +242,9 @@ private fun mapQuestion(question: JsonObject): QuestionNotification? =
                             Wire.objectOf("kind" to "confirm", "value" to false),
                         ),
                     ),
+                    escalation,
                 )
+            }
             "select" -> {
                 val options = question.getValue("options").jsonArray.map {
                     val value = it.jsonPrimitive

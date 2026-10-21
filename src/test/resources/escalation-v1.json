@@ -1,0 +1,203 @@
+{
+  "version": 1,
+  "wireValid": [
+    {
+      "name": "escalation-plain-confirm",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 31,
+        "kind": "question.open",
+        "question": {
+          "id": "6f1c2b9e-4a3d-4e8f-9b21-7c5d3e1a0f42",
+          "kind": "confirm",
+          "title": "Auto mode blocked bash from Explore#a1b2c3d4",
+          "message": "git push --force origin main\n\nPushing to a shared branch (p=0.91)\n\n3 auto-mode blocks in a row. Run it anyway?\n\nYes runs this call once."
+        }
+      }
+    },
+    {
+      "name": "escalation-child",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 32,
+        "kind": "question.open",
+        "question": {
+          "id": "6f1c2b9e-4a3d-4e8f-9b21-7c5d3e1a0f42",
+          "kind": "confirm",
+          "title": "Auto mode blocked bash from Explore#a1b2c3d4",
+          "message": "git push --force origin main\n\nPushing to a shared branch (p=0.91)\n\n3 auto-mode blocks in a row. Run it anyway?\n\nYes runs this call once.",
+          "escalation": {
+            "tool": "bash",
+            "reason": "Pushing to a shared branch (p=0.91)",
+            "child": "Explore#a1b2c3d4"
+          }
+        }
+      }
+    },
+    {
+      "name": "escalation-top-level-empty-reason",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 33,
+        "kind": "question.open",
+        "question": {
+          "id": "6f1c2b9e-4a3d-4e8f-9b21-7c5d3e1a0f42",
+          "kind": "confirm",
+          "title": "Auto mode blocked mcp__git__push",
+          "message": "mcp__git__push {\"remote\":\"origin\",\"force\":true}\n\nThe classifier could not decide. Run it anyway?\n\nYes runs this call once.",
+          "escalation": { "tool": "mcp__git__push", "reason": "" }
+        }
+      }
+    },
+    {
+      "name": "escalation-answer-yes",
+      "payload": {
+        "type": "question.answer",
+        "requestId": "r-41",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "questionId": "6f1c2b9e-4a3d-4e8f-9b21-7c5d3e1a0f42",
+        "answer": { "kind": "confirm", "value": true }
+      }
+    },
+    {
+      "name": "escalation-answer-cancel",
+      "payload": {
+        "type": "question.answer",
+        "requestId": "r-42",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "questionId": "6f1c2b9e-4a3d-4e8f-9b21-7c5d3e1a0f42",
+        "answer": { "kind": "cancel" }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "escalation-empty-tool",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 34,
+        "kind": "question.open",
+        "question": {
+          "id": "6f1c2b9e-4a3d-4e8f-9b21-7c5d3e1a0f42",
+          "kind": "confirm",
+          "title": "Auto mode blocked bash",
+          "message": "ls",
+          "escalation": { "tool": "", "reason": "x" }
+        }
+      }
+    },
+    {
+      "name": "escalation-missing-reason",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 35,
+        "kind": "question.open",
+        "question": {
+          "id": "6f1c2b9e-4a3d-4e8f-9b21-7c5d3e1a0f42",
+          "kind": "confirm",
+          "title": "Auto mode blocked bash",
+          "message": "ls",
+          "escalation": { "tool": "bash" }
+        }
+      }
+    },
+    {
+      "name": "escalation-unknown-key",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 36,
+        "kind": "question.open",
+        "question": {
+          "id": "6f1c2b9e-4a3d-4e8f-9b21-7c5d3e1a0f42",
+          "kind": "confirm",
+          "title": "Auto mode blocked bash",
+          "message": "ls",
+          "escalation": { "tool": "bash", "reason": "x", "session": true }
+        }
+      }
+    },
+    {
+      "name": "escalation-tool-too-long",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 37,
+        "kind": "question.open",
+        "question": {
+          "id": "6f1c2b9e-4a3d-4e8f-9b21-7c5d3e1a0f42",
+          "kind": "confirm",
+          "title": "Auto mode blocked bash",
+          "message": "ls",
+          "escalation": {
+            "tool": "ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+            "reason": "x"
+          }
+        }
+      }
+    },
+    {
+      "name": "escalation-empty-child",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 39,
+        "kind": "question.open",
+        "question": {
+          "id": "6f1c2b9e-4a3d-4e8f-9b21-7c5d3e1a0f42",
+          "kind": "confirm",
+          "title": "Auto mode blocked bash",
+          "message": "ls",
+          "escalation": { "tool": "bash", "reason": "x", "child": "" }
+        }
+      }
+    },
+    {
+      "name": "escalation-not-object",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 40,
+        "kind": "question.open",
+        "question": {
+          "id": "6f1c2b9e-4a3d-4e8f-9b21-7c5d3e1a0f42",
+          "kind": "confirm",
+          "title": "Auto mode blocked bash",
+          "message": "ls",
+          "escalation": "bash"
+        }
+      }
+    },
+    {
+      "name": "escalation-on-select",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 41,
+        "kind": "question.open",
+        "question": {
+          "id": "6f1c2b9e-4a3d-4e8f-9b21-7c5d3e1a0f42",
+          "kind": "select",
+          "title": "Auto mode blocked bash",
+          "options": ["No", "Yes, once"],
+          "escalation": { "tool": "bash", "reason": "x" }
+        }
+      }
+    },
+    {
+      "name": "escalation-answer-session",
+      "payload": {
+        "type": "question.answer",
+        "requestId": "r-43",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "questionId": "6f1c2b9e-4a3d-4e8f-9b21-7c5d3e1a0f42",
+        "answer": { "kind": "confirm", "value": "session" }
+      }
+    }
+  ]
+}

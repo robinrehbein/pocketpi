@@ -220,7 +220,7 @@ Keystore and encrypted file recreation. With an attached emulator, run
 `./gradlew pixel2Api36DebugAndroidTest`; for CI's tablet subset, run
 `./gradlew pixelTabletApi36DebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.annotation=de.joinnoah.pi.remote.LargeScreen`.
 
-Unit tests consume the seventeen JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
+Unit tests consume the eighteen JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
 of `packages/pi-remote/protocol/fixtures/` from noah-monorepo commit
 `1550dcc200459913b9b1dc9b16fc3439db341c68`. `provider-auth-v1.json` (provider login) is a
 byte-for-byte copy from noah-monorepo commit `daca1ee562ca661fb76ce2d61a75ca2fc8c8059f`, the
@@ -249,7 +249,10 @@ of pull request #721. `session-bash-v1.json` (shell commands run from the phone 
 `!!`) is a byte-for-byte copy from noah-monorepo commit `5b9bc88eedda8b0ae9e425e88d613a4fe2dfae9f`,
 the merge of pull request #739. `session-suggestion-v1.json` (the Mac's suggested next prompt
 as a session event and an optional snapshot key) is a byte-for-byte copy from noah-monorepo commit
-`1faf283797d9484c02568beff4586d49490a0137`, the merge of pull request #746. When the
+`1faf283797d9484c02568beff4586d49490a0137`, the merge of pull request #746.
+`escalation-v1.json` (the optional `escalation` field of a `confirm` question that asks whether to
+run a call auto mode blocked) is a byte-for-byte copy from noah-monorepo commit
+`2004c61568855a3d824bb0f55055d1dcfa1c3dea`, the merge of pull request #905. When the
 upstream protocol fixtures change, copy the changed files into
 `src/test/resources/`, compare their bytes with the upstream source, and run
 `./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and
