@@ -60,6 +60,32 @@ class QuestionCardUiTest {
         ), answers)
     }
 
+    @Test fun escalationShowsToolChildAndReasonAndAnswersOnce() {
+        render(
+            """{"id":"q","kind":"confirm","title":"Auto mode blocked bash from Explore#a1b2c3d4",""" +
+                """"message":"git push --force origin main","escalation":{"tool":"bash",""" +
+                """"reason":"Pushing to a shared branch (p=0.91)","child":"Explore#a1b2c3d4"}}"""
+        )
+        compose.onNodeWithText("Tool: bash").assertExists()
+        compose.onNodeWithText("Subagent: Explore#a1b2c3d4").assertExists()
+        compose.onNodeWithText("Reason: Pushing to a shared branch (p=0.91)").assertExists()
+        compose.onNodeWithText("git push --force origin main").assertExists()
+        compose.onNodeWithText("Yes, once").performClick()
+        compose.onNodeWithText("No").performClick()
+        compose.onNodeWithText("Cancel").performClick()
+        assertEquals(listOf(
+            Wire.objectOf("kind" to "confirm", "value" to true),
+            Wire.objectOf("kind" to "confirm", "value" to false),
+            Wire.objectOf("kind" to "cancel"),
+        ), answers)
+        change("""{"id":"r","kind":"confirm","message":"ls","escalation":{"tool":"bash","reason":""}}""")
+        compose.onNodeWithText("Tool: bash").assertExists()
+        compose.onAllNodesWithText("Reason:", substring = true).assertCountEquals(0)
+        change("""{"id":"s","kind":"confirm","message":"ls","escalation":{"tool":"bash","reason":"x","session":true}}""")
+        compose.onAllNodesWithText("Tool:", substring = true).assertCountEquals(0)
+        compose.onNodeWithText("Yes").assertExists()
+    }
+
     @Test fun selectAndInputStringPayloadsAndInputLimitAreExact() {
         render("""{"id":"s","kind":"select","options":["First","Second"]}""")
         compose.onNodeWithText("Submit answer").assertIsNotEnabled()

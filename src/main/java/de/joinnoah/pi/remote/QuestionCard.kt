@@ -84,13 +84,20 @@ internal fun QuestionCard(
                 ) { Text(stringResource(R.string.remote_cancel)) }
             }
             "confirm" -> {
+                val escalation = remember(question) { confirmEscalation(question) }
+                if (escalation != null) EscalationDetails(escalation)
                 Text(question.text("message"))
                 Row {
+                    // An escalation's yes runs the blocked call once; the phone offers no session allow.
                     Button(
                         onClick = { submit(Wire.objectOf("kind" to "confirm", "value" to true)) },
                         enabled = controlsEnabled,
                     ) {
-                        Text(stringResource(R.string.remote_yes))
+                        Text(
+                            stringResource(
+                                if (escalation != null) R.string.remote_escalation_yes else R.string.remote_yes
+                            )
+                        )
                     }
                     TextButton(
                         onClick = { submit(Wire.objectOf("kind" to "confirm", "value" to false)) },
@@ -404,4 +411,27 @@ private fun QuestionPrompt(prompt: String) {
     val (text, diagram) = promptParts(prompt)
     Text(text, style = MaterialTheme.typography.titleMedium)
     if (diagram != null) MarkdownText(diagram)
+}
+
+/** The tool, subagent and reason of a call auto mode blocked, shown above the confirm's message. */
+@Composable
+private fun EscalationDetails(escalation: ConfirmEscalation) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.medium,
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                stringResource(R.string.remote_escalation_tool, escalation.tool),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            escalation.child?.let { Text(stringResource(R.string.remote_escalation_child, it)) }
+            escalation.reason.takeIf { it.isNotBlank() }?.let {
+                Text(stringResource(R.string.remote_escalation_reason, it))
+            }
+        }
+    }
 }

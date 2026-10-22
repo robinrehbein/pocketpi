@@ -292,8 +292,20 @@ internal object RemoteNotifications {
         alert: Boolean = true,
     ) {
         val localized = localized(context)
+        // An escalation is named in the phone's language; the host's title is English.
+        val escalationTitle =
+            question.escalation?.let { escalation ->
+                val child = escalation.child
+                val text =
+                    if (child == null)
+                        localized.getString(R.string.remote_notification_escalation, escalation.tool)
+                    else
+                        localized.getString(R.string.remote_notification_escalation_child, escalation.tool, child)
+                if (text.length <= 120) text else text.take(119).trimEnd() + "…"
+            }
         val title =
-            question.title
+            escalationTitle
+                ?: question.title
                 ?: localized.getString(
                     when (question.kind) {
                         "plan" -> R.string.remote_notification_plan

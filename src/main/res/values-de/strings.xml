@@ -184,6 +184,12 @@
     <string name="remote_question_answer_uncertain">Die Antwort wurde möglicherweise zugestellt; warte auf die Sitzung</string>
     <string name="remote_yes">Ja</string>
     <string name="remote_no">Nein</string>
+    <string name="remote_escalation_tool">Werkzeug: %1$s</string>
+    <string name="remote_escalation_child">Subagent: %1$s</string>
+    <string name="remote_escalation_reason">Grund: %1$s</string>
+    <string name="remote_escalation_yes">Ja, einmal</string>
+    <string name="remote_notification_escalation">Auto-Modus hat %1$s blockiert</string>
+    <string name="remote_notification_escalation_child">Auto-Modus hat %1$s von %2$s blockiert</string>
     <string name="remote_other">Andere Antwort</string>
     <string name="remote_skip">Überspringen</string>
     <string name="remote_question_required">Wähle für jede erforderliche Frage eine Antwort.</string>
