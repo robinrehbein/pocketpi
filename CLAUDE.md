@@ -5,7 +5,8 @@ shared projects and sessions, and chats with them through the pi Remote relay. T
 `de.robinrehbein.pocketpi`; the Kotlin package is still `de.joinnoah.pi.remote`.
 
 The pi host, relay, extensions and wire protocol live in `robinrehbein/noah-monorepo`
-(`packages/pi-remote`). This repository holds only the Android app and copies of the protocol test
+(`packages/pi-atlas/extensions/remote`, formerly `packages/pi-remote`; the relay is
+`packages/pi-remote-relay`). This repository holds only the Android app and copies of the protocol test
 fixtures in `src/test/resources` (the README names their source commit). A change that needs a new
 protocol field or host behaviour lands in noah-monorepo first, under that repository's rules.
 
