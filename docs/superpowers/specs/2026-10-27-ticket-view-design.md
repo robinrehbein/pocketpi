@@ -76,7 +76,7 @@ The existing home sections stay. Changes:
 - Top bar: back and title `Tickets`; reload. Below, the project name (only ticket-enabled projects
   exist here; with more than one, a simple chooser, none disabled).
 - Sections: **Zur Abnahme**, **Läuft**, **Todo**. Rows show `ref`, title, and a caption with linked
-  sessions (`2 Sessions · 1 läuft`) or `PR offen` for tasks in Review.
+  chats (`2 Chats · 1 arbeitet`) or `PR offen` for tasks in Review.
 - States: loading skeleton; unavailable with a reason (`Plane nicht erreichbar`, `Tickets auf dem
   Mac nicht eingerichtet`, …); stale data shown with `Stand vor X Min` and write actions disabled
   while the Mac is offline.
@@ -87,7 +87,7 @@ The existing home sections stay. Changes:
 - `project · ref`, title, pills for state, priority, type.
 - Buttons: primary depends on the decision table (`Abnehmen`, `Mit Agent starten`, or none);
   secondary `Kommentar` and `Status ändern`.
-- `Sessions zu diesem Ticket` with status; tapping opens the session.
+- `Chats zu diesem Ticket` with status; tapping opens the session.
 - Description and comments (newest first), loaded when the detail opens, rendered as markdown with
   http(s) links only.
 - The chat header shows a ticket chip for linked sessions; tapping opens the ticket detail.
@@ -95,9 +95,9 @@ The existing home sections stay. Changes:
 ### Sheets
 
 - **Abnehmen**: confirms `DEV-123 auf Done setzen` with a comment field prefilled with
-  `Abgenommen in PocketPi.` (editable). One tap on `Abnehmen` sends it. After success a snackbar
-  offers `Rückgängig` for a few seconds, which moves the ticket back to Review with an automatic
-  comment.
+  `Abgenommen in PocketPi.` (editable). Tapping `Abnehmen` closes the sheet and shows an undo bar
+  (`DEV-123 wird abgenommen · Rückgängig`) for 5 seconds; only then does the app send the move.
+  Undo cancels before anything reaches Plane, so the host needs no reverse move.
 - **Kommentar**: text field; `Senden` disabled while empty.
 - **Status ändern**: offers only the targets the decision table allows for this ticket; Done and
   Cancelled require a comment; Cancelled is visually secondary. Review is not offered (the agent
@@ -114,7 +114,10 @@ missing; the detail then shows one line explaining why.
 
 ### Decision table
 
-"Robin's ticket" means Robin is among the assignees (member id configured on the Mac). Type comes
+The host evaluates this table and sends each visible ticket's `section`, allowed `actions` and
+`moveTargets`; the app renders them and holds no copy of the rules. Hidden tickets are not sent.
+"Robin's ticket" means Robin is among the assignees; his member id is the owner of his Plane key
+(`users/me`), falling back to the host's configured assignee when no key is set. Type comes
 from the issue's `type` field (`type:` label); `null` when missing or ambiguous.
 
 | State group / state | Type | Robin's? | Section | Primary action |
@@ -136,13 +139,15 @@ ticket ref.
 
 ## Data and Plane budget
 
-### Reads (bot key, host background sync)
+### Reads (bot key, host-native, background sync)
 
 - The host keeps a per-Plane-project snapshot (workspace + identifier, not per pi project) in
   memory. A sync runs on host start, every 5 minutes while at least one device has fetched tickets
   in the last 30 minutes, after the host's own writes (just the affected ticket), and on an explicit
   reload from the app, which is coalesced and rate-limited to once per 60 s.
-- One sync = one full `issues` scan per project (the API filters nothing server-side) plus states,
+- The host reads Plane itself over the REST API in TypeScript (the same endpoints `plane.sh` uses),
+  so it controls and counts every request. It does not run `plane.sh`.
+- One sync = one full issues scan per project (the API filters nothing server-side) plus states,
   labels and members cached for 6 hours. Budget: at most 25 requests per sync for DEV + TOOLING at
   today's size, measured in a test against a fake Plane.
 - A host-wide token bucket limits all app-initiated Plane traffic to 20 requests per minute,
@@ -177,10 +182,10 @@ ticket ref.
   in this version.
 - Robin's Plane member id comes from host configuration (default from the existing `PLANE_MINE` /
   `NOAH_PLANE_ASSIGNEE` conventions).
-- Reads run the checkout's `plane.sh` with the bot key, with an explicit environment: PATH, HOME,
-  TMPDIR, `PLANE_API_KEY`, and `PLANE_PAGE_CACHE_DIR` pointing to a host-owned directory. The host
-  checks `bash`, `curl`, `jq` and `python3` at start and maps missing pieces to an unavailable
-  reason.
+- Reads use the bot key the host already imports as `PLANE_API_KEY`; base URL and workspace come
+  from `atlas.plane.url` / `atlas.plane.workspace` (defaults `https://plane.join-noah.de`, `noah`).
+- The Keychain store accepts only `[A-Za-z0-9_-]` secrets; the set-key command rejects other keys
+  with a clear message.
 
 ## Session ↔ ticket links
 
@@ -236,8 +241,9 @@ ticket ref.
   (snapshot only, no reload), and after the app's own writes.
 - Colours and tokens: reuse `RemoteColors.kt` meanings; the check-badge icon uses the theme's
   primary or tertiary role. No red/green pairing; every state also has text.
-- Strings in `values/strings.xml` and `values-de/strings.xml`, with plurals via
-  `pluralStringResource`.
+- Strings in a new `remote_tickets.xml` under `values/` and `values-de/`, with plurals via
+  `pluralStringResource`. German copy follows the app glossary (`TerminologyTest`): no "Session",
+  use the app's existing word for a chat; status words reuse `remote_status_*`.
 - New `RemoteNavKey` entries for the Tickets screen and ticket detail; detail opens in the detail
   pane on two-pane layouts; snapshot restore follows existing rules.
 - TalkBack: rows merge into one description (`DEV-433, zur Abnahme, Chat-Fehler …`), buttons
