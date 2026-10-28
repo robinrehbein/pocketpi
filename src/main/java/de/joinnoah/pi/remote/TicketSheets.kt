@@ -92,28 +92,38 @@ private fun SheetConfirm(text: String, enabled: Boolean, onClick: () -> Unit) {
 
 /** Confirms setting [ref] to Done; the comment is prefilled and editable. */
 @Composable
-internal fun AcceptSheet(ref: String, onConfirm: (comment: String) -> Unit, onDismiss: () -> Unit) {
+internal fun AcceptSheet(
+    ref: String,
+    onConfirm: (comment: String) -> Unit,
+    onDismiss: () -> Unit,
+    connected: Boolean = true,
+) {
     val prefill = stringResource(R.string.remote_tickets_accept_comment)
     var comment by rememberSaveable { mutableStateOf(prefill) }
     SheetFrame(stringResource(R.string.remote_tickets_accept_title, ref), onDismiss) {
         SheetField(stringResource(R.string.remote_tickets_comment_label), comment, { comment = it }, MAX_TICKET_MOVE_COMMENT_CHARS)
-        SheetConfirm(stringResource(R.string.remote_ticket_accept), comment.isNotBlank()) { onConfirm(comment.trim()) }
+        SheetConfirm(stringResource(R.string.remote_ticket_accept), connected && comment.isNotBlank()) { onConfirm(comment.trim()) }
     }
 }
 
 @Composable
-internal fun CommentSheet(ref: String, onSend: (text: String) -> Unit, onDismiss: () -> Unit) {
+internal fun CommentSheet(ref: String, onSend: (text: String) -> Unit, onDismiss: () -> Unit, connected: Boolean = true) {
     var text by rememberSaveable { mutableStateOf("") }
     SheetFrame(stringResource(R.string.remote_tickets_comment_title, ref), onDismiss) {
         SheetField(stringResource(R.string.remote_tickets_comment_label), text, { text = it }, MAX_TICKET_COMMENT_CHARS)
-        SheetConfirm(stringResource(R.string.remote_tickets_send), text.isNotBlank()) { onSend(text.trim()) }
+        SheetConfirm(stringResource(R.string.remote_tickets_send), connected && text.isNotBlank()) { onSend(text.trim()) }
     }
 }
 
 /** The moves the host allows, minus Done; Cancelled is secondary and needs a comment. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun StatusSheet(ticket: Ticket, onMove: (state: String, comment: String?) -> Unit, onDismiss: () -> Unit) {
+internal fun StatusSheet(
+    ticket: Ticket,
+    onMove: (state: String, comment: String?) -> Unit,
+    onDismiss: () -> Unit,
+    connected: Boolean = true,
+) {
     val targets = statusTargets(ticket)
     var chosen by rememberSaveable { mutableStateOf<String?>(null) }
     var comment by rememberSaveable { mutableStateOf("") }
@@ -157,7 +167,7 @@ internal fun StatusSheet(ticket: Ticket, onMove: (state: String, comment: String
         }
         SheetConfirm(
             stringResource(R.string.remote_ticket_status),
-            chosen != null && (!needsComment || comment.isNotBlank()),
+            connected && chosen != null && (!needsComment || comment.isNotBlank()),
         ) { chosen?.let { onMove(it, if (needsComment) comment.trim() else null) } }
     }
 }
@@ -198,8 +208,10 @@ internal fun startFailureText(start: TicketStart): Int =
  */
 @Composable
 internal fun StartSheet(
+    projectId: String,
     ref: String,
     tickets: TicketsState,
+    connected: Boolean,
     onStart: (note: String?) -> Unit,
     onOpenChat: (sessionId: String) -> Unit,
     onDismiss: () -> Unit,
@@ -207,9 +219,14 @@ internal fun StartSheet(
     var note by rememberSaveable { mutableStateOf("") }
     var submitted by rememberSaveable { mutableStateOf(false) }
     val initial = remember { tickets.start }
-    val job = tickets.start?.takeIf { it != initial || initial.state == TicketStartState.RUNNING }
+    // Only this ticket's job: another ticket's running job is neither shown nor opened.
+    val job = tickets.start?.takeIf {
+        it.projectId == projectId && it.ref == ref && (it != initial || initial.state == TicketStartState.RUNNING)
+    }
     val following = submitted || job != null
-    val failedToSend = submitted && job == null && (tickets.writeFailure != null || tickets.outcomeUnknown)
+    // The request failed, or went nowhere (the connection ended before the host answered).
+    val failedToSend =
+        submitted && job == null && (tickets.writeFailure != null || tickets.outcomeUnknown || !connected)
 
     LaunchedEffect(job?.startId, job?.state) {
         val sessionId = job?.sessionId
@@ -226,7 +243,7 @@ internal fun StartSheet(
                 Text(stringResource(R.string.remote_tickets_start_moves), style = MaterialTheme.typography.bodyLarge)
             }
             SheetField(stringResource(R.string.remote_tickets_start_note), note, { note = it }, MAX_TICKET_NOTE_CHARS)
-            SheetConfirm(stringResource(R.string.remote_tickets_start_go), true) {
+            SheetConfirm(stringResource(R.string.remote_tickets_start_go), connected) {
                 submitted = true
                 onStart(note.trim().ifEmpty { null })
             }

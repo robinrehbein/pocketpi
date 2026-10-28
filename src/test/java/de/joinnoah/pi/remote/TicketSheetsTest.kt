@@ -184,7 +184,7 @@ class TicketSheetsTest {
         moved: Boolean? = null,
         sessionId: String? = null,
         error: TicketStartError? = null,
-    ) = TicketStart("abc", state, step, reused, moved, sessionId, error)
+    ) = TicketStart("abc", state, step, reused, moved, sessionId, error, "p1", "DEV-1")
 
     @Test
     fun startShowsProgressThenOpensChat() {
@@ -210,6 +210,42 @@ class TicketSheetsTest {
         )
         compose.waitForIdle()
         assertEquals(listOf("s9"), chats)
+    }
+
+    @Test
+    fun anotherTicketsRunningStartIsNeitherShownNorOpened() {
+        val base = startable()
+        val other = job(TicketStartState.RUNNING, TicketStartStep.SESSION).copy(ref = "DEV-2")
+        show(base.copy(tickets = base.tickets.copy(start = other)))
+        compose.onNodeWithText(label(R.string.remote_ticket_start)).performClick()
+        compose.onNodeWithTag("ticketSheetConfirm").assertIsEnabled()
+        current = base.copy(
+            tickets = base.tickets.copy(
+                start = other.copy(state = TicketStartState.SUCCEEDED, step = TicketStartStep.DONE, sessionId = "other"),
+            ),
+        )
+        compose.waitForIdle()
+        assertTrue(chats.isEmpty())
+        compose.onNodeWithTag("ticketSheetConfirm").assertIsEnabled()
+    }
+
+    @Test
+    fun confirmsAreDisabledWhileOffline() {
+        show(stateOf().copy(connected = false))
+        // Buttons are disabled offline, so the sheets cannot be opened at all.
+        compose.onNodeWithText(label(R.string.remote_ticket_accept)).assertIsNotEnabled()
+    }
+
+    @Test
+    fun aSubmitThatWentNowhereFailsInsteadOfSpinning() {
+        val base = startable()
+        show(base)
+        compose.onNodeWithText(label(R.string.remote_ticket_start)).performClick()
+        tap("ticketSheetConfirm")
+        current = base.copy(connected = false)
+        compose.waitForIdle()
+        compose.onNodeWithText(label(R.string.remote_tickets_write_failed)).assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.remote_tickets_start_close)).assertIsDisplayed()
     }
 
     @Test
@@ -278,6 +314,16 @@ class TicketSheetsTest {
         compose.onAllNodesWithText(label(R.string.remote_ticket_start)).assertCountEquals(0)
         compose.onNodeWithText(label(R.string.remote_ticket_write_block_writes_off)).assertIsDisplayed()
         assertTrue(accepted.isEmpty() && comments.isEmpty() && moves.isEmpty() && starts.isEmpty())
+    }
+
+    @Test
+    fun writeButtonsAbsentWithoutTheUserKey() {
+        show(stateOf(project = project.copy(writable = false, writeBlock = TicketWriteBlock.MISSING_USER_KEY)))
+        compose.onAllNodesWithText(label(R.string.remote_ticket_accept)).assertCountEquals(0)
+        compose.onAllNodesWithText(label(R.string.remote_ticket_comment)).assertCountEquals(0)
+        compose.onAllNodesWithText(label(R.string.remote_ticket_status)).assertCountEquals(0)
+        compose.onAllNodesWithText(label(R.string.remote_ticket_start)).assertCountEquals(0)
+        compose.onNodeWithText(label(R.string.remote_ticket_write_block_missing_user_key)).assertIsDisplayed()
     }
 
     @Test

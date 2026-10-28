@@ -2075,12 +2075,8 @@ internal fun RemoteScreen(
         floatingActionButtonPosition = FabPosition.Center,
         // The 5 s window of a queued accept; the open-folder button sits in the same corner.
         snackbarHost = {
-            if (key is RemoteNavKey.Projects)
-                TicketUndoBar(
-                    state.tickets.pendingAccept,
-                    onUndo = { (model as? ProjectsViewModel)?.undoAccept() },
-                    modifier = Modifier.padding(bottom = if (canOpenFolders(state)) 72.dp else 0.dp),
-                )
+            if (key is RemoteNavKey.Projects && state.tickets.routeId == key.routeId)
+                TicketUndoBar(state.tickets.pendingAccept, onUndo = { (model as? ProjectsViewModel)?.undoAccept() })
         },
         floatingActionButton = {
             if (key is RemoteNavKey.Projects && canOpenFolders(state))
@@ -2851,6 +2847,7 @@ internal fun RemoteScreen(
                                 },
                                 onAccept = { project, ticket -> acceptTarget = project.projectId to ticket.ref },
                                 onAll = { navigator.openTickets(key.routeId) },
+                                acceptPending = state.tickets.pendingAccept != null,
                             )
                             if (waitingChats.isNotEmpty()) {
                                 item(key = "project_chats_waiting_heading") {
@@ -4182,6 +4179,7 @@ private fun LazyListScope.acceptanceSection(
     onOpen: (TicketProject, Ticket) -> Unit,
     onAccept: (TicketProject, Ticket) -> Unit,
     onAll: () -> Unit,
+    acceptPending: Boolean,
 ) {
     item(key = "tickets_acceptance_heading") {
         ProjectsSectionHeading(stringResource(R.string.remote_tickets_section_acceptance))
@@ -4190,7 +4188,8 @@ private fun LazyListScope.acceptanceSection(
         (project, ticket) ->
         AcceptanceRow(
             ticket = ticket,
-            canAccept = project.writable && TicketAction.ACCEPT in ticket.actions,
+            // A second accept would be dropped by the loader, so the row does not offer it meanwhile.
+            canAccept = project.writable && TicketAction.ACCEPT in ticket.actions && !acceptPending,
             onOpen = { onOpen(project, ticket) },
             onAccept = { onAccept(project, ticket) },
         )

@@ -326,7 +326,12 @@ internal class TicketsLoader(
                 }
             if (version != startVersion) return@launch
             write(routeId) {
-                it.copy(start = TicketStart(startId, TicketStartState.RUNNING, TicketStartStep.WORKTREE, false, null, null, null))
+                it.copy(
+                    start = TicketStart(
+                        startId, TicketStartState.RUNNING, TicketStartStep.WORKTREE, false, null, null, null,
+                        projectId, ref,
+                    )
+                )
             }
             val startedAt = now()
             while (now() - startedAt < TICKET_START_MAX_MILLIS) {
@@ -335,7 +340,7 @@ internal class TicketsLoader(
                 try {
                     val status = source.ticketStartStatus(startId)
                     if (version != startVersion) return@launch
-                    write(routeId) { it.copy(start = status) }
+                    write(routeId) { it.copy(start = status.copy(projectId = projectId, ref = ref)) }
                     if (status.state != TicketStartState.RUNNING) {
                         reread(routeId, projectId, ref)
                         return@launch

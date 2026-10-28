@@ -391,6 +391,12 @@ class MacHubUiTest {
     }
 
     @Test
+    fun homeOffersNoSecondAcceptWhileOneIsPending() {
+        renderTickets(ticketsState(ticket(1), ticket(2)).copy(pendingAccept = PendingAccept("p1", "DEV-1", "c", 5_000L)))
+        compose.onAllNodesWithText(label(R.string.remote_ticket_accept)).assertCountEquals(0)
+    }
+
+    @Test
     fun homeShowsTheUndoBarForAPendingAcceptAndUndoSendsNothing() {
         val pending = PendingAccept("p1", "DEV-1", "c", 5_000L)
         renderTickets(ticketsState(ticket(1)).copy(pendingAccept = pending))

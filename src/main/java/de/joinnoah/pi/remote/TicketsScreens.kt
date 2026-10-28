@@ -433,10 +433,10 @@ internal fun TicketDetailContent(
     val close = { sheet = null }
     if (open != null)
         when (sheet) {
-            TicketSheet.ACCEPT -> AcceptSheet(open.ref, { onAccept(it); close() }, close)
-            TicketSheet.COMMENT -> CommentSheet(open.ref, { onComment(it); close() }, close)
-            TicketSheet.STATUS -> StatusSheet(open, { target, comment -> onMove(target, comment); close() }, close)
-            TicketSheet.START -> StartSheet(open.ref, state.tickets, onStart, onOpenChat, close)
+            TicketSheet.ACCEPT -> AcceptSheet(open.ref, { onAccept(it); close() }, close, state.connected)
+            TicketSheet.COMMENT -> CommentSheet(open.ref, { onComment(it); close() }, close, state.connected)
+            TicketSheet.STATUS -> StatusSheet(open, { target, comment -> onMove(target, comment); close() }, close, state.connected)
+            TicketSheet.START -> StartSheet(projectId, open.ref, state.tickets, state.connected, onStart, onOpenChat, close)
             null -> Unit
         }
 }

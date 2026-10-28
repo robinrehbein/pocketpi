@@ -178,6 +178,9 @@ data class TicketStart(
     val moved: Boolean?,
     val sessionId: String?,
     val error: TicketStartError?,
+    /** The ticket this job started; set by the app (the wire result names only the job). */
+    val projectId: String? = null,
+    val ref: String? = null,
 )
 
 /** Tickets show with the capability and while the host has not reported it unavailable. */
