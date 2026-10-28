@@ -37,8 +37,10 @@ data class PendingAccept(val projectId: String, val ref: String, val comment: St
  * [failure] is the last failed read; the data of earlier reads stays. [writeFailure] is the last
  * failed comment, move, accept or start. [outcomeUnknown] is set with it when the request may have
  * reached the host (it timed out, the connection ended after sending, or the host said
- * `outcome_unknown`): the app never retries such a write, reads the ticket again, and the UI says
- * the result is unknown.
+ * `outcome_unknown`, or its answer could not be read): the app never retries such a write, reads the
+ * ticket again, and the UI says the result is unknown. [writeRef] names the ticket both are about.
+ * [pageFailures] holds the last failed list read per project, so one failed project of several
+ * shows its failure instead of waiting for a page that is not coming.
  */
 data class TicketsState(
     val routeId: String? = null,
@@ -56,6 +58,9 @@ data class TicketsState(
     /** The last failed [TicketsLoader.loadDetail]; separate from the list's [failure]. */
     val detailFailure: TicketsFailure? = null,
     val outcomeUnknown: Boolean = false,
+    /** The ticket [writeFailure] and [outcomeUnknown] are about. */
+    val writeRef: String? = null,
+    val pageFailures: Map<String, TicketsFailure> = emptyMap(),
 )
 
 /** Tickets in the acceptance section of all projects, newest change first. */
@@ -97,7 +102,10 @@ internal class TicketsLoader(
     private var acceptJob: Job? = null
     private var startJob: Job? = null
     private var startVersion = 0L
-    private var inFlightWrites = 0
+    /** The ticket of the start job [startJob] follows. */
+    private var startRef: String? = null
+    /** The tickets of the writes sent and not answered yet, oldest first. */
+    private val writingRefs = mutableListOf<String>()
 
     private fun routeId() = current().host?.routeId
 
@@ -122,7 +130,7 @@ internal class TicketsLoader(
             val tickets = state.tickets
             state.copy(
                 tickets =
-                    if (tickets.routeId == routeId) tickets.copy(loading = true, failure = null)
+                    if (tickets.routeId == routeId) tickets.copy(loading = true, failure = null, pageFailures = emptyMap())
                     else TicketsState(routeId = routeId, loading = true)
             )
         }
@@ -156,11 +164,14 @@ internal class TicketsLoader(
                     } catch (e: Exception) {
                         Diagnostics.caught("tickets.list", e)
                         if (firstFailure == null) firstFailure = e
+                        val failure = failure(e)
+                        write(routeId) { it.copy(pageFailures = it.pageFailures + (project.projectId to failure)) }
                     }
                 }
                 if (version != listVersion) return@launch
                 val failed = firstFailure?.takeIf { !loadedAny }
-                if (failed == null) lastLoadedAt = routeId to now()
+                // A failed project is read again on the next refresh, however soon it comes.
+                if (firstFailure == null) lastLoadedAt = routeId to now()
                 write(routeId) { it.copy(loading = false, failure = failed?.let(::failure)) }
             } catch (e: CancellationException) {
                 throw e
@@ -226,6 +237,7 @@ internal class TicketsLoader(
         if (current().tickets.pendingAccept != null || comment.isEmpty() ||
             comment.length > MAX_TICKET_MOVE_COMMENT_CHARS || !writable(routeId, projectId)
         ) return
+        if (!valid(routeId, ref) { requireWrite(projectId, ref); requireTicketMove(ACCEPT_STATE, comment) }) return
         val deadline = now() + TICKET_ACCEPT_UNDO_MILLIS
         write(routeId) { it.copy(pendingAccept = PendingAccept(projectId, ref, comment, deadline), writeFailure = null, outcomeUnknown = false) }
         acceptJob = scope.launch {
@@ -240,6 +252,26 @@ internal class TicketsLoader(
         }
     }
 
+    /** The ids every write carries, checked as the host checks them. */
+    private fun requireWrite(projectId: String, ref: String) {
+        requireTicketProjectId(projectId)
+        requireTicketRef(ref)
+    }
+
+    /**
+     * Makes the host's checks of a write before it is sent, so an exception the write throws later
+     * always came after sending. A write that fails them is never sent and reported as failed.
+     */
+    private fun valid(routeId: String, ref: String, check: () -> Unit): Boolean =
+        try {
+            check()
+            true
+        } catch (e: IllegalArgumentException) {
+            Diagnostics.caught("tickets.write.invalid", e)
+            write(routeId) { it.copy(writeFailure = TicketsFailure.FAILED, writeRef = ref, outcomeUnknown = false) }
+            false
+        }
+
     /** Takes the queued accept back; nothing has been sent. */
     fun undo() {
         acceptJob?.cancel()
@@ -251,35 +283,37 @@ internal class TicketsLoader(
     /** Forgets the last write's failure or unknown outcome once the user has seen it. */
     fun dismissNotice() {
         val routeId = current().tickets.routeId ?: return
-        write(routeId) { it.copy(writeFailure = null, outcomeUnknown = false) }
+        write(routeId) { it.copy(writeFailure = null, outcomeUnknown = false, writeRef = null) }
     }
 
     fun comment(projectId: String, ref: String, text: String) {
         val routeId = usableRoute() ?: return
-        if (!writable(routeId, projectId) || text.isEmpty() || text.length > MAX_TICKET_COMMENT_CHARS) return
-        write(routeId) { it.copy(writeFailure = null, outcomeUnknown = false) }
+        if (!writable(routeId, projectId)) return
+        if (!valid(routeId, ref) { requireWrite(projectId, ref); requireTicketComment(text) }) return
+        write(routeId) { it.copy(writeFailure = null, outcomeUnknown = false, writeRef = null) }
         scope.launch { send(routeId, projectId, ref) { source.commentTicket(projectId, ref, text) } }
     }
 
     fun move(projectId: String, ref: String, state: String, comment: String?) {
         val routeId = usableRoute() ?: return
         if (!writable(routeId, projectId)) return
-        write(routeId) { it.copy(writeFailure = null, outcomeUnknown = false) }
+        if (!valid(routeId, ref) { requireWrite(projectId, ref); requireTicketMove(state, comment) }) return
+        write(routeId) { it.copy(writeFailure = null, outcomeUnknown = false, writeRef = null) }
         scope.launch { send(routeId, projectId, ref) { source.moveTicket(projectId, ref, state, comment) } }
     }
 
     /** One write, never retried; afterwards the ticket is read again whatever happened. */
     private suspend fun send(routeId: String, projectId: String, ref: String, request: suspend () -> Any?) {
-        inFlightWrites++
+        writingRefs += ref
         try {
             request()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Diagnostics.caught("tickets.write", e)
-            write(routeId) { it.copy(writeFailure = failure(e), outcomeUnknown = outcomeUnknown(e)) }
+            write(routeId) { it.copy(writeFailure = failure(e), outcomeUnknown = outcomeUnknown(e), writeRef = ref) }
         } finally {
-            inFlightWrites--
+            writingRefs.remove(ref)
         }
         reread(routeId, projectId, ref)
     }
@@ -291,7 +325,7 @@ internal class TicketsLoader(
             try {
                 val page = readPages(projectId)
                 if (version != listVersion) return@launch
-                write(routeId) { it.copy(pages = it.pages + (projectId to page)) }
+                write(routeId) { it.copy(pages = it.pages + (projectId to page), pageFailures = it.pageFailures - projectId) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -303,14 +337,21 @@ internal class TicketsLoader(
 
     /**
      * Starts the start job of [ref] and polls its status every [TICKET_START_POLL_MILLIS] until it
-     * is not running, for at most [TICKET_START_MAX_MILLIS].
+     * is not running, for at most [TICKET_START_MAX_MILLIS]. While a job runs, a second start is
+     * refused as [TicketsFailure.BUSY] and the running job is kept.
      */
     fun start(projectId: String, ref: String, note: String?) {
         val routeId = usableRoute() ?: return
-        if (!writable(routeId, projectId) || current().tickets.start?.state == TicketStartState.RUNNING) return
+        if (!writable(routeId, projectId)) return
+        if (current().tickets.start?.state == TicketStartState.RUNNING) {
+            write(routeId) { it.copy(writeFailure = TicketsFailure.BUSY, writeRef = ref, outcomeUnknown = false) }
+            return
+        }
+        if (!valid(routeId, ref) { requireWrite(projectId, ref); requireTicketNote(note) }) return
         val version = ++startVersion
-        write(routeId) { it.copy(start = null, writeFailure = null, outcomeUnknown = false) }
+        write(routeId) { it.copy(start = null, writeFailure = null, outcomeUnknown = false, writeRef = null) }
         startJob?.cancel()
+        startRef = ref
         startJob = scope.launch {
             val startId =
                 try {
@@ -320,7 +361,7 @@ internal class TicketsLoader(
                 } catch (e: Exception) {
                     Diagnostics.caught("tickets.start", e)
                     if (version == startVersion)
-                        write(routeId) { it.copy(writeFailure = failure(e), outcomeUnknown = outcomeUnknown(e)) }
+                        write(routeId) { it.copy(writeFailure = failure(e), outcomeUnknown = outcomeUnknown(e), writeRef = ref) }
                     reread(routeId, projectId, ref)
                     return@launch
                 }
@@ -358,6 +399,7 @@ internal class TicketsLoader(
                                 start = it.start?.copy(state = TicketStartState.FAILED),
                                 writeFailure = failure(e),
                                 outcomeUnknown = true,
+                                writeRef = ref,
                             )
                         }
                     reread(routeId, projectId, ref)
@@ -369,13 +411,18 @@ internal class TicketsLoader(
                 it.copy(
                     start = it.start?.copy(state = TicketStartState.FAILED, error = TicketStartError.TIMEOUT),
                     outcomeUnknown = true,
+                    writeRef = ref,
                 )
             }
             reread(routeId, projectId, ref)
         }
     }
 
-    /** The connection ended or the Mac changed: a queued accept is dropped unsent, polling stops. */
+    /**
+     * The connection ended or the Mac changed: a queued accept is dropped unsent (and the notice says
+     * so), polling stops. A detail read it cut off is forgotten, so the ticket page asks again once
+     * tickets can be used.
+     */
     fun connectionLost() {
         acceptJob?.cancel()
         acceptJob = null
@@ -384,29 +431,45 @@ internal class TicketsLoader(
         detailVersion++
         val polling = startJob?.isActive == true
         // A write in flight is cut off with its answer; the next connection reads the tickets again.
-        val writing = inFlightWrites > 0
+        val writing = writingRefs.lastOrNull()
+        val unknownRef = startRef.takeIf { polling } ?: writing
         lastLoadedAt = null
         startJob?.cancel()
         startJob = null
         startVersion++
         update { state ->
             val tickets = state.tickets
+            val dropped = tickets.pendingAccept
             if (tickets.routeId == null) state
             else state.copy(
                 tickets = tickets.copy(
                     loading = false,
                     detailLoading = false,
+                    // A detail already shown stays; one still loading is asked for again.
+                    detailRef =
+                        if (tickets.detailLoading && tickets.detail?.ticket?.ref != tickets.detailRef) null
+                        else tickets.detailRef,
                     pendingAccept = null,
                     // The job may still run on the Mac; what it did is read again after reconnecting.
                     start = if (polling) null else tickets.start,
-                    outcomeUnknown = tickets.outcomeUnknown || polling || writing,
+                    // An unknown outcome wins over the dropped accept: that write is never retried.
+                    outcomeUnknown =
+                        if (unknownRef != null) true else if (dropped != null) false else tickets.outcomeUnknown,
+                    writeFailure =
+                        if (unknownRef == null && dropped != null) TicketsFailure.OFFLINE else tickets.writeFailure,
+                    writeRef = unknownRef ?: dropped?.ref ?: tickets.writeRef,
                 )
             )
         }
     }
 
-    /** Whether the request may have reached the host, so its outcome is not known. */
+    /**
+     * Whether the request may have reached the host, so its outcome is not known. Writes are checked
+     * before sending ([valid]), so anything but a request error came after sending: most likely an
+     * answer that could not be read.
+     */
     private fun outcomeUnknown(e: Exception): Boolean =
+        e !is RemoteRequestException ||
         e.requestKind == RemoteRequestException.Kind.TIMEOUT ||
             e.requestKind == RemoteRequestException.Kind.CONNECTION_LOST ||
             (e as? RemoteRequestException)?.reason == "outcome_unknown"

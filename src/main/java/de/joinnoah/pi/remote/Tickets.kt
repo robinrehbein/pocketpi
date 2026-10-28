@@ -189,11 +189,13 @@ internal fun canUseTickets(state: RemoteState): Boolean =
 
 /**
  * The first ticket (and its project) that lists the chat [sessionId], from the tickets already
- * loaded; null without the capability or when none does.
+ * loaded for the shown Mac; null without the capability, for another Mac's tickets, or when none
+ * does.
  */
 internal fun ticketForSession(state: RemoteState, sessionId: String): Pair<TicketProject, Ticket>? {
     if (!canUseTickets(state)) return null
     val tickets = state.tickets
+    if (tickets.routeId == null || tickets.routeId != state.host?.routeId) return null
     return tickets.projects.firstNotNullOfOrNull { project ->
         tickets.pages[project.projectId]?.items
             ?.firstOrNull { ticket -> ticket.sessions.any { it.id == sessionId } }

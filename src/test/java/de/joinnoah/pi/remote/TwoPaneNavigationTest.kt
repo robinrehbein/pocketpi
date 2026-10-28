@@ -1613,6 +1613,8 @@ class TwoPaneNavigationTest {
             )
         repository.state.value =
             repository.state.value.copy(
+                // Tickets link chats only on the Mac they were read from.
+                host = PairedHost("host", "wss://relay.example", "device", "secret", "Studio"),
                 capabilities = setOf(TICKETS_CAPABILITY),
                 tickets =
                     TicketsState(

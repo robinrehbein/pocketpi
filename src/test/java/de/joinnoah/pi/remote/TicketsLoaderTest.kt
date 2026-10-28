@@ -20,6 +20,8 @@ class TicketsLoaderTest {
         var failStart: Exception? = null
         var moveGate: CompletableDeferred<Unit>? = null
         var failStatus: Exception? = null
+        var detailGate: CompletableDeferred<Unit>? = null
+        val failPage = mutableMapOf<String, Exception>()
 
         override suspend fun ticketProjects(): List<TicketProject> {
             calls += "projects"
@@ -30,12 +32,14 @@ class TicketsLoaderTest {
 
         override suspend fun ticketsPage(projectId: String, cursor: String?): TicketsPage {
             calls += "page:$projectId:${cursor ?: ""}"
+            failPage[projectId]?.let { throw it }
             val list = pages[projectId] ?: listOf(page(projectId, emptyList()))
             return list[if (cursor == null) 0 else cursor.toInt()]
         }
 
         override suspend fun ticketDetail(projectId: String, ref: String): TicketDetail {
             calls += "detail:$ref"
+            detailGate?.await()
             return TicketDetail(ticket(ref))
         }
 
@@ -170,6 +174,10 @@ class TicketsLoaderTest {
         runCurrent()
         assertTrue(e.source.calls.none { it.startsWith("move") })
         assertNull(e.tickets.pendingAccept)
+        // The user hears that the accept was not sent.
+        assertEquals(TicketsFailure.OFFLINE, e.tickets.writeFailure)
+        assertFalse(e.tickets.outcomeUnknown)
+        assertEquals("DEV-1", e.tickets.writeRef)
     }
 
     @Test
@@ -409,6 +417,114 @@ class TicketsLoaderTest {
         e.loader.loadDetail("p1", "DEV-1")
         runCurrent()
         assertEquals("DEV-1", e.tickets.detailRef)
+    }
+
+    @Test
+    fun detailCutByConnectionLossIsAskedForAgain() = runTest {
+        val e = loaded(Fake().apply { detailGate = CompletableDeferred() })
+        e.loader.loadDetail("p1", "DEV-1")
+        runCurrent()
+        assertTrue(e.tickets.detailLoading)
+        e.state = e.state.copy(connected = false)
+        e.loader.connectionLost()
+        // Not asked any more, so the page asks again once tickets can be used.
+        assertNull(e.tickets.detailRef)
+        assertFalse(e.tickets.detailLoading)
+    }
+
+    @Test
+    fun aShownDetailStaysWhenItsReloadIsCut() = runTest {
+        val e = loaded()
+        e.loader.loadDetail("p1", "DEV-1")
+        runCurrent()
+        e.source.detailGate = CompletableDeferred()
+        e.loader.loadDetail("p1", "DEV-1")
+        runCurrent()
+        e.loader.connectionLost()
+        assertEquals("DEV-1", e.tickets.detailRef)
+        assertEquals("DEV-1", e.tickets.detail!!.ticket!!.ref)
+    }
+
+    @Test
+    fun startWhileAnotherTicketsJobRunsIsRefusedAsBusy() = runTest {
+        val e = loaded()
+        repeat(5) { e.source.starts += startStatus(TicketStartState.RUNNING, TicketStartStep.SESSION) }
+        e.loader.start("p1", "DEV-1", null)
+        advanceTimeBy(1_000)
+        runCurrent()
+        e.loader.start("p1", "DEV-2", null)
+        runCurrent()
+        assertEquals(TicketsFailure.BUSY, e.tickets.writeFailure)
+        assertEquals("DEV-2", e.tickets.writeRef)
+        assertFalse(e.tickets.outcomeUnknown)
+        // The running job is kept and nothing else was sent.
+        assertEquals("DEV-1", e.tickets.start!!.ref)
+        assertEquals(TicketStartState.RUNNING, e.tickets.start!!.state)
+        assertEquals(1, e.source.calls.count { it.startsWith("start:") })
+    }
+
+    @Test
+    fun anUnreadableWriteAnswerIsOutcomeUnknown() = runTest {
+        val e = loaded(Fake().apply { failMove = IllegalStateException("bad reply") })
+        e.loader.move("p1", "DEV-1", "Todo", null)
+        runCurrent()
+        assertTrue("move:DEV-1:Todo:null" in e.source.calls)
+        assertTrue(e.tickets.outcomeUnknown)
+        assertEquals(TicketsFailure.FAILED, e.tickets.writeFailure)
+        assertEquals("DEV-1", e.tickets.writeRef)
+    }
+
+    @Test
+    fun anUnreadableStartAnswerIsOutcomeUnknown() = runTest {
+        val e = loaded(Fake().apply { failStart = IllegalArgumentException("bad start id") })
+        e.loader.start("p1", "DEV-1", null)
+        runCurrent()
+        assertTrue(e.tickets.outcomeUnknown)
+        assertEquals("DEV-1", e.tickets.writeRef)
+    }
+
+    @Test
+    fun anInvalidWriteIsNeverSentAndFails() = runTest {
+        val e = loaded()
+        e.loader.move("p1", "DEV-1", "Bogus", null)
+        runCurrent()
+        assertTrue(e.source.calls.none { it.startsWith("move") })
+        assertEquals(TicketsFailure.FAILED, e.tickets.writeFailure)
+        assertFalse(e.tickets.outcomeUnknown)
+        assertEquals("DEV-1", e.tickets.writeRef)
+        e.loader.dismissNotice()
+        assertNull(e.tickets.writeFailure)
+        assertNull(e.tickets.writeRef)
+    }
+
+    @Test
+    fun oneFailedProjectOfSeveralKeepsItsFailureAndIsReadAgain() = runTest {
+        val e = env(Fake().apply { failPage["p2"] = RemoteRequestException("busy") })
+        e.loader.refresh(false)
+        runCurrent()
+        assertNull(e.tickets.failure)
+        assertEquals(mapOf("p2" to TicketsFailure.BUSY), e.tickets.pageFailures)
+        assertTrue("p1" in e.tickets.pages && "p2" !in e.tickets.pages)
+        // A fresh read with a failed project does not hold back the next refresh.
+        e.source.failPage.clear()
+        e.loader.refresh(false)
+        runCurrent()
+        assertEquals(2, e.source.calls.count { it == "projects" })
+        assertTrue(e.tickets.pageFailures.isEmpty())
+        assertTrue("p2" in e.tickets.pages)
+    }
+
+    @Test
+    fun aChatsTicketComesOnlyFromTheShownMacsTickets() = runTest {
+        val linked = ticket("DEV-7").copy(sessions = listOf(TicketSession("s1", "t", SessionLinkStatus.IDLE)))
+        val e = env(Fake().apply { projects = listOf(project("p1")); pages["p1"] = listOf(page("p1", listOf(linked))) })
+        e.loader.refresh(false)
+        runCurrent()
+        assertEquals("DEV-7", ticketRefForSession(e.state, "s1"))
+        // Another Mac is shown now; its chats are not linked to the old Mac's tickets.
+        val other = e.state.copy(host = e.state.host!!.copy(routeId = "other"))
+        assertNull(ticketForSession(other, "s1"))
+        assertNull(ticketRefForSession(other, "s1"))
     }
 
     private fun TestScope.loaded(source: Fake = Fake()): Env {
