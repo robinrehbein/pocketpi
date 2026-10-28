@@ -111,4 +111,39 @@ class TicketsNavigationTest {
         assertEquals(emptyList<Pair<String, String>>(), repository.ticketOpens)
         assertEquals(emptyList<Boolean>(), repository.ticketRefreshes)
     }
+
+    @Test
+    fun openTicketRefusedOverSettingsAndOverlaysAndOtherRoutes() = runTest {
+        val open = RemoteSelection("host", "project", "s1").keys()
+        val tops = listOf<NavKey>(
+            RemoteNavKey.Settings,
+            RemoteNavKey.FolderBrowser("host"),
+            RemoteNavKey.Providers("host"),
+            RemoteNavKey.Activity("host"),
+        )
+        for (top in tops) {
+            val repository = repo()
+            val stack = (open + top).toMutableList<NavKey>()
+            val navigation = RemoteNavigator(repository, stack, backgroundScope)
+            navigation.openTicket("host", "p", "DEV-1")
+            assertEquals(open + top, stack)
+            assertEquals(emptyList<Pair<String, String>>(), repository.ticketOpens)
+        }
+        val repository = repo()
+        val stack = open.toMutableList<NavKey>()
+        RemoteNavigator(repository, stack, backgroundScope).openTicket("other", "p", "DEV-1")
+        assertEquals(open, stack)
+        assertEquals(emptyList<Pair<String, String>>(), repository.ticketOpens)
+    }
+
+    @Test
+    fun openTicketFromSessionsPushesDetailOverSessions() = runTest {
+        val repository = repo()
+        val open = RemoteSelection("host", "project").keys()
+        val stack = open.toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.openTicket("host", "p", "DEV-1")
+        assertEquals(open + RemoteNavKey.Ticket("host", "p", "DEV-1"), stack)
+        assertEquals(listOf("p" to "DEV-1"), repository.ticketOpens)
+    }
 }

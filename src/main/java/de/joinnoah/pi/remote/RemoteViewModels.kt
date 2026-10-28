@@ -261,8 +261,8 @@ internal class ProvidersViewModel(
 }
 
 /**
- * Backs both ticket pages. The detail page must read its detail with [ticketDetailFor] by
- * (projectId, ref) and show loading on a mismatch. [matches] ignores the project so the pages
+ * Backs both ticket pages. The detail page must read its state with [ticketDetailView] by ref
+ * (loading, ready, unavailable or failed). [matches] ignores the project so the pages
  * stay valid over a chat.
  */
 internal class TicketsViewModel(

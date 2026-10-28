@@ -48,6 +48,8 @@ data class TicketsState(
     val failure: TicketsFailure? = null,
     val detail: TicketDetail? = null,
     val detailLoading: Boolean = false,
+    /** The ref the last [TicketsLoader.loadDetail] asked for; [detail] and [detailFailure] answer it. */
+    val detailRef: String? = null,
     val pendingAccept: PendingAccept? = null,
     val start: TicketStart? = null,
     val writeFailure: TicketsFailure? = null,
@@ -189,10 +191,11 @@ internal class TicketsLoader(
             val tickets = state.tickets
             state.copy(
                 tickets =
-                    if (tickets.routeId != routeId) TicketsState(routeId = routeId, detailLoading = true)
+                    if (tickets.routeId != routeId) TicketsState(routeId = routeId, detailLoading = true, detailRef = ref)
                     else tickets.copy(
                         detail = tickets.detail?.takeIf { it.ticket?.ref == ref },
                         detailLoading = true,
+                        detailRef = ref,
                         detailFailure = null,
                     )
             )

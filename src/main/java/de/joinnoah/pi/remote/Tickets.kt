@@ -184,13 +184,36 @@ data class TicketStart(
 internal fun canUseTickets(state: RemoteState): Boolean =
     state.connected && TICKETS_CAPABILITY in state.capabilities && TICKETS_CAPABILITY !in state.unavailableCapabilities
 
+/** What a ticket page shows for one ref; see [ticketDetailView]. */
+internal sealed interface TicketDetailView {
+    data object Loading : TicketDetailView
+
+    data class Ready(val detail: TicketDetail) : TicketDetailView
+
+    /** The host answered but Plane could not give the ticket. */
+    data class Unavailable(val reason: TicketReason?) : TicketDetailView
+
+    /** The request itself failed. */
+    data class Failed(val failure: TicketsFailure) : TicketDetailView
+}
+
 /**
- * The loaded detail when it is the one of [ref]. [RemoteState.tickets] holds a single detail, so a
- * screen for another ticket must treat null as loading, never show the previous ticket's detail.
- * An unavailable detail carries no ref and cannot be matched; read `detailFailure` for it.
+ * The page state of [ref]. [RemoteState.tickets] holds one detail, so anything not requested for
+ * [ref] (another ticket's detail, no request yet) is [TicketDetailView.Loading]; it never shows the
+ * previous ticket. A loaded detail wins over a later failed refresh.
  */
-internal fun ticketDetailFor(state: RemoteState, projectId: String, ref: String): TicketDetail? =
-    state.tickets.detail?.takeIf { it.ticket?.ref == ref }
+internal fun ticketDetailView(state: RemoteState, ref: String): TicketDetailView {
+    val tickets = state.tickets
+    if (tickets.detailRef != ref) return TicketDetailView.Loading
+    val detail = tickets.detail
+    return when {
+        detail?.ticket != null ->
+            if (detail.ticket.ref == ref) TicketDetailView.Ready(detail) else TicketDetailView.Loading
+        detail != null -> TicketDetailView.Unavailable(detail.reason)
+        tickets.detailFailure != null -> TicketDetailView.Failed(tickets.detailFailure)
+        else -> TicketDetailView.Loading
+    }
+}
 
 // ---- Requests -----------------------------------------------------------------------------
 
