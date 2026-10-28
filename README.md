@@ -229,9 +229,9 @@ commit `4783a9fb2a54ed0e22c72ffa029d9cf8b9aac85e`. `device-access-v1.json` (a pa
 device is denied) comes from commit `3eee84dec207e987b6ab439e0dd6acc2e1c1a6be`, the merge of pull
 request #642. `session-export-v1.json` (exporting a session as an HTML file) is a byte-for-byte
 copy from noah-monorepo commit `748465c46c866a4d9d3c78754bff6e860955fdf8`, the merge of pull
-request #647. `session-tree-v1.json` (browsing, navigating and forking the session tree, and a session list that
-shows host workers) comes from commit `12e18fcc1ceed204deba5be68ee64f4570b7e459`, the merge of
-pull request #1081.
+request #647. `session-tree-v1.json` (browsing, navigating and forking the session tree, and a
+session list that shows host workers) comes from commit `12e18fcc1ceed204deba5be68ee64f4570b7e459`,
+the merge of pull request #1081.
 `files-media-v1.json` (agent images read by path from the session folder, plus `text/html`
 artifacts behind `session.files.artifact.v1`) is a byte-for-byte copy from noah-monorepo commit
 `a07ba16e92e6613ac81a0032e2000c592fb2ed6f`, the merge of pull request #653.

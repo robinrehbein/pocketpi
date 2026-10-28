@@ -9315,6 +9315,22 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun projectListsKeepHostWorkersAsTerminalSessions() = runTest {
+        val transport = Transport()
+        configureProjects(
+            transport,
+            mapOf("a" to listOf(session("worker", "worker", "running", projectId = "a"))),
+        )
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN)
+        runCurrent()
+        val chat = repository.state.value.projectChats.single().session
+        assertEquals("tui", chat.text("origin"))
+        assertTrue(isHostWorker(chat))
+        assertTrue(isHostWorker(repository.state.value.projectSessions.getValue("a").sessions.single()))
+    }
+
+    @Test
     fun featuredChatsStayVerifiedUntilTheirProjectsReplyReplacesThem() = runTest {
         val transport = Transport()
         val lists =
