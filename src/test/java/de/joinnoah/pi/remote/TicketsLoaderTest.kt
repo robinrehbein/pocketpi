@@ -403,6 +403,14 @@ class TicketsLoaderTest {
         assertFalse(e.tickets.detailLoading)
     }
 
+    @Test
+    fun loadDetailRecordsTheRequestedRef() = runTest {
+        val e = loaded()
+        e.loader.loadDetail("p1", "DEV-1")
+        runCurrent()
+        assertEquals("DEV-1", e.tickets.detailRef)
+    }
+
     private fun TestScope.loaded(source: Fake = Fake()): Env {
         val e = env(source)
         e.loader.refresh(false)

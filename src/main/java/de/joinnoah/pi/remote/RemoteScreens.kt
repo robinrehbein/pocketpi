@@ -4095,7 +4095,7 @@ private fun QuickChatsShowAll(expanded: Boolean, tag: String, onClick: () -> Uni
 
 /** The heading of a section of the Projects page; the rows under it belong to it. */
 @Composable
-private fun ProjectsSectionHeading(text: String) {
+internal fun ProjectsSectionHeading(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.titleSmall,
@@ -4234,7 +4234,7 @@ private fun ChatSkeleton() {
 }
 
 @Composable
-private fun SkeletonBar(modifier: Modifier) {
+internal fun SkeletonBar(modifier: Modifier) {
     Box(
         modifier.height(10.dp)
             .background(MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.shapes.extraSmall)

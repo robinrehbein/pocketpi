@@ -2,4 +2,65 @@
 <resources>
     <!-- Tickets (tickets.v1): Mac menu entry and page title. -->
     <string name="remote_tickets_title">Tickets</string>
+
+    <!-- Tickets screen -->
+    <string name="remote_tickets_reload">Tickets neu laden</string>
+    <string name="remote_tickets_loading">Tickets werden geladen</string>
+    <string name="remote_tickets_retry">Erneut versuchen</string>
+    <string name="remote_tickets_section_acceptance">Zur Abnahme</string>
+    <string name="remote_tickets_section_working">Läuft</string>
+    <string name="remote_tickets_section_todo">Todo</string>
+    <string name="remote_tickets_empty_title">Keine offenen Tickets</string>
+    <string name="remote_tickets_empty_body">Tickets, die dir zugewiesen sind oder auf deine Abnahme warten, erscheinen hier.</string>
+    <string name="remote_tickets_no_projects_title">Keine Tickets auf diesem Mac</string>
+    <string name="remote_tickets_no_projects_body">Keines der geteilten Projekte des Macs hat Tickets eingerichtet.</string>
+    <string name="remote_tickets_pr_open">PR offen</string>
+    <plurals name="remote_tickets_chats_caption">
+        <item quantity="one">%d Chat</item>
+        <item quantity="other">%d Chats</item>
+    </plurals>
+    <plurals name="remote_tickets_chats_working">
+        <item quantity="one">%d arbeitet</item>
+        <item quantity="other">%d arbeiten</item>
+    </plurals>
+    <string name="remote_tickets_caption_join">%1$s · %2$s</string>
+    <string name="remote_tickets_stale">Stand vor %d Min</string>
+
+    <!-- Why Plane has no tickets (TicketReason) and how a request failed (TicketsFailure) -->
+    <string name="remote_tickets_reason_not_configured">Tickets auf dem Mac nicht eingerichtet.</string>
+    <string name="remote_tickets_reason_missing_bot_key">Auf dem Mac fehlt noch der Plane-Schlüssel für Tickets.</string>
+    <string name="remote_tickets_reason_plane_unreachable">Plane nicht erreichbar.</string>
+    <string name="remote_tickets_reason_plane_rejected">Plane hat die Anfrage abgelehnt. Prüfe den Plane-Schlüssel auf dem Mac.</string>
+    <string name="remote_tickets_reason_unknown">Tickets sind gerade nicht verfügbar.</string>
+    <string name="remote_tickets_failure_offline">Der Mac ist nicht verbunden.</string>
+    <string name="remote_tickets_failure_unsupported">Dieser Mac unterstützt keine Tickets.</string>
+    <string name="remote_tickets_failure_busy">Der Mac ist beschäftigt. Versuche es gleich noch einmal.</string>
+    <string name="remote_tickets_failure_forbidden">Dieses Projekt teilt seine Tickets nicht.</string>
+    <string name="remote_tickets_failure_not_found">Das Ticket wurde nicht gefunden.</string>
+    <string name="remote_tickets_failure_failed">Die Tickets konnten nicht geladen werden.</string>
+
+    <!-- Ticket detail -->
+    <string name="remote_ticket_open_plane">In Plane öffnen</string>
+    <string name="remote_ticket_project_ref">%1$s · %2$s</string>
+    <string name="remote_ticket_priority_urgent">Dringend</string>
+    <string name="remote_ticket_priority_high">Hoch</string>
+    <string name="remote_ticket_priority_medium">Mittel</string>
+    <string name="remote_ticket_priority_low">Niedrig</string>
+    <string name="remote_ticket_accept">Abnehmen</string>
+    <string name="remote_ticket_start">Mit Agent starten</string>
+    <string name="remote_ticket_comment">Kommentar</string>
+    <string name="remote_ticket_status">Status ändern</string>
+    <string name="remote_ticket_open_chat">Zum Chat</string>
+    <string name="remote_ticket_write_block_writes_off">Tickets bearbeiten ist auf dem Mac ausgeschaltet.</string>
+    <string name="remote_ticket_write_block_missing_user_key">Dein persönlicher Plane-Schlüssel fehlt auf dem Mac, deshalb sind Tickets nur lesbar.</string>
+    <string name="remote_ticket_offline">Der Mac ist offline. Änderungen gehen wieder, sobald er zurück ist.</string>
+    <string name="remote_ticket_chats">Chats zu diesem Ticket</string>
+    <string name="remote_ticket_chat_untitled">Chat</string>
+    <string name="remote_ticket_description">Beschreibung</string>
+    <string name="remote_ticket_description_empty">Keine Beschreibung.</string>
+    <string name="remote_ticket_description_truncated">Die Beschreibung ist gekürzt. Öffne das Ticket in Plane, um alles zu lesen.</string>
+    <string name="remote_ticket_comments">Kommentare</string>
+    <string name="remote_ticket_comments_empty">Noch keine Kommentare.</string>
+    <string name="remote_ticket_comments_truncated">Nur die neuesten Kommentare werden angezeigt.</string>
+    <string name="remote_ticket_comment_meta">%1$s · %2$s</string>
 </resources>

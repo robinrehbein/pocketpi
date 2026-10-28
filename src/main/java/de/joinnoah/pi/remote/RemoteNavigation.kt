@@ -1551,7 +1551,7 @@ private fun RemoteNavDisplay(
                 }
                 entry<RemoteNavKey.Ticket>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { TicketsViewModel(repository, key) }
-                    CenteredPage { TicketScreen(key, model, navigator) }
+                    CenteredPage { TicketDetailScreen(key, model, navigator) }
                 }
                 entry<RemoteNavKey.Activity>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ActivityViewModel(repository, key) }

@@ -32,6 +32,13 @@ class TicketDetailViewTest {
     }
 
     @Test
+    fun aDetailOfAnotherRefThanRequestedIsLoading() {
+        val detail = TicketDetail(ticket("DEV-2"))
+        val view = ticketDetailView(state(TicketsState(routeId = "r", detailRef = "DEV-1", detail = detail)), "DEV-1")
+        assertEquals(TicketDetailView.Loading, view)
+    }
+
+    @Test
     fun unavailableCarriesTheReason() {
         val detail = TicketDetail(null, reason = TicketReason.PLANE_UNREACHABLE)
         val view = ticketDetailView(state(TicketsState(routeId = "r", detailRef = "DEV-1", detail = detail)), "DEV-1")
