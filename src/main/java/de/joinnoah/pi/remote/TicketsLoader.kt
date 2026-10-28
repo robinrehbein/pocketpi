@@ -51,6 +51,8 @@ data class TicketsState(
     val pendingAccept: PendingAccept? = null,
     val start: TicketStart? = null,
     val writeFailure: TicketsFailure? = null,
+    /** The last failed [TicketsLoader.loadDetail]; separate from the list's [failure]. */
+    val detailFailure: TicketsFailure? = null,
     val outcomeUnknown: Boolean = false,
 )
 
@@ -93,6 +95,7 @@ internal class TicketsLoader(
     private var acceptJob: Job? = null
     private var startJob: Job? = null
     private var startVersion = 0L
+    private var inFlightWrites = 0
 
     private fun routeId() = current().host?.routeId
 
@@ -183,13 +186,15 @@ internal class TicketsLoader(
         val routeId = usableRoute() ?: return
         val version = ++detailVersion
         update { state ->
-            if (state.tickets.routeId != routeId) state
-            else state.copy(
-                tickets = state.tickets.copy(
-                    detail = state.tickets.detail?.takeIf { it.ticket?.ref == ref },
-                    detailLoading = true,
-                    failure = null,
-                )
+            val tickets = state.tickets
+            state.copy(
+                tickets =
+                    if (tickets.routeId != routeId) TicketsState(routeId = routeId, detailLoading = true)
+                    else tickets.copy(
+                        detail = tickets.detail?.takeIf { it.ticket?.ref == ref },
+                        detailLoading = true,
+                        detailFailure = null,
+                    )
             )
         }
         scope.launch {
@@ -200,7 +205,7 @@ internal class TicketsLoader(
                 throw e
             } catch (e: Exception) {
                 Diagnostics.caught("tickets.get", e)
-                if (version == detailVersion) write(routeId) { it.copy(detailLoading = false, failure = failure(e)) }
+                if (version == detailVersion) write(routeId) { it.copy(detailLoading = false, detailFailure = failure(e)) }
             }
         }
     }
@@ -227,7 +232,8 @@ internal class TicketsLoader(
                 return@launch
             }
             write(routeId) { it.copy(pendingAccept = null) }
-            send(routeId, projectId, ref) { source.moveTicket(projectId, ref, ACCEPT_STATE, comment) }
+            // Its own coroutine: losing the connection must not cancel a request already sent.
+            scope.launch { send(routeId, projectId, ref) { source.moveTicket(projectId, ref, ACCEPT_STATE, comment) } }
         }
     }
 
@@ -255,6 +261,7 @@ internal class TicketsLoader(
 
     /** One write, never retried; afterwards the ticket is read again whatever happened. */
     private suspend fun send(routeId: String, projectId: String, ref: String, request: suspend () -> Any?) {
+        inFlightWrites++
         try {
             request()
         } catch (e: CancellationException) {
@@ -262,15 +269,19 @@ internal class TicketsLoader(
         } catch (e: Exception) {
             Diagnostics.caught("tickets.write", e)
             write(routeId) { it.copy(writeFailure = failure(e), outcomeUnknown = outcomeUnknown(e)) }
+        } finally {
+            inFlightWrites--
         }
         reread(routeId, projectId, ref)
     }
 
     private fun reread(routeId: String, projectId: String, ref: String) {
         if (usableRoute() != routeId) return
+        val version = listVersion
         scope.launch {
             try {
                 val page = readPages(projectId)
+                if (version != listVersion) return@launch
                 write(routeId) { it.copy(pages = it.pages + (projectId to page)) }
             } catch (e: CancellationException) {
                 throw e
@@ -308,10 +319,9 @@ internal class TicketsLoader(
             write(routeId) {
                 it.copy(start = TicketStart(startId, TicketStartState.RUNNING, TicketStartStep.WORKTREE, false, null, null, null))
             }
-            var waited = 0L
-            while (waited < TICKET_START_MAX_MILLIS) {
+            val startedAt = now()
+            while (now() - startedAt < TICKET_START_MAX_MILLIS) {
                 delay(TICKET_START_POLL_MILLIS)
-                waited += TICKET_START_POLL_MILLIS
                 if (version != startVersion) return@launch
                 try {
                     val status = source.ticketStartStatus(startId)
@@ -327,7 +337,15 @@ internal class TicketsLoader(
                     Diagnostics.caught("tickets.start.status", e)
                     // A read that timed out is asked again; any other answer ends the polling.
                     if (e.requestKind == RemoteRequestException.Kind.TIMEOUT) continue
-                    if (version == startVersion) write(routeId) { it.copy(writeFailure = failure(e)) }
+                    // The job's outcome is not known any more, but a new start must be possible.
+                    if (version == startVersion)
+                        write(routeId) {
+                            it.copy(
+                                start = it.start?.copy(state = TicketStartState.FAILED),
+                                writeFailure = failure(e),
+                                outcomeUnknown = true,
+                            )
+                        }
                     reread(routeId, projectId, ref)
                     return@launch
                 }
@@ -351,6 +369,9 @@ internal class TicketsLoader(
         listVersion++
         detailVersion++
         val polling = startJob?.isActive == true
+        // A write in flight is cut off with its answer; the next connection reads the tickets again.
+        val writing = inFlightWrites > 0
+        lastLoadedAt = null
         startJob?.cancel()
         startJob = null
         startVersion++
@@ -364,7 +385,7 @@ internal class TicketsLoader(
                     pendingAccept = null,
                     // The job may still run on the Mac; what it did is read again after reconnecting.
                     start = if (polling) null else tickets.start,
-                    outcomeUnknown = tickets.outcomeUnknown || polling,
+                    outcomeUnknown = tickets.outcomeUnknown || polling || writing,
                 )
             )
         }

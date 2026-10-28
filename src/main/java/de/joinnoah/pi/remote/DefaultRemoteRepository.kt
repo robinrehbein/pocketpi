@@ -6857,6 +6857,15 @@ class DefaultRemoteRepository(
 
     override fun undoAccept() = ticketsLoader.undo()
 
+    override fun commentOnTicket(projectId: String, ref: String, text: String) =
+        ticketsLoader.comment(projectId, ref, text)
+
+    override fun moveTicketTo(projectId: String, ref: String, state: String, comment: String?) =
+        ticketsLoader.move(projectId, ref, state, comment)
+
+    override fun startTicketJob(projectId: String, ref: String, note: String?) =
+        ticketsLoader.start(projectId, ref, note)
+
     private val changesLoader =
         GitChangesLoader(
             scope,

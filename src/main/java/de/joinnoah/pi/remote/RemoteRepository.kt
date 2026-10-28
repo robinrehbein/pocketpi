@@ -507,6 +507,15 @@ interface RemoteRepository {
     /** Accepts [ref] after a five-second undo window; see [undoAccept]. */
     fun queueAccept(projectId: String, ref: String, comment: String) {}
 
+    /** Comments on [ref]; a read-only project sends nothing. */
+    fun commentOnTicket(projectId: String, ref: String, text: String) {}
+
+    /** Moves [ref] to [state]; [comment] is required for Done and Cancelled. */
+    fun moveTicketTo(projectId: String, ref: String, state: String, comment: String?) {}
+
+    /** Starts the start job of [ref] and follows it in [TicketsState.start]. */
+    fun startTicketJob(projectId: String, ref: String, note: String?) {}
+
     /** Takes back the accept waiting in its undo window; nothing was sent. */
     fun undoAccept() {}
 

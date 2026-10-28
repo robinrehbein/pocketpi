@@ -18,6 +18,8 @@ class TicketsLoaderTest {
         var failMove: Exception? = null
         var failComment: Exception? = null
         var failStart: Exception? = null
+        var moveGate: CompletableDeferred<Unit>? = null
+        var failStatus: Exception? = null
 
         override suspend fun ticketProjects(): List<TicketProject> {
             calls += "projects"
@@ -49,6 +51,7 @@ class TicketsLoaderTest {
 
         override suspend fun moveTicket(projectId: String, ref: String, state: String, comment: String?): Boolean {
             calls += "move:$ref:$state:$comment"
+            moveGate?.await()
             failMove?.let { throw it }
             return false
         }
@@ -61,6 +64,7 @@ class TicketsLoaderTest {
 
         override suspend fun ticketStartStatus(startId: String): TicketStart {
             calls += "status"
+            failStatus?.let { throw it }
             return starts.removeFirst()
         }
     }
@@ -248,6 +252,51 @@ class TicketsLoaderTest {
         advanceTimeBy(10_000)
         runCurrent()
         assertEquals(3, e.source.calls.count { it == "status" })
+    }
+
+    @Test
+    fun sentAcceptCutOffByConnectionLossIsOutcomeUnknown() = runTest {
+        val e = loaded(Fake().apply { moveGate = CompletableDeferred() })
+        e.loader.queueAccept("p1", "DEV-1", "Accepted")
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertTrue("move:DEV-1:Done:Accepted" in e.source.calls)
+        e.state = e.state.copy(connected = false)
+        e.loader.connectionLost()
+        assertTrue(e.tickets.outcomeUnknown)
+        // After reconnecting the capability merge reads again, although the last read was fresh.
+        e.state = e.state.copy(connected = true)
+        e.source.calls.clear()
+        e.loader.refresh(false)
+        runCurrent()
+        assertTrue("projects" in e.source.calls)
+    }
+
+    @Test
+    fun startPollErrorEndsTheStart() = runTest {
+        val e = loaded(Fake().apply { failStatus = RemoteRequestException("not_found") })
+        e.loader.start("p1", "DEV-1", null)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(TicketStartState.FAILED, e.tickets.start!!.state)
+        assertTrue(e.tickets.outcomeUnknown)
+        assertEquals(TicketsFailure.NOT_FOUND, e.tickets.writeFailure)
+        e.source.failStatus = null
+        e.source.starts += startStatus(TicketStartState.SUCCEEDED, TicketStartStep.DONE)
+        e.loader.start("p1", "DEV-1", null)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(TicketStartState.SUCCEEDED, e.tickets.start!!.state)
+    }
+
+    @Test
+    fun detailBeforeListAndItsFailureIsSeparate() = runTest {
+        val e = env()
+        e.loader.loadDetail("p1", "DEV-1")
+        runCurrent()
+        assertEquals("DEV-1", e.tickets.detail!!.ticket!!.ref)
+        assertNull(e.tickets.detailFailure)
+        assertNull(e.tickets.failure)
     }
 
     @Test
