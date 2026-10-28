@@ -2299,12 +2299,17 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
     /** Ticket capability and state the fake host advertises; see [enableTickets]. */
     private var ticketCapabilities = emptySet<String>()
     private var tickets = TicketsState()
-    private val ticketScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // The UI calls the ticket methods on the main thread, and the delayed accept applies there too,
+    // so [tickets] and [state] change on one thread only.
+    private val ticketScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var acceptJob: Job? = null
 
     /** How long an accept waits before the fake host applies it; the real window is 5 s. */
     var acceptWindowMillis = 1_500L
-    val ticketMoves = mutableListOf<Triple<String, String, String>>()
+
+    /** The accepts the fake host applied; the test thread reads it while the main thread appends. */
+    val ticketMoves: MutableList<Triple<String, String, String>> =
+        java.util.Collections.synchronizedList(mutableListOf())
 
     /** Makes the host advertise `tickets.v1` with one ticket awaiting acceptance. */
     fun enableTickets() {
@@ -2385,7 +2390,7 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
     }
 
     override fun dismissTicketNotice() {
-        ticketsChanged { it.copy(writeFailure = null, outcomeUnknown = false) }
+        ticketsChanged { it.copy(writeFailure = null, outcomeUnknown = false, writeRef = null) }
     }
 
     override suspend fun activate(
