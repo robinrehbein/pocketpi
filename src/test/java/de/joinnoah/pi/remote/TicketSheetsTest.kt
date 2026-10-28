@@ -218,7 +218,9 @@ class TicketSheetsTest {
         val other = job(TicketStartState.RUNNING, TicketStartStep.SESSION).copy(ref = "DEV-2")
         show(base.copy(tickets = base.tickets.copy(start = other)))
         compose.onNodeWithText(label(R.string.remote_ticket_start)).performClick()
-        compose.onNodeWithTag("ticketSheetConfirm").assertIsEnabled()
+        // The host runs one start at a time: the sheet says so instead of offering a start that is refused.
+        compose.onNodeWithTag("ticketSheetConfirm").assertIsNotEnabled()
+        compose.onNodeWithText(label(R.string.remote_tickets_start_other_running)).assertIsDisplayed()
         current = base.copy(
             tickets = base.tickets.copy(
                 start = other.copy(state = TicketStartState.SUCCEEDED, step = TicketStartStep.DONE, sessionId = "other"),
@@ -247,6 +249,60 @@ class TicketSheetsTest {
         compose.onNodeWithText(label(R.string.remote_tickets_write_failed)).assertIsDisplayed()
         compose.onNodeWithText(label(R.string.remote_tickets_start_close)).assertIsDisplayed()
     }
+
+    @Test
+    fun aRefusedStartShowsTheFailureInsteadOfSpinning() {
+        val base = startable()
+        show(base)
+        compose.onNodeWithText(label(R.string.remote_ticket_start)).performClick()
+        tap("ticketSheetConfirm")
+        current = base.copy(tickets = base.tickets.copy(writeFailure = TicketsFailure.BUSY, writeRef = "DEV-1"))
+        compose.waitForIdle()
+        val text = compose.activity.getString(
+            R.string.remote_tickets_notice_ref, "DEV-1", label(R.string.remote_tickets_failure_busy),
+        )
+        compose.onNodeWithText(text).assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.remote_tickets_start_close)).assertIsDisplayed()
+    }
+
+    @Test
+    fun anotherTicketsFailureDoesNotEndThisStart() {
+        val base = startable()
+        show(base)
+        compose.onNodeWithText(label(R.string.remote_ticket_start)).performClick()
+        tap("ticketSheetConfirm")
+        current = base.copy(tickets = base.tickets.copy(writeFailure = TicketsFailure.FAILED, writeRef = "DEV-2"))
+        compose.waitForIdle()
+        compose.onNodeWithTag("ticketStartProgress").assertIsDisplayed()
+        compose.onAllNodesWithText(label(R.string.remote_tickets_start_close)).assertCountEquals(0)
+    }
+
+    @Test
+    fun startStepsTellTheirStateToTalkBack() {
+        val base = startable()
+        show(base)
+        compose.onNodeWithText(label(R.string.remote_ticket_start)).performClick()
+        tap("ticketSheetConfirm")
+        current = base.copy(
+            tickets = base.tickets.copy(
+                start = job(TicketStartState.FAILED, TicketStartStep.SESSION, error = TicketStartError.SESSION_FAILED),
+            ),
+        )
+        compose.waitForIdle()
+        fun step(text: Int, state: Int) =
+            compose.onNode(hasText(label(text)) and hasStateDescription(label(state)), useUnmergedTree = false)
+        step(R.string.remote_tickets_step_worktree, R.string.remote_tickets_step_state_done).assertIsDisplayed()
+        step(R.string.remote_tickets_step_session, R.string.remote_tickets_step_state_failed).assertIsDisplayed()
+        step(R.string.remote_tickets_step_prompt, R.string.remote_tickets_step_state_pending).assertIsDisplayed()
+        current = base.copy(tickets = base.tickets.copy(start = job(TicketStartState.RUNNING, TicketStartStep.SESSION)))
+        compose.waitForIdle()
+        step(R.string.remote_tickets_step_session, R.string.remote_tickets_step_state_active).assertIsDisplayed()
+    }
+
+    private fun hasStateDescription(text: String) =
+        androidx.compose.ui.test.SemanticsMatcher.expectValue(
+            androidx.compose.ui.semantics.SemanticsProperties.StateDescription, text,
+        )
 
     @Test
     fun anOldFinishedStartNeverOpensItsChat() {

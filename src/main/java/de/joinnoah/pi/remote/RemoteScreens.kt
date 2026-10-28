@@ -2216,6 +2216,7 @@ internal fun RemoteScreen(
                     acceptTarget = null
                 },
                 onDismiss = { acceptTarget = null },
+                connected = state.connected,
             )
         BoxWithConstraints(
             if (key is RemoteNavKey.Chat)
@@ -2834,9 +2835,11 @@ internal fun RemoteScreen(
                                 )
                             }
                             // Tickets waiting for the user's acceptance lead the page, only once they are known:
-                            // never while they load, without the capability, or when none waits.
+                            // never before the first read, without the capability, or when none waits. A
+                            // refresh of known tickets keeps the section in place.
                             val acceptance =
-                                if (projectSelected || !canUseTickets(state) || state.tickets.loading ||
+                                if (projectSelected || !canUseTickets(state) ||
+                                    (state.tickets.loading && state.tickets.pages.isEmpty()) ||
                                     state.tickets.routeId != key.routeId)
                                     emptyList()
                                 else acceptanceItems(state.tickets)
@@ -4222,7 +4225,13 @@ private fun AcceptanceRow(ticket: Ticket, canAccept: Boolean, onOpen: () -> Unit
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        if (canAccept) TextButton(onClick = onAccept) { Text(stringResource(R.string.remote_ticket_accept)) }
+        if (canAccept) {
+            // "Accept" alone does not say which of the rows it accepts.
+            val description = stringResource(R.string.remote_ticket_accept_ref, ticket.ref)
+            TextButton(onClick = onAccept, modifier = Modifier.semantics { contentDescription = description }) {
+                Text(stringResource(R.string.remote_ticket_accept))
+            }
+        }
     }
 }
 

@@ -45,6 +45,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
 /** The sheets of a ticket page; at most one is open. */
@@ -224,9 +225,12 @@ internal fun StartSheet(
         it.projectId == projectId && it.ref == ref && (it != initial || initial.state == TicketStartState.RUNNING)
     }
     val following = submitted || job != null
-    // The request failed, or went nowhere (the connection ended before the host answered).
+    // The host runs one start at a time, so another ticket's running job blocks this one.
+    val otherRunning = tickets.start?.state == TicketStartState.RUNNING && job == null
+    // This start failed or was refused, or went nowhere (the connection ended before the host answered).
+    val ownNotice = tickets.writeRef == null || tickets.writeRef == ref
     val failedToSend =
-        submitted && job == null && (tickets.writeFailure != null || tickets.outcomeUnknown || !connected)
+        submitted && job == null && ((ownNotice && hasWriteNotice(tickets)) || !connected)
 
     LaunchedEffect(job?.startId, job?.state) {
         val sessionId = job?.sessionId
@@ -243,7 +247,13 @@ internal fun StartSheet(
                 Text(stringResource(R.string.remote_tickets_start_moves), style = MaterialTheme.typography.bodyLarge)
             }
             SheetField(stringResource(R.string.remote_tickets_start_note), note, { note = it }, MAX_TICKET_NOTE_CHARS)
-            SheetConfirm(stringResource(R.string.remote_tickets_start_go), connected) {
+            if (otherRunning)
+                Text(
+                    stringResource(R.string.remote_tickets_start_other_running),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            SheetConfirm(stringResource(R.string.remote_tickets_start_go), connected && !otherRunning) {
                 submitted = true
                 onStart(note.trim().ifEmpty { null })
             }
@@ -254,7 +264,7 @@ internal fun StartSheet(
             }
         } else {
             StartProgress(job, onOpenChat, onDismiss)
-            if (tickets.outcomeUnknown) TicketWriteMessage(tickets)
+            if (tickets.outcomeUnknown && ownNotice) TicketWriteMessage(tickets)
         }
     }
 }
@@ -272,7 +282,20 @@ private fun StartProgress(job: TicketStart?, onOpenChat: (String) -> Unit, onDis
         startSteps.forEachIndexed { index, step ->
             val done = finished || index < current
             val active = index == current && !finished
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            // The icons are not read, so each step says how far it is.
+            val stepState = stringResource(
+                when {
+                    done -> R.string.remote_tickets_step_state_done
+                    active && failed -> R.string.remote_tickets_step_state_failed
+                    active -> R.string.remote_tickets_step_state_active
+                    else -> R.string.remote_tickets_step_state_pending
+                }
+            )
+            Row(
+                Modifier.semantics(mergeDescendants = true) { stateDescription = stepState },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
                     when {
                         done -> Icon(Icons.Default.Check, contentDescription = null)
@@ -350,18 +373,23 @@ private fun writeFailureText(failure: TicketsFailure): Int =
 /** Whether the last write left something to tell: an unknown outcome or a failure. */
 internal fun hasWriteNotice(tickets: TicketsState): Boolean = tickets.outcomeUnknown || tickets.writeFailure != null
 
-/** Any unknown outcome wins over the reason: a timeout carries none and the write is never retried. */
+/**
+ * Any unknown outcome wins over the reason: a timeout carries none and the write is never retried.
+ * The ticket it is about leads, so a notice shown away from that ticket still says which one.
+ */
 @Composable
 private fun TicketWriteMessage(tickets: TicketsState) {
     val failure = tickets.writeFailure
+    val message = stringResource(
+        when {
+            tickets.outcomeUnknown -> R.string.remote_tickets_outcome_unknown
+            failure != null -> writeFailureText(failure)
+            else -> R.string.remote_tickets_write_failed
+        }
+    )
+    val ref = tickets.writeRef
     Text(
-        stringResource(
-            when {
-                tickets.outcomeUnknown -> R.string.remote_tickets_outcome_unknown
-                failure != null -> writeFailureText(failure)
-                else -> R.string.remote_tickets_write_failed
-            }
-        ),
+        if (ref == null) message else stringResource(R.string.remote_tickets_notice_ref, ref, message),
         style = MaterialTheme.typography.bodyMedium,
     )
 }

@@ -50,6 +50,7 @@
     <string name="remote_ticket_priority_medium">Mittel</string>
     <string name="remote_ticket_priority_low">Niedrig</string>
     <string name="remote_ticket_accept">Abnehmen</string>
+    <string name="remote_ticket_accept_ref">%1$s abnehmen</string>
     <string name="remote_ticket_start">Mit Agent starten</string>
     <string name="remote_ticket_comment">Kommentar</string>
     <string name="remote_ticket_status">Status ändern</string>
@@ -86,10 +87,16 @@
     <string name="remote_tickets_start_go">Starten</string>
     <string name="remote_tickets_start_close">Schließen</string>
     <string name="remote_tickets_start_open_chat">Chat öffnen</string>
+    <string name="remote_tickets_start_other_running">Gerade wird ein anderes Ticket gestartet. Warte, bis es fertig ist.</string>
     <string name="remote_tickets_step_worktree">Worktree wird vorbereitet</string>
     <string name="remote_tickets_step_move">Ticket wird auf In Progress gesetzt</string>
     <string name="remote_tickets_step_session">Chat wird gestartet</string>
     <string name="remote_tickets_step_prompt">Auftrag wird gesendet</string>
+    <!-- How far a start step is, for TalkBack -->
+    <string name="remote_tickets_step_state_done">Erledigt</string>
+    <string name="remote_tickets_step_state_active">Läuft</string>
+    <string name="remote_tickets_step_state_failed">Fehlgeschlagen</string>
+    <string name="remote_tickets_step_state_pending">Noch nicht</string>
     <string name="remote_tickets_start_failed_worktree">Der Worktree konnte nicht vorbereitet werden.</string>
     <string name="remote_tickets_start_failed_move">Ticket konnte nicht auf In Progress gesetzt werden.</string>
     <string name="remote_tickets_start_failed_session">Der Chat konnte nicht gestartet werden.</string>
@@ -105,4 +112,6 @@
     <string name="remote_tickets_outcome_unknown">Das Ergebnis ist unbekannt. Das Ticket wird neu geladen; prüfe es, bevor du es noch einmal versuchst.</string>
     <string name="remote_tickets_write_failed">Die Änderung ist nicht angekommen.</string>
     <string name="remote_tickets_dismiss">Schließen</string>
+    <!-- A write notice: the ticket it is about, then what happened -->
+    <string name="remote_tickets_notice_ref">%1$s: %2$s</string>
 </resources>

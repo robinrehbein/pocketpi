@@ -22,6 +22,8 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.serialization.json.JsonObject
@@ -351,9 +353,42 @@ class MacHubUiTest {
     }
 
     @Test
-    fun acceptanceSectionAbsentWhileLoading() {
-        renderTickets(ticketsState(ticket(1), loading = true))
+    fun acceptanceSectionAbsentWhileNothingIsKnownYet() {
+        renderTickets(ticketsState(ticket(1), loading = true).copy(pages = emptyMap()))
         compose.onAllNodesWithText(label(R.string.remote_tickets_section_acceptance)).assertCountEquals(0)
+    }
+
+    @Test
+    fun aRefreshOfKnownTicketsKeepsTheSection() {
+        renderTickets(ticketsState(ticket(1), loading = true))
+        compose.onNodeWithText(label(R.string.remote_tickets_section_acceptance)).assertIsDisplayed()
+        compose.onNodeWithText("DEV-1 · Title 1").assertIsDisplayed()
+    }
+
+    @Test
+    fun theHomeAcceptButtonNamesItsTicket() {
+        renderTickets(ticketsState(ticket(1)))
+        compose.onNode(hasContentDescription(compose.activity.getString(R.string.remote_ticket_accept_ref, "DEV-1")))
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun theHomeAcceptSheetCannotConfirmOnceTheMacIsGone() {
+        renderTickets(ticketsState(ticket(1)))
+        compose.onNodeWithText(label(R.string.remote_ticket_accept)).performClick()
+        compose.onNodeWithTag("ticketSheetConfirm").assertIsEnabled()
+        repository.state.value = repository.state.value.copy(connected = false)
+        compose.waitForIdle()
+        compose.onNodeWithTag("ticketSheetConfirm").assertIsNotEnabled()
+    }
+
+    @Test
+    fun theHomeWriteNoticeNamesItsTicket() {
+        renderTickets(ticketsState(ticket(1)).copy(writeFailure = TicketsFailure.OFFLINE, writeRef = "DEV-1"))
+        val text = compose.activity.getString(
+            R.string.remote_tickets_notice_ref, "DEV-1", label(R.string.remote_tickets_failure_offline),
+        )
+        compose.onNodeWithText(text).assertIsDisplayed()
     }
 
     @Test

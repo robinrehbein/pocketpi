@@ -50,6 +50,7 @@
     <string name="remote_ticket_priority_medium">Medium</string>
     <string name="remote_ticket_priority_low">Low</string>
     <string name="remote_ticket_accept">Accept</string>
+    <string name="remote_ticket_accept_ref">Accept %1$s</string>
     <string name="remote_ticket_start">Start with agent</string>
     <string name="remote_ticket_comment">Comment</string>
     <string name="remote_ticket_status">Change status</string>
@@ -86,10 +87,16 @@
     <string name="remote_tickets_start_go">Start</string>
     <string name="remote_tickets_start_close">Close</string>
     <string name="remote_tickets_start_open_chat">Open chat</string>
+    <string name="remote_tickets_start_other_running">Another ticket is being started. Wait until it is done.</string>
     <string name="remote_tickets_step_worktree">Preparing worktree</string>
     <string name="remote_tickets_step_move">Moving ticket to In Progress</string>
     <string name="remote_tickets_step_session">Starting chat</string>
     <string name="remote_tickets_step_prompt">Sending prompt</string>
+    <!-- How far a start step is, for TalkBack -->
+    <string name="remote_tickets_step_state_done">Done</string>
+    <string name="remote_tickets_step_state_active">In progress</string>
+    <string name="remote_tickets_step_state_failed">Failed</string>
+    <string name="remote_tickets_step_state_pending">Not yet</string>
     <string name="remote_tickets_start_failed_worktree">The worktree could not be prepared.</string>
     <string name="remote_tickets_start_failed_move">The ticket could not be moved to In Progress.</string>
     <string name="remote_tickets_start_failed_session">The chat could not be started.</string>
@@ -105,4 +112,6 @@
     <string name="remote_tickets_outcome_unknown">The result is unknown. The ticket is being read again; check it before you try once more.</string>
     <string name="remote_tickets_write_failed">The change did not go through.</string>
     <string name="remote_tickets_dismiss">Dismiss</string>
+    <!-- A write notice: the ticket it is about, then what happened -->
+    <string name="remote_tickets_notice_ref">%1$s: %2$s</string>
 </resources>

@@ -299,6 +299,58 @@ class TicketsScreensTest {
     }
 
     @Test
+    fun aFailedProjectOfSeveralShowsItsFailureWithRetry() {
+        val second = project.copy(projectId = "p2", name = "Boreas")
+        var retries = 0
+        val tickets = TicketsState(
+            projects = listOf(project, second),
+            pages = mapOf("p2" to TicketsPage("p2", true, null, now, listOf(ticket("DEV-9")), null)),
+            pageFailures = mapOf("p1" to TicketsFailure.BUSY),
+        )
+        compose.setContent {
+            MaterialTheme {
+                TicketsContent(state(tickets), now, onBack = {}, onReload = {}, onRetry = { retries++ }, onOpen = { _, _ -> })
+            }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText(label(R.string.remote_tickets_failure_busy)).assertIsDisplayed()
+        assertTrue(compose.onAllNodesWithContentDescription(label(R.string.remote_tickets_loading)).fetchSemanticsNodes().isEmpty())
+        compose.onNodeWithText(label(R.string.remote_tickets_retry)).performClick()
+        assertEquals(1, retries)
+    }
+
+    @Test
+    fun aPageThatIsNotComingIsAFailureNotASkeleton() {
+        list(state(TicketsState(projects = listOf(project))))
+        compose.onNodeWithText(label(R.string.remote_tickets_failure_failed)).assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.remote_tickets_retry)).assertIsDisplayed()
+        assertTrue(compose.onAllNodesWithContentDescription(label(R.string.remote_tickets_loading)).fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test
+    fun aPageStillLoadingShowsTheSkeleton() {
+        list(state(TicketsState(projects = listOf(project), loading = true)))
+        compose.onNodeWithContentDescription(label(R.string.remote_tickets_loading)).assertIsDisplayed()
+    }
+
+    @Test
+    fun aTicketPageShowsOnlyItsOwnWriteNotice() {
+        val base = detailState(ticket("DEV-1"))
+        detail(base.copy(tickets = base.tickets.copy(writeFailure = TicketsFailure.FAILED, writeRef = "DEV-2")))
+        assertTrue(compose.onAllNodes(androidx.compose.ui.test.hasTestTag("ticketWriteNotice")).fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test
+    fun theWriteNoticeNamesItsTicket() {
+        val base = detailState(ticket("DEV-1"))
+        detail(base.copy(tickets = base.tickets.copy(writeFailure = TicketsFailure.FAILED, writeRef = "DEV-1")))
+        val text = compose.activity.getString(
+            R.string.remote_tickets_notice_ref, "DEV-1", label(R.string.remote_tickets_write_failed),
+        )
+        compose.onNodeWithText(text).assertIsDisplayed()
+    }
+
+    @Test
     fun germanCopyPassesGlossary() {
         val base = androidx.test.core.app.ApplicationProvider.getApplicationContext<Context>()
         val german = base.createConfigurationContext(Configuration(base.resources.configuration).apply { setLocale(Locale("de")) })

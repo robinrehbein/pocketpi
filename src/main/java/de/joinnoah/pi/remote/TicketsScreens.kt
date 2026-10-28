@@ -90,7 +90,8 @@ internal fun TicketDetailScreen(key: RemoteNavKey.Ticket, model: TicketsViewMode
     val context = LocalContext.current
     val usable = canUseTickets(state)
     val asked = state.tickets.routeId == key.routeId && state.tickets.detailRef == key.ref
-    // A restored page, or a reconnect that lost the request, asks again.
+    // A restored page asks again, and so does a reconnect: the loader forgets a read the lost
+    // connection cut off, which makes `asked` false until tickets can be used again.
     LaunchedEffect(usable, asked) {
         if (usable && !asked) model.open(key.projectId, key.ref)
     }
@@ -209,8 +210,13 @@ private fun androidx.compose.foundation.lazy.LazyListScope.ticketsBody(
             }
         !project.available ->
             item("unavailable") { ReasonBlock(project.reason) }
-        page == null && tickets.failure != null -> item("failure") { FailureBlock(tickets.failure, onRetry) }
-        page == null -> item("skeleton") { TicketsSkeleton() }
+        page == null && tickets.loading -> item("skeleton") { TicketsSkeleton() }
+        // Nothing is loading, so no page is coming: this project's failure, or why none came.
+        page == null -> {
+            val failure = tickets.pageFailures[project.projectId] ?: tickets.failure
+                ?: if (state.connected) TicketsFailure.FAILED else TicketsFailure.OFFLINE
+            item("failure") { FailureBlock(failure, onRetry) }
+        }
         !page.available -> item("unavailable") { ReasonBlock(page.reason) }
         else -> {
             val syncedAt = page.syncedAt
@@ -410,8 +416,9 @@ internal fun TicketDetailContent(
                 .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            // The start sheet reports its own failures.
-            if (sheet != TicketSheet.START) TicketWriteNotice(state.tickets, onDismissNotice)
+            // The start sheet reports its own failures; another ticket's result is left for its page and home.
+            if (sheet != TicketSheet.START && (state.tickets.writeRef == null || state.tickets.writeRef == ref))
+                TicketWriteNotice(state.tickets, onDismissNotice)
             when (view) {
                 TicketDetailView.Loading -> TicketsSkeleton()
                 is TicketDetailView.Unavailable -> ReasonBlock(view.reason)
