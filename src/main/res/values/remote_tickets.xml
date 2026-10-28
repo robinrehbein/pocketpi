@@ -3,6 +3,9 @@
     <!-- Tickets (tickets.v1): Mac menu entry and page title. -->
     <string name="remote_tickets_title">Tickets</string>
 
+    <!-- Home: link under the "To accept" rows; the chip in a chat header names the chat's ticket. -->
+    <string name="remote_tickets_all">All tickets</string>
+    <string name="remote_ticket_chip">Ticket %1$s</string>
     <!-- Tickets screen -->
     <string name="remote_tickets_reload">Reload tickets</string>
     <string name="remote_tickets_loading">Loading tickets</string>

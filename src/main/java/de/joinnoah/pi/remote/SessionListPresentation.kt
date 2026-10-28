@@ -35,6 +35,8 @@ internal data class SessionListItem(
     val pinned: Boolean = false,
     /** Changed or finished since the user last looked, and not open (see [sessionUnread]). */
     val unread: Boolean = false,
+    /** The ticket that lists this chat (see [ticketRefForSession]); not part of the session JSON. */
+    val ticketRef: String? = null,
 )
 
 data class ProjectChatSummary(
@@ -244,12 +246,15 @@ internal fun visibleSessionListItems(
     marks: Map<String, SessionMark> = emptyMap(),
     /** The session the chat on screen shows; it is never unread. */
     openSessionId: String? = null,
+    /** The ticket ref of a session ID, see [ticketRefForSession]. */
+    ticketRef: (String) -> String? = { null },
 ): List<SessionListItem> {
     val items =
         sessions.map { session ->
             val item = sessionListItem(session, connected, loading, stale)
             val mark = marks[item.id]
             item.copy(
+                ticketRef = ticketRef(item.id),
                 pinned = mark?.pinned == true,
                 unread = sessionUnread(mark, item.updatedAt, open = item.id == openSessionId),
             )

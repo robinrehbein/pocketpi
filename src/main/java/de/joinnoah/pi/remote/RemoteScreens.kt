@@ -45,6 +45,8 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.annotation.StringRes
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Verified
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.MenuOpen
@@ -295,7 +297,7 @@ internal fun RemoteScreen(
     // The selection names the chat beside the list; the screen's state strips the chat's session.
     val shownSessionId = state.selection.sessionId
     val visibleSessions =
-        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds, routeMarks, shownSessionId) {
+        remember(state.sessions, state.connected, state.loading, state.stale, hideOfflineSessions, collapsedIds, routeMarks, shownSessionId, state.tickets, state.capabilities) {
             visibleSessionListItems(
                 state.sessions,
                 state.connected,
@@ -305,6 +307,7 @@ internal fun RemoteScreen(
                 stale = state.stale,
                 marks = routeMarks,
                 openSessionId = shownSessionId,
+                ticketRef = { ticketRefForSession(state, it) },
             )
         }
     val listedSessions =
@@ -1409,6 +1412,8 @@ internal fun RemoteScreen(
                     ?.takeIf { canCloseSession(it, state.connected, loading = false, state.capabilities) }
             val hasTuiInfo =
                 state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
+            // The ticket this chat belongs to, from the loaded tickets: its chip opens the ticket.
+            val chatTicket = state.session?.optionalText("id")?.let { ticketForSession(state, it) }
             val headerColor = floatingHeaderColor()
             // History never competes for the pill's places: it would push Settings into the menu.
             fun actionLayout(withHistory: Boolean) =
@@ -1461,6 +1466,7 @@ internal fun RemoteScreen(
                     maxWidth - 32.dp - if (narrow) 0.dp else actionsWidth + 8.dp
                 val maxTitleWidth =
                     (maxPillWidth - 64.dp - CHAT_STATUS_MARK_SIZE - (if (hasTuiInfo) 40.dp else 0.dp) -
+                        (if (chatTicket != null) CHAT_TICKET_CHIP_WIDTH else 0.dp) -
                         if (detailPane) 48.dp else 0.dp)
                         .coerceAtLeast(24.dp)
                 Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -1524,6 +1530,26 @@ internal fun RemoteScreen(
                                         maxLines = 1,
                                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     )
+                                    if (chatTicket != null) {
+                                        val (ticketProject, linked) = chatTicket
+                                        val chipLabel = stringResource(R.string.remote_ticket_chip, linked.ref)
+                                        Text(
+                                            linked.ref,
+                                            modifier =
+                                                Modifier.padding(start = 8.dp)
+                                                    .widthIn(max = CHAT_TICKET_CHIP_WIDTH - 8.dp)
+                                                    .heightIn(min = 48.dp)
+                                                    .clickable(role = Role.Button, onClickLabel = chipLabel) {
+                                                        navigator.openTicket(key.routeId, ticketProject.projectId, linked.ref)
+                                                    }
+                                                    .wrapContentHeight(Alignment.CenterVertically)
+                                                    .testTag("chatTicketChip"),
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        )
+                                    }
                                     if (hasTuiInfo)
                                         IconButton(
                                             onClick = { tuiInfoOpen = true },
@@ -2775,11 +2801,30 @@ internal fun RemoteScreen(
                             val waitingChats = quick.waiting
                             val runningChats = quick.running
                             val recentChats = quick.recent
+                            val homeTicketRef: (String) -> String? = { ticketRefForSession(state, it) }
+                            // Tickets waiting for the user's acceptance lead the page, only once they are known:
+                            // never while they load, without the capability, or when none waits.
+                            val acceptance =
+                                if (projectSelected || !canUseTickets(state) || state.tickets.loading ||
+                                    state.tickets.routeId != key.routeId)
+                                    emptyList()
+                                else acceptanceItems(state.tickets)
+                            if (acceptance.isNotEmpty()) acceptanceSection(
+                                acceptance,
+                                onOpen = { project, ticket ->
+                                    navigator.openTicket(key.routeId, project.projectId, ticket.ref)
+                                },
+                                // The accept sheet arrives with the ticket sheets (B6); until then Accept opens the detail.
+                                onAccept = { project, ticket ->
+                                    navigator.openTicket(key.routeId, project.projectId, ticket.ref)
+                                },
+                                onAll = { navigator.openTickets(key.routeId) },
+                            )
                             if (waitingChats.isNotEmpty()) {
                                 item(key = "project_chats_waiting_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_needs_you))
                                 }
-                                projectChatRows(waitingChats, routeMarks, state.connected, !state.loading) { chat ->
+                                projectChatRows(waitingChats, routeMarks, state.connected, !state.loading, homeTicketRef) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
                             }
@@ -2787,7 +2832,7 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_running_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_working))
                                 }
-                                projectChatRows(runningChats, routeMarks, state.connected, !state.loading) { chat ->
+                                projectChatRows(runningChats, routeMarks, state.connected, !state.loading, homeTicketRef) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
                                 // Directly under the group it expands, so it is not far down the page.
@@ -2857,7 +2902,7 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_projects_quick_chats))
                                 }
-                                projectChatRows(recentChats, routeMarks, state.connected, !state.loading) { chat ->
+                                projectChatRows(recentChats, routeMarks, state.connected, !state.loading, homeTicketRef) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
                                 if (quick.recentExpandable) item(key = "project_chats_recent_show_all") {
@@ -4093,9 +4138,66 @@ private fun QuickChatsShowAll(expanded: Boolean, tag: String, onClick: () -> Uni
     }
 }
 
+/** Room the ticket chip takes in the chat header's pill, taken from the title's. */
+private val CHAT_TICKET_CHIP_WIDTH = 96.dp
+
+/** Rows of the "To accept" section on the Projects page, as many as it shows before "All tickets". */
+private const val HOME_ACCEPTANCE_LIMIT = 3
+
+/** The home section of tickets awaiting acceptance: up to three rows, then the link to all tickets. */
+private fun LazyListScope.acceptanceSection(
+    items: List<Pair<TicketProject, Ticket>>,
+    onOpen: (TicketProject, Ticket) -> Unit,
+    onAccept: (TicketProject, Ticket) -> Unit,
+    onAll: () -> Unit,
+) {
+    item(key = "tickets_acceptance_heading") {
+        ProjectsSectionHeading(stringResource(R.string.remote_tickets_section_acceptance))
+    }
+    items(items.take(HOME_ACCEPTANCE_LIMIT), key = { "acceptance:${it.first.projectId}:${it.second.ref}" }) {
+        (project, ticket) ->
+        AcceptanceRow(
+            ticket = ticket,
+            canAccept = project.writable && TicketAction.ACCEPT in ticket.actions,
+            onOpen = { onOpen(project, ticket) },
+            onAccept = { onAccept(project, ticket) },
+        )
+    }
+    item(key = "tickets_acceptance_all") {
+        TextButton(onClick = onAll, modifier = Modifier.testTag("acceptanceAll")) {
+            Text(stringResource(R.string.remote_tickets_all))
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+        }
+    }
+}
+
+@Composable
+private fun AcceptanceRow(ticket: Ticket, canAccept: Boolean, onOpen: () -> Unit, onAccept: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().testTag("acceptanceRow"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            Modifier.weight(1f).heightIn(min = 48.dp).clickable(role = Role.Button, onClick = onOpen),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(Icons.Outlined.Verified, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Text(
+                "${ticket.ref} · ${ticket.title}",
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+        }
+        if (canAccept) TextButton(onClick = onAccept) { Text(stringResource(R.string.remote_ticket_accept)) }
+    }
+}
+
 /** The heading of a section of the Projects page; the rows under it belong to it. */
 @Composable
-internal fun ProjectsSectionHeading(text: String) {
+private fun ProjectsSectionHeading(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.titleSmall,
@@ -4110,6 +4212,7 @@ private fun LazyListScope.projectChatRows(
     marks: Map<String, SessionMark>,
     connected: Boolean,
     enabled: Boolean,
+    ticketRef: (String) -> String?,
     onOpen: (ProjectChatSummary) -> Unit,
 ) {
     items(chats, key = { "chat:${it.projectId}:${it.session.text("id")}" }) { chat ->
@@ -4118,6 +4221,7 @@ private fun LazyListScope.projectChatRows(
             connected = connected,
             enabled = enabled,
             mark = chat.session.optionalText("id")?.let(marks::get),
+            ticketRef = chat.session.optionalText("id")?.let(ticketRef),
             onClick = { onOpen(chat) },
         )
     }
@@ -4129,6 +4233,7 @@ private fun ProjectChatRow(
     connected: Boolean,
     enabled: Boolean,
     mark: SessionMark?,
+    ticketRef: String?,
     onClick: () -> Unit,
 ) {
     Column {
@@ -4140,7 +4245,11 @@ private fun ProjectChatRow(
         SessionListRow(
             item =
                 sessionListItem(chat.session, connected && chat.verified, loading = false).let {
-                    it.copy(pinned = mark?.pinned == true, unread = sessionUnread(mark, it.updatedAt, open = false))
+                    it.copy(
+                        pinned = mark?.pinned == true,
+                        unread = sessionUnread(mark, it.updatedAt, open = false),
+                        ticketRef = ticketRef,
+                    )
                 },
             enabled = enabled,
             closeAvailable = false,

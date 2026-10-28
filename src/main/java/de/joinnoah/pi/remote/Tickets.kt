@@ -184,6 +184,24 @@ data class TicketStart(
 internal fun canUseTickets(state: RemoteState): Boolean =
     state.connected && TICKETS_CAPABILITY in state.capabilities && TICKETS_CAPABILITY !in state.unavailableCapabilities
 
+/**
+ * The first ticket (and its project) that lists the chat [sessionId], from the tickets already
+ * loaded; null without the capability or when none does.
+ */
+internal fun ticketForSession(state: RemoteState, sessionId: String): Pair<TicketProject, Ticket>? {
+    if (!canUseTickets(state)) return null
+    val tickets = state.tickets
+    return tickets.projects.firstNotNullOfOrNull { project ->
+        tickets.pages[project.projectId]?.items
+            ?.firstOrNull { ticket -> ticket.sessions.any { it.id == sessionId } }
+            ?.let { project to it }
+    }
+}
+
+/** The ref of the first ticket that lists the chat [sessionId]; see [ticketForSession]. */
+internal fun ticketRefForSession(state: RemoteState, sessionId: String): String? =
+    ticketForSession(state, sessionId)?.second?.ref
+
 /** What a ticket page shows for one ref; see [ticketDetailView]. */
 internal sealed interface TicketDetailView {
     data object Loading : TicketDetailView

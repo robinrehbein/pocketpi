@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -81,6 +82,7 @@ class MacHubUiTest {
         connected: Boolean = true,
         connection: Int? = null,
         capabilities: Set<String> = emptySet(),
+        tickets: TicketsState = TicketsState(),
     ) {
         repository.state.value =
             RemoteState(
@@ -94,6 +96,7 @@ class MacHubUiTest {
                 projects = projects,
                 projectChats = chats,
                 projectSessions = counts,
+                tickets = tickets,
             )
         compose.setContent {
             androidx.compose.material3.MaterialTheme {
@@ -300,5 +303,111 @@ class MacHubUiTest {
         compose.waitForIdle()
 
         compose.runOnIdle { assertEquals(1, repository.revalidations) }
+    }
+
+    // ---- Zur Abnahme -----------------------------------------------------------------------
+
+    private val ticketProject = TicketProject("p1", "Alpha", listOf("DEV"), true, null, true, null)
+
+    private fun ticket(n: Int, section: TicketSection = TicketSection.ACCEPTANCE, sessions: List<TicketSession> = emptyList()) =
+        Ticket(
+            "DEV-$n", "Title $n", "https://plane.example/DEV-$n", "Review", TicketStateGroup.STARTED, "feature",
+            TicketPriority.NONE, true, section, false,
+            if (section == TicketSection.ACCEPTANCE) setOf(TicketAction.ACCEPT, TicketAction.COMMENT) else emptySet(),
+            emptyList(), n.toLong(), sessions,
+        )
+
+    private fun ticketsState(vararg items: Ticket, loading: Boolean = false, writable: Boolean = true) =
+        TicketsState(
+            routeId = "studio",
+            projects = listOf(ticketProject.copy(writable = writable)),
+            pages = mapOf("p1" to TicketsPage("p1", true, null, 1L, items.toList(), null)),
+            loading = loading,
+        )
+
+    private fun renderTickets(tickets: TicketsState, chats: List<ProjectChatSummary> = emptyList()) =
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = chats,
+            capabilities = setOf(TICKETS_CAPABILITY),
+            tickets = tickets,
+        )
+
+    @Test
+    fun acceptanceSectionAboveNeedsYou() {
+        renderTickets(ticketsState(ticket(1)), listOf(chat("p1", "Alpha", "waiting", "waiting")))
+
+        assertTrue(
+            headingTop(label(R.string.remote_tickets_section_acceptance)) <
+                headingTop(label(R.string.remote_status_needs_you))
+        )
+        compose.onNodeWithText("DEV-1 · Title 1").assertIsDisplayed()
+    }
+
+    @Test
+    fun acceptanceSectionAbsentWhenEmpty() {
+        renderTickets(ticketsState(ticket(1, TicketSection.WORKING)))
+        compose.onAllNodesWithText(label(R.string.remote_tickets_section_acceptance)).assertCountEquals(0)
+    }
+
+    @Test
+    fun acceptanceSectionAbsentWhileLoading() {
+        renderTickets(ticketsState(ticket(1), loading = true))
+        compose.onAllNodesWithText(label(R.string.remote_tickets_section_acceptance)).assertCountEquals(0)
+    }
+
+    @Test
+    fun acceptanceSectionAbsentWithoutCapability() {
+        render(listOf(project("p1", "Alpha")), tickets = ticketsState(ticket(1)))
+        compose.onAllNodesWithText(label(R.string.remote_tickets_section_acceptance)).assertCountEquals(0)
+    }
+
+    @Test
+    fun atMostThreeRowsThenAllLink() {
+        renderTickets(ticketsState(ticket(1), ticket(2), ticket(3), ticket(4)))
+
+        compose.onAllNodes(hasText("Title", substring = true)).assertCountEquals(3)
+        // The newest three show.
+        compose.onNodeWithText("DEV-4 · Title 4").assertIsDisplayed()
+        compose.onAllNodesWithText("DEV-1 · Title 1").assertCountEquals(0)
+        compose.onNodeWithText(label(R.string.remote_tickets_all)).performClick()
+        assertTrue(repository.ticketRefreshes.isNotEmpty())
+    }
+
+    @Test
+    fun allLinkFollowsEvenASingleRow() {
+        renderTickets(ticketsState(ticket(1)))
+        compose.onNodeWithText(label(R.string.remote_tickets_all)).assertIsDisplayed()
+    }
+
+    @Test
+    fun rowTapOpensTheTicketAndTheButtonOnlyShowsWhenWritable() {
+        renderTickets(ticketsState(ticket(1)))
+        compose.onNodeWithText(label(R.string.remote_ticket_accept)).assertIsDisplayed()
+        compose.onNodeWithText("DEV-1 · Title 1").performClick()
+        assertEquals(listOf("p1" to "DEV-1"), repository.ticketOpens.distinct())
+    }
+
+    @Test
+    fun noAcceptButtonForAReadOnlyProject() {
+        renderTickets(ticketsState(ticket(1), writable = false))
+        compose.onNodeWithText("DEV-1 · Title 1").assertIsDisplayed()
+        compose.onAllNodesWithText(label(R.string.remote_ticket_accept)).assertCountEquals(0)
+    }
+
+    @Test
+    fun chatRowShowsTicketRef() {
+        val linked = ticket(433, TicketSection.WORKING, listOf(TicketSession("waiting", "t", SessionLinkStatus.WAITING)))
+        renderTickets(ticketsState(linked), listOf(chat("p1", "Alpha", "waiting", "waiting")))
+        compose.onNode(hasText("DEV-433", substring = true) and !hasText("Title", substring = true)).assertIsDisplayed()
+    }
+
+    @Test
+    fun talkBackRowDescriptionIncludesRef() {
+        val linked = ticket(433, TicketSection.WORKING, listOf(TicketSession("waiting", "t", SessionLinkStatus.WAITING)))
+        renderTickets(ticketsState(linked), listOf(chat("p1", "Alpha", "waiting", "waiting")))
+        assertTrue(
+            compose.onAllNodes(hasContentDescription("DEV-433", substring = true)).fetchSemanticsNodes().isNotEmpty()
+        )
     }
 }

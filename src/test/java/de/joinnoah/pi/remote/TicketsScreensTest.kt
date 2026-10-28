@@ -12,8 +12,6 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.onAllNodesWithContentDescription
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import java.util.Locale
@@ -240,7 +238,7 @@ class TicketsScreensTest {
     }
 
     @Test
-    fun planeLinkOnlyForPlaneHost() {
+    fun planeLinkOpensTheTicketsHttpsUrl() {
         val opened = mutableListOf<String>()
         detail(detailState(ticket("DEV-1")), onOpenLink = { opened += it; true })
         compose.onNodeWithContentDescription(label(R.string.remote_ticket_open_plane)).performClick()
