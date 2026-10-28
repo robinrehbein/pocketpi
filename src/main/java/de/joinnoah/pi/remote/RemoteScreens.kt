@@ -1388,6 +1388,8 @@ internal fun RemoteScreen(
                     is RemoteNavKey.Chat -> R.string.remote_chat
                     is RemoteNavKey.FolderBrowser -> R.string.remote_folders_title
                     is RemoteNavKey.Providers -> R.string.providers_title
+                    is RemoteNavKey.Tickets,
+                    is RemoteNavKey.Ticket -> R.string.remote_tickets_title
                     is RemoteNavKey.Activity -> R.string.remote_activity_title
                     RemoteNavKey.Settings -> R.string.remote_settings
                 }
@@ -2149,6 +2151,8 @@ internal fun RemoteScreen(
                             is RemoteNavKey.Chat -> Unit
                             is RemoteNavKey.FolderBrowser -> Unit
                             is RemoteNavKey.Providers -> Unit
+                            is RemoteNavKey.Tickets -> Unit
+                            is RemoteNavKey.Ticket -> Unit
                             is RemoteNavKey.Activity -> Unit
                             // Providers, Open folder, Disconnect and Remove pairing live in the Mac's
                             // overflow in the header, so the list keeps the full height.
@@ -2724,6 +2728,8 @@ internal fun RemoteScreen(
                         RemoteNavKey.Settings -> Unit
                         is RemoteNavKey.FolderBrowser -> Unit
                         is RemoteNavKey.Providers -> Unit
+                        is RemoteNavKey.Tickets -> Unit
+                        is RemoteNavKey.Ticket -> Unit
                         // The board is its own screen (ActivityBoardScreen), never a RemoteScreen page.
                         is RemoteNavKey.Activity -> Unit
                         RemoteNavKey.Hosts -> {
@@ -3149,6 +3155,10 @@ internal fun RemoteScreen(
                                     providers =
                                         if (canManageProviders(state)) {
                                             { navigator.openProviders(projectsPage.routeId) }
+                                        } else null,
+                                    tickets =
+                                        if (canUseTickets(state)) {
+                                            { navigator.openTickets(projectsPage.routeId) }
                                         } else null,
                                     folders =
                                         if (canOpenFolders(state)) {
@@ -4010,6 +4020,7 @@ private fun ThemePreview(colors: ColorScheme, palette: ThemePalette) {
 private fun MacOverflow(
     enabled: Boolean,
     providers: (() -> Unit)?,
+    tickets: (() -> Unit)?,
     folders: (() -> Unit)?,
     refresh: (() -> Unit)?,
     onDetails: () -> Unit,
@@ -4036,6 +4047,14 @@ private fun MacOverflow(
                     onClick = { open = false; action() },
                     enabled = enabled,
                     modifier = Modifier.testTag("macProviders"),
+                )
+            }
+            tickets?.let { action ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.remote_tickets_title)) },
+                    onClick = { open = false; action() },
+                    enabled = enabled,
+                    modifier = Modifier.testTag("macTickets"),
                 )
             }
             folders?.let { action ->

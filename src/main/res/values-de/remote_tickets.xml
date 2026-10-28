@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tickets (tickets.v1): Mac menu entry and page title. -->
+    <string name="remote_tickets_title">Tickets</string>
+</resources>

@@ -9,7 +9,7 @@ class OverlayColumnsTest {
 
     @Test
     fun providersFoldersAndSettingsTakeTheDetailColumnBesideTheProjects() {
-        for (page in listOf<RemoteNavKey>(RemoteNavKey.Providers("host"), RemoteNavKey.FolderBrowser("host"), RemoteNavKey.Settings)) {
+        for (page in listOf<RemoteNavKey>(RemoteNavKey.Providers("host"), RemoteNavKey.FolderBrowser("host"), RemoteNavKey.Tickets("host"), RemoteNavKey.Ticket("host", "project", "DEV-1"), RemoteNavKey.Settings)) {
             // Over a chat: the projects and the session list stay, the page takes the chat's column.
             assertEquals(ColumnPanes(projects = 1, list = 2, detail = 4), columnPanes(chat + page))
             // Over the open project: the page takes the sessions' column beside the projects.
@@ -17,6 +17,16 @@ class OverlayColumnsTest {
             // Over the host's projects only.
             assertEquals(ColumnPanes(projects = 1, list = null, detail = 2), columnPanes(RemoteSelection("host").keys() + page))
         }
+    }
+
+    @Test
+    fun ticketKeysUseDetailColumnInTwoPane() {
+        val tickets = RemoteSelection("host").keys() + RemoteNavKey.Tickets("host")
+        assertEquals(ColumnPanes(projects = 1, list = null, detail = 2), columnPanes(tickets))
+        assertEquals(
+            ColumnPanes(projects = 1, list = null, detail = 3),
+            columnPanes(tickets + RemoteNavKey.Ticket("host", "project", "DEV-1")),
+        )
     }
 
     @Test

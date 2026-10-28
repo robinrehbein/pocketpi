@@ -28,6 +28,9 @@ internal open class DestinationViewModel(
                 state.selection.routeId == key.routeId && state.selection.projectId == null
             is RemoteNavKey.Providers ->
                 state.selection.routeId == key.routeId && state.selection.projectId == null
+            is RemoteNavKey.Tickets,
+            is RemoteNavKey.Ticket ->
+                state.selection.routeId == key.selection().routeId
             is RemoteNavKey.Sessions ->
                 state.selection.routeId == key.routeId && state.selection.projectId == key.projectId
             is RemoteNavKey.Chat -> state.selection == key.selection()
@@ -255,6 +258,25 @@ internal class ProvidersViewModel(
     fun dismissLogin() = repository.dismissLogin()
 
     fun dismissNotice() = repository.dismissProviderNotice()
+}
+
+internal class TicketsViewModel(
+    repository: RemoteRepository,
+    key: RemoteNavKey,
+) : DestinationViewModel(repository, key) {
+    /** Reads the tickets again; [force] has the host read Plane first. */
+    fun reload(force: Boolean) = active { repository.refreshTickets(force) }
+
+    fun open(projectId: String, ref: String) = active { repository.openTicket(projectId, ref) }
+
+    fun comment(projectId: String, ref: String, text: String) =
+        active { repository.commentOnTicket(projectId, ref, text) }
+
+    fun move(projectId: String, ref: String, state: String, comment: String?) =
+        active { repository.moveTicketTo(projectId, ref, state, comment) }
+
+    fun start(projectId: String, ref: String, note: String?) =
+        active { repository.startTicketJob(projectId, ref, note) }
 }
 
 internal class SessionsViewModel(

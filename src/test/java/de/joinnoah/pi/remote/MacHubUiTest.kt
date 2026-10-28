@@ -80,6 +80,7 @@ class MacHubUiTest {
         hosts: List<PairedHost> = listOf(studio, laptop),
         connected: Boolean = true,
         connection: Int? = null,
+        capabilities: Set<String> = emptySet(),
     ) {
         repository.state.value =
             RemoteState(
@@ -88,6 +89,7 @@ class MacHubUiTest {
                 host = studio,
                 selection = RemoteSelection("studio"),
                 connected = connected,
+                capabilities = capabilities,
                 connection = connection ?: if (connected) R.string.remote_connected else R.string.remote_offline,
                 projects = projects,
                 projectChats = chats,
@@ -236,6 +238,22 @@ class MacHubUiTest {
             // A cold launch does not reconnect to the Mac the user just disconnected.
             assertNull(LastRouteStore(context()).load())
         }
+    }
+
+    @Test
+    fun macOverflowShowsTicketsOnlyWithCapability() {
+        render(projects = listOf(project("p", "App")))
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onAllNodesWithTag("macTickets").assertCountEquals(0)
+    }
+
+    @Test
+    fun macOverflowShowsTicketsWithCapabilityAndOpensThem() {
+        render(projects = listOf(project("p", "App")), capabilities = setOf(TICKETS_CAPABILITY))
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macTickets").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(false), repository.ticketRefreshes)
     }
 
     @Test

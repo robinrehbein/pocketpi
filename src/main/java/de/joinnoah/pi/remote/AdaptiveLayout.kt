@@ -790,6 +790,8 @@ internal fun columnPanes(keys: List<Any?>): ColumnPanes? {
         }
         is RemoteNavKey.FolderBrowser,
         is RemoteNavKey.Providers,
+        is RemoteNavKey.Tickets,
+        is RemoteNavKey.Ticket,
         RemoteNavKey.Settings -> {
             val beneath = columnPanes(keys.subList(0, lastIndex)) ?: return null
             ColumnPanes(beneath.projects, beneath.list, lastIndex)
