@@ -650,7 +650,8 @@ internal class BackgroundJobsController(
     /**
      * Refreshes the list now and at most once per [JOBS_AUTO_REFRESH_MILLIS] after that: job
      * events reach only a device that holds a watch lease, so status changes and finished
-     * `bash_bg` or `TaskStop` (`bash_kill`) calls are the list's other hints.
+     * `bash_bg` or `TaskStop` (`bash_kill`) calls are the list's other hints. `TaskStop` also covers
+     * subagent stops, so it can refresh when no job changed.
      */
     fun refreshSoon() {
         if (autoRefresh?.isActive == true) {
