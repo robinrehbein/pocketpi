@@ -164,6 +164,7 @@ internal class TicketsLoader(
                     } catch (e: Exception) {
                         Diagnostics.caught("tickets.list", e)
                         if (firstFailure == null) firstFailure = e
+                        if (version != listVersion) return@launch
                         val failure = failure(e)
                         write(routeId) { it.copy(pageFailures = it.pageFailures + (project.projectId to failure)) }
                     }
