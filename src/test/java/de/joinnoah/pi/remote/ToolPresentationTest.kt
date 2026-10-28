@@ -308,6 +308,23 @@ class ToolPresentationTest {
     }
 
     @Test
+    fun toolNamesAreRecognisedUnderBothTheClaudeCodeAndTheOlderNames() {
+        for (name in listOf("AskUserQuestion", "questionnaire")) {
+            assertEquals(TimelineMarkerKind.QUESTION, timelineMarkerKind(activity("q", name, "{}")))
+            assertEquals(true, isQuestionTool(name))
+        }
+        for (name in listOf("ExitPlanMode", "submit_plan")) {
+            assertEquals(TimelineMarkerKind.PLAN, timelineMarkerKind(activity("p", name, "{}")))
+            // ConversationMessage auto-expands the plan card through this predicate.
+            assertEquals(true, isPlanTool(name))
+        }
+        for (name in listOf("bash_bg", "TaskStop", "bash_kill")) assertEquals(true, isJobChangingTool(name))
+        for (name in listOf("read", "stop_subagent", null)) assertEquals(false, isJobChangingTool(name))
+        assertEquals(false, isQuestionTool("submit_plan"))
+        assertEquals(false, isPlanTool("questionnaire"))
+    }
+
+    @Test
     fun timelineMarkersClassifyAndPositionItems() {
         val items =
             listOf(

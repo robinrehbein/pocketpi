@@ -1985,7 +1985,7 @@ class DefaultRemoteRepository(
             // A held list lease already gets session.jobs.changed for this; older hosts need the hint.
             !canLeaseJobsList(state.value) &&
             (payload["message"] as? JsonObject)?.let {
-                it.optionalText("role") == "tool" && it.optionalText("toolName") in setOf("bash_bg", "bash_kill")
+                it.optionalText("role") == "tool" && isJobChangingTool(it.optionalText("toolName"))
             } == true
         ) jobsController.refreshSoon()
         // The open Changes view follows the agent's edits.

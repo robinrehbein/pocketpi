@@ -132,6 +132,25 @@ class ConversationMessageUiTest {
     }
 
     @Test
+    fun planCardHeaderTapStillTogglesInlineForTheClaudeCodeName() {
+        val opened = mutableListOf<ConversationItem.Activity>()
+        show(
+            activity("ExitPlanMode", """{"plan":"Step one of the plan"}""", output = null),
+            onOpenTool = { opened += it },
+        )
+        // A plan starts expanded, exactly as before.
+        compose.onNodeWithContentDescription(text(R.string.remote_hide_output)).assertExists()
+        compose.onNodeWithText("Step one of the plan", substring = true).assertExists()
+        compose.onNodeWithTag("toolCardToggle").assertDoesNotExist()
+        compose.onNodeWithTag("toolCardHeader").performClick()
+        compose.onNodeWithContentDescription(text(R.string.remote_show_output)).assertExists()
+        compose.onNodeWithText("Step one of the plan", substring = true).assertDoesNotExist()
+        compose.onNodeWithTag("toolCardHeader").performClick()
+        compose.onNodeWithText("Step one of the plan", substring = true).assertExists()
+        assertTrue(opened.isEmpty())
+    }
+
+    @Test
     fun editCardShowsDiffPreviewAndCounts() {
         show(
             activity(
