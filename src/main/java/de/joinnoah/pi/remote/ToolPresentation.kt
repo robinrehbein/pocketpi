@@ -421,15 +421,25 @@ internal fun isErrorItem(item: ConversationItem): Boolean =
 
 internal fun onlyErrors(items: List<ConversationItem>): List<ConversationItem> = items.filter(::isErrorItem)
 
+/** pi's question tool: `AskUserQuestion` now, `questionnaire` in older saved sessions. */
+internal fun isQuestionTool(name: String?): Boolean = name == "AskUserQuestion" || name == "questionnaire"
+
+/** pi's plan tool: `ExitPlanMode` now, `submit_plan` in older saved sessions. */
+internal fun isPlanTool(name: String?): Boolean = name == "ExitPlanMode" || name == "submit_plan"
+
+/** A tool call that starts or ends a background job: `bash_bg`, `TaskStop`, or `bash_kill` in older sessions. */
+internal fun isJobChangingTool(name: String?): Boolean =
+    name == "bash_bg" || name == "TaskStop" || name == "bash_kill"
+
 /** What a marker or a history entry calls [item], or null when it is not worth finding again. */
 internal fun timelineMarkerKind(item: ConversationItem): TimelineMarkerKind? =
     when {
         isErrorItem(item) -> TimelineMarkerKind.ERROR
         item is ConversationItem.Bubble -> if (item.role == "user") TimelineMarkerKind.USER else null
         item !is ConversationItem.Activity -> null
-        item.name == "questionnaire" -> TimelineMarkerKind.QUESTION
+        isQuestionTool(item.name) -> TimelineMarkerKind.QUESTION
         item.name == "edit" || item.name == "write" -> TimelineMarkerKind.EDIT
-        item.name == "submit_plan" -> TimelineMarkerKind.PLAN
+        isPlanTool(item.name) -> TimelineMarkerKind.PLAN
         else -> null
     }
 

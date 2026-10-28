@@ -230,7 +230,7 @@ device is denied) comes from commit `3eee84dec207e987b6ab439e0dd6acc2e1c1a6be`, 
 request #642. `session-export-v1.json` (exporting a session as an HTML file) is a byte-for-byte
 copy from noah-monorepo commit `748465c46c866a4d9d3c78754bff6e860955fdf8`, the merge of pull
 request #647. `session-tree-v1.json` (browsing, navigating and forking the session tree) comes
-from commit `1b6b8d3871d52b66b876e95f080f69bf00bb4309`, the merge of pull request #650.
+is a byte-for-byte copy from noah-monorepo commit `97682441742582486db109c1f4b058b4418b8a4c` (origin/dev).
 `files-media-v1.json` (agent images read by path from the session folder, plus `text/html`
 artifacts behind `session.files.artifact.v1`) is a byte-for-byte copy from noah-monorepo commit
 `a07ba16e92e6613ac81a0032e2000c592fb2ed6f`, the merge of pull request #653.
