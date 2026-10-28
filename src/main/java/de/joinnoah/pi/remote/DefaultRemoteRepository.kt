@@ -1675,6 +1675,7 @@ class DefaultRemoteRepository(
         earlyProviderUpdates.clear()
         folderVersion++
         folderSession++
+        ticketsLoader.connectionLost()
         activeOpen = null
         sessionStatusRevisions.clear()
         sessionStatusOverrides.clear()
@@ -1787,6 +1788,7 @@ class DefaultRemoteRepository(
                     ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                     .orEmpty()
                 val merged = routeCapabilities.filter { it in advertised }
+                val hadTickets = TICKETS_CAPABILITY in state.value.capabilities
                 if (merged.isNotEmpty()) {
                     // Capabilities merge in additively as later projects.list replies arrive; a list
                     // lease that only now becomes possible starts leasing at once, not at the next
@@ -1798,6 +1800,7 @@ class DefaultRemoteRepository(
                 update { it.copy(capabilitiesKnown = true) }
                 if (PROJECT_OPEN_CAPABILITY in merged) resumeClone()
                 if (PROVIDER_AUTH_CAPABILITY in merged) resumeProviderAuth()
+                if (TICKETS_CAPABILITY in merged && !hadTickets) ticketsLoader.refresh(force = false)
             }
             return result
         } catch (e: Throwable) {
@@ -3530,6 +3533,7 @@ class DefaultRemoteRepository(
         generation++
         folderVersion++
         folderSession++
+        ticketsLoader.connectionLost()
         activeOpen = null
         cloneStatusJob?.cancel()
         providerStatusJob?.cancel()
@@ -3793,6 +3797,7 @@ class DefaultRemoteRepository(
 
     override fun refresh() {
         reconnectEnabled = true
+        ticketsLoader.refresh(force = true)
         // Retrying a denied device reopens what was being opened, which may not be selected yet.
         val selection =
             if (state.value.deniedRouteId != null) requestedSelection ?: state.value.selection
@@ -3876,6 +3881,7 @@ class DefaultRemoteRepository(
     /** Acts on [signal]; [pathMoved]: the network in use only moved its route. */
     private fun resume(signal: RemoteRecovery.Signal, pathMoved: Boolean = false) {
         onRecoverySignal(signal)
+        if (signal == RemoteRecovery.Signal.FRESH_FOREGROUND) ticketsLoader.refresh(force = false)
         // A moved route says nothing about the Mac, so a backoff under way keeps its count.
         if (!pathMoved) resetReconnect()
         if (
@@ -6809,6 +6815,47 @@ class DefaultRemoteRepository(
             request("session.git.log", selectionEpoch, "sessionId" to sessionId, "snapshotId" to snapshotId)
         return parseGitLog(data, sessionId, snapshotId)
     }
+
+    private val ticketsLoader =
+        TicketsLoader(
+            scope,
+            object : TicketSource {
+                override suspend fun ticketProjects() = this@DefaultRemoteRepository.ticketProjects()
+
+                override suspend fun ticketsPage(projectId: String, cursor: String?) =
+                    this@DefaultRemoteRepository.ticketsPage(projectId, cursor)
+
+                override suspend fun ticketDetail(projectId: String, ref: String) =
+                    this@DefaultRemoteRepository.ticketDetail(projectId, ref)
+
+                override suspend fun reloadTickets(projectId: String) =
+                    this@DefaultRemoteRepository.reloadTickets(projectId)
+
+                override suspend fun commentTicket(projectId: String, ref: String, text: String) =
+                    this@DefaultRemoteRepository.commentTicket(projectId, ref, text)
+
+                override suspend fun moveTicket(projectId: String, ref: String, state: String, comment: String?) =
+                    this@DefaultRemoteRepository.moveTicket(projectId, ref, state, comment)
+
+                override suspend fun startTicket(projectId: String, ref: String, note: String?) =
+                    this@DefaultRemoteRepository.startTicket(projectId, ref, note)
+
+                override suspend fun ticketStartStatus(startId: String) =
+                    this@DefaultRemoteRepository.ticketStartStatus(startId)
+            },
+            { state.value },
+            now,
+            ::update,
+        )
+
+    override fun refreshTickets(force: Boolean) = ticketsLoader.refresh(force)
+
+    override fun openTicket(projectId: String, ref: String) = ticketsLoader.loadDetail(projectId, ref)
+
+    override fun queueAccept(projectId: String, ref: String, comment: String) =
+        ticketsLoader.queueAccept(projectId, ref, comment)
+
+    override fun undoAccept() = ticketsLoader.undo()
 
     private val changesLoader =
         GitChangesLoader(

@@ -209,6 +209,8 @@ data class RemoteState(
     val folders: FolderBrowserState = FolderBrowserState(),
     /** The provider list and login flow of the host shown on the Providers screen. */
     val providerAuth: ProviderAuthState = ProviderAuthState(),
+    /** Plane tickets of the shown Mac (`tickets.v1`); empty without the capability. */
+    val tickets: TicketsState = TicketsState(),
 )
 
 /** The app's connection counts as healthy for a notification's request while a frame arrived this recently. */
@@ -495,6 +497,18 @@ interface RemoteRepository {
 
     /** `tickets.start.status` of a start job. */
     suspend fun ticketStartStatus(startId: String): TicketStart = throw RemoteRequestException.unsupported()
+
+    /** Reads the tickets of the shown Mac; [force] has the host read Plane again first. */
+    fun refreshTickets(force: Boolean) {}
+
+    /** Reads one ticket with its description and comments into [TicketsState.detail]. */
+    fun openTicket(projectId: String, ref: String) {}
+
+    /** Accepts [ref] after a five-second undo window; see [undoAccept]. */
+    fun queueAccept(projectId: String, ref: String, comment: String) {}
+
+    /** Takes back the accept waiting in its undo window; nothing was sent. */
+    fun undoAccept() {}
 
     /** `session.files.list`; only with [FILES_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing =
