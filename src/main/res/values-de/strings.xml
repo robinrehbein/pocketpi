@@ -126,6 +126,7 @@
     <string name="remote_subagents_show">Subagenten anzeigen</string>
     <string name="remote_subagents_hide">Subagenten ausblenden</string>
     <string name="remote_mac_tui_session">Läuft im Terminal auf dem Mac</string>
+    <string name="remote_mac_worker_session">Host-Worker auf dem Mac</string>
     <string name="remote_empty_hosts">Noch kein Mac gekoppelt</string>
     <string name="remote_empty_projects">Gib ein Projekt mit /remote auf deinem Mac frei.</string>
     <string name="remote_empty_sessions">Starte eine Sitzung in diesem Projekt.</string>

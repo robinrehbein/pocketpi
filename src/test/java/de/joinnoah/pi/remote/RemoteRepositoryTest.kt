@@ -1067,6 +1067,23 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun sessionListsOptInToHostWorkersAndKeepThemAsTerminalSessions() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session("worker", "worker", "offline"), session("tui", "tui")))
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        val lists = transport.sent.filter { it.text("type") == "sessions.list" }
+        assertTrue(lists.isNotEmpty())
+        assertTrue(lists.all { it.text("requestId").startsWith(HOST_WORKER_REQUEST_PREFIX) })
+        val rows = repository.state.value.sessions.associateBy { it.text("id") }
+        assertEquals("tui", rows.getValue("worker").text("origin"))
+        assertTrue(isHostWorker(rows.getValue("worker")))
+        assertEquals("tui", rows.getValue("tui").text("origin"))
+        assertFalse(isHostWorker(rows.getValue("tui")))
+    }
+
+    @Test
     fun unsupportedTuiControlsDoNotHideCapabilitiesForLaterRpcSession() = runTest {
         val transport = Transport().also(::capable)
         val original = transport.response

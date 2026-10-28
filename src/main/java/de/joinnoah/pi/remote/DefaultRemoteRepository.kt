@@ -1161,7 +1161,7 @@ class DefaultRemoteRepository(
         val sessions = connectionRequest("sessions.list", "projectId" to project.text("id")).array("items")
         // A reply to a connection that is gone, or to another Mac, says nothing about this one.
         if (connection != generation || activeHost?.routeId != routeId) return null
-        val rows = sessions.map { withSessionTitle(withSessionStatus(it)) }
+        val rows = sessions.map { withSessionTitle(withSessionStatus(withHostWorker(it))) }
         applyProjectList(routeId, project, rows)
         return rows
     }
@@ -1730,7 +1730,7 @@ class DefaultRemoteRepository(
         checkEpoch(epoch)
         check(state.value.connected)
         // Older hosts accept this as an opaque request ID and return ordinary projects.
-        val id = if (type == "projects.list") "$capabilityRoute$requestId" else requestId
+        val id = if (type == "projects.list") "$capabilityRoute$requestId" else sessionsListRequestId(type, requestId)
         val payload = Wire.objectOf("type" to type, "requestId" to id, *fields)
         val completion = CompletableDeferred<JsonObject>()
         requests.add(
@@ -2267,7 +2267,7 @@ class DefaultRemoteRepository(
         sessionTitleOverrides.clear()
         return request("sessions.list", epoch, "projectId" to projectId)
             .array("items")
-            .map { withSessionTitle(withSessionStatus(it)) }
+            .map { withSessionTitle(withSessionStatus(withHostWorker(it))) }
     }
 
     /**
@@ -5896,7 +5896,7 @@ class DefaultRemoteRepository(
      */
     private suspend fun connectionRequest(type: String, vararg fields: Pair<String, Any?>): JsonObject {
         check(connectionRequestsOpen())
-        return awaitConnectionReply(Wire.random(), type, fields, REQUEST_TIMEOUT_MILLIS, record = true)
+        return awaitConnectionReply(sessionsListRequestId(type, Wire.random()), type, fields, REQUEST_TIMEOUT_MILLIS, record = true)
     }
 
     /** Thrown inside [withHealthyConnection] when a plain request's connection went or changed: the caller falls back. */
