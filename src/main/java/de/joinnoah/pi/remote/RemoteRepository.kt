@@ -463,6 +463,35 @@ interface RemoteRepository {
 
     fun requestChangesPreview(path: String) {}
 
+    /** `tickets.projects`; only with [TICKETS_CAPABILITY]. Throws [RemoteRequestException]. */
+    suspend fun ticketProjects(): List<TicketProject> = throw RemoteRequestException.unsupported()
+
+    /** `tickets.list`: one page of the project's tickets, after [cursor] when given. */
+    suspend fun ticketsPage(projectId: String, cursor: String?): TicketsPage =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.get`: one ticket with its description and newest comments. */
+    suspend fun ticketDetail(projectId: String, ref: String): TicketDetail =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.reload`: asks the host to read Plane again; returns when its snapshot was taken. */
+    suspend fun reloadTickets(projectId: String): Long = throw RemoteRequestException.unsupported()
+
+    /** `tickets.comment`. A timeout may carry the reason `outcome_unknown`: the comment may be posted. */
+    suspend fun commentTicket(projectId: String, ref: String, text: String): Unit =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.move` to [state]; [comment] is required for Done and Cancelled. Returns whether nothing was written. */
+    suspend fun moveTicket(projectId: String, ref: String, state: String, comment: String?): Boolean =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.start`: begins the start job and returns its start ID. */
+    suspend fun startTicket(projectId: String, ref: String, note: String?): String =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.start.status` of a start job. */
+    suspend fun ticketStartStatus(startId: String): TicketStart = throw RemoteRequestException.unsupported()
+
     /** `session.files.list`; only with [FILES_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing =
         throw RemoteRequestException.unsupported()
