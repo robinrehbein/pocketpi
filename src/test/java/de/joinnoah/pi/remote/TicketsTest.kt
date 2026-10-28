@@ -223,6 +223,53 @@ class TicketsTest {
         fails(with(running, "step" to JsonPrimitive("later")))
     }
 
+    /** The checks the repository makes before it sends a command; throws when the host would refuse it. */
+    private fun preSend(command: JsonObject) {
+        when (command.text("type")) {
+            "tickets.projects" -> Unit
+            "tickets.list" -> {
+                requireTicketProjectId(command.text("projectId"))
+                requireTicketCursor(command.optionalText("cursor"))
+            }
+            "tickets.get", "tickets.reload", "tickets.comment", "tickets.move", "tickets.start" -> {
+                requireTicketProjectId(command.text("projectId"))
+                if (command.containsKey("ref")) requireTicketRef(command.text("ref"))
+                when (command.text("type")) {
+                    "tickets.comment" -> requireTicketComment(command.text("text"))
+                    "tickets.move" -> requireTicketMove(command.text("state"), command.optionalText("comment"))
+                    "tickets.start" -> requireTicketNote(command.optionalText("note"))
+                }
+            }
+            "tickets.start.status" -> requireStartId(command.text("startId"))
+            else -> error("unknown command")
+        }
+        // The host's strict parser also refuses extra keys; the app never builds them.
+        val known = setOf("type", "requestId", "projectId", "cursor", "ref", "text", "state", "comment", "note", "startId")
+        require(command.keys.all { it in known })
+    }
+
+    @Test
+    fun invalidFixtureCommandsAreRefusedBeforeSending() {
+        var commands = 0
+        for (entry in entries("invalid")) {
+            val payload = entry.obj("payload")
+            if (payload.text("type") == "result") continue
+            commands++
+            assertTrue(entry.text("name"), runCatching { preSend(payload) }.isFailure)
+        }
+        assertTrue(commands >= 7)
+    }
+
+    @Test
+    fun validFixtureCommandsPassTheSendChecks() {
+        for (entry in entries("valid")) {
+            val payload = entry.obj("payload")
+            if (payload.text("type") == "result") continue
+            runCatching { preSend(payload) }.onFailure { throw AssertionError(entry.text("name"), it) }
+        }
+        assertEquals(8000, valid("comment-command-max-length").text("text").length)
+    }
+
     // ---- Repository ---------------------------------------------------------------------
 
     private val ticketCapabilities = listOf(TICKETS_CAPABILITY)

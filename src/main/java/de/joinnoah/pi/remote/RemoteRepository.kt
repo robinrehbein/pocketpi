@@ -477,7 +477,11 @@ interface RemoteRepository {
     /** `tickets.reload`: asks the host to read Plane again; returns when its snapshot was taken. */
     suspend fun reloadTickets(projectId: String): Long = throw RemoteRequestException.unsupported()
 
-    /** `tickets.comment`. A timeout may carry the reason `outcome_unknown`: the comment may be posted. */
+    /**
+     * `tickets.comment`. A host error may carry the reason `outcome_unknown`, but an app-side timeout
+     * carries no reason: callers must treat any write timeout as outcome-unknown, as the comment may
+     * be posted.
+     */
     suspend fun commentTicket(projectId: String, ref: String, text: String): Unit =
         throw RemoteRequestException.unsupported()
 

@@ -313,11 +313,19 @@ internal fun parseTicketProjects(data: JsonObject): List<TicketProject> {
     require(data.text("kind") == "tickets.projects")
     Wire.keys(data, setOf("kind", "items"))
     return data.list("items", MAX_TICKET_PROJECTS).objects(MAX_TICKET_PROJECTS).map { item ->
-        Wire.keys(item, setOf("projectId", "name", "planeProjects", "writable", "available"), setOf("writeBlock", "reason"))
+        Wire.keys(
+            item,
+            setOf("projectId", "name", "planeProjects", "writable", "available"),
+            setOf("writeBlock", "reason"),
+        )
         val writable = item.flag("writable")
         val available = item.flag("available")
         val writeBlock =
-            if (item.containsKey("writeBlock")) enumOf(TicketWriteBlock.entries, { it.wire }, item.text("writeBlock")) else null
+            if (item.containsKey("writeBlock")) {
+                enumOf(TicketWriteBlock.entries, { it.wire }, item.text("writeBlock"))
+            } else {
+                null
+            }
         val reason = if (item.containsKey("reason")) item.reason() else null
         // The host sends a block only for a project it will not write to, a reason only for an unavailable one.
         require(!(writable && writeBlock != null))
@@ -422,7 +430,8 @@ internal fun parseTicketStart(data: JsonObject, startId: String): TicketStart {
     requireStartId(startId)
     val state = enumOf(TicketStartState.entries, { it.wire }, data.text("state"))
     val moved = if (data["moved"] is JsonNull) null else data.flag("moved")
-    val error = if (data.containsKey("error")) enumOf(TicketStartError.entries, { it.wire }, data.text("error")) else null
+    val error =
+        if (data.containsKey("error")) enumOf(TicketStartError.entries, { it.wire }, data.text("error")) else null
     // The host reports an error only for a start that failed.
     require(error == null || state == TicketStartState.FAILED)
     return TicketStart(
