@@ -686,7 +686,7 @@ private fun ConversationMessageContent(
         }
         is ConversationItem.Activity -> {
             val planMarkdown = remember(item.name, item.arguments) {
-                if (item.name == "submit_plan")
+                if (isPlanTool(item.name))
                     runCatching {
                         Json.parseToJsonElement(item.arguments.orEmpty()).jsonObject["plan"]
                             ?.jsonPrimitive?.content

@@ -435,6 +435,34 @@
           "text": "Try again"
         }
       }
+    },
+    {
+      "name": "sessions-host-worker",
+      "payload": {
+        "type": "result",
+        "requestId": "host_worker.v1:list-1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "worker-session",
+              "projectId": "project",
+              "title": "Fix",
+              "origin": "worker",
+              "status": "offline",
+              "updatedAt": 1767225600000
+            },
+            {
+              "id": "live-session",
+              "projectId": "project",
+              "title": "Fix",
+              "origin": "tui",
+              "status": "idle"
+            }
+          ]
+        }
+      }
     }
   ],
   "wireInvalid": [
