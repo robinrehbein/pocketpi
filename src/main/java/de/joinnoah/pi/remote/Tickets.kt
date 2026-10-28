@@ -184,6 +184,14 @@ data class TicketStart(
 internal fun canUseTickets(state: RemoteState): Boolean =
     state.connected && TICKETS_CAPABILITY in state.capabilities && TICKETS_CAPABILITY !in state.unavailableCapabilities
 
+/**
+ * The loaded detail when it is the one of [ref]. [RemoteState.tickets] holds a single detail, so a
+ * screen for another ticket must treat null as loading, never show the previous ticket's detail.
+ * An unavailable detail carries no ref and cannot be matched; read `detailFailure` for it.
+ */
+internal fun ticketDetailFor(state: RemoteState, projectId: String, ref: String): TicketDetail? =
+    state.tickets.detail?.takeIf { it.ticket?.ref == ref }
+
 // ---- Requests -----------------------------------------------------------------------------
 
 internal fun validTicketRef(ref: String): Boolean = ticketRef.matches(ref)

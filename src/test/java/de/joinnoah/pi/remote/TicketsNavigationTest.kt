@@ -9,9 +9,14 @@ import org.junit.Test
 class TicketsNavigationTest {
     private val projects = listOf<NavKey>(RemoteNavKey.Hosts, RemoteNavKey.Projects("host"))
 
+    private fun repo(enabled: Boolean = true) =
+        NavigationFakeRepository().also {
+            if (enabled) it.state.value = RemoteState(connected = true, capabilities = setOf(TICKETS_CAPABILITY))
+        }
+
     @Test
     fun openTicketsPushesOverHost() = runTest {
-        val repository = NavigationFakeRepository()
+        val repository = repo()
         val stack = projects.toMutableList()
         val navigation = RemoteNavigator(repository, stack, backgroundScope)
         navigation.openTickets("other")
@@ -27,7 +32,7 @@ class TicketsNavigationTest {
 
     @Test
     fun openTicketFromTicketsPushesDetail() = runTest {
-        val repository = NavigationFakeRepository()
+        val repository = repo()
         val stack = (projects + RemoteNavKey.Tickets("host")).toMutableList()
         val navigation = RemoteNavigator(repository, stack, backgroundScope)
         navigation.openTicket("other", "p", "DEV-1")
@@ -35,8 +40,6 @@ class TicketsNavigationTest {
         navigation.openTicket("host", "p", "DEV-1")
         assertEquals(projects + RemoteNavKey.Tickets("host") + RemoteNavKey.Ticket("host", "p", "DEV-1"), stack)
         assertEquals(listOf("p" to "DEV-1"), repository.ticketOpens)
-        navigation.openTicket("host", "p", "DEV-2")
-        assertEquals(1, repository.ticketOpens.size)
         navigation.back()
         runCurrent()
         assertEquals(projects + RemoteNavKey.Tickets("host"), stack)
@@ -44,7 +47,7 @@ class TicketsNavigationTest {
 
     @Test
     fun ticketKeysKeptAcrossRouteLikeProviders() = runTest {
-        val repository = NavigationFakeRepository()
+        val repository = repo()
         val open = RemoteSelection("host", "project", "s1")
         val kept = open.keys() + RemoteNavKey.Tickets("host") + RemoteNavKey.Ticket("host", "p", "DEV-1")
         val stack = kept.toMutableList<NavKey>()
@@ -58,5 +61,54 @@ class TicketsNavigationTest {
         navigation.restore()
         runCurrent()
         assertEquals(RemoteNavKey.Ticket("host", "p", "DEV-1"), stack.last())
+    }
+
+    @Test
+    fun openTicketFromProjectsPushesDetailOverProjects() = runTest {
+        val repository = repo()
+        val stack = projects.toMutableList()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.openTicket("other", "p", "DEV-1")
+        assertEquals(projects, stack)
+        navigation.openTicket("host", "p", "DEV-1")
+        assertEquals(projects + RemoteNavKey.Ticket("host", "p", "DEV-1"), stack)
+        navigation.back()
+        runCurrent()
+        assertEquals(projects, stack)
+    }
+
+    @Test
+    fun openTicketFromChatPushesDetailOverChat() = runTest {
+        val repository = repo()
+        val open = RemoteSelection("host", "project", "s1").keys()
+        val stack = open.toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.openTicket("host", "p", "DEV-1")
+        assertEquals(open + RemoteNavKey.Ticket("host", "p", "DEV-1"), stack)
+        navigation.back()
+        runCurrent()
+        assertEquals(open, stack)
+    }
+
+    @Test
+    fun openTicketWhileTicketOnTopReplacesIt() = runTest {
+        val repository = repo()
+        val stack = (projects + RemoteNavKey.Tickets("host") + RemoteNavKey.Ticket("host", "p", "DEV-1")).toMutableList()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.openTicket("host", "p", "DEV-2")
+        assertEquals(projects + RemoteNavKey.Tickets("host") + RemoteNavKey.Ticket("host", "p", "DEV-2"), stack)
+        assertEquals(listOf("p" to "DEV-2"), repository.ticketOpens)
+    }
+
+    @Test
+    fun ticketsOpenNothingWithoutTheCapability() = runTest {
+        val repository = repo(enabled = false)
+        val stack = projects.toMutableList()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        navigation.openTickets("host")
+        navigation.openTicket("host", "p", "DEV-1")
+        assertEquals(projects, stack)
+        assertEquals(emptyList<Pair<String, String>>(), repository.ticketOpens)
+        assertEquals(emptyList<Boolean>(), repository.ticketRefreshes)
     }
 }

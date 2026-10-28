@@ -695,13 +695,24 @@ internal class RemoteNavigator(
 
     /** Opens the tickets of [routeId] on top of the host's open destination. */
     fun openTickets(routeId: String) {
+        if (!canUseTickets(repository.state.value)) return
         if (!pushOverHost(routeId, RemoteNavKey.Tickets(routeId))) return
         repository.refreshTickets(false)
     }
 
-    /** Opens one ticket on top of the tickets of [routeId], which stay beneath it. */
+    /**
+     * Opens one ticket on top of whatever host destination of [routeId] is open: the tickets, the
+     * home page (an acceptance row), a project or a chat (its ticket chip). Back returns to what was
+     * beneath. A ticket already on top is replaced, not stacked. Nothing happens without the
+     * capability, for another host or with Settings on top.
+     */
     fun openTicket(routeId: String, projectId: String, ref: String) {
-        if (stack.lastOrNull() != RemoteNavKey.Tickets(routeId)) return
+        if (!canUseTickets(repository.state.value)) return
+        if (stack.lastOrNull() == RemoteNavKey.Settings) return
+        val top = topKey() ?: return
+        if (top.selection().routeId != routeId) return
+        if (top is RemoteNavKey.FolderBrowser || top is RemoteNavKey.Providers || top is RemoteNavKey.Activity) return
+        if (top is RemoteNavKey.Ticket) stack.removeAt(stack.lastIndex)
         stack.add(RemoteNavKey.Ticket(routeId, projectId, ref))
         repository.openTicket(projectId, ref)
     }

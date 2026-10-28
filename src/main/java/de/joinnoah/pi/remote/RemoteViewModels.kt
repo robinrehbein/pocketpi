@@ -260,6 +260,11 @@ internal class ProvidersViewModel(
     fun dismissNotice() = repository.dismissProviderNotice()
 }
 
+/**
+ * Backs both ticket pages. The detail page must read its detail with [ticketDetailFor] by
+ * (projectId, ref) and show loading on a mismatch. [matches] ignores the project so the pages
+ * stay valid over a chat.
+ */
 internal class TicketsViewModel(
     repository: RemoteRepository,
     key: RemoteNavKey,
