@@ -252,10 +252,10 @@ as a session event and an optional snapshot key) is a byte-for-byte copy from no
 `1faf283797d9484c02568beff4586d49490a0137`, the merge of pull request #746.
 `escalation-v1.json` (the optional `escalation` field of a `confirm` question that asks whether to
 run a call auto mode blocked) is a byte-for-byte copy from noah-monorepo commit
-`2004c61568855a3d824bb0f55055d1dcfa1c3dea`, the merge of pull request #905. `tickets-v1.json` (the Plane ticket view: listing, reading,
-commenting, moving and starting tickets behind `tickets.v1`) is a byte-for-byte copy from
-noah-monorepo branch `task/tooling-759-ticket-view` commit `63e90e92e`; update to the merge commit
-once merged. When the upstream protocol fixtures change, copy the changed files into
+`2004c61568855a3d824bb0f55055d1dcfa1c3dea`, the merge of pull request #905. `tickets-v1.json`
+(the Plane ticket view: listing, reading, commenting, moving and starting tickets behind
+`tickets.v1`) is a byte-for-byte copy from noah-monorepo commit
+`97682441742582486db109c1f4b058b4418b8a4c`, the merge of pull request #1122. When the upstream protocol fixtures change, copy the changed files into
 `src/test/resources/`, compare their bytes with the upstream source, and run
 `./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and
 QR encoding, replay and tampering rejection, session request correlation, history pagination, early
