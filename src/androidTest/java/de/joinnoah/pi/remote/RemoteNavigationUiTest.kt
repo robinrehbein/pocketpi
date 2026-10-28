@@ -17,6 +17,12 @@ import java.io.File
 import java.security.KeyStore
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
@@ -1832,6 +1838,46 @@ class RemoteNavigationUiTest {
     }
 
     @Test
+    fun ticketAcceptFlow() {
+        repository.enableTickets()
+        compose.onNodeWithText("Test computer").performClick()
+        compose.onNodeWithText(label(R.string.remote_tickets_section_acceptance)).assertIsDisplayed()
+        compose.onNodeWithText("Fix login redirect", substring = true).performClick()
+        // The detail page: Abnehmen opens the accept sheet, whose confirm queues the accept.
+        click(R.string.remote_ticket_accept)
+        compose.onNodeWithTag("ticketSheetConfirm").performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("ticketUndoBar").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText(label(R.string.remote_tickets_undo)).assertIsDisplayed()
+        compose.runOnIdle { assertEquals(0, repository.ticketMoves.size) }
+        // After the window the fake host has moved the ticket to Done and it left the section.
+        compose.waitUntil(10_000) { repository.ticketMoves.size == 1 }
+        compose.runOnIdle {
+            assertEquals("DEV-12", repository.ticketMoves.single().second)
+            assertNull(repository.state.value.tickets.pendingAccept)
+            assertTrue(acceptanceItems(repository.state.value.tickets).isEmpty())
+        }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("ticketUndoBar").fetchSemanticsNodes().isEmpty()
+        }
+        back()
+        compose.onNodeWithText("Project one").assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.remote_tickets_section_acceptance)).assertDoesNotExist()
+        compose.onNodeWithText("Fix login redirect", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun ticketsFromMacMenu() {
+        repository.enableTickets()
+        compose.onNodeWithText("Test computer").performClick()
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macTickets").performClick()
+        compose.onNodeWithTag("ticketsList").assertIsDisplayed()
+        compose.onNodeWithText("Fix login redirect", substring = true).assertIsDisplayed()
+    }
+
+    @Test
     fun disconnectAsksForConfirmationFirst() {
         compose.onNodeWithText("Test computer").performClick()
         compose.onNodeWithText("Project one").assertIsDisplayed()
@@ -2245,7 +2291,106 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
                 draft = stored?.text.orEmpty(),
                 uncertain = stored?.mutationId != null,
                 status = "idle",
+                capabilities = ticketCapabilities,
+                tickets = tickets,
             )
+    }
+
+    /** Ticket capability and state the fake host advertises; see [enableTickets]. */
+    private var ticketCapabilities = emptySet<String>()
+    private var tickets = TicketsState()
+    // The UI calls the ticket methods on the main thread, and the delayed accept applies there too,
+    // so [tickets] and [state] change on one thread only.
+    private val ticketScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var acceptJob: Job? = null
+
+    /** How long an accept waits before the fake host applies it; the real window is 5 s. */
+    var acceptWindowMillis = 1_500L
+
+    /** The accepts the fake host applied; the test thread reads it while the main thread appends. */
+    val ticketMoves: MutableList<Triple<String, String, String>> =
+        java.util.Collections.synchronizedList(mutableListOf())
+
+    /** Makes the host advertise `tickets.v1` with one ticket awaiting acceptance. */
+    fun enableTickets() {
+        val ticket =
+            Ticket(
+                ref = "DEV-12",
+                title = "Fix login redirect",
+                url = "https://plane.invalid/dev/12",
+                state = "Review",
+                stateGroup = TicketStateGroup.STARTED,
+                type = "feature",
+                priority = TicketPriority.HIGH,
+                assignedToMe = true,
+                section = TicketSection.ACCEPTANCE,
+                prOpen = false,
+                actions = setOf(TicketAction.ACCEPT, TicketAction.COMMENT, TicketAction.MOVE),
+                moveTargets = listOf("Done", "Cancelled"),
+                updatedAt = 1_700_000_000_000L,
+                sessions = emptyList(),
+            )
+        val projectTickets = TicketProject("project", "Project one", listOf("DEV"), true, null, true, null)
+        ticketCapabilities = setOf(TICKETS_CAPABILITY)
+        tickets =
+            TicketsState(
+                routeId = "host",
+                projects = listOf(projectTickets),
+                pages =
+                    mapOf(
+                        "project" to
+                            TicketsPage("project", true, null, System.currentTimeMillis(), listOf(ticket), null)
+                    ),
+            )
+        state.value = state.value.copy(capabilities = ticketCapabilities, tickets = tickets)
+    }
+
+    private fun ticketsChanged(change: (TicketsState) -> TicketsState) {
+        tickets = change(tickets)
+        state.value = state.value.copy(tickets = tickets)
+    }
+
+    override fun refreshTickets(force: Boolean) {}
+
+    override fun openTicket(projectId: String, ref: String) {
+        val ticket = tickets.pages[projectId]?.items?.firstOrNull { it.ref == ref } ?: return
+        ticketsChanged {
+            it.copy(
+                detail = TicketDetail(ticket, description = "Redirects loop after login."),
+                detailRef = ref,
+                detailFailure = null,
+            )
+        }
+    }
+
+    override fun queueAccept(projectId: String, ref: String, comment: String) {
+        if (tickets.pendingAccept != null) return
+        val deadline = System.currentTimeMillis() + acceptWindowMillis
+        ticketsChanged { it.copy(pendingAccept = PendingAccept(projectId, ref, comment, deadline)) }
+        acceptJob =
+            ticketScope.launch {
+                delay(acceptWindowMillis)
+                ticketMoves += Triple(projectId, ref, comment)
+                ticketsChanged { current ->
+                    current.copy(
+                        pendingAccept = null,
+                        pages =
+                            current.pages.mapValues { (id, page) ->
+                                if (id == projectId) page.copy(items = page.items.filterNot { it.ref == ref })
+                                else page
+                            },
+                    )
+                }
+            }
+    }
+
+    override fun undoAccept() {
+        acceptJob?.cancel()
+        ticketsChanged { it.copy(pendingAccept = null) }
+    }
+
+    override fun dismissTicketNotice() {
+        ticketsChanged { it.copy(writeFailure = null, outcomeUnknown = false, writeRef = null) }
     }
 
     override suspend fun activate(

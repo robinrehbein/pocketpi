@@ -220,7 +220,7 @@ Keystore and encrypted file recreation. With an attached emulator, run
 `./gradlew pixel2Api36DebugAndroidTest`; for CI's tablet subset, run
 `./gradlew pixelTabletApi36DebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.annotation=de.joinnoah.pi.remote.LargeScreen`.
 
-Unit tests consume the eighteen JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
+Unit tests consume the nineteen JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
 of `packages/pi-remote/protocol/fixtures/` from noah-monorepo commit
 `1550dcc200459913b9b1dc9b16fc3439db341c68`. `provider-auth-v1.json` (provider login) is a
 byte-for-byte copy from noah-monorepo commit `daca1ee562ca661fb76ce2d61a75ca2fc8c8059f`, the
@@ -252,8 +252,10 @@ as a session event and an optional snapshot key) is a byte-for-byte copy from no
 `1faf283797d9484c02568beff4586d49490a0137`, the merge of pull request #746.
 `escalation-v1.json` (the optional `escalation` field of a `confirm` question that asks whether to
 run a call auto mode blocked) is a byte-for-byte copy from noah-monorepo commit
-`2004c61568855a3d824bb0f55055d1dcfa1c3dea`, the merge of pull request #905. When the
-upstream protocol fixtures change, copy the changed files into
+`2004c61568855a3d824bb0f55055d1dcfa1c3dea`, the merge of pull request #905. `tickets-v1.json`
+(the Plane ticket view: listing, reading, commenting, moving and starting tickets behind
+`tickets.v1`) is a byte-for-byte copy from noah-monorepo commit
+`97682441742582486db109c1f4b058b4418b8a4c`, the merge of pull request #1122. When the upstream protocol fixtures change, copy the changed files into
 `src/test/resources/`, compare their bytes with the upstream source, and run
 `./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and
 QR encoding, replay and tampering rejection, session request correlation, history pagination, early
@@ -261,7 +263,7 @@ events, questionnaire defaults and the project file browser's list and read resu
 login commands, results and events, the attachment manifest and content reads, the session export
 and its chunked download, the session tree with its navigate and fork commands, the agent image commands and their chunked
 download, the session reload command and its result, the session artifact list and open commands,
-the denied-device message, and prompt suggestions.
+the denied-device message, prompt suggestions, and the ticket commands and results.
 A built APK does not establish Samsung device, TalkBack, mobile-network or real Firebase
 delivery acceptance; those require the configured host, relay and device.
 

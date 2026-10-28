@@ -1604,6 +1604,56 @@ class TwoPaneNavigationTest {
         assertEquals(count, repository.activations.size)
     }
 
+    private fun linkTicket(sessionId: String) {
+        val ticket =
+            Ticket(
+                "DEV-5", "Fix it", "https://plane.example/DEV-5", "In Progress", TicketStateGroup.STARTED, "task",
+                TicketPriority.NONE, true, TicketSection.WORKING, false, emptySet(), emptyList(), 1L,
+                listOf(TicketSession(sessionId, "t", SessionLinkStatus.IDLE)),
+            )
+        repository.state.value =
+            repository.state.value.copy(
+                // Tickets link chats only on the Mac they were read from.
+                host = PairedHost("host", "wss://relay.example", "device", "secret", "Studio"),
+                capabilities = setOf(TICKETS_CAPABILITY),
+                tickets =
+                    TicketsState(
+                        routeId = "host",
+                        projects = listOf(TicketProject("project", "Atlas", listOf("DEV"), true, null, true, null)),
+                        pages = mapOf("project" to TicketsPage("project", true, null, 1L, listOf(ticket), null)),
+                    ),
+            )
+    }
+
+    @Test
+    @Config(qualifiers = "w400dp-h800dp")
+    fun chatHeaderChipOpensTicket() {
+        linkTicket("s1")
+        render()
+        compose.onNodeWithTag("chatTicketChip").assertIsDisplayed()
+        compose.onNodeWithTag("chatTicketChip").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf("project" to "DEV-5"), repository.ticketOpens.distinct())
+    }
+
+    @Test
+    @Config(qualifiers = "w400dp-h800dp")
+    fun chatHeaderHasNoChipForAnUnlinkedChat() {
+        linkTicket("other-session")
+        render()
+        compose.onNodeWithTag("chatTicketChip").assertDoesNotExist()
+        compose.onNodeWithTag("chatTitle").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w400dp-h800dp")
+    fun chatHeaderChipKeepsTheTitleVisible() {
+        linkTicket("s1")
+        render()
+        compose.onNodeWithTag("chatTitle").assertIsDisplayed()
+        compose.onNodeWithTag("chatTicketChip").assertIsDisplayed()
+    }
+
     @Test
     @Config(qualifiers = "w400dp-h800dp")
     fun tappingTheChatTitleOpensTheSessionSwitcher() {

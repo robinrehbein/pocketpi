@@ -56,6 +56,32 @@ internal class NavigationFakeRepository : RemoteRepository {
     var sessionRefreshes = 0
     val browsed = mutableListOf<Pair<String, String>>()
     val providersBrowsed = mutableListOf<String>()
+    val ticketRefreshes = mutableListOf<Boolean>()
+    val ticketOpens = mutableListOf<Pair<String, String>>()
+
+    override fun refreshTickets(force: Boolean) {
+        ticketRefreshes += force
+    }
+
+    override fun openTicket(projectId: String, ref: String) {
+        ticketOpens += projectId to ref
+    }
+
+    val ticketAccepts = mutableListOf<Triple<String, String, String>>()
+    var ticketUndos = 0
+    var ticketNoticeDismissals = 0
+
+    override fun queueAccept(projectId: String, ref: String, comment: String) {
+        ticketAccepts += Triple(projectId, ref, comment)
+    }
+
+    override fun undoAccept() {
+        ticketUndos++
+    }
+
+    override fun dismissTicketNotice() {
+        ticketNoticeDismissals++
+    }
 
     override fun browseProviders(routeId: String) {
         providersBrowsed += routeId

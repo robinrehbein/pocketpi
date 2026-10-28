@@ -264,6 +264,8 @@ class DefaultRemoteRepository(
             ARTIFACTS_CAPABILITY,
             // Only on the capabilities.v2 route, and only while the Mac's switch is on.
             SESSION_BASH_CAPABILITY,
+            // Only on the capabilities.v2 route; writes need the project's `writable` flag as well.
+            TICKETS_CAPABILITY,
         )
     /** The request ID prefix of `projects.list`; falls back to v1 once for a host without v2. */
     private var capabilityRoute = CAPABILITIES_V2_ROUTE
@@ -1673,6 +1675,7 @@ class DefaultRemoteRepository(
         earlyProviderUpdates.clear()
         folderVersion++
         folderSession++
+        ticketsLoader.connectionLost()
         activeOpen = null
         sessionStatusRevisions.clear()
         sessionStatusOverrides.clear()
@@ -1785,6 +1788,7 @@ class DefaultRemoteRepository(
                     ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                     .orEmpty()
                 val merged = routeCapabilities.filter { it in advertised }
+                val hadTickets = TICKETS_CAPABILITY in state.value.capabilities
                 if (merged.isNotEmpty()) {
                     // Capabilities merge in additively as later projects.list replies arrive; a list
                     // lease that only now becomes possible starts leasing at once, not at the next
@@ -1796,6 +1800,7 @@ class DefaultRemoteRepository(
                 update { it.copy(capabilitiesKnown = true) }
                 if (PROJECT_OPEN_CAPABILITY in merged) resumeClone()
                 if (PROVIDER_AUTH_CAPABILITY in merged) resumeProviderAuth()
+                if (TICKETS_CAPABILITY in merged && !hadTickets) ticketsLoader.refresh(force = false)
             }
             return result
         } catch (e: Throwable) {
@@ -3528,6 +3533,7 @@ class DefaultRemoteRepository(
         generation++
         folderVersion++
         folderSession++
+        ticketsLoader.connectionLost()
         activeOpen = null
         cloneStatusJob?.cancel()
         providerStatusJob?.cancel()
@@ -3791,6 +3797,7 @@ class DefaultRemoteRepository(
 
     override fun refresh() {
         reconnectEnabled = true
+        ticketsLoader.refresh(force = true)
         // Retrying a denied device reopens what was being opened, which may not be selected yet.
         val selection =
             if (state.value.deniedRouteId != null) requestedSelection ?: state.value.selection
@@ -3874,6 +3881,7 @@ class DefaultRemoteRepository(
     /** Acts on [signal]; [pathMoved]: the network in use only moved its route. */
     private fun resume(signal: RemoteRecovery.Signal, pathMoved: Boolean = false) {
         onRecoverySignal(signal)
+        if (signal == RemoteRecovery.Signal.FRESH_FOREGROUND) ticketsLoader.refresh(force = false)
         // A moved route says nothing about the Mac, so a backoff under way keeps its count.
         if (!pathMoved) resetReconnect()
         if (
@@ -6697,6 +6705,79 @@ class DefaultRemoteRepository(
 
     override fun stopJob(jobId: String) = jobsController.kill(jobId)
 
+    // ---- Tickets (tickets.v1) ------------------------------------------------------------
+
+    private fun requireTickets() {
+        val current = state.value
+        if (!current.connected) throw RemoteRequestException("offline")
+        // An older host closes the connection on a command it does not know.
+        if (!canUseTickets(current)) throw RemoteRequestException.unsupported()
+    }
+
+    override suspend fun ticketProjects(): List<TicketProject> {
+        requireTickets()
+        return parseTicketProjects(connectionRequest("tickets.projects"))
+    }
+
+    override suspend fun ticketsPage(projectId: String, cursor: String?): TicketsPage {
+        requireTickets()
+        requireTicketProjectId(projectId)
+        requireTicketCursor(cursor)
+        val fields = listOfNotNull("projectId" to projectId, cursor?.let { "cursor" to it })
+        return parseTicketsPage(connectionRequest("tickets.list", *fields.toTypedArray()), projectId)
+    }
+
+    override suspend fun ticketDetail(projectId: String, ref: String): TicketDetail {
+        requireTickets()
+        requireTicketProjectId(projectId)
+        requireTicketRef(ref)
+        val data = connectionRequest("tickets.get", "projectId" to projectId, "ref" to ref)
+        return parseTicketDetail(data, projectId).also { require(it.ticket == null || it.ticket.ref == ref) }
+    }
+
+    override suspend fun reloadTickets(projectId: String): Long {
+        requireTickets()
+        requireTicketProjectId(projectId)
+        return parseTicketReloaded(connectionRequest("tickets.reload", "projectId" to projectId), projectId)
+    }
+
+    // The writes go through folderRequest: leaving the screen must not drop the reply of a write.
+    override suspend fun commentTicket(projectId: String, ref: String, text: String) {
+        requireTickets()
+        requireTicketProjectId(projectId)
+        requireTicketRef(ref)
+        requireTicketComment(text)
+        parseTicketCommented(
+            folderRequest("tickets.comment", "projectId" to projectId, "ref" to ref, "text" to text),
+            projectId,
+            ref,
+        )
+    }
+
+    override suspend fun moveTicket(projectId: String, ref: String, state: String, comment: String?): Boolean {
+        requireTickets()
+        requireTicketProjectId(projectId)
+        requireTicketRef(ref)
+        requireTicketMove(state, comment)
+        val fields = listOfNotNull("projectId" to projectId, "ref" to ref, "state" to state, comment?.let { "comment" to it })
+        return parseTicketMoved(folderRequest("tickets.move", *fields.toTypedArray()), projectId, ref, state)
+    }
+
+    override suspend fun startTicket(projectId: String, ref: String, note: String?): String {
+        requireTickets()
+        requireTicketProjectId(projectId)
+        requireTicketRef(ref)
+        requireTicketNote(note)
+        val fields = listOfNotNull("projectId" to projectId, "ref" to ref, note?.let { "note" to it })
+        return parseTicketStartStarted(folderRequest("tickets.start", *fields.toTypedArray()))
+    }
+
+    override suspend fun ticketStartStatus(startId: String): TicketStart {
+        requireTickets()
+        requireStartId(startId)
+        return parseTicketStart(folderRequest("tickets.start.status", "startId" to startId), startId)
+    }
+
     // ---- Git changes (session.git.v1) ----------------------------------------------------
 
     private fun requireGit(sessionId: String) {
@@ -6734,6 +6815,58 @@ class DefaultRemoteRepository(
             request("session.git.log", selectionEpoch, "sessionId" to sessionId, "snapshotId" to snapshotId)
         return parseGitLog(data, sessionId, snapshotId)
     }
+
+    private val ticketsLoader =
+        TicketsLoader(
+            scope,
+            object : TicketSource {
+                override suspend fun ticketProjects() = this@DefaultRemoteRepository.ticketProjects()
+
+                override suspend fun ticketsPage(projectId: String, cursor: String?) =
+                    this@DefaultRemoteRepository.ticketsPage(projectId, cursor)
+
+                override suspend fun ticketDetail(projectId: String, ref: String) =
+                    this@DefaultRemoteRepository.ticketDetail(projectId, ref)
+
+                override suspend fun reloadTickets(projectId: String) =
+                    this@DefaultRemoteRepository.reloadTickets(projectId)
+
+                override suspend fun commentTicket(projectId: String, ref: String, text: String) =
+                    this@DefaultRemoteRepository.commentTicket(projectId, ref, text)
+
+                override suspend fun moveTicket(projectId: String, ref: String, state: String, comment: String?) =
+                    this@DefaultRemoteRepository.moveTicket(projectId, ref, state, comment)
+
+                override suspend fun startTicket(projectId: String, ref: String, note: String?) =
+                    this@DefaultRemoteRepository.startTicket(projectId, ref, note)
+
+                override suspend fun ticketStartStatus(startId: String) =
+                    this@DefaultRemoteRepository.ticketStartStatus(startId)
+            },
+            { state.value },
+            now,
+            ::update,
+        )
+
+    override fun refreshTickets(force: Boolean) = ticketsLoader.refresh(force)
+
+    override fun openTicket(projectId: String, ref: String) = ticketsLoader.loadDetail(projectId, ref)
+
+    override fun queueAccept(projectId: String, ref: String, comment: String) =
+        ticketsLoader.queueAccept(projectId, ref, comment)
+
+    override fun undoAccept() = ticketsLoader.undo()
+
+    override fun dismissTicketNotice() = ticketsLoader.dismissNotice()
+
+    override fun commentOnTicket(projectId: String, ref: String, text: String) =
+        ticketsLoader.comment(projectId, ref, text)
+
+    override fun moveTicketTo(projectId: String, ref: String, state: String, comment: String?) =
+        ticketsLoader.move(projectId, ref, state, comment)
+
+    override fun startTicketJob(projectId: String, ref: String, note: String?) =
+        ticketsLoader.start(projectId, ref, note)
 
     private val changesLoader =
         GitChangesLoader(

@@ -94,6 +94,16 @@ sealed interface RemoteNavKey : NavKey {
     @Serializable data class Providers(val routeId: String) : RemoteNavKey
 
     /**
+     * The tickets of one host (`tickets.v1`), on top of that host's open destination like
+     * [Providers]. Only the route is saved; the tickets live in [RemoteState.tickets].
+     */
+    @Serializable data class Tickets(val routeId: String) : RemoteNavKey
+
+    /** One ticket of a host's shared project, on top of [Tickets]. */
+    @Serializable
+    data class Ticket(val routeId: String, val projectId: String, val ref: String) : RemoteNavKey
+
+    /**
      * The activity board of one host: its sessions that wait, run or finished since they were last
      * looked at (see [ActivityBoardScreen]). It opens on top of the open project or chat, which stay
      * beneath it, so the wide layout can show the board where the session list is.
@@ -108,6 +118,8 @@ internal fun RemoteNavKey.selection(): RemoteSelection =
         is RemoteNavKey.Projects -> RemoteSelection(routeId)
         is RemoteNavKey.FolderBrowser -> RemoteSelection(routeId)
         is RemoteNavKey.Providers -> RemoteSelection(routeId)
+        is RemoteNavKey.Tickets -> RemoteSelection(routeId)
+        is RemoteNavKey.Ticket -> RemoteSelection(routeId)
         is RemoteNavKey.Activity -> RemoteSelection(routeId)
         is RemoteNavKey.Sessions -> RemoteSelection(routeId, projectId)
         is RemoteNavKey.Chat -> RemoteSelection(routeId, projectId, sessionId)
@@ -204,7 +216,9 @@ internal class RemoteNavigator(
         this == RemoteNavKey.Settings ||
             this is RemoteNavKey.Activity ||
             this is RemoteNavKey.FolderBrowser ||
-            this is RemoteNavKey.Providers
+            this is RemoteNavKey.Providers ||
+            this is RemoteNavKey.Tickets ||
+            this is RemoteNavKey.Ticket
 
     /** The destination beneath the overlays, which the selection stays on. */
     private fun contentKey(): RemoteNavKey? = stack.lastOrNull { !it.isOverlay() } as? RemoteNavKey
@@ -264,7 +278,9 @@ internal class RemoteNavigator(
             when (overlay) {
                 is RemoteNavKey.Activity -> overlay.takeIf { keepActivity && it.routeId == routeId }
                 is RemoteNavKey.FolderBrowser,
-                is RemoteNavKey.Providers -> (overlay as RemoteNavKey).takeIf { keepFolders && it.selection().routeId == routeId }
+                is RemoteNavKey.Providers,
+                is RemoteNavKey.Tickets,
+                is RemoteNavKey.Ticket -> (overlay as RemoteNavKey).takeIf { keepFolders && it.selection().routeId == routeId }
                 else -> null
             }
         }
@@ -638,7 +654,12 @@ internal class RemoteNavigator(
     private fun pushOverHost(routeId: String, page: RemoteNavKey): Boolean {
         if (stack.lastOrNull() == RemoteNavKey.Settings) return false
         val top = topKey() ?: return false
-        if (top is RemoteNavKey.FolderBrowser || top is RemoteNavKey.Providers) return false
+        if (
+            top is RemoteNavKey.FolderBrowser ||
+                top is RemoteNavKey.Providers ||
+                top is RemoteNavKey.Tickets ||
+                top is RemoteNavKey.Ticket
+        ) return false
         if (top.selection().routeId != routeId) return false
         stack.add(page)
         return true
@@ -670,6 +691,30 @@ internal class RemoteNavigator(
         if (!pushOverHost(routeId, RemoteNavKey.Providers(routeId))) return
         repository.dismissProviderNotice()
         repository.browseProviders(routeId)
+    }
+
+    /** Opens the tickets of [routeId] on top of the host's open destination. */
+    fun openTickets(routeId: String) {
+        if (!canUseTickets(repository.state.value)) return
+        if (!pushOverHost(routeId, RemoteNavKey.Tickets(routeId))) return
+        repository.refreshTickets(false)
+    }
+
+    /**
+     * Opens one ticket on top of whatever host destination of [routeId] is open: the tickets, the
+     * home page (an acceptance row), a project or a chat (its ticket chip). Back returns to what was
+     * beneath. A ticket already on top is replaced, not stacked. Nothing happens without the
+     * capability, for another host or with Settings on top.
+     */
+    fun openTicket(routeId: String, projectId: String, ref: String) {
+        if (!canUseTickets(repository.state.value)) return
+        if (stack.lastOrNull() == RemoteNavKey.Settings) return
+        val top = topKey() ?: return
+        if (top.selection().routeId != routeId) return
+        if (top is RemoteNavKey.FolderBrowser || top is RemoteNavKey.Providers || top is RemoteNavKey.Activity) return
+        if (top is RemoteNavKey.Ticket) stack.removeAt(stack.lastIndex)
+        stack.add(RemoteNavKey.Ticket(routeId, projectId, ref))
+        repository.openTicket(projectId, ref)
     }
 
     /**
@@ -1499,6 +1544,14 @@ private fun RemoteNavDisplay(
                 entry<RemoteNavKey.Providers>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ProvidersViewModel(repository, key) }
                     CenteredPage { ProvidersScreen(key, model, navigator) }
+                }
+                entry<RemoteNavKey.Tickets>(metadata = { key -> navKeyMetadata(key) }) { key ->
+                    val model = viewModel { TicketsViewModel(repository, key) }
+                    CenteredPage { TicketsScreen(key, model, navigator) }
+                }
+                entry<RemoteNavKey.Ticket>(metadata = { key -> navKeyMetadata(key) }) { key ->
+                    val model = viewModel { TicketsViewModel(repository, key) }
+                    CenteredPage { TicketDetailScreen(key, model, navigator) }
                 }
                 entry<RemoteNavKey.Activity>(metadata = { key -> navKeyMetadata(key) }) { key ->
                     val model = viewModel { ActivityViewModel(repository, key) }

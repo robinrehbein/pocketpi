@@ -124,10 +124,12 @@ internal fun SessionListRow(
             else null,
             stringResource(R.string.remote_fork_session).takeIf { item.continuesAsCopy },
         )
+    val ticketLabel = item.ticketRef?.let { stringResource(R.string.remote_ticket_chip, it) }
     val rowDescription =
         listOfNotNull(
             subagentLabel.takeIf { item.parentSessionId != null },
             title,
+            ticketLabel,
             macTuiLabel.takeIf { item.liveMacTui },
             pinnedLabel.takeIf { item.pinned },
             unreadLabel.takeIf { item.unread },
@@ -287,9 +289,9 @@ internal fun SessionListRow(
                             if (item.lastKnown) SessionAvailability.OFFLINE else item.availability,
                             statusColor,
                         )
-                        if (metaLabels.isNotEmpty())
+                        if (metaLabels.isNotEmpty() || item.ticketRef != null)
                             Text(
-                                metaLabels.joinToString(separator = " · ", prefix = "· "),
+                                (listOfNotNull(item.ticketRef) + metaLabels).joinToString(separator = " · ", prefix = "· "),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,

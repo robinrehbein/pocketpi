@@ -209,6 +209,8 @@ data class RemoteState(
     val folders: FolderBrowserState = FolderBrowserState(),
     /** The provider list and login flow of the host shown on the Providers screen. */
     val providerAuth: ProviderAuthState = ProviderAuthState(),
+    /** Plane tickets of the shown Mac (`tickets.v1`); empty without the capability. */
+    val tickets: TicketsState = TicketsState(),
 )
 
 /** The app's connection counts as healthy for a notification's request while a frame arrived this recently. */
@@ -462,6 +464,63 @@ interface RemoteRepository {
     fun openChangesSubagentFile(sessionId: String, path: String) {}
 
     fun requestChangesPreview(path: String) {}
+
+    /** `tickets.projects`; only with [TICKETS_CAPABILITY]. Throws [RemoteRequestException]. */
+    suspend fun ticketProjects(): List<TicketProject> = throw RemoteRequestException.unsupported()
+
+    /** `tickets.list`: one page of the project's tickets, after [cursor] when given. */
+    suspend fun ticketsPage(projectId: String, cursor: String?): TicketsPage =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.get`: one ticket with its description and newest comments. */
+    suspend fun ticketDetail(projectId: String, ref: String): TicketDetail =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.reload`: asks the host to read Plane again; returns when its snapshot was taken. */
+    suspend fun reloadTickets(projectId: String): Long = throw RemoteRequestException.unsupported()
+
+    /**
+     * `tickets.comment`. A host error may carry the reason `outcome_unknown`, but an app-side timeout
+     * carries no reason: callers must treat any write timeout as outcome-unknown, as the comment may
+     * be posted.
+     */
+    suspend fun commentTicket(projectId: String, ref: String, text: String): Unit =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.move` to [state]; [comment] is required for Done and Cancelled. Returns whether nothing was written. */
+    suspend fun moveTicket(projectId: String, ref: String, state: String, comment: String?): Boolean =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.start`: begins the start job and returns its start ID. */
+    suspend fun startTicket(projectId: String, ref: String, note: String?): String =
+        throw RemoteRequestException.unsupported()
+
+    /** `tickets.start.status` of a start job. */
+    suspend fun ticketStartStatus(startId: String): TicketStart = throw RemoteRequestException.unsupported()
+
+    /** Reads the tickets of the shown Mac; [force] has the host read Plane again first. */
+    fun refreshTickets(force: Boolean) {}
+
+    /** Reads one ticket with its description and comments into [TicketsState.detail]. */
+    fun openTicket(projectId: String, ref: String) {}
+
+    /** Accepts [ref] after a five-second undo window; see [undoAccept]. */
+    fun queueAccept(projectId: String, ref: String, comment: String) {}
+
+    /** Comments on [ref]; a read-only project sends nothing. */
+    fun commentOnTicket(projectId: String, ref: String, text: String) {}
+
+    /** Moves [ref] to [state]; [comment] is required for Done and Cancelled. */
+    fun moveTicketTo(projectId: String, ref: String, state: String, comment: String?) {}
+
+    /** Starts the start job of [ref] and follows it in [TicketsState.start]. */
+    fun startTicketJob(projectId: String, ref: String, note: String?) {}
+
+    /** Takes back the accept waiting in its undo window; nothing was sent. */
+    fun undoAccept() {}
+
+    /** Clears the failure or unknown outcome of the last ticket write after the user saw it. */
+    fun dismissTicketNotice() {}
 
     /** `session.files.list`; only with [FILES_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing =

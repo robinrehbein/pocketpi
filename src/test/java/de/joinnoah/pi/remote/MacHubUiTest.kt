@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -21,6 +22,8 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.serialization.json.JsonObject
@@ -80,6 +83,8 @@ class MacHubUiTest {
         hosts: List<PairedHost> = listOf(studio, laptop),
         connected: Boolean = true,
         connection: Int? = null,
+        capabilities: Set<String> = emptySet(),
+        tickets: TicketsState = TicketsState(),
     ) {
         repository.state.value =
             RemoteState(
@@ -88,10 +93,12 @@ class MacHubUiTest {
                 host = studio,
                 selection = RemoteSelection("studio"),
                 connected = connected,
+                capabilities = capabilities,
                 connection = connection ?: if (connected) R.string.remote_connected else R.string.remote_offline,
                 projects = projects,
                 projectChats = chats,
                 projectSessions = counts,
+                tickets = tickets,
             )
         compose.setContent {
             androidx.compose.material3.MaterialTheme {
@@ -239,6 +246,24 @@ class MacHubUiTest {
     }
 
     @Test
+    fun macOverflowShowsTicketsOnlyWithCapability() {
+        render(projects = listOf(project("p", "App")))
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onAllNodesWithTag("macTickets").assertCountEquals(0)
+    }
+
+    @Test
+    fun macOverflowShowsTicketsWithCapabilityAndOpensThem() {
+        render(projects = listOf(project("p", "App")), capabilities = setOf(TICKETS_CAPABILITY))
+        compose.onNodeWithTag("macOverflow").performClick()
+        compose.onNodeWithTag("macTickets").performClick()
+        compose.waitForIdle()
+        // The navigator asks once; the opened page asks too while the fake state holds no tickets yet
+        // (the real loader marks itself loading first, so the page then stays quiet). Neither forces.
+        assertTrue(repository.ticketRefreshes.isNotEmpty() && repository.ticketRefreshes.none { it })
+    }
+
+    @Test
     fun removingThePairingConfirmsAndForgetsTheLastMac() {
         render(listOf(project("p1", "Alpha")))
 
@@ -280,5 +305,176 @@ class MacHubUiTest {
         compose.waitForIdle()
 
         compose.runOnIdle { assertEquals(1, repository.revalidations) }
+    }
+
+    // ---- Zur Abnahme -----------------------------------------------------------------------
+
+    private val ticketProject = TicketProject("p1", "Alpha", listOf("DEV"), true, null, true, null)
+
+    private fun ticket(n: Int, section: TicketSection = TicketSection.ACCEPTANCE, sessions: List<TicketSession> = emptyList()) =
+        Ticket(
+            "DEV-$n", "Title $n", "https://plane.example/DEV-$n", "Review", TicketStateGroup.STARTED, "feature",
+            TicketPriority.NONE, true, section, false,
+            if (section == TicketSection.ACCEPTANCE) setOf(TicketAction.ACCEPT, TicketAction.COMMENT) else emptySet(),
+            emptyList(), n.toLong(), sessions,
+        )
+
+    private fun ticketsState(vararg items: Ticket, loading: Boolean = false, writable: Boolean = true) =
+        TicketsState(
+            routeId = "studio",
+            projects = listOf(ticketProject.copy(writable = writable)),
+            pages = mapOf("p1" to TicketsPage("p1", true, null, 1L, items.toList(), null)),
+            loading = loading,
+        )
+
+    private fun renderTickets(tickets: TicketsState, chats: List<ProjectChatSummary> = emptyList()) =
+        render(
+            listOf(project("p1", "Alpha")),
+            chats = chats,
+            capabilities = setOf(TICKETS_CAPABILITY),
+            tickets = tickets,
+        )
+
+    @Test
+    fun acceptanceSectionAboveNeedsYou() {
+        renderTickets(ticketsState(ticket(1)), listOf(chat("p1", "Alpha", "waiting", "waiting")))
+
+        assertTrue(
+            headingTop(label(R.string.remote_tickets_section_acceptance)) <
+                headingTop(label(R.string.remote_status_needs_you))
+        )
+        compose.onNodeWithText("DEV-1 · Title 1").assertIsDisplayed()
+    }
+
+    @Test
+    fun acceptanceSectionAbsentWhenEmpty() {
+        renderTickets(ticketsState(ticket(1, TicketSection.WORKING)))
+        compose.onAllNodesWithText(label(R.string.remote_tickets_section_acceptance)).assertCountEquals(0)
+    }
+
+    @Test
+    fun acceptanceSectionAbsentWhileNothingIsKnownYet() {
+        renderTickets(ticketsState(ticket(1), loading = true).copy(pages = emptyMap()))
+        compose.onAllNodesWithText(label(R.string.remote_tickets_section_acceptance)).assertCountEquals(0)
+    }
+
+    @Test
+    fun aRefreshOfKnownTicketsKeepsTheSection() {
+        renderTickets(ticketsState(ticket(1), loading = true))
+        compose.onNodeWithText(label(R.string.remote_tickets_section_acceptance)).assertIsDisplayed()
+        compose.onNodeWithText("DEV-1 · Title 1").assertIsDisplayed()
+    }
+
+    @Test
+    fun theHomeAcceptButtonNamesItsTicket() {
+        renderTickets(ticketsState(ticket(1)))
+        compose.onNode(hasContentDescription(compose.activity.getString(R.string.remote_ticket_accept_ref, "DEV-1")))
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun theHomeAcceptSheetCannotConfirmOnceTheMacIsGone() {
+        renderTickets(ticketsState(ticket(1)))
+        compose.onNodeWithText(label(R.string.remote_ticket_accept)).performClick()
+        compose.onNodeWithTag("ticketSheetConfirm").assertIsEnabled()
+        repository.state.value = repository.state.value.copy(connected = false)
+        compose.waitForIdle()
+        compose.onNodeWithTag("ticketSheetConfirm").assertIsNotEnabled()
+    }
+
+    @Test
+    fun theHomeWriteNoticeNamesItsTicket() {
+        renderTickets(ticketsState(ticket(1)).copy(writeFailure = TicketsFailure.OFFLINE, writeRef = "DEV-1"))
+        val text = compose.activity.getString(
+            R.string.remote_tickets_notice_ref, "DEV-1", label(R.string.remote_tickets_failure_offline),
+        )
+        compose.onNodeWithText(text).assertIsDisplayed()
+    }
+
+    @Test
+    fun acceptanceSectionAbsentWithoutCapability() {
+        render(listOf(project("p1", "Alpha")), tickets = ticketsState(ticket(1)))
+        compose.onAllNodesWithText(label(R.string.remote_tickets_section_acceptance)).assertCountEquals(0)
+    }
+
+    @Test
+    fun atMostThreeRowsThenAllLink() {
+        renderTickets(ticketsState(ticket(1), ticket(2), ticket(3), ticket(4)))
+
+        compose.onAllNodes(hasText("Title", substring = true)).assertCountEquals(3)
+        // The newest three show.
+        compose.onNodeWithText("DEV-4 · Title 4").assertIsDisplayed()
+        compose.onAllNodesWithText("DEV-1 · Title 1").assertCountEquals(0)
+        compose.onNodeWithText(label(R.string.remote_tickets_all)).performClick()
+        compose.waitForIdle()
+        // The link leads to the tickets screen, not just to a refresh.
+        compose.onNodeWithTag("ticketsList").assertIsDisplayed()
+        compose.onNodeWithTag("ticketsReload").assertIsDisplayed()
+        assertTrue(repository.ticketRefreshes.isNotEmpty())
+    }
+
+    @Test
+    fun acceptOnHomeOpensTheSheetAndQueuesTheAccept() {
+        renderTickets(ticketsState(ticket(1)))
+        compose.onNodeWithText(label(R.string.remote_ticket_accept)).performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_tickets_accept_title, "DEV-1")).assertIsDisplayed()
+        compose.onNodeWithTag("ticketSheetConfirm").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(Triple("p1", "DEV-1", "Accepted in PocketPi.")), repository.ticketAccepts)
+        // Accept no longer detours through the detail page.
+        assertEquals(emptyList<Pair<String, String>>(), repository.ticketOpens)
+    }
+
+    @Test
+    fun homeOffersNoSecondAcceptWhileOneIsPending() {
+        renderTickets(ticketsState(ticket(1), ticket(2)).copy(pendingAccept = PendingAccept("p1", "DEV-1", "c", 5_000L)))
+        compose.onAllNodesWithText(label(R.string.remote_ticket_accept)).assertCountEquals(0)
+    }
+
+    @Test
+    fun homeShowsTheUndoBarForAPendingAcceptAndUndoSendsNothing() {
+        val pending = PendingAccept("p1", "DEV-1", "c", 5_000L)
+        renderTickets(ticketsState(ticket(1)).copy(pendingAccept = pending))
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_tickets_accepting, "DEV-1")).assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.remote_tickets_undo)).performClick()
+        assertEquals(1, repository.ticketUndos)
+        assertEquals(emptyList<Triple<String, String, String>>(), repository.ticketAccepts)
+    }
+
+    @Test
+    fun allLinkFollowsEvenASingleRow() {
+        renderTickets(ticketsState(ticket(1)))
+        compose.onNodeWithText(label(R.string.remote_tickets_all)).assertIsDisplayed()
+    }
+
+    @Test
+    fun rowTapOpensTheTicketAndTheButtonOnlyShowsWhenWritable() {
+        renderTickets(ticketsState(ticket(1)))
+        compose.onNodeWithText(label(R.string.remote_ticket_accept)).assertIsDisplayed()
+        compose.onNodeWithText("DEV-1 · Title 1").performClick()
+        assertEquals(listOf("p1" to "DEV-1"), repository.ticketOpens.distinct())
+    }
+
+    @Test
+    fun noAcceptButtonForAReadOnlyProject() {
+        renderTickets(ticketsState(ticket(1), writable = false))
+        compose.onNodeWithText("DEV-1 · Title 1").assertIsDisplayed()
+        compose.onAllNodesWithText(label(R.string.remote_ticket_accept)).assertCountEquals(0)
+    }
+
+    @Test
+    fun chatRowShowsTicketRef() {
+        val linked = ticket(433, TicketSection.WORKING, listOf(TicketSession("waiting", "t", SessionLinkStatus.WAITING)))
+        renderTickets(ticketsState(linked), listOf(chat("p1", "Alpha", "waiting", "waiting")))
+        compose.onNode(hasText("DEV-433", substring = true) and !hasText("Title", substring = true)).assertIsDisplayed()
+    }
+
+    @Test
+    fun talkBackRowDescriptionIncludesRef() {
+        val linked = ticket(433, TicketSection.WORKING, listOf(TicketSession("waiting", "t", SessionLinkStatus.WAITING)))
+        renderTickets(ticketsState(linked), listOf(chat("p1", "Alpha", "waiting", "waiting")))
+        assertTrue(
+            compose.onAllNodes(hasContentDescription("DEV-433", substring = true)).fetchSemanticsNodes().isNotEmpty()
+        )
     }
 }

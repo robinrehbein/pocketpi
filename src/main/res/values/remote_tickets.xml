@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tickets (tickets.v1): Mac menu entry and page title. -->
+    <string name="remote_tickets_title">Tickets</string>
+
+    <!-- Home: link under the "To accept" rows; the chip in a chat header names the chat's ticket. -->
+    <string name="remote_tickets_all">All tickets</string>
+    <string name="remote_ticket_chip">Ticket %1$s</string>
+    <!-- Tickets screen -->
+    <string name="remote_tickets_reload">Reload tickets</string>
+    <string name="remote_tickets_loading">Loading tickets</string>
+    <string name="remote_tickets_retry">Try again</string>
+    <string name="remote_tickets_section_acceptance">To accept</string>
+    <string name="remote_tickets_section_working">Running</string>
+    <string name="remote_tickets_section_todo">To do</string>
+    <string name="remote_tickets_empty_title">No open tickets</string>
+    <string name="remote_tickets_empty_body">Tickets that are assigned to you or wait for your acceptance show up here.</string>
+    <string name="remote_tickets_no_projects_title">No tickets on this Mac</string>
+    <string name="remote_tickets_no_projects_body">None of the Mac\'s shared projects has tickets set up.</string>
+    <string name="remote_tickets_pr_open">PR open</string>
+    <plurals name="remote_tickets_chats_caption">
+        <item quantity="one">%d chat</item>
+        <item quantity="other">%d chats</item>
+    </plurals>
+    <plurals name="remote_tickets_chats_working">
+        <item quantity="one">%d working</item>
+        <item quantity="other">%d working</item>
+    </plurals>
+    <string name="remote_tickets_caption_join">%1$s · %2$s</string>
+    <string name="remote_tickets_stale">Updated %d min ago</string>
+
+    <!-- Why Plane has no tickets (TicketReason) and how a request failed (TicketsFailure) -->
+    <string name="remote_tickets_reason_not_configured">Tickets are not set up on the Mac.</string>
+    <string name="remote_tickets_reason_missing_bot_key">The Mac has no Plane key for tickets yet.</string>
+    <string name="remote_tickets_reason_plane_unreachable">Plane is not reachable.</string>
+    <string name="remote_tickets_reason_plane_rejected">Plane rejected the request. Check the Plane key on the Mac.</string>
+    <string name="remote_tickets_reason_unknown">Tickets are not available right now.</string>
+    <string name="remote_tickets_failure_offline">The Mac is not connected.</string>
+    <string name="remote_tickets_failure_unsupported">This Mac does not support tickets.</string>
+    <string name="remote_tickets_failure_busy">The Mac is busy. Try again in a moment.</string>
+    <string name="remote_tickets_failure_forbidden">This project does not share its tickets.</string>
+    <string name="remote_tickets_failure_not_found">The ticket was not found.</string>
+    <string name="remote_tickets_failure_failed">The tickets could not be loaded.</string>
+
+    <!-- Ticket detail -->
+    <string name="remote_ticket_open_plane">Open in Plane</string>
+    <string name="remote_ticket_project_ref">%1$s · %2$s</string>
+    <string name="remote_ticket_priority_urgent">Urgent</string>
+    <string name="remote_ticket_priority_high">High</string>
+    <string name="remote_ticket_priority_medium">Medium</string>
+    <string name="remote_ticket_priority_low">Low</string>
+    <string name="remote_ticket_accept">Accept</string>
+    <string name="remote_ticket_accept_ref">Accept %1$s</string>
+    <string name="remote_ticket_start">Start with agent</string>
+    <string name="remote_ticket_comment">Comment</string>
+    <string name="remote_ticket_status">Change status</string>
+    <string name="remote_ticket_open_chat">Go to chat</string>
+    <string name="remote_ticket_write_block_writes_off">Editing tickets is turned off on the Mac.</string>
+    <string name="remote_ticket_write_block_missing_user_key">Your personal Plane key is missing on the Mac, so tickets are read-only.</string>
+    <string name="remote_ticket_offline">The Mac is offline. Changes work again once it is back.</string>
+    <string name="remote_ticket_chats">Chats for this ticket</string>
+    <string name="remote_ticket_chat_untitled">Chat</string>
+    <string name="remote_ticket_description">Description</string>
+    <string name="remote_ticket_description_empty">No description.</string>
+    <string name="remote_ticket_description_truncated">The description is shortened. Open the ticket in Plane to read all of it.</string>
+    <string name="remote_ticket_comments">Comments</string>
+    <string name="remote_ticket_comments_empty">No comments yet.</string>
+    <string name="remote_ticket_comments_truncated">Only the newest comments are shown.</string>
+    <string name="remote_ticket_comment_meta">%1$s · %2$s</string>
+
+    <!-- Sheets: accept (with undo), comment, status, start -->
+    <string name="remote_tickets_accept_title">Set %1$s to Done</string>
+    <string name="remote_tickets_accept_comment">Accepted in PocketPi.</string>
+    <string name="remote_tickets_comment_label">Comment</string>
+    <string name="remote_tickets_accepting">%1$s is being accepted</string>
+    <string name="remote_tickets_undo">Undo</string>
+    <string name="remote_tickets_comment_title">Comment on %1$s</string>
+    <string name="remote_tickets_send">Send</string>
+    <string name="remote_tickets_status_title">Change status of %1$s</string>
+    <string name="remote_tickets_status_current">Now: %1$s</string>
+    <string name="remote_tickets_status_comment_required">Cancelling needs a comment.</string>
+    <string name="remote_tickets_status_none">This ticket can not be moved right now.</string>
+    <string name="remote_tickets_start_title">Start %1$s with an agent</string>
+    <string name="remote_tickets_start_branch">Branch %1$s</string>
+    <string name="remote_tickets_start_moves">Ticket → In Progress</string>
+    <string name="remote_tickets_start_note">Note for the agent (optional)</string>
+    <string name="remote_tickets_start_go">Start</string>
+    <string name="remote_tickets_start_close">Close</string>
+    <string name="remote_tickets_start_open_chat">Open chat</string>
+    <string name="remote_tickets_start_other_running">Another ticket is being started. Wait until it is done.</string>
+    <string name="remote_tickets_step_worktree">Preparing worktree</string>
+    <string name="remote_tickets_step_move">Moving ticket to In Progress</string>
+    <string name="remote_tickets_step_session">Starting chat</string>
+    <string name="remote_tickets_step_prompt">Sending prompt</string>
+    <!-- How far a start step is, for TalkBack -->
+    <string name="remote_tickets_step_state_done">Done</string>
+    <string name="remote_tickets_step_state_active">In progress</string>
+    <string name="remote_tickets_step_state_failed">Failed</string>
+    <string name="remote_tickets_step_state_pending">Not yet</string>
+    <string name="remote_tickets_start_failed_worktree">The worktree could not be prepared.</string>
+    <string name="remote_tickets_start_failed_move">The ticket could not be moved to In Progress.</string>
+    <string name="remote_tickets_start_failed_session">The chat could not be started.</string>
+    <string name="remote_tickets_start_failed_prompt">The prompt could not be sent.</string>
+    <string name="remote_tickets_start_failed_timeout">Starting took too long. The Mac may still be working on it.</string>
+    <string name="remote_tickets_start_failed_unsupported">This Mac can not start tickets.</string>
+    <string name="remote_tickets_start_failed">Starting failed.</string>
+    <string name="remote_tickets_fact_reused">The worktree already existed and was reused.</string>
+    <string name="remote_tickets_fact_moved">The ticket is now In Progress.</string>
+    <string name="remote_tickets_fact_not_moved">The ticket was not moved.</string>
+
+    <!-- After a write -->
+    <string name="remote_tickets_outcome_unknown">The result is unknown. The ticket is being read again; check it before you try once more.</string>
+    <string name="remote_tickets_write_failed">The change did not go through.</string>
+    <string name="remote_tickets_dismiss">Dismiss</string>
+    <!-- A write notice: the ticket it is about, then what happened -->
+    <string name="remote_tickets_notice_ref">%1$s: %2$s</string>
+</resources>

@@ -28,6 +28,9 @@ internal open class DestinationViewModel(
                 state.selection.routeId == key.routeId && state.selection.projectId == null
             is RemoteNavKey.Providers ->
                 state.selection.routeId == key.routeId && state.selection.projectId == null
+            is RemoteNavKey.Tickets,
+            is RemoteNavKey.Ticket ->
+                state.selection.routeId == key.selection().routeId
             is RemoteNavKey.Sessions ->
                 state.selection.routeId == key.routeId && state.selection.projectId == key.projectId
             is RemoteNavKey.Chat -> state.selection == key.selection()
@@ -196,6 +199,13 @@ internal class ActivityViewModel(repository: RemoteRepository, key: RemoteNavKey
 internal class ProjectsViewModel(repository: RemoteRepository, key: RemoteNavKey.Projects) :
     DestinationViewModel(repository, key) {
     fun unshare(projectId: String) = active { repository.unshareProject(projectId) }
+
+    fun queueAccept(projectId: String, ref: String, comment: String) =
+        active { repository.queueAccept(projectId, ref, comment) }
+
+    fun undoAccept() = repository.undoAccept()
+
+    fun dismissTicketNotice() = repository.dismissTicketNotice()
 }
 
 internal class FolderBrowserViewModel(
@@ -255,6 +265,38 @@ internal class ProvidersViewModel(
     fun dismissLogin() = repository.dismissLogin()
 
     fun dismissNotice() = repository.dismissProviderNotice()
+}
+
+/**
+ * Backs both ticket pages. The detail page must read its state with [ticketDetailView] by ref
+ * (loading, ready, unavailable or failed). [matches] ignores the project so the pages
+ * stay valid over a chat.
+ */
+internal class TicketsViewModel(
+    repository: RemoteRepository,
+    key: RemoteNavKey,
+) : DestinationViewModel(repository, key) {
+    /** Reads the tickets again; [force] has the host read Plane first. */
+    fun reload(force: Boolean) = active { repository.refreshTickets(force) }
+
+    fun open(projectId: String, ref: String) = active { repository.openTicket(projectId, ref) }
+
+    fun comment(projectId: String, ref: String, text: String) =
+        active { repository.commentOnTicket(projectId, ref, text) }
+
+    fun queueAccept(projectId: String, ref: String, comment: String) =
+        active { repository.queueAccept(projectId, ref, comment) }
+
+    /** Not gated: taking an accept back must work whatever the page is doing. */
+    fun undoAccept() = repository.undoAccept()
+
+    fun dismissNotice() = repository.dismissTicketNotice()
+
+    fun move(projectId: String, ref: String, state: String, comment: String?) =
+        active { repository.moveTicketTo(projectId, ref, state, comment) }
+
+    fun start(projectId: String, ref: String, note: String?) =
+        active { repository.startTicketJob(projectId, ref, note) }
 }
 
 internal class SessionsViewModel(
