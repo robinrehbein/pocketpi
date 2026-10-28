@@ -66,4 +66,43 @@
     <string name="remote_ticket_comments_empty">No comments yet.</string>
     <string name="remote_ticket_comments_truncated">Only the newest comments are shown.</string>
     <string name="remote_ticket_comment_meta">%1$s · %2$s</string>
+
+    <!-- Sheets: accept (with undo), comment, status, start -->
+    <string name="remote_tickets_accept_title">Set %1$s to Done</string>
+    <string name="remote_tickets_accept_comment">Accepted in PocketPi.</string>
+    <string name="remote_tickets_comment_label">Comment</string>
+    <string name="remote_tickets_accepting">%1$s is being accepted</string>
+    <string name="remote_tickets_undo">Undo</string>
+    <string name="remote_tickets_comment_title">Comment on %1$s</string>
+    <string name="remote_tickets_send">Send</string>
+    <string name="remote_tickets_status_title">Change status of %1$s</string>
+    <string name="remote_tickets_status_current">Now: %1$s</string>
+    <string name="remote_tickets_status_comment_required">Cancelling needs a comment.</string>
+    <string name="remote_tickets_status_none">This ticket can not be moved right now.</string>
+    <string name="remote_tickets_start_title">Start %1$s with an agent</string>
+    <string name="remote_tickets_start_branch">Branch %1$s</string>
+    <string name="remote_tickets_start_moves">Ticket → In Progress</string>
+    <string name="remote_tickets_start_note">Note for the agent (optional)</string>
+    <string name="remote_tickets_start_go">Start</string>
+    <string name="remote_tickets_start_close">Close</string>
+    <string name="remote_tickets_start_open_chat">Open chat</string>
+    <string name="remote_tickets_step_worktree">Preparing worktree</string>
+    <string name="remote_tickets_step_move">Moving ticket to In Progress</string>
+    <string name="remote_tickets_step_session">Starting chat</string>
+    <string name="remote_tickets_step_prompt">Sending prompt</string>
+    <string name="remote_tickets_start_failed_worktree">The worktree could not be prepared.</string>
+    <string name="remote_tickets_start_failed_move">The ticket could not be moved to In Progress.</string>
+    <string name="remote_tickets_start_failed_session">The chat could not be started.</string>
+    <string name="remote_tickets_start_failed_prompt">The prompt could not be sent.</string>
+    <string name="remote_tickets_start_failed_timeout">Starting took too long. The Mac may still be working on it.</string>
+    <string name="remote_tickets_start_failed_unsupported">This Mac can not start tickets.</string>
+    <string name="remote_tickets_start_failed">Starting failed.</string>
+    <string name="remote_tickets_fact_reused">The worktree already existed and was reused.</string>
+    <string name="remote_tickets_fact_moved">The ticket is now In Progress.</string>
+    <string name="remote_tickets_fact_not_moved">The ticket was not moved.</string>
+
+    <!-- After a write -->
+    <string name="remote_tickets_outcome_unknown">The result is unknown. The ticket is being read again; check it before you try once more.</string>
+    <string name="remote_tickets_write_failed">The change did not go through.</string>
+    <string name="remote_tickets_dismiss">Dismiss</string>
 </resources>

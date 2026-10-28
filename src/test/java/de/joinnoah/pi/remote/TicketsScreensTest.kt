@@ -71,7 +71,7 @@ class TicketsScreensTest {
             MaterialTheme {
                 TicketDetailContent(
                     state, "p1", ref, onBack = {}, onRetry = {}, onOpenChat = onOpenChat,
-                    onOpenLink = onOpenLink, onAccept = {}, onComment = {}, onMove = {}, onStart = {},
+                    onOpenLink = onOpenLink, onAccept = {}, onComment = {}, onMove = { _, _ -> }, onStart = {},
                 )
             }
         }

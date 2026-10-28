@@ -371,7 +371,33 @@ class MacHubUiTest {
         compose.onNodeWithText("DEV-4 · Title 4").assertIsDisplayed()
         compose.onAllNodesWithText("DEV-1 · Title 1").assertCountEquals(0)
         compose.onNodeWithText(label(R.string.remote_tickets_all)).performClick()
+        compose.waitForIdle()
+        // The link leads to the tickets screen, not just to a refresh.
+        compose.onNodeWithTag("ticketsList").assertIsDisplayed()
+        compose.onNodeWithTag("ticketsReload").assertIsDisplayed()
         assertTrue(repository.ticketRefreshes.isNotEmpty())
+    }
+
+    @Test
+    fun acceptOnHomeOpensTheSheetAndQueuesTheAccept() {
+        renderTickets(ticketsState(ticket(1)))
+        compose.onNodeWithText(label(R.string.remote_ticket_accept)).performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_tickets_accept_title, "DEV-1")).assertIsDisplayed()
+        compose.onNodeWithTag("ticketSheetConfirm").performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(Triple("p1", "DEV-1", "Accepted in PocketPi.")), repository.ticketAccepts)
+        // Accept no longer detours through the detail page.
+        assertEquals(emptyList<Pair<String, String>>(), repository.ticketOpens)
+    }
+
+    @Test
+    fun homeShowsTheUndoBarForAPendingAcceptAndUndoSendsNothing() {
+        val pending = PendingAccept("p1", "DEV-1", "c", 5_000L)
+        renderTickets(ticketsState(ticket(1)).copy(pendingAccept = pending))
+        compose.onNodeWithText(compose.activity.getString(R.string.remote_tickets_accepting, "DEV-1")).assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.remote_tickets_undo)).performClick()
+        assertEquals(1, repository.ticketUndos)
+        assertEquals(emptyList<Triple<String, String, String>>(), repository.ticketAccepts)
     }
 
     @Test

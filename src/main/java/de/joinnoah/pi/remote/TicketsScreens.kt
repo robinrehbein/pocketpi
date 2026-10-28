@@ -79,6 +79,8 @@ internal fun TicketsScreen(key: RemoteNavKey.Tickets, model: TicketsViewModel, n
         onReload = { model.reload(true) },
         onRetry = { model.reload(true) },
         onOpen = { projectId, ref -> navigator.openTicket(key.routeId, projectId, ref) },
+        onUndo = model::undoAccept,
+        onDismissNotice = model::dismissNotice,
     )
 }
 
@@ -100,15 +102,14 @@ internal fun TicketDetailScreen(key: RemoteNavKey.Ticket, model: TicketsViewMode
         onRetry = { model.open(key.projectId, key.ref) },
         onOpenChat = { sessionId -> navigator.open(RemoteNavKey.Chat(key.routeId, key.projectId, sessionId)) },
         onOpenLink = { openHttpsLink(context, it) },
-        // The accept, comment, status and start sheets arrive with B6.
-        onAccept = ::sheetComesWithB6,
-        onComment = ::sheetComesWithB6,
-        onMove = ::sheetComesWithB6,
-        onStart = ::sheetComesWithB6,
+        onAccept = { comment -> model.queueAccept(key.projectId, key.ref, comment) },
+        onComment = { text -> model.comment(key.projectId, key.ref, text) },
+        onMove = { target, comment -> model.move(key.projectId, key.ref, target, comment) },
+        onStart = { note -> model.start(key.projectId, key.ref, note) },
+        onUndo = model::undoAccept,
+        onDismissNotice = model::dismissNotice,
     )
 }
-
-private fun sheetComesWithB6() = Unit
 
 // ---- Tickets screen -------------------------------------------------------------------------
 
@@ -121,6 +122,8 @@ internal fun TicketsContent(
     onRetry: () -> Unit,
     onOpen: (projectId: String, ref: String) -> Unit,
     modifier: Modifier = Modifier,
+    onUndo: () -> Unit = {},
+    onDismissNotice: () -> Unit = {},
 ) {
     val tickets = state.tickets
     var chosen by rememberSaveable { mutableStateOf<String?>(null) }
@@ -146,12 +149,15 @@ internal fun TicketsContent(
                 connection = connectionStatusLine(state),
             )
         },
+        snackbarHost = { TicketUndoBar(tickets.pendingAccept, onUndo) },
     ) { insets ->
         LazyColumn(
             Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets).testTag("ticketsList"),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            if (hasWriteNotice(tickets))
+                item("notice") { TicketWriteNotice(tickets, onDismissNotice) }
             if (tickets.projects.size > 1)
                 item("chooser") {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -359,12 +365,15 @@ internal fun TicketDetailContent(
     onRetry: () -> Unit,
     onOpenChat: (sessionId: String) -> Unit,
     onOpenLink: (String) -> Boolean,
-    onAccept: () -> Unit,
-    onComment: () -> Unit,
-    onMove: () -> Unit,
-    onStart: () -> Unit,
+    onAccept: (comment: String) -> Unit,
+    onComment: (text: String) -> Unit,
+    onMove: (state: String, comment: String?) -> Unit,
+    onStart: (note: String?) -> Unit,
     modifier: Modifier = Modifier,
+    onUndo: () -> Unit = {},
+    onDismissNotice: () -> Unit = {},
 ) {
+    var sheet by rememberSaveable { mutableStateOf<TicketSheet?>(null) }
     val view = ticketDetailView(state, ref)
     val ticket = (view as? TicketDetailView.Ready)?.detail?.ticket
     val project = state.tickets.projects.firstOrNull { it.projectId == projectId }
@@ -394,12 +403,15 @@ internal fun TicketDetailContent(
                 connection = connectionStatusLine(state),
             )
         },
+        snackbarHost = { TicketUndoBar(state.tickets.pendingAccept, onUndo) },
     ) { insets ->
         Column(
             Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)
                 .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            // The start sheet reports its own failures.
+            if (sheet != TicketSheet.START) TicketWriteNotice(state.tickets, onDismissNotice)
             when (view) {
                 TicketDetailView.Loading -> TicketsSkeleton()
                 is TicketDetailView.Unavailable -> ReasonBlock(view.reason)
@@ -407,11 +419,26 @@ internal fun TicketDetailContent(
                 is TicketDetailView.Ready ->
                     TicketBody(
                         view.detail, view.detail.ticket!!, project, state.connected,
-                        onOpenChat, onAccept, onComment, onMove, onStart,
+                        acceptPending = state.tickets.pendingAccept != null,
+                        onOpenChat = onOpenChat,
+                        onAccept = { sheet = TicketSheet.ACCEPT },
+                        onComment = { sheet = TicketSheet.COMMENT },
+                        onMove = { sheet = TicketSheet.STATUS },
+                        onStart = { sheet = TicketSheet.START },
                     )
             }
         }
     }
+    val open = (view as? TicketDetailView.Ready)?.detail?.ticket
+    val close = { sheet = null }
+    if (open != null)
+        when (sheet) {
+            TicketSheet.ACCEPT -> AcceptSheet(open.ref, { onAccept(it); close() }, close)
+            TicketSheet.COMMENT -> CommentSheet(open.ref, { onComment(it); close() }, close)
+            TicketSheet.STATUS -> StatusSheet(open, { target, comment -> onMove(target, comment); close() }, close)
+            TicketSheet.START -> StartSheet(open.ref, state.tickets, onStart, onOpenChat, close)
+            null -> Unit
+        }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -421,6 +448,7 @@ private fun TicketBody(
     ticket: Ticket,
     project: TicketProject?,
     connected: Boolean,
+    acceptPending: Boolean,
     onOpenChat: (String) -> Unit,
     onAccept: () -> Unit,
     onComment: () -> Unit,
@@ -447,7 +475,7 @@ private fun TicketBody(
         }
     }
 
-    TicketActions(ticket, project, connected, onAccept, onComment, onMove, onStart, onOpenChat)
+    TicketActions(ticket, project, connected, acceptPending, onAccept, onComment, onMove, onStart, onOpenChat)
 
     if (ticket.sessions.isNotEmpty())
         Section(stringResource(R.string.remote_ticket_chats)) {
@@ -526,6 +554,7 @@ private fun TicketActions(
     ticket: Ticket,
     project: TicketProject?,
     connected: Boolean,
+    acceptPending: Boolean,
     onAccept: () -> Unit,
     onComment: () -> Unit,
     onMove: () -> Unit,
@@ -544,7 +573,7 @@ private fun TicketActions(
     if (primary || comment || move || (chat != null))
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (accept) Button(onClick = onAccept, enabled = connected) { Text(stringResource(R.string.remote_ticket_accept)) }
+                if (accept) Button(onClick = onAccept, enabled = connected && !acceptPending) { Text(stringResource(R.string.remote_ticket_accept)) }
                 else if (start) Button(onClick = onStart, enabled = connected) { Text(stringResource(R.string.remote_ticket_start)) }
                 else if (chat != null) Button(onClick = { onOpenChat(chat.id) }) { Text(stringResource(R.string.remote_ticket_open_chat)) }
                 if (comment)

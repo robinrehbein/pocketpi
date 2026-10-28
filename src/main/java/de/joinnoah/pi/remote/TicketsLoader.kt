@@ -248,6 +248,12 @@ internal class TicketsLoader(
         write(routeId) { it.copy(pendingAccept = null) }
     }
 
+    /** Forgets the last write's failure or unknown outcome once the user has seen it. */
+    fun dismissNotice() {
+        val routeId = current().tickets.routeId ?: return
+        write(routeId) { it.copy(writeFailure = null, outcomeUnknown = false) }
+    }
+
     fun comment(projectId: String, ref: String, text: String) {
         val routeId = usableRoute() ?: return
         if (!writable(routeId, projectId) || text.isEmpty() || text.length > MAX_TICKET_COMMENT_CHARS) return

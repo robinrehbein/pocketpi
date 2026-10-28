@@ -519,6 +519,9 @@ interface RemoteRepository {
     /** Takes back the accept waiting in its undo window; nothing was sent. */
     fun undoAccept() {}
 
+    /** Clears the failure or unknown outcome of the last ticket write after the user saw it. */
+    fun dismissTicketNotice() {}
+
     /** `session.files.list`; only with [FILES_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing =
         throw RemoteRequestException.unsupported()

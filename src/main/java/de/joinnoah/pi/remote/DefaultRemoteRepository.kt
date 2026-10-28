@@ -6857,6 +6857,8 @@ class DefaultRemoteRepository(
 
     override fun undoAccept() = ticketsLoader.undo()
 
+    override fun dismissTicketNotice() = ticketsLoader.dismissNotice()
+
     override fun commentOnTicket(projectId: String, ref: String, text: String) =
         ticketsLoader.comment(projectId, ref, text)
 

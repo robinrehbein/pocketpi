@@ -199,6 +199,13 @@ internal class ActivityViewModel(repository: RemoteRepository, key: RemoteNavKey
 internal class ProjectsViewModel(repository: RemoteRepository, key: RemoteNavKey.Projects) :
     DestinationViewModel(repository, key) {
     fun unshare(projectId: String) = active { repository.unshareProject(projectId) }
+
+    fun queueAccept(projectId: String, ref: String, comment: String) =
+        active { repository.queueAccept(projectId, ref, comment) }
+
+    fun undoAccept() = repository.undoAccept()
+
+    fun dismissTicketNotice() = repository.dismissTicketNotice()
 }
 
 internal class FolderBrowserViewModel(
@@ -276,6 +283,14 @@ internal class TicketsViewModel(
 
     fun comment(projectId: String, ref: String, text: String) =
         active { repository.commentOnTicket(projectId, ref, text) }
+
+    fun queueAccept(projectId: String, ref: String, comment: String) =
+        active { repository.queueAccept(projectId, ref, comment) }
+
+    /** Not gated: taking an accept back must work whatever the page is doing. */
+    fun undoAccept() = repository.undoAccept()
+
+    fun dismissNotice() = repository.dismissTicketNotice()
 
     fun move(projectId: String, ref: String, state: String, comment: String?) =
         active { repository.moveTicketTo(projectId, ref, state, comment) }
