@@ -225,22 +225,30 @@ internal fun toolSummary(name: String?, arguments: String?, output: String? = nu
             R.string.remote_shell_command,
             output?.takeIf { it.startsWith("$ ") }?.substring(2)?.lineSequence()?.first()?.trim()?.takeIf(String::isNotEmpty),
         )
+    val args = arguments?.let(::parsedToolArguments)
     val label =
         when (name) {
             "read" -> R.string.remote_tool_read
             "edit" -> R.string.remote_tool_edit
             "write" -> R.string.remote_tool_write
-            "bash" -> R.string.remote_tool_bash
+            "bash" ->
+                if (runsInBackground(args)) R.string.remote_tool_bash_background
+                else R.string.remote_tool_bash
+            // Older sessions start background jobs with `bash_bg`, which also takes `command`.
+            "bash_bg" -> R.string.remote_tool_bash_background
             else -> return ToolSummary(null, null)
         }
-    val args = arguments?.let(::parsedToolArguments)
     fun field(key: String): String? =
         (args?.get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank)
     val detail =
-        if (name == "bash") field("command")?.trim()?.lineSequence()?.first()?.trim()
+        if (name == "bash" || name == "bash_bg") field("command")?.trim()?.lineSequence()?.first()?.trim()
         else field("path") ?: field("file_path")
     return ToolSummary(label, detail?.takeIf(String::isNotEmpty))
 }
+
+/** Whether a `bash` call's arguments carry the JSON boolean `run_in_background: true`. */
+internal fun runsInBackground(args: JsonObject?): Boolean =
+    (args?.get("run_in_background") as? JsonPrimitive)?.let { !it.isString && it.booleanOrNull == true } == true
 
 private val toolArgumentsCache =
     object : LinkedHashMap<String, JsonObject?>(64, 0.75f, true) {

@@ -427,7 +427,11 @@ internal fun isQuestionTool(name: String?): Boolean = name == "AskUserQuestion" 
 /** pi's plan tool: `ExitPlanMode` now, `submit_plan` in older saved sessions. */
 internal fun isPlanTool(name: String?): Boolean = name == "ExitPlanMode" || name == "submit_plan"
 
-/** A tool call that starts or ends a background job: `bash_bg`, `TaskStop`, or `bash_kill` in older sessions. */
+/**
+ * A tool call that starts or ends a background job on a host without the jobs lease: `bash_bg`,
+ * `TaskStop`, or `bash_kill` in older sessions. Newer hosts start jobs with `bash` and
+ * `run_in_background` and report every change through `session.jobs.changed`, so `bash` is no hint.
+ */
 internal fun isJobChangingTool(name: String?): Boolean =
     name == "bash_bg" || name == "TaskStop" || name == "bash_kill"
 

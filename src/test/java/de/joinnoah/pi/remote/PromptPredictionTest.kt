@@ -130,6 +130,14 @@ class PromptPredictionTest {
     }
 
     @Test
+    fun aBackgroundedTestCommandIsNotATestRun() {
+        val started = tool("bash", """{"command":"npm test","run_in_background":true}""", failed = true)
+        assertEquals(rule(PredictionRule.FIX_ERROR), predictPrompt(listOf(user()) + started, "idle", false))
+        val foreground = tool("bash", """{"command":"npm test","run_in_background":false}""", failed = true)
+        assertEquals(rule(PredictionRule.FIX_TESTS), predictPrompt(listOf(user()) + foreground, "idle", false))
+    }
+
+    @Test
     fun aTurnTheHostStoppedDuringSuggestsContinuing() {
         val stopped = reply("The host stopped while running a turn. Nothing was resent.", state = "error")
         assertEquals(rule(PredictionRule.CONTINUE), predictPrompt(listOf(user()) + edit() + stopped, "idle", false))

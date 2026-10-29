@@ -61,6 +61,9 @@ private fun command(arguments: String): String =
         arguments
     }
 
+private fun backgrounded(arguments: String): Boolean =
+    runsInBackground(parsedToolArguments(arguments))
+
 private fun toolEvents(messages: List<JsonObject>): Pair<List<ToolEvent>, Int> {
     val calls = mutableMapOf<String, ToolCall>()
     val events = mutableListOf<ToolEvent>()
@@ -86,7 +89,8 @@ private fun toolEvents(messages: List<JsonObject>): Pair<List<ToolEvent>, Int> {
                 val call = message.optionalText("toolCallId")?.let { calls[it] }
                 val name = (message.optionalText("toolName") ?: call?.name).orEmpty().lowercase()
                 if (message.optionalText("state") == "streaming") return@forEachIndexed
-                val shell = if (name == "bash" && call != null) command(call.arguments) else null
+                // A background command has only started: its result says nothing about tests or a push.
+                val shell = if (name == "bash" && call != null && !backgrounded(call.arguments)) command(call.arguments) else null
                 events +=
                     ToolEvent(
                         index,
