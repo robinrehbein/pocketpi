@@ -562,6 +562,16 @@ class ChangesPaneTest {
     }
 
     @Test
+    fun anOpenPullRequestLeavesOutOnlyThePullRequestPrompt() {
+        val base = GitDevBase("origin/main")
+        assertEquals(ShipAction.entries - ShipAction.PULL_REQUEST, shipActions(base, prOpen = true))
+        assertEquals(ShipAction.entries, shipActions(base, prOpen = false))
+        // No value, as from an older host, keeps the prompt.
+        assertEquals(ShipAction.entries, shipActions(base))
+        assertEquals(listOf(ShipAction.COMMIT, ShipAction.COMMIT_PUSH, ShipAction.BRANCH), shipActions(null, prOpen = true))
+    }
+
+    @Test
     fun aNarrowHeaderKeepsTheShipMenuBehindMore() {
         val recorder = Recorder()
         renderInLayout(reviewState(file = null).copy(devBase = GitDevBase(null), status = reviewStatus.copy(devBase = GitDevBase(null))), recorder)

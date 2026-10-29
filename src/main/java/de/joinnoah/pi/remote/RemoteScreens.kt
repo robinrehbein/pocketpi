@@ -1610,6 +1610,7 @@ internal fun RemoteScreen(
                     Modifier.fillMaxSize(),
                     projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
                     offline = !state.connected,
+                    pullRequest = state.pullRequest,
                 )
             }
         }

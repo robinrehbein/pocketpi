@@ -61,6 +61,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -128,6 +130,8 @@ internal fun ChangesPane(
     projectName: String? = null,
     /** No connection: a status shown says when it was read. */
     offline: Boolean = false,
+    /** The open pull request of the session's branch, when the host reports one. */
+    pullRequest: PullRequestStatus? = null,
 ) {
     PaneBackHandler { if (state.file != null) actions.onOpenFile(null) else actions.onClose() }
     // Review mode belongs to the two-pane layout, which gives the pane the window.
@@ -189,7 +193,7 @@ internal fun ChangesPane(
             onDispose { keyTarget.removeReviewHandler(handler) }
         }
     val headerActions =
-        changesHeaderActions(state, codeWrap, twoPane, reviewing) { prompt -> checked.onPrefill(prompt) }
+        changesHeaderActions(state, codeWrap, twoPane, reviewing, pullRequest != null) { prompt -> checked.onPrefill(prompt) }
     var headerHeight by remember { mutableStateOf(64.dp) }
     Surface(modifier.fillMaxSize().testTag("changesPane")) {
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
@@ -209,7 +213,7 @@ internal fun ChangesPane(
                     val wrap = codeWrap.wrap
                     val width = maxWidth
                     when {
-                        file == null -> ChangesOverview(state, checked, inset, offline)
+                        file == null -> ChangesOverview(state, checked, inset, offline, pullRequest)
                         // A wide pane keeps the file list beside the diff.
                         width >= FILE_LIST_BESIDE_MIN_WIDTH ->
                             Row(Modifier.fillMaxSize()) {
@@ -278,10 +282,17 @@ internal enum class ShipAction {
 
 /**
  * The Ship actions for a repository whose dev base is [devBase]: a pull request and a rebase need
- * one. Deterministic git operations are the host's to add; these are prompts for pi.
+ * one, and a pull request is left out once [prOpen]. Deterministic git operations are the host's to add; these are prompts for pi.
  */
-internal fun shipActions(devBase: GitDevBase?): List<ShipAction> =
-    ShipAction.entries.filter { (it != ShipAction.PULL_REQUEST && it != ShipAction.REBASE) || devBase?.ref != null }
+internal fun shipActions(devBase: GitDevBase?, prOpen: Boolean = false): List<ShipAction> =
+    ShipAction.entries.filter {
+        when (it) {
+            // A known pull request makes the prompt moot; no value (an older host too) keeps it.
+            ShipAction.PULL_REQUEST -> !prOpen && devBase?.ref != null
+            ShipAction.REBASE -> devBase?.ref != null
+            else -> true
+        }
+    }
 
 /** What [action] is called in the Ship menu. */
 internal fun shipLabel(context: Context, action: ShipAction, devBase: GitDevBase?): String =
@@ -317,6 +328,7 @@ private fun changesHeaderActions(
     codeWrap: CodeWrapState,
     twoPane: TwoPaneState?,
     reviewing: Boolean,
+    prOpen: Boolean,
     onPrefill: (String) -> Unit,
 ): List<PaneAction> {
     val context = LocalContext.current
@@ -343,7 +355,7 @@ private fun changesHeaderActions(
                     Icons.Default.RocketLaunch,
                     "changesShip",
                     items =
-                        shipActions(devBase).map { action ->
+                        shipActions(devBase, prOpen).map { action ->
                             PaneMenuItem(shipLabel(context, action, devBase), "changesShip_${action.name.lowercase()}") {
                                 onPrefill(shipPrompt(context, action, devBase))
                             }
@@ -483,7 +495,13 @@ private fun Loading() {
 }
 
 @Composable
-private fun ChangesOverview(state: ChangesState, actions: ChangesActions, headerHeight: Dp, offline: Boolean = false) {
+private fun ChangesOverview(
+    state: ChangesState,
+    actions: ChangesActions,
+    headerHeight: Dp,
+    offline: Boolean = false,
+    pullRequest: PullRequestStatus? = null,
+) {
     val context = LocalContext.current
     val status = state.status
     val shownBase = status?.base ?: state.base
@@ -505,6 +523,11 @@ private fun ChangesOverview(state: ChangesState, actions: ChangesActions, header
             verticalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerHeight + 8.dp, bottom = 8.dp),
         ) {
+            pullRequest?.let { pr ->
+                item(key = "pullRequest", span = { GridItemSpan(maxLineSpan) }) {
+                    PullRequestCard(pr) { url -> openHttpsLink(context, url) }
+                }
+            }
             item(key = "bases", span = { GridItemSpan(maxLineSpan) }) {
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
@@ -1182,3 +1205,75 @@ internal fun reviewPrompt(context: Context, comments: List<ReviewComment>, devBa
             },
         )
     }
+
+/** The part of a GitHub-shaped pull request address that the checks page hangs off. */
+private val PULL_REQUEST_PAGE = Regex("https://[^/?#]+(?:/[^/?#]+)*/pull/[0-9]+")
+
+/**
+ * The checks page of the pull request at [url]: only for an `https:` address that ends in
+ * `/pull/<n>` with no query or fragment, as GitHub's are. Anything else gets no checks button.
+ */
+internal fun pullRequestChecksUrl(url: String): String? =
+    if (validHttpsUrl(url) && PULL_REQUEST_PAGE.matches(url)) "$url/checks" else null
+
+/** How many failing checks the card cannot list by name. */
+internal fun pullRequestMoreFailing(pr: PullRequestStatus): Int = (pr.failedChecks - pr.failingChecks.size).coerceAtLeast(0)
+
+/**
+ * The pull request card at the top of the Changes overview: the pill's words, the names of failing
+ * checks as plain text, and buttons that call [onOpen] with an `https:` address. Without a valid
+ * https address the card has no buttons.
+ */
+@Composable
+internal fun PullRequestCard(pr: PullRequestStatus, onOpen: (String) -> Unit) {
+    // Reading the configuration recomposes the words when the language changes.
+    LocalConfiguration.current
+    val resources = LocalContext.current.resources
+    val model = pullRequestChipModel(pr)
+    val title = pullRequestChipText(model, resources)
+    val description = pullRequestChipDescription(model, resources)
+    val more = pullRequestMoreFailing(pr)
+    val checksUrl = pullRequestChecksUrl(pr.url)
+    val canOpen = validHttpsUrl(pr.url)
+    Surface(
+        Modifier.fillMaxWidth().testTag("changesPullRequest"),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                title,
+                Modifier.semantics { contentDescription = description },
+                style = MaterialTheme.typography.titleSmall,
+            )
+            // Check names come from the remote repository: plain text, never a link or markdown.
+            pr.failingChecks.forEach { name ->
+                Text(
+                    name,
+                    Modifier.testTag("changesPullRequestFailing"),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (more > 0)
+                Text(
+                    stringResource(R.string.remote_pr_more_failing, more),
+                    Modifier.testTag("changesPullRequestMore"),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            if (canOpen)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { onOpen(pr.url) }, Modifier.testTag("changesPullRequestOpen")) {
+                        Text(stringResource(R.string.remote_pr_open))
+                    }
+                    if (checksUrl != null)
+                        OutlinedButton(onClick = { onOpen(checksUrl) }, Modifier.testTag("changesPullRequestChecks")) {
+                            Text(stringResource(R.string.remote_pr_open_checks))
+                        }
+                }
+        }
+    }
+}
