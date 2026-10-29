@@ -1,0 +1,1075 @@
+{
+  "version": 1,
+  "wireValid": [
+    {
+      "name": "pull-request-approved-done",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 40,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "pull-request-draft-no-review-no-checks",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 41,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": true,
+          "review": null,
+          "checks": {
+            "state": "none",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "pull-request-running",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 42,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "review_required",
+          "checks": {
+            "state": "running",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "pull-request-failing-names",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 43,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "changes_requested",
+          "checks": {
+            "state": "done",
+            "failed": 7
+          },
+          "failingChecks": [
+            "build",
+            "lint",
+            "unit tests (ubuntu-latest, 22)",
+            "e2e",
+            "typecheck"
+          ]
+        }
+      }
+    },
+    {
+      "name": "pull-request-enterprise-host-and-limits",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 44,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 9007199254740991,
+          "url": "https://git.example.corp/ééééééééééaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "running",
+            "failed": 10000
+          },
+          "failingChecks": [
+            "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "c",
+            "d",
+            "e"
+          ]
+        }
+      }
+    },
+    {
+      "name": "pull-request-cleared",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 45,
+        "kind": "session.pull_request",
+        "pullRequest": null
+      }
+    },
+    {
+      "name": "snapshot-with-pull-request",
+      "payload": {
+        "type": "result",
+        "requestId": "snapshot-1",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "revision": 40,
+          "status": "idle",
+          "messages": [],
+          "pendingQuestions": [],
+          "pullRequest": {
+            "number": 123,
+            "url": "https://github.com/acme/app/pull/123",
+            "draft": false,
+            "review": "approved",
+            "checks": {
+              "state": "done",
+              "failed": 1
+            },
+            "failingChecks": [
+              "build"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "snapshot-without-pull-request",
+      "payload": {
+        "type": "result",
+        "requestId": "snapshot-1",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "revision": 40,
+          "status": "idle",
+          "messages": [],
+          "pendingQuestions": []
+        }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "url-http",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "http://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "url-empty",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "url-scheme-only",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "url-trailing-space",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123 ",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "url-inner-space",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/ app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "url-newline",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123\n",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "url-c0-control",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123\u0007",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "url-del",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123\u007f",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "url-c1-control",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123\u009b",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "url-oversized",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "url-missing",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "pull-request-unknown-key",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          },
+          "state": "open"
+        }
+      }
+    },
+    {
+      "name": "pull-request-checked-at",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          },
+          "checkedAt": 1
+        }
+      }
+    },
+    {
+      "name": "checks-unknown-key",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0,
+            "passed": 3
+          }
+        }
+      }
+    },
+    {
+      "name": "number-zero",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 0,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "number-negative",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": -1,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "number-fraction",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 1.5,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "number-string",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": "123",
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "number-unsafe",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 9007199254740992,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "draft-string",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": "false",
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "review-missing",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "review-unknown",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "APPROVED",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "review-commented",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "commented",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "checks-missing",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved"
+        }
+      }
+    },
+    {
+      "name": "checks-state-unknown",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "pending",
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "checks-state-failed",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "failed",
+            "failed": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "checks-failed-above-limit",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 10001
+          }
+        }
+      }
+    },
+    {
+      "name": "checks-failed-negative",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": -1
+          }
+        }
+      }
+    },
+    {
+      "name": "checks-failed-fraction",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 1.5
+          }
+        }
+      }
+    },
+    {
+      "name": "checks-failed-with-state-none",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "none",
+            "failed": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "checks-state-missing",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "failed": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "failing-checks-six-names",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 6
+          },
+          "failingChecks": [
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+            "f"
+          ]
+        }
+      }
+    },
+    {
+      "name": "failing-checks-more-than-failed",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 1
+          },
+          "failingChecks": [
+            "a",
+            "b"
+          ]
+        }
+      }
+    },
+    {
+      "name": "failing-checks-with-zero-failed",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          },
+          "failingChecks": [
+            "a"
+          ]
+        }
+      }
+    },
+    {
+      "name": "failing-checks-empty-list",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 1
+          },
+          "failingChecks": []
+        }
+      }
+    },
+    {
+      "name": "failing-checks-empty-name",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 1
+          },
+          "failingChecks": [
+            ""
+          ]
+        }
+      }
+    },
+    {
+      "name": "failing-checks-oversized-name",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 1
+          },
+          "failingChecks": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ]
+        }
+      }
+    },
+    {
+      "name": "failing-checks-oversized-multibyte-name",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 1
+          },
+          "failingChecks": [
+            "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééa"
+          ]
+        }
+      }
+    },
+    {
+      "name": "failing-checks-number-name",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 1
+          },
+          "failingChecks": [
+            1
+          ]
+        }
+      }
+    },
+    {
+      "name": "failing-checks-null",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          },
+          "failingChecks": null
+        }
+      }
+    },
+    {
+      "name": "pull-request-missing",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request"
+      }
+    },
+    {
+      "name": "pull-request-array",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": []
+      }
+    },
+    {
+      "name": "pull-request-string",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": "https://github.com/acme/app/pull/123"
+      }
+    },
+    {
+      "name": "pull-request-extra-event-key",
+      "payload": {
+        "type": "event",
+        "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+        "revision": 50,
+        "kind": "session.pull_request",
+        "pullRequest": {
+          "number": 123,
+          "url": "https://github.com/acme/app/pull/123",
+          "draft": false,
+          "review": "approved",
+          "checks": {
+            "state": "done",
+            "failed": 0
+          }
+        },
+        "source": "pr-status"
+      }
+    },
+    {
+      "name": "snapshot-null-pull-request",
+      "payload": {
+        "type": "result",
+        "requestId": "snapshot-1",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "revision": 40,
+          "status": "idle",
+          "messages": [],
+          "pendingQuestions": [],
+          "pullRequest": null
+        }
+      }
+    },
+    {
+      "name": "snapshot-pull-request-bad-url",
+      "payload": {
+        "type": "result",
+        "requestId": "snapshot-1",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "revision": 40,
+          "status": "idle",
+          "messages": [],
+          "pendingQuestions": [],
+          "pullRequest": {
+            "number": 123,
+            "url": "http://github.com/acme/app/pull/123",
+            "draft": false,
+            "review": "approved",
+            "checks": {
+              "state": "done",
+              "failed": 0
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "snapshot-pull-request-unknown-key",
+      "payload": {
+        "type": "result",
+        "requestId": "snapshot-1",
+        "ok": true,
+        "data": {
+          "kind": "snapshot",
+          "sessionId": "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d",
+          "revision": 40,
+          "status": "idle",
+          "messages": [],
+          "pendingQuestions": [],
+          "pullRequest": {
+            "number": 123,
+            "url": "https://github.com/acme/app/pull/123",
+            "draft": false,
+            "review": "approved",
+            "checks": {
+              "state": "done",
+              "failed": 0
+            },
+            "state": "open"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -256,7 +256,10 @@ run a call auto mode blocked) is a byte-for-byte copy from noah-monorepo commit
 `2004c61568855a3d824bb0f55055d1dcfa1c3dea`, the merge of pull request #905. `tickets-v1.json`
 (the Plane ticket view: listing, reading, commenting, moving and starting tickets behind
 `tickets.v1`) is a byte-for-byte copy from noah-monorepo commit
-`97682441742582486db109c1f4b058b4418b8a4c`, the merge of pull request #1122. When the upstream protocol fixtures change, copy the changed files into
+`97682441742582486db109c1f4b058b4418b8a4c`, the merge of pull request #1122. `session-pr-status-v1.json` (the open pull request of a session's
+branch and its checks, as a session event and an optional snapshot key) is a byte-for-byte copy
+from noah-monorepo commit `06a9baeea79f1dbc6644cbd6c420fb0596174cff`, the merge of pull request
+#1152. When the upstream protocol fixtures change, copy the changed files into
 `src/test/resources/`, compare their bytes with the upstream source, and run
 `./gradlew testDebugUnitTest`. The fixtures cover byte-identical HKDF, AES-GCM and
 QR encoding, replay and tampering rejection, session request correlation, history pagination, early

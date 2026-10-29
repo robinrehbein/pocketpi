@@ -5579,6 +5579,70 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun hostPullRequestsFollowEventsSnapshotsOfflineAndSelection() = runTest {
+        val sessionId = "session"
+        val transport = Transport()
+        configure(transport, sessions = listOf(session(sessionId), session("other")), opened = session(sessionId))
+        fun pullRequest(number: Int) =
+            Wire.objectOf(
+                "number" to number,
+                "url" to "https://github.com/acme/app/pull/$number",
+                "draft" to false,
+                "review" to "approved",
+                "checks" to Wire.objectOf("state" to "done", "failed" to 0),
+            )
+        val original = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && request.text("sessionId") == sessionId)
+                JsonObject(original(request)!! + mapOf("revision" to JsonPrimitive(3), "pullRequest" to pullRequest(7)))
+            else original(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        // The snapshot's optional key restores the current pull request.
+        assertEquals(7L, repository.state.value.pullRequest?.number)
+        fun event(revision: Int, value: Any?) =
+            Wire.objectOf(
+                "type" to "event",
+                "sessionId" to sessionId,
+                "revision" to revision,
+                "kind" to "session.pull_request",
+                "pullRequest" to value,
+            )
+        val snapshots = transport.sent.count { it.text("type") == "session.snapshot" }
+        transport.deliver(event(4, null))
+        runCurrent()
+        assertNull(repository.state.value.pullRequest)
+        transport.deliver(event(5, pullRequest(8)))
+        runCurrent()
+        assertEquals(8L, repository.state.value.pullRequest?.number)
+        // A malformed pull request is ignored without an unknown-kind resync.
+        transport.deliver(event(6, "https://github.com/acme/app/pull/9"))
+        runCurrent()
+        advanceUntilIdle()
+        assertEquals(8L, repository.state.value.pullRequest?.number)
+        assertEquals(snapshots, transport.sent.count { it.text("type") == "session.snapshot" })
+        transport.deliver(
+            Wire.objectOf(
+                "type" to "event",
+                "sessionId" to sessionId,
+                "revision" to 7,
+                "kind" to "session.status",
+                "status" to "offline",
+            )
+        )
+        runCurrent()
+        assertNull(repository.state.value.pullRequest)
+        transport.deliver(event(8, pullRequest(10)))
+        runCurrent()
+        assertEquals(10L, repository.state.value.pullRequest?.number)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertNull(repository.state.value.pullRequest)
+    }
+
+    @Test
     fun manualCompactionDispatchesWithoutChangingTheDraft() = runTest {
         val transport = Transport()
         configure(transport)

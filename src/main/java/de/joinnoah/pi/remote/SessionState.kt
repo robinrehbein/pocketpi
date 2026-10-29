@@ -120,6 +120,13 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         private set
 
     /**
+     * The open pull request of the session's branch (`session.pull_request` or the snapshot's
+     * `pullRequest` key); null when there is none or the session went offline.
+     */
+    var pullRequest: PullRequestStatus? = null
+        private set
+
+    /**
      * Whether a snapshot of this epoch has been applied. Until then [messages], [questions] and
      * [nextCursor] are empty placeholders, not the session's state, and the owner keeps showing
      * what it had.
@@ -153,6 +160,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         pendingEvents.clear()
         compaction = null
         suggestion = null
+        pullRequest = null
         this.status = status
     }
 
@@ -201,6 +209,8 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         questions = data.array("pendingQuestions")
         // Absent means none; a malformed value is dropped rather than failing the snapshot.
         suggestion = suggestionText(data["suggestion"])
+        // Same for the pull request: absent means none, a malformed value is dropped.
+        pullRequest = pullRequestStatus(data["pullRequest"])
         compaction =
             if ((data["compacting"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull == true)
                 compaction ?: SessionCompaction(null, now())
@@ -263,8 +273,11 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
                 val incomingStatus = event.text("status")
                 require(incomingStatus in SESSION_STATUSES)
                 status = incomingStatus
-                // The host forgets a suggestion when the session goes offline.
-                if (incomingStatus == "offline") suggestion = null
+                // The host forgets a suggestion and the pull request when the session goes offline.
+                if (incomingStatus == "offline") {
+                    suggestion = null
+                    pullRequest = null
+                }
             }
             "question.open" -> {
                 val question = event.obj("question")
@@ -277,6 +290,8 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
             "session.notice" -> Unit
             // A malformed suggestion is ignored; the next event or snapshot carries the value.
             "session.suggestion" -> sessionSuggestion(event)?.let { suggestion = it.text }
+            // Likewise a malformed pull request keeps the previous one; a null clears it.
+            "session.pull_request" -> sessionPullRequest(event)?.let { pullRequest = it.pullRequest }
             // Applied outside the timeline (the advisor chip); its revision needs no snapshot.
             "advisor.status" -> Unit
             else -> unknownKindSeen = true
