@@ -8,7 +8,10 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertContentDescriptionEquals
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -177,6 +180,51 @@ class ChatActionsUiTest {
         expect(ChatStatusShape.UNKNOWN, R.string.remote_status_unknown)
         compose.runOnIdle { repository.state.value = repository.state.value.copy(connected = false) }
         expect(ChatStatusShape.OFFLINE, R.string.remote_status_offline)
+    }
+
+    private fun withPullRequest(capabilities: Set<String>, connected: Boolean = true) {
+        repository.state.value =
+            repository.state.value.copy(
+                capabilities = capabilities,
+                connected = connected,
+                pullRequest =
+                    PullRequestStatus(
+                        123,
+                        "https://github.com/o/r/pull/123",
+                        false,
+                        PullRequestReview.NONE,
+                        PullRequestChecksState.DONE,
+                        2,
+                        listOf("build", "lint"),
+                    ),
+            )
+    }
+
+    @Test
+    fun theConnectedPullRequestPillOpensTheChangesPane() {
+        withPullRequest(setOf(GIT_CAPABILITY))
+        render()
+        val chip = compose.onNodeWithTag("pullRequestChip")
+        chip.assertIsDisplayed().assertHasClickAction()
+        chip.assertTextContains("PR #123", substring = true).assertTextContains("2 failing", substring = true)
+        compose.onNodeWithTag("changesPane").assertDoesNotExist()
+        chip.performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("changesPane").assertIsDisplayed()
+    }
+
+    @Test
+    fun thePullRequestPillIsNotAButtonWithoutGitSupport() {
+        withPullRequest(setOf(SESSION_TREE_CAPABILITY))
+        render()
+        compose.onNodeWithTag("pullRequestChip").assertIsDisplayed().assertHasNoClickAction()
+    }
+
+    @Test
+    fun thePullRequestPillIsNotAButtonWhileOffline() {
+        withPullRequest(setOf(GIT_CAPABILITY), connected = false)
+        render()
+        compose.onNodeWithTag("pullRequestChip").assertIsDisplayed().assertHasNoClickAction()
     }
 
     private fun menuEntries(): List<String> {

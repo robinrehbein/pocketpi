@@ -341,11 +341,17 @@
         <item quantity="one">%d failing</item>
         <item quantity="other">%d failing</item>
     </plurals>
-    <string name="remote_pr_checks_running">running</string>
+    <string name="remote_pr_checks_running">checks running</string>
     <string name="remote_pr_checks_passed">checks passed</string>
     <string name="remote_pr_review_approved">approved</string>
     <string name="remote_pr_review_changes_requested">changes requested</string>
     <string name="remote_pr_review_required">review required</string>
+    <string name="remote_pr_description_number">Pull request %d</string>
+    <plurals name="remote_pr_description_failing">
+        <item quantity="one">%d check failing</item>
+        <item quantity="other">%d checks failing</item>
+    </plurals>
+    <string name="remote_pr_open_changes">Open changes</string>
     <string name="remote_pr_review_draft">draft</string>
     <string name="remote_jobs_status_running">Running</string>
     <string name="remote_jobs_status_stuck">Running, no output for a while</string>

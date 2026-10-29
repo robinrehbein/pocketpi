@@ -1,7 +1,9 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
@@ -46,6 +48,7 @@ class PullRequestChipUiTest {
             MaterialTheme { PullRequestChip(pr(0, PullRequestChecksState.NONE, draft = true), onClick = null) }
         }
         val chip = compose.onNodeWithTag("pullRequestChip")
-        chip.assertTextEquals("PR #123 · draft")
+        chip.assertTextEquals("PR #123 · draft").assertHasNoClickAction()
+        chip.assertContentDescriptionEquals("Pull request 123, draft")
     }
 }

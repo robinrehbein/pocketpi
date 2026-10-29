@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import android.content.res.Resources
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -16,11 +17,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
@@ -50,10 +52,12 @@ internal data class PullRequestChipModel(
     val checks: PullRequestChecksWord?,
     val review: PullRequestReviewWord?,
     val tone: PullRequestTone,
-) {
-    /** Failed checks or requested changes need attention, as in the host's footer. */
-    val needsAttention: Boolean get() = tone == PullRequestTone.ERROR
-}
+    /**
+     * Failed checks or requested changes, as in the host's footer. A draft with failing checks needs
+     * attention too, although its tone stays muted.
+     */
+    val needsAttention: Boolean,
+)
 
 /**
  * The pill of [pr]. The tone follows pi's footer: a draft is muted, failed checks or requested
@@ -83,35 +87,50 @@ internal fun pullRequestChipModel(pr: PullRequestStatus): PullRequestChipModel {
                 PullRequestTone.SUCCESS
             else -> PullRequestTone.NEUTRAL
         }
-    return PullRequestChipModel(pr.number, checks, review, tone)
+    val needsAttention = pr.failedChecks > 0 || pr.review == PullRequestReview.CHANGES_REQUESTED
+    return PullRequestChipModel(pr.number, checks, review, tone, needsAttention)
 }
 
-@Composable
-private fun pullRequestChipText(model: PullRequestChipModel): String {
+/** The pill's words: `PR #123 · 2 failing · draft`, in the order number, checks, review. */
+internal fun pullRequestChipText(model: PullRequestChipModel, resources: Resources): String {
     val parts = buildList {
-        add(stringResource(R.string.remote_pr_chip_number, model.number))
+        add(resources.getString(R.string.remote_pr_chip_number, model.number))
         when (val checks = model.checks) {
             is PullRequestChecksWord.Failing ->
-                add(pluralStringResource(R.plurals.remote_pr_checks_failing, checks.count, checks.count))
-            PullRequestChecksWord.Running -> add(stringResource(R.string.remote_pr_checks_running))
-            PullRequestChecksWord.Passed -> add(stringResource(R.string.remote_pr_checks_passed))
+                add(resources.getQuantityString(R.plurals.remote_pr_checks_failing, checks.count, checks.count))
+            PullRequestChecksWord.Running -> add(resources.getString(R.string.remote_pr_checks_running))
+            PullRequestChecksWord.Passed -> add(resources.getString(R.string.remote_pr_checks_passed))
             null -> Unit
         }
-        model.review?.let { add(stringResource(it.label)) }
+        model.review?.let { add(resources.getString(it.label)) }
     }
     return parts.joinToString(" · ")
 }
 
+/** What TalkBack says: `Pull request 123, 2 checks failing, draft`, from the same parts as the pill. */
+internal fun pullRequestChipDescription(model: PullRequestChipModel, resources: Resources): String {
+    val parts = buildList {
+        add(resources.getString(R.string.remote_pr_description_number, model.number))
+        when (val checks = model.checks) {
+            is PullRequestChecksWord.Failing ->
+                add(resources.getQuantityString(R.plurals.remote_pr_description_failing, checks.count, checks.count))
+            PullRequestChecksWord.Running -> add(resources.getString(R.string.remote_pr_checks_running))
+            PullRequestChecksWord.Passed -> add(resources.getString(R.string.remote_pr_checks_passed))
+            null -> Unit
+        }
+        model.review?.let { add(resources.getString(it.label)) }
+    }
+    return parts.joinToString(", ")
+}
+
 @Composable
-private fun pullRequestToneColor(tone: PullRequestTone): Color {
-    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    return when (tone) {
+private fun pullRequestToneColor(tone: PullRequestTone): Color =
+    when (tone) {
         PullRequestTone.ERROR -> MaterialTheme.colorScheme.error
-        PullRequestTone.SUCCESS -> if (dark) IdleDark else IdleLight
-        PullRequestTone.NEUTRAL -> if (dark) WaitingDark else WaitingLight
+        PullRequestTone.SUCCESS -> idleColor()
+        PullRequestTone.NEUTRAL -> waitingColor()
         PullRequestTone.MUTED -> MaterialTheme.colorScheme.outline
     }
-}
 
 /**
  * The pull request pill of the insights row: a dot in the tone, `PR #123` and the state in words.
@@ -120,14 +139,22 @@ private fun pullRequestToneColor(tone: PullRequestTone): Color {
 @Composable
 internal fun PullRequestChip(pr: PullRequestStatus, onClick: (() -> Unit)?) {
     val model = pullRequestChipModel(pr)
-    val text = pullRequestChipText(model)
+    // Reading the configuration recomposes the words when the language changes.
+    LocalConfiguration.current
+    val resources = LocalContext.current.resources
+    val text = pullRequestChipText(model, resources)
+    val description = pullRequestChipDescription(model, resources)
+    val openLabel = if (onClick != null) stringResource(R.string.remote_pr_open_changes) else null
     FloatingSurface(shape = CircleShape) {
         Row(
             Modifier.testTag("pullRequestChip")
-                .let { if (onClick != null) it.clickable(role = Role.Button, onClick = onClick) else it }
+                .let {
+                    if (onClick != null) it.clickable(role = Role.Button, onClickLabel = openLabel, onClick = onClick)
+                    else it
+                }
+                .semantics(mergeDescendants = true) { contentDescription = description }
                 .minimumInteractiveComponentSize()
-                .padding(horizontal = 12.dp, vertical = 6.dp)
-                .semantics(mergeDescendants = true) {},
+                .padding(horizontal = 12.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

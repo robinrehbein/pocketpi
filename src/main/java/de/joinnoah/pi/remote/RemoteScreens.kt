@@ -4572,9 +4572,9 @@ internal enum class InsightChip { TOUCHED, ERRORS, JOBS, SUBAGENTS, PULL_REQUEST
 
 /**
  * The order of the insights chips: the touched files first, as they always were. On a compact chat,
- * where the narrow row scrolls, the chips that need attention (errors, jobs, subagents, a pull request with failing checks
- * or requested changes) come first
- * and the touched files after them, behind the status chip.
+ * where the narrow row scrolls, the chips that need attention (errors, jobs, subagents, a pull request
+ * with failing checks or requested changes) come first and the touched files after them, behind the
+ * status chip.
  */
 internal fun insightChipOrder(compact: Boolean, pullRequestNeedsAttention: Boolean = false): List<InsightChip> =
     if (compact) {
