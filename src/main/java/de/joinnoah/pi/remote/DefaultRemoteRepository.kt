@@ -2866,7 +2866,7 @@ class DefaultRemoteRepository(
                         epoch,
                         "sessionId" to session.text("id"),
                         thenSend = { if (live) held = beside.holdSnapshot(session.text("id"), epoch) },
-                    ).obj("session")
+                    ).obj("session").let(::withHostWorker)
                 } else session
             val canonicalProject =
                 projects.find { it.text("id") == chosen.text("projectId") }
@@ -2997,7 +2997,7 @@ class DefaultRemoteRepository(
         val epoch = selectionEpoch
         update { it.copy(loading = true) }
         try {
-            val session = request("sessions.create", epoch, "projectId" to projectId).obj("session")
+            val session = withHostWorker(request("sessions.create", epoch, "projectId" to projectId).obj("session"))
             // Only the project's list misses the new chat; other lists and chats stay cached.
             invalidateProjectList(routeId, projectId)
             invalidateProjectList(routeId, session.text("projectId"))

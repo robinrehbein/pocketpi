@@ -1083,6 +1083,70 @@ class RemoteRepositoryTest {
         assertFalse(isHostWorker(rows.getValue("tui")))
     }
 
+    /** The `worker` session the host returns for `sessions.create` in the shared bash fixture. */
+    private fun fixtureWorker(): JsonObject =
+        Wire.json.parseToJsonElement(javaClass.getResource("/session-bash-v1.json")!!.readText()).jsonObject
+            .array("wireValid")
+            .single { it.text("name") == "worker-create-result" }
+            .obj("payload")
+            .obj("data")
+            .obj("session")
+
+    @Test
+    fun aWorkerCreatedFromTheFixtureStaysMarkedAsATerminalSession() = runTest {
+        val worker = fixtureWorker()
+        assertEquals("worker", worker.text("origin"))
+        val transport = Transport().also { configure(it, sessions = listOf(session()), opened = worker) }
+        val repository = repository(transport)
+        assertEquals(
+            RemoteSelection("host", "project", "worker-session"),
+            repository.createSession("host", "project"),
+        )
+        runCurrent()
+        val create = transport.sent.single { it.text("type") == "sessions.create" }
+        assertTrue(create.text("requestId").startsWith(HOST_WORKER_REQUEST_PREFIX))
+        val selected = checkNotNull(repository.state.value.session)
+        assertTrue(isHostWorker(selected))
+        assertEquals("tui", selected.text("origin"))
+    }
+
+    @Test
+    fun aWorkerReachedThroughOpenIsMarked() = runTest {
+        val transport =
+            Transport().also {
+                configure(it, sessions = listOf(session("worker-session", "tui")), opened = fixtureWorker())
+            }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "worker-session"), ActivationMode.USER_OPEN)
+        runCurrent()
+        val open = transport.sent.single { it.text("type") == "sessions.open" }
+        assertTrue(open.text("requestId").startsWith(HOST_WORKER_REQUEST_PREFIX))
+        val selected = checkNotNull(repository.state.value.session)
+        assertTrue(isHostWorker(selected))
+        assertEquals("tui", selected.text("origin"))
+    }
+
+    @Test
+    fun anOlderHostsTuiAnswerStaysUnmarked() = runTest {
+        val older = JsonObject(fixtureWorker() + ("origin" to JsonPrimitive("tui")))
+        val transport =
+            Transport().also {
+                configure(it, sessions = listOf(session("worker-session", "tui")), opened = older)
+            }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "worker-session"), ActivationMode.USER_OPEN)
+        runCurrent()
+        assertFalse(isHostWorker(checkNotNull(repository.state.value.session)))
+        assertEquals(
+            RemoteSelection("host", "project", "worker-session"),
+            repository.createSession("host", "project"),
+        )
+        runCurrent()
+        val created = checkNotNull(repository.state.value.session)
+        assertFalse(isHostWorker(created))
+        assertEquals("tui", created.text("origin"))
+    }
+
     @Test
     fun unsupportedTuiControlsDoNotHideCapabilitiesForLaterRpcSession() = runTest {
         val transport = Transport().also(::capable)
