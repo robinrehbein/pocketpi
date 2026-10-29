@@ -69,7 +69,7 @@ enum class JobStatus(val wire: String) {
     TIMEOUT("timeout"),
 }
 
-/** One background shell started by pi's `bash_bg`, as `session.jobs.*` reports it. */
+/** One background shell started by pi's `bash` with `run_in_background` (`bash_bg` in older sessions), as `session.jobs.*` reports it. */
 data class BackgroundJob(
     val id: String,
     val command: String,
@@ -650,7 +650,8 @@ internal class BackgroundJobsController(
     /**
      * Refreshes the list now and at most once per [JOBS_AUTO_REFRESH_MILLIS] after that: job
      * events reach only a device that holds a watch lease, so status changes and finished
-     * `bash_bg` or `TaskStop` (`bash_kill`) calls are the list's other hints. `TaskStop` also covers
+     * `bash_bg` (older hosts; newer ones start jobs with `bash` and `run_in_background` and report
+     * them through the lease) or `TaskStop` (`bash_kill`) calls are the list's other hints. `TaskStop` also covers
      * subagent stops, so it can refresh when no job changed.
      */
     fun refreshSoon() {

@@ -353,6 +353,49 @@ class ConversationPresentationTest {
     }
 
     @Test
+    fun toolSummaryLabelsBackgroundBash() {
+        assertEquals(
+            ToolSummary(R.string.remote_tool_bash_background, "npm run dev"),
+            toolSummary("bash", """{"command":"npm run dev\nmore","run_in_background":true}"""),
+        )
+        assertEquals(
+            ToolSummary(R.string.remote_tool_bash_background, "npm run dev"),
+            toolSummary("bash", """{"run_in_background":true,"command":"npm run dev","timeout":5}"""),
+        )
+        assertEquals(
+            ToolSummary(R.string.remote_tool_bash_background, null),
+            toolSummary("bash", """{"run_in_background":true}"""),
+        )
+    }
+
+    @Test
+    fun toolSummaryKeepsForegroundBashWithoutATrueBackgroundFlag() {
+        val plain = ToolSummary(R.string.remote_tool_bash, "ls")
+        assertEquals(plain, toolSummary("bash", """{"command":"ls","run_in_background":false}"""))
+        assertEquals(plain, toolSummary("bash", """{"command":"ls"}"""))
+        assertEquals(plain, toolSummary("bash", """{"command":"ls","run_in_background":"true"}"""))
+        assertEquals(plain, toolSummary("bash", """{"command":"ls","run_in_background":1}"""))
+        assertEquals(plain, toolSummary("bash", """{"command":"ls","run_in_background":null}"""))
+    }
+
+    @Test
+    fun toolSummaryKeepsTheBashLabelWhenArgumentsAreTruncatedOrAbsent() {
+        val plain = ToolSummary(R.string.remote_tool_bash, null)
+        assertEquals(plain, toolSummary("bash", """{"command":"npm run dev","run_in_back"""))
+        assertEquals(plain, toolSummary("bash", null))
+        assertEquals(plain, toolSummary("bash", ""))
+    }
+
+    @Test
+    fun toolSummaryLabelsLegacyBashBgAsBackgroundShell() {
+        assertEquals(
+            ToolSummary(R.string.remote_tool_bash_background, "npm run dev"),
+            toolSummary("bash_bg", """{"command":"npm run dev\n"}"""),
+        )
+        assertEquals(ToolSummary(R.string.remote_tool_bash_background, null), toolSummary("bash_bg", null))
+    }
+
+    @Test
     fun toolSummaryAcceptsFilePathForEdit() {
         assertEquals(
             ToolSummary(R.string.remote_tool_edit, "README.md"),
