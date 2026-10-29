@@ -353,6 +353,14 @@
     </plurals>
     <string name="remote_pr_open_changes">Open changes</string>
     <string name="remote_pr_review_draft">draft</string>
+    <string name="remote_pr_open">Open pull request</string>
+    <string name="remote_pr_open_checks">Open checks</string>
+    <plurals name="remote_pr_more_failing">
+        <item quantity="one">+%d more</item>
+        <item quantity="other">+%d more</item>
+    </plurals>
+    <string name="remote_pr_on_host">on %s</string>
+    <string name="remote_pr_failing_checks">Failing checks</string>
     <string name="remote_jobs_status_running">Running</string>
     <string name="remote_jobs_status_stuck">Running, no output for a while</string>
     <string name="remote_jobs_status_exited">Exited with code %d</string>
