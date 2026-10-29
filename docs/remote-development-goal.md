@@ -71,8 +71,10 @@ about doing these steps as first-class, confirmed and logged actions.
    purpose; the goal keeps that boundary.
 5. **Code search.** The phone can browse and open files but has no search over contents or
    symbols outside the agent.
-6. **Shell commands in native sessions.** `session.bash.v1` works only in RPC sessions, so the
-   phone-started session of the qualifying run cannot run tests through `!` commands.
+6. **Worker parity.** `session.bash.v1` works only in RPC sessions, so the phone-started session
+   of the qualifying run cannot run tests through `!` commands. Follow-up and steer while pi runs,
+   clearing the queue on stop, closing the session, export, tree, reload and keeping the Mac awake
+   are RPC-only as well, and reopened conversations and forks still start RPC sessions.
 7. **Relayed terminal.** `view.native.*` drives host worker terminals over the local `host.sock`
    view protocol only, not through the relay. Relaying it lets the phone operate a worker's full
    terminal, including custom dialogs. It covers sessions the host runs as workers, not a pi Robin
@@ -119,7 +121,10 @@ Robin decided these on 2026-10-29. Each spec goes to Plane (TOOLING) as its own 
   - The phone shows the push target only as host and `owner/repo`. Local git config that
     redirects transport or credentials is refused, and only https and ssh push URLs are allowed.
 - **Custom dialogs** go through the relayed terminal (gap 7), which moves into the goal.
-- **Shell commands** come to native worker sessions (gap 6).
+- **Native workers are the one session runtime.** Every RPC-only feature comes to native worker
+  sessions through the Remote extension, and reopened conversations and forks start workers too
+  (gap 6). RPC stays only as the fallback for hosts without node-pty, so one path is maintained.
+  Shell commands come first, because criterion 3 needs them.
 
 ## Acceptance criteria
 
@@ -139,7 +144,7 @@ Each criterion is checked in the qualifying run, on a real phone, with the Mac u
 ## Order
 
 1. Run the qualifying run once, asking the agent for steps 5 and 6, and record where it breaks.
-2. Shell commands in native sessions (criterion 3).
+2. Shell commands in native sessions (criterion 3), then the rest of worker parity.
 3. Pull request and CI status (criterion 6).
 4. Git writes (criterion 5).
 5. Oversized questions, approvals and editors (criterion 4a).
