@@ -83,7 +83,9 @@ class PullRequestCardTest {
         assertNull(pullRequestHost("https://github.com/o/r/pull/123"))
         assertNull(pullRequestHost("https://GitHub.com/o/r/pull/123"))
         assertEquals("git.example.corp", pullRequestHost("https://Git.Example.Corp/o/r/pull/123"))
-        assertEquals("gíthub.com", pullRequestHost("https://gíthub.com/o/r/pull/123"))
+        assertEquals("xn--gthub-zsa.com", pullRequestHost("https://gíthub.com/o/r/pull/123"))
+        // A Cyrillic "і" looks like a Latin "i"; the ASCII form makes the difference visible.
+        assertEquals("xn--gthub-n2e.com", pullRequestHost("https://gіthub.com/o/r/pull/123"))
         assertEquals("github.com.evil.example", pullRequestHost("https://github.com.evil.example/o/r/pull/123"))
     }
 
@@ -132,7 +134,7 @@ class PullRequestCardTest {
     fun aLookalikeHostIsShown() {
         compose.setContent { MaterialTheme { PullRequestCard(pr(url = "https://gíthub.com/o/r/pull/123")) {} } }
         compose.onNodeWithTag("changesPullRequestHost", useUnmergedTree = true)
-            .assertTextEquals(context.getString(R.string.remote_pr_on_host, "gíthub.com"))
+            .assertTextEquals(context.getString(R.string.remote_pr_on_host, "xn--gthub-zsa.com"))
     }
 
     @Test

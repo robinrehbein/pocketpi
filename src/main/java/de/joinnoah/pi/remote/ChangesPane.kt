@@ -34,6 +34,7 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import java.net.IDN
 import java.util.Locale
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.clickable
@@ -1227,11 +1228,17 @@ internal fun pullRequestChecksUrl(pr: PullRequestStatus): String? {
 }
 
 /**
- * The host of [url] when it is not exactly `github.com` (lower-cased, so lookalikes such as
- * `gíthub.com` show), else null.
+ * The host of [url] when it is not exactly `github.com`, else null. It is lower-cased, and a host
+ * with non-ASCII characters shows in its ASCII form (`xn--…`), so a lookalike such as a Cyrillic
+ * `gіthub.com` cannot read as `github.com`.
  */
-internal fun pullRequestHost(url: String): String? =
-    Uri.parse(url).host?.lowercase(Locale.ROOT)?.takeIf { it.isNotEmpty() && it != "github.com" }
+internal fun pullRequestHost(url: String): String? {
+    val host = Uri.parse(url).host?.lowercase(Locale.ROOT)?.takeIf { it.isNotEmpty() && it != "github.com" }
+        ?: return null
+    if (host.all { it.code < 0x80 }) return host
+    return runCatching { IDN.toASCII(host, IDN.ALLOW_UNASSIGNED) }.getOrNull()
+        ?.lowercase(Locale.ROOT)?.takeIf { it.isNotEmpty() } ?: host
+}
 
 /** How many failing checks the card cannot list by name. */
 internal fun pullRequestMoreFailing(pr: PullRequestStatus): Int = (pr.failedChecks - pr.failingChecks.size).coerceAtLeast(0)
