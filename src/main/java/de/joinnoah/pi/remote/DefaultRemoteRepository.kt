@@ -1695,6 +1695,7 @@ class DefaultRemoteRepository(
                 connection = line,
                 compaction = null,
                 suggestion = null,
+                pullRequest = null,
                 compactionRequesting = false,
                 // A finished download stays readable; a running one stopped above.
                 toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },
@@ -2286,6 +2287,7 @@ class DefaultRemoteRepository(
                 status = t.status,
                 compaction = t.compaction,
                 suggestion = t.suggestion,
+                pullRequest = t.pullRequest,
                 pendingSend = settledSend(it.pendingSend, it.messages),
             )
             else
@@ -2299,6 +2301,7 @@ class DefaultRemoteRepository(
                     nextCursor = t.nextCursor,
                     compaction = t.compaction,
                     suggestion = t.suggestion,
+                    pullRequest = t.pullRequest,
                     pendingSend = settledSend(it.pendingSend, t.messages),
                 )
         }
@@ -2528,6 +2531,7 @@ class DefaultRemoteRepository(
                 selection = selection,
                 compaction = null,
                 suggestion = null,
+                pullRequest = null,
                 compactionRequesting = false,
                 // Only a download that can still finish, or has, stays; a stopped one would spin.
                 toolOutput = it.toolOutput?.takeIf { output ->
@@ -2734,6 +2738,7 @@ class DefaultRemoteRepository(
                         connection = line,
                         compaction = null,
                         suggestion = null,
+                        pullRequest = null,
                         compactionRequesting = false,
                         // A finished download stays readable; a running one stopped above.
                         toolOutput = it.toolOutput?.takeIf { output -> reconnecting && output.text != null },
@@ -3270,6 +3275,7 @@ class DefaultRemoteRepository(
                         toolOutput = null,
                         compaction = null,
                         suggestion = null,
+                        pullRequest = null,
                     )
                 if (previous.session != null) {
                     timeline?.beginSnapshotEpoch(previous.status)
@@ -3596,6 +3602,7 @@ class DefaultRemoteRepository(
                 connected = false,
                 compaction = null,
                 suggestion = null,
+                pullRequest = null,
                 compactionRequesting = false,
                 // A finished download stays readable; a running one stopped above.
                 toolOutput = it.toolOutput?.takeIf { output -> keep && output.text != null },

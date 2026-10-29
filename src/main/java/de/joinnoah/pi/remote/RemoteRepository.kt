@@ -197,6 +197,8 @@ data class RemoteState(
     val compaction: SessionCompaction? = null,
     /** The host's suggested next prompt for the selected session; untrusted plain text. */
     val suggestion: String? = null,
+    /** The open pull request of the selected session's branch; null when there is none. */
+    val pullRequest: PullRequestStatus? = null,
     val toolOutput: ToolOutputDownload? = null,
     /** The changes view of the selected session; null while it is closed. */
     val changes: ChangesState? = null,

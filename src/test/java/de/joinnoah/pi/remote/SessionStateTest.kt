@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
@@ -719,5 +720,91 @@ class TimelineIndexTest {
         upsert(timeline, message("a", "updated"))
         assertEquals(listOf("updated", "b", "second"), timeline.messages.map { it.text("text") })
         assertIndexed(timeline)
+    }
+
+    private val samplePullRequest = Wire.objectOf(
+        "number" to 123,
+        "url" to "https://github.com/acme/app/pull/123",
+        "draft" to false,
+        "review" to "approved",
+        "checks" to Wire.objectOf("state" to "done", "failed" to 1),
+        "failingChecks" to kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive("build"))),
+    )
+
+    private fun pullRequestTimeline(pullRequest: Any? = null): Timeline =
+        Timeline("one").apply {
+            snapshot(
+                Wire.objectOf(
+                    "sessionId" to "one",
+                    "revision" to 3,
+                    "status" to "idle",
+                    "messages" to kotlinx.serialization.json.JsonArray(emptyList()),
+                    "pendingQuestions" to kotlinx.serialization.json.JsonArray(emptyList()),
+                    *listOfNotNull(pullRequest?.let { "pullRequest" to it }).toTypedArray(),
+                )
+            )
+        }
+
+    private fun pullRequestEvent(revision: Long, value: Any?, session: String = "one") =
+        Wire.objectOf(
+            "type" to "event",
+            "sessionId" to session,
+            "revision" to revision,
+            "kind" to "session.pull_request",
+            "pullRequest" to value,
+        )
+
+    @Test
+    fun pullRequestEventsSetAndClearWithoutAnUnknownKindResync() {
+        val timeline = pullRequestTimeline()
+        assertNull(timeline.pullRequest)
+        assertFalse(timeline.event(pullRequestEvent(4, samplePullRequest)))
+        assertEquals(123L, timeline.pullRequest?.number)
+        assertEquals(PullRequestReview.APPROVED, timeline.pullRequest?.review)
+        assertEquals(listOf("build"), timeline.pullRequest?.failingChecks)
+        assertEquals(4L, timeline.revision)
+        assertFalse(timeline.unknownKindSeen)
+        // Another session's or a replayed event changes nothing.
+        timeline.event(pullRequestEvent(5, null, "two"))
+        timeline.event(pullRequestEvent(4, null))
+        assertEquals(123L, timeline.pullRequest?.number)
+        // A null clears it.
+        assertFalse(timeline.event(pullRequestEvent(5, null)))
+        assertNull(timeline.pullRequest)
+        assertEquals(5L, timeline.revision)
+    }
+
+    @Test
+    fun aMalformedPullRequestEventIsIgnoredWithoutAResync() {
+        val timeline = pullRequestTimeline(samplePullRequest)
+        val broken = JsonObject(samplePullRequest + ("url" to JsonPrimitive("http://github.com/acme/app/pull/123")))
+        assertFalse(timeline.event(pullRequestEvent(4, broken)))
+        assertFalse(timeline.event(pullRequestEvent(5, "https://github.com/acme/app/pull/123")))
+        assertFalse(timeline.event(JsonObject(pullRequestEvent(6, samplePullRequest) + ("source" to JsonPrimitive("pr-status")))))
+        assertEquals(6L, timeline.revision)
+        assertEquals(123L, timeline.pullRequest?.number)
+        assertFalse(timeline.unknownKindSeen)
+    }
+
+    @Test
+    fun snapshotsRestorePullRequestsAndOfflineOrANewEpochClearsThem() {
+        val timeline = pullRequestTimeline(samplePullRequest)
+        assertEquals(123L, timeline.pullRequest?.number)
+        timeline.event(
+            Wire.objectOf("type" to "event", "sessionId" to "one", "revision" to 4, "kind" to "session.status", "status" to "running")
+        )
+        assertEquals(123L, timeline.pullRequest?.number)
+        timeline.event(
+            Wire.objectOf("type" to "event", "sessionId" to "one", "revision" to 5, "kind" to "session.status", "status" to "offline")
+        )
+        assertNull(timeline.pullRequest)
+        timeline.event(pullRequestEvent(6, samplePullRequest))
+        timeline.beginSnapshotEpoch("idle")
+        assertNull(timeline.pullRequest)
+        // A snapshot without the key, or with a malformed or null value, holds no pull request.
+        assertNull(pullRequestTimeline().pullRequest)
+        assertNull(pullRequestTimeline(JsonNull).pullRequest)
+        assertNull(pullRequestTimeline(JsonObject(samplePullRequest + ("extra" to JsonPrimitive(1)))).pullRequest)
+        assertNull(Timeline("two").pullRequest)
     }
 }
