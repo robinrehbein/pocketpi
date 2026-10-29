@@ -3407,10 +3407,12 @@ internal fun RemoteScreen(
                     val insightsShown =
                         touched.total > 0 || errorCount > 0 || onlyErrorsShown ||
                             subagentChipShown(strip, subagentsExpanded.value) ||
-                            jobsChipShown(statusJobs, jobsExpanded.value)
+                            jobsChipShown(statusJobs, jobsExpanded.value) || state.pullRequest != null
                     // The chips sit in their own row above the composer, never inside it. While the chat is
                     // compact the row also holds the status chip that stands in for the banners.
-                    val chipOrder = insightChipOrder(compact)
+                    val pullRequest = state.pullRequest
+                    val chipOrder =
+                        insightChipOrder(compact, pullRequest?.let { pullRequestChipModel(it).needsAttention } == true)
                     val insightChips: @Composable RowScope.() -> Unit = {
                         for (chip in chipOrder)
                             when (chip) {
@@ -3451,6 +3453,16 @@ internal fun RemoteScreen(
                                         sessionId = chatKey?.sessionId,
                                         expandedState = subagentsExpanded,
                                     )
+                                InsightChip.PULL_REQUEST ->
+                                    pullRequest?.let { pr ->
+                                        PullRequestChip(
+                                            pr,
+                                            onClick =
+                                                if (canViewChanges(state) && state.connected) {
+                                                    { openInspector(InspectorTab.CHANGES) }
+                                                } else null,
+                                        )
+                                    }
                                 InsightChip.TOUCHED ->
                                     TouchedFilesSummary(touched, touchedLines) {
                                         val target = touchedFilesTarget(
@@ -4556,16 +4568,21 @@ private fun rememberTouchExploring(): State<Boolean> {
 }
 
 /** The chips of the chat's insights row. */
-internal enum class InsightChip { TOUCHED, ERRORS, JOBS, SUBAGENTS }
+internal enum class InsightChip { TOUCHED, ERRORS, JOBS, SUBAGENTS, PULL_REQUEST }
 
 /**
  * The order of the insights chips: the touched files first, as they always were. On a compact chat,
- * where the narrow row scrolls, the chips that need attention (errors, jobs, subagents) come first
- * and the touched files after them, behind the status chip.
+ * where the narrow row scrolls, the chips that need attention (errors, jobs, subagents, a pull request
+ * with failing checks or requested changes) come first and the touched files after them, behind the
+ * status chip.
  */
-internal fun insightChipOrder(compact: Boolean): List<InsightChip> =
-    if (compact) listOf(InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS, InsightChip.TOUCHED)
-    else listOf(InsightChip.TOUCHED, InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS)
+internal fun insightChipOrder(compact: Boolean, pullRequestNeedsAttention: Boolean = false): List<InsightChip> =
+    if (compact) {
+        val attention = listOf(InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS)
+        // Failing checks or requested changes need attention too, so the pull request leads the row.
+        if (pullRequestNeedsAttention) listOf(InsightChip.PULL_REQUEST) + attention + InsightChip.TOUCHED
+        else attention + listOf(InsightChip.PULL_REQUEST, InsightChip.TOUCHED)
+    } else listOf(InsightChip.TOUCHED, InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS, InsightChip.PULL_REQUEST)
 
 /**
  * Hides the compact header while the user drags the list down and shows it again on a drag up or at

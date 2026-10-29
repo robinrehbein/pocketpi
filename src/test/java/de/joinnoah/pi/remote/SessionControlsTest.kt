@@ -459,12 +459,25 @@ class SessionControlsTest {
     @Test
     fun insightChipsKeepTheirOrderExceptCompactWhereAttentionComesFirst() {
         assertEquals(
-            listOf(InsightChip.TOUCHED, InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS),
+            listOf(
+                InsightChip.TOUCHED, InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS,
+                InsightChip.PULL_REQUEST,
+            ),
             insightChipOrder(compact = false),
         )
         assertEquals(
-            listOf(InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS, InsightChip.TOUCHED),
+            listOf(
+                InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS, InsightChip.PULL_REQUEST,
+                InsightChip.TOUCHED,
+            ),
             insightChipOrder(compact = true),
+        )
+        assertEquals(
+            listOf(
+                InsightChip.PULL_REQUEST, InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS,
+                InsightChip.TOUCHED,
+            ),
+            insightChipOrder(compact = true, pullRequestNeedsAttention = true),
         )
     }
 }

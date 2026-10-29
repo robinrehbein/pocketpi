@@ -27,10 +27,10 @@ internal val WaitingLight = Color(0xFFB45309)
 internal val WaitingDark = Color(0xFFF5B971)
 
 @Composable
-private fun idleColor(): Color = if (isDarkSurface()) IdleDark else IdleLight
+internal fun idleColor(): Color = if (isDarkSurface()) IdleDark else IdleLight
 
 @Composable
-private fun waitingColor(): Color = if (isDarkSurface()) WaitingDark else WaitingLight
+internal fun waitingColor(): Color = if (isDarkSurface()) WaitingDark else WaitingLight
 
 @Composable
 internal fun sessionStatusColor(availability: SessionAvailability): Color =
