@@ -1067,6 +1067,23 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun sessionListsOptInToHostWorkersAndKeepThemAsTerminalSessions() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session("worker", "worker", "offline"), session("tui", "tui")))
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        val lists = transport.sent.filter { it.text("type") == "sessions.list" }
+        assertTrue(lists.isNotEmpty())
+        assertTrue(lists.all { it.text("requestId").startsWith(HOST_WORKER_REQUEST_PREFIX) })
+        val rows = repository.state.value.sessions.associateBy { it.text("id") }
+        assertEquals("tui", rows.getValue("worker").text("origin"))
+        assertTrue(isHostWorker(rows.getValue("worker")))
+        assertEquals("tui", rows.getValue("tui").text("origin"))
+        assertFalse(isHostWorker(rows.getValue("tui")))
+    }
+
+    @Test
     fun unsupportedTuiControlsDoNotHideCapabilitiesForLaterRpcSession() = runTest {
         val transport = Transport().also(::capable)
         val original = transport.response
@@ -9295,6 +9312,22 @@ class RemoteRepositoryTest {
         assertEquals(b, repository.activate(b, ActivationMode.USER_OPEN))
         assertEquals(1, transport.lists("b"))
         assertEquals(listOf("two", "three"), repository.state.value.sessions.map { it.text("id") })
+    }
+
+    @Test
+    fun projectListsKeepHostWorkersAsTerminalSessions() = runTest {
+        val transport = Transport()
+        configureProjects(
+            transport,
+            mapOf("a" to listOf(session("worker", "worker", "running", projectId = "a"))),
+        )
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host"), ActivationMode.USER_OPEN)
+        runCurrent()
+        val chat = repository.state.value.projectChats.single().session
+        assertEquals("tui", chat.text("origin"))
+        assertTrue(isHostWorker(chat))
+        assertTrue(isHostWorker(repository.state.value.projectSessions.getValue("a").sessions.single()))
     }
 
     @Test

@@ -37,6 +37,8 @@ internal data class SessionListItem(
     val unread: Boolean = false,
     /** The ticket that lists this chat (see [ticketRefForSession]); not part of the session JSON. */
     val ticketRef: String? = null,
+    /** A pi the host runs in a terminal of its own (see [isHostWorker]); it may be offline until it reports. */
+    val hostWorker: Boolean = false,
 )
 
 data class ProjectChatSummary(
@@ -224,6 +226,7 @@ internal fun sessionListItem(
         liveMacTui = session.text("origin") == "tui" &&
             availability != SessionAvailability.OFFLINE && !loading,
         lastKnown = !connected && availability != SessionAvailability.OFFLINE,
+        hostWorker = isHostWorker(session),
     )
 }
 

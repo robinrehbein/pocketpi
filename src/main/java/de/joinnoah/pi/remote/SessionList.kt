@@ -86,6 +86,7 @@ internal fun SessionListRow(
     val closeLabel = stringResource(R.string.remote_session_close)
     val renameLabel = stringResource(R.string.remote_rename_session)
     val macTuiLabel = stringResource(R.string.remote_mac_tui_session)
+    val workerLabel = stringResource(R.string.remote_mac_worker_session)
     val showActionsLabel = stringResource(R.string.remote_menu_show_actions)
     val copyId = rememberCopyToClipboard(stringResource(R.string.remote_menu_copy_session_id))
     val pinnedLabel = stringResource(R.string.remote_activity_pinned)
@@ -123,6 +124,8 @@ internal fun SessionListRow(
                 pluralStringResource(R.plurals.remote_sessions_subagent_count, item.childCount, item.childCount)
             else null,
             stringResource(R.string.remote_fork_session).takeIf { item.continuesAsCopy },
+            // Shown even before the worker's first report, while it is still offline.
+            workerLabel.takeIf { item.hostWorker },
         )
     val ticketLabel = item.ticketRef?.let { stringResource(R.string.remote_ticket_chip, it) }
     val rowDescription =
@@ -131,6 +134,7 @@ internal fun SessionListRow(
             title,
             ticketLabel,
             macTuiLabel.takeIf { item.liveMacTui },
+            workerLabel.takeIf { item.hostWorker },
             pinnedLabel.takeIf { item.pinned },
             unreadLabel.takeIf { item.unread },
             item.preview,
