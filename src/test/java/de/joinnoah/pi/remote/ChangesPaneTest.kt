@@ -496,6 +496,7 @@ class ChangesPaneTest {
         keys: ChatKeyTarget? = null,
         projectName: String? = null,
         menus: Boolean = false,
+        pullRequest: PullRequestStatus? = null,
     ) {
         var state by mutableStateOf(initial)
         compose.setContent {
@@ -518,6 +519,7 @@ class ChangesPaneTest {
                             onPrefill = { recorder.prefills += it; recorder.prefillResult },
                         ),
                         projectName = projectName,
+                        pullRequest = pullRequest,
                     )
                   }
                   if (menus) PointerMenuHost(pane) else pane()
@@ -569,6 +571,24 @@ class ChangesPaneTest {
         // No value, as from an older host, keeps the prompt.
         assertEquals(ShipAction.entries, shipActions(base))
         assertEquals(listOf(ShipAction.COMMIT, ShipAction.COMMIT_PUSH, ShipAction.BRANCH), shipActions(null, prOpen = true))
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1000dp")
+    fun theShipMenuLeavesOutThePullRequestPromptWithAPullRequest() {
+        val open = PullRequestStatus(7, "https://github.com/o/r/pull/7", false, PullRequestReview.NONE, PullRequestChecksState.DONE, 0, emptyList())
+        renderInLayout(reviewState(file = null), Recorder(), pullRequest = open)
+        compose.onNodeWithTag("changesShip").performClick()
+        compose.onNodeWithTag("changesShip_commit").assertExists()
+        compose.onNodeWithTag("changesShip_pull_request").assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1000dp")
+    fun theShipMenuKeepsThePullRequestPromptWithoutAPullRequest() {
+        renderInLayout(reviewState(file = null), Recorder())
+        compose.onNodeWithTag("changesShip").performClick()
+        compose.onNodeWithTag("changesShip_pull_request").assertExists()
     }
 
     @Test

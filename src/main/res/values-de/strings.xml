@@ -355,7 +355,12 @@
     <string name="remote_pr_review_draft">Entwurf</string>
     <string name="remote_pr_open">Pull Request öffnen</string>
     <string name="remote_pr_open_checks">Checks öffnen</string>
-    <string name="remote_pr_more_failing">+%d weitere</string>
+    <plurals name="remote_pr_more_failing">
+        <item quantity="one">+%d weitere</item>
+        <item quantity="other">+%d weitere</item>
+    </plurals>
+    <string name="remote_pr_on_host">auf %s</string>
+    <string name="remote_pr_failing_checks">Fehlgeschlagene Checks</string>
     <string name="remote_jobs_status_running">Läuft</string>
     <string name="remote_jobs_status_stuck">Läuft, seit einer Weile ohne Ausgabe</string>
     <string name="remote_jobs_status_exited">Beendet mit Code %d</string>
