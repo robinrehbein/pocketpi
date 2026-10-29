@@ -67,6 +67,24 @@ class PullRequestStatusTest {
     }
 
     @Test
+    fun integerNumbersWrittenAsDecimalsOrExponentsAreAccepted() {
+        for (text in listOf("1.0", "1e2", "1E2", "100.0")) {
+            val number = Wire.json.parseToJsonElement(text)
+            assertEquals(text, text.toDouble().toLong(), pullRequestStatus(pullRequest(number = number))?.number)
+        }
+        assertNull(pullRequestStatus(pullRequest(number = Wire.json.parseToJsonElement("1e400"))))
+    }
+
+    @Test
+    fun urlsWithJsWhitespaceOrControlCharactersAreRejected() {
+        val base = "https://github.com/a/b/pull/1"
+        assertNotNull(pullRequestStatus(pullRequest(url = JsonPrimitive(base))))
+        for (c in listOf('\uFEFF', '\u00A0', '\u2028', '\u2029', '\u3000', ' ', '\u0000', '\u007f', '\u0085')) {
+            assertNull("U+%04X".format(c.code), pullRequestStatus(pullRequest(url = JsonPrimitive(base + c))))
+        }
+    }
+
+    @Test
     fun urlAndNameLimitsCountUtf8BytesNotCharacters() {
         val prefix = "https://h.example/"
         // "é" is two bytes: 2048 bytes fit, one more does not, though both are far below 2048 chars.

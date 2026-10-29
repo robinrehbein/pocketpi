@@ -65,11 +65,13 @@ private fun pullRequestUrl(value: JsonElement?): String? {
     val url = (value as? JsonPrimitive)?.takeIf { it !is JsonNull && it.isString }?.content ?: return null
     if (!url.startsWith("https://") || url.length == "https://".length) return null
     if (url.encodeToByteArray().size > MAX_PULL_REQUEST_URL_BYTES) return null
-    val unsafe = url.any {
-        it.isWhitespace() || Character.isSpaceChar(it) || it.code <= 0x1f || it.code in 0x7f..0x9f
-    }
-    return url.takeUnless { unsafe }
+    return url.takeUnless { it.any(::isUnsafeUrlChar) }
 }
+
+/** The complement of the host's `[^\s\u0000-\u001f\u007f-\u009f]`: JS whitespace, including U+FEFF, or a control. */
+private fun isUnsafeUrlChar(c: Char): Boolean =
+    c.code <= 0x1f || c.code in 0x7f..0x9f || c.isWhitespace() || Character.isSpaceChar(c) ||
+        c == '\uFEFF' || c == '\u2028' || c == '\u2029'
 
 private fun checkName(value: JsonElement?): String? =
     (value as? JsonPrimitive)
