@@ -187,6 +187,110 @@
           "truncated": true
         }
       }
+    },
+    {
+      "name": "worker-create-result",
+      "payload": {
+        "type": "result",
+        "requestId": "host_worker.v1:create-1",
+        "ok": true,
+        "data": {
+          "kind": "session",
+          "session": {
+            "id": "worker-session",
+            "projectId": "project",
+            "title": "Fix",
+            "origin": "worker",
+            "status": "idle"
+          }
+        }
+      }
+    },
+    {
+      "name": "terminal-session-result",
+      "payload": {
+        "type": "result",
+        "requestId": "bash:3",
+        "ok": true,
+        "data": {
+          "kind": "bash",
+          "sessionId": "terminal-session",
+          "exitCode": 0,
+          "cancelled": false,
+          "truncated": false,
+          "output": "a\nb"
+        }
+      }
+    },
+    {
+      "name": "outside-gate",
+      "payload": {
+        "type": "result",
+        "requestId": "bash:1",
+        "ok": false,
+        "error": {
+          "code": "unsupported",
+          "message": "Shell commands are only available for sessions started from the phone"
+        }
+      }
+    },
+    {
+      "name": "extension-too-old",
+      "payload": {
+        "type": "result",
+        "requestId": "bash:1",
+        "ok": false,
+        "error": {
+          "code": "unsupported",
+          "message": "Reload the pi remote extension to use this control"
+        }
+      }
+    },
+    {
+      "name": "session-changed",
+      "payload": {
+        "type": "result",
+        "requestId": "bash:1",
+        "ok": false,
+        "error": {
+          "code": "offline",
+          "message": "Session changed; refresh"
+        }
+      }
+    },
+    {
+      "name": "already-running",
+      "payload": {
+        "type": "result",
+        "requestId": "bash:1",
+        "ok": false,
+        "error": {
+          "code": "busy",
+          "message": "A shell command is already running"
+        }
+      }
+    },
+    {
+      "name": "worker-user-bash-message",
+      "payload": {
+        "type": "event",
+        "sessionId": "worker-session",
+        "revision": 4,
+        "kind": "message.upsert",
+        "message": {
+          "id": "user_bash-run-1",
+          "role": "tool",
+          "text": "$ cmd\nout",
+          "state": "error",
+          "toolName": "user_bash",
+          "parts": [
+            {
+              "type": "text",
+              "text": "$ cmd\nout"
+            }
+          ]
+        }
+      }
     }
   ],
   "wireInvalid": [

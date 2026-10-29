@@ -13,9 +13,10 @@ class HostWorkersTest {
             .obj("payload")
 
     @Test
-    fun onlySessionListsCarryThePrefix() {
+    fun onlySessionListsCreatesAndOpensCarryThePrefix() {
         assertEquals("host_worker.v1:abc", sessionsListRequestId("sessions.list", "abc"))
-        assertEquals("abc", sessionsListRequestId("sessions.open", "abc"))
+        assertEquals("host_worker.v1:abc", sessionsListRequestId("sessions.open", "abc"))
+        assertEquals("host_worker.v1:abc", sessionsListRequestId("sessions.create", "abc"))
         assertEquals("abc", sessionsListRequestId("session.snapshot", "abc"))
         assertTrue(listed.text("requestId").startsWith(HOST_WORKER_REQUEST_PREFIX))
     }
