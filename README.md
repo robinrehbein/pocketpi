@@ -273,6 +273,26 @@ the denied-device message, prompt suggestions, and the ticket commands and resul
 A built APK does not establish Samsung device, TalkBack, mobile-network or real Firebase
 delivery acceptance; those require the configured host, relay and device.
 
+## Native worker terminal
+
+An updated host can offer an interactive terminal for sessions it owns as native PTY workers.
+Use the host CLI in noah-monorepo, `node packages/pi-atlas/extensions/remote/host/cli.ts`.
+Enable `config terminal-control on` on the host, then use
+`terminal grant <deviceId> <projectId>` while the host is running. This grants shell-level authority;
+it remains off by default. Terminal access is separate from the shell-command switch. Revoke it
+with `terminal revoke <deviceId> <projectId>` or turn terminal control off.
+
+The chat's Terminal action opens a phone overlay or a tablet inspector tab. Another writer requires
+an explicit takeover. Closing the terminal releases input ownership and keeps the worker running.
+After a disconnect, open it explicitly again; inputs are never automatically replayed. Externally
+started terminal sessions and RPC sessions do not offer this view.
+
+The renderer bundles xterm.js 6.0.0 locally and has no network access. Its license and pinned package
+integrity are in `src/main/assets/terminal/`. Local tests cover an encrypted relay, a macOS PTY and
+an API 36 WebView. Samsung and Linux/container qualification remain open. Finish pending terminal
+input before navigating away from the whole chat: the close confirmation currently covers explicit
+terminal closure, while full chat navigation can still discard unsent terminal input.
+
 ## Appearance
 
 PocketPi uses the official pi mark for its adaptive launcher icon and a monochrome silhouette for

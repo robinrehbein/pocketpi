@@ -293,6 +293,7 @@ interface RemoteRepository {
 
     fun disconnect()
 
+    fun canAttachTerminal(): Boolean = false
     fun attachTerminal(cols: Int, rows: Int, takeoverGeneration: Long? = null): Boolean = false
     fun detachTerminal() {}
     fun takeTerminalOutput(): List<String> = emptyList()

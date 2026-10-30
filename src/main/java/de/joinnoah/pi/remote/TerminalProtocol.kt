@@ -110,6 +110,7 @@ internal class TerminalAttachment(private val connection: String, private val se
 data class TerminalView(
     val sessionId: String,
     val attaching: Boolean = true,
+    val inputPending: Boolean = false,
     val generation: Long? = null,
     val holder: String? = null,
     val output: List<String> = emptyList(),

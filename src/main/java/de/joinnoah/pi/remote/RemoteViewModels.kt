@@ -317,6 +317,12 @@ internal class ChatViewModel(
     private val settings: SettingsRepository,
 ) : DestinationViewModel(repository, key) {
     val preferences = settings.state
+    fun canAttachTerminal() = repository.canAttachTerminal()
+    fun attachTerminal(cols: Int, rows: Int, generation: Long? = null) = repository.attachTerminal(cols, rows, generation)
+    fun detachTerminal() = repository.detachTerminal()
+    fun takeTerminalOutput() = repository.takeTerminalOutput()
+    fun sendTerminalInput(input: TerminalInput) = repository.sendTerminalInput(input)
+    fun resizeTerminal(cols: Int, rows: Int) = repository.resizeTerminal(cols, rows)
 
     fun recordChatAction(action: ChatAction) = settings.recordChatAction(action)
 

@@ -6096,6 +6096,36 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun terminalDraftAndEnterAreAcknowledgedInOrder() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            "session.terminal.input" -> Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else -> original(request)
+        } }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        val batch = terminalInputForKey("ls", "enter")!!
+        assertTrue(repo.sendTerminalInput(batch[0]))
+        assertEquals(true, repo.state.value.terminal?.inputPending)
+        assertFalse(repo.sendTerminalInput(batch[1]))
+        runCurrent()
+        assertEquals(false, repo.state.value.terminal?.inputPending)
+        assertTrue(repo.sendTerminalInput(batch[1])); runCurrent()
+        val sent = transport.sent.filter { it.text("type") == "session.terminal.input" }
+        assertEquals(2, sent.size)
+        assertEquals("ls", sent[0].text("text"))
+        assertEquals("enter", sent[1].obj("key").text("name"))
+        assertEquals(0L, sent[0].long("inputSeq"))
+        assertEquals(1L, sent[1].long("inputSeq"))
+    }
+
+    @Test
     fun terminalStopsOnSequenceGapAndDoesNotResendInput() = runTest {
         val transport = Transport()
         val worker = session(origin = "worker")
@@ -6113,12 +6143,14 @@ class RemoteRepositoryTest {
         assertTrue(repo.attachTerminal(80, 24))
         runCurrent()
         assertTrue(repo.sendTerminalInput(TerminalInput.Text("x")))
+        assertEquals(true, repo.state.value.terminal?.inputPending)
         assertFalse(repo.sendTerminalInput(TerminalInput.Text("y")))
         runCurrent()
         assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.input" })
         transport.deliver(Wire.objectOf("type" to "host.event", "kind" to "session.terminal.data", "sessionId" to "session", "attachmentGeneration" to 3, "seq" to 1, "text" to "gap"))
         runCurrent()
         assertEquals("sequence", repo.state.value.terminal?.ended)
+        assertEquals(false, repo.state.value.terminal?.inputPending)
         assertFalse(repo.sendTerminalInput(TerminalInput.Text("again")))
         assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.input" })
     }

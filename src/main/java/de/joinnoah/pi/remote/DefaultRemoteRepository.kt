@@ -7664,6 +7664,13 @@ class DefaultRemoteRepository(
     private var terminalInputBusy = false
     private val terminalOutputLimit = 256 * 1024
 
+    override fun canAttachTerminal(): Boolean {
+        val current = state.value
+        return current.connected && !current.stale && activeHost?.routeId == current.selection.routeId &&
+            terminalRouteOffered && SESSION_TERMINAL_CAPABILITY in current.capabilities && capabilityRoute == CAPABILITIES_V2_ROUTE &&
+            current.session?.let(::isHostWorker) == true && current.selection.sessionId == current.session?.optionalText("id")
+    }
+
     override fun attachTerminal(cols: Int, rows: Int, takeoverGeneration: Long?): Boolean {
         val current = state.value
         val session = current.selection.sessionId ?: return false
@@ -7716,7 +7723,7 @@ class DefaultRemoteRepository(
             val bytes = if (event is TerminalEvent.Data) event.text.toByteArray().size else 0
             if (pending.early.size >= 256 || pending.bytes + bytes > terminalOutputLimit) {
                 pending.abandoned = true
-                update { it.copy(terminal = it.terminal?.copy(attaching = false, ended = "overflow")) }
+                update { it.copy(terminal = it.terminal?.copy(attaching = false, inputPending = false, ended = "overflow")) }
             } else { pending.bytes += bytes; pending.early += event }
             return
         }
@@ -7738,7 +7745,7 @@ class DefaultRemoteRepository(
             is TerminalEvent.Detached -> {
                 terminalAttachment = null
                 terminalInputBusy = false
-                update { it.copy(terminal = it.terminal?.copy(ended = event.reason, exitCode = event.exitCode)) }
+                update { it.copy(terminal = it.terminal?.copy(inputPending = false, ended = event.reason, exitCode = event.exitCode)) }
             }
             is TerminalEvent.Data -> {
                 val size = view.output.sumOf { it.toByteArray().size } + event.text.toByteArray().size
@@ -7765,7 +7772,7 @@ class DefaultRemoteRepository(
         terminalAttachment = null
         terminalInputBusy = false
         if (attachment != null && sendDetach && view.generation != null) sendTerminalDetach(view.sessionId, view.generation, generation)
-        if (view.ended == null) update { it.copy(terminal = it.terminal?.copy(attaching = false, ended = reason)) }
+        if (view.ended == null) update { it.copy(terminal = it.terminal?.copy(attaching = false, inputPending = false, ended = reason)) }
     }
     override fun detachTerminal() = endTerminal("detached", sendDetach = true)
     override fun takeTerminalOutput(): List<String> {
@@ -7781,6 +7788,7 @@ class DefaultRemoteRepository(
         val seq = attachment.nextInputSequence(generation.toString()) ?: return false
         val connection = generation
         terminalInputBusy = true
+        update { it.copy(terminal = it.terminal?.copy(inputPending = true)) }
         scope.launch {
             if (connection != generation || terminalAttachment !== attachment || !state.value.connected) return@launch
             try {
@@ -7788,7 +7796,10 @@ class DefaultRemoteRepository(
                 validatedBashAborted(result, view.sessionId)
             } catch (_: Exception) {
                 if (terminalAttachment === attachment) endTerminal("input_failed", sendDetach = true)
-            } finally { if (connection == generation && terminalAttachment === attachment) terminalInputBusy = false }
+            } finally { if (connection == generation && terminalAttachment === attachment) {
+                terminalInputBusy = false
+                update { it.copy(terminal = it.terminal?.copy(inputPending = false)) }
+            } }
         }
         return true
     }

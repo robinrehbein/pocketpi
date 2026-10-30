@@ -80,6 +80,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -721,6 +722,9 @@ internal fun RemoteScreen(
     val filesOpen = state.files?.takeIf { it.sessionId == state.selection.sessionId && chatModel != null }
     val jobsOpen =
         state.jobs?.let { (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId } == true
+    var terminalOpen by remember(key) { mutableStateOf(false) }
+    var terminalHasUnsent by remember(key) { mutableStateOf(false) }
+    var terminalCloseConfirm by remember(key) { mutableStateOf(false) }
     // The touched files and the session's artifacts: sheets on a phone, tabs beside the chat.
     var touchedSheet by rememberSaveable(key) { mutableStateOf(false) }
     var artifactsSheetRequested by remember(key) { mutableStateOf(false) }
@@ -759,6 +763,9 @@ internal fun RemoteScreen(
         val chat = chatModel ?: return
         showTab(tab)
         when (tab) {
+            InspectorTab.TERMINAL -> {
+                if (!terminalOpen && chat.attachTerminal(80, 24)) terminalOpen = true
+            }
             InspectorTab.CHANGES -> if (changesOpen == null) chat.openChanges(exclusive = !sideCapable)
             InspectorTab.FILES -> if (filesOpen == null) chat.openFiles(exclusive = !sideCapable)
             InspectorTab.JOBS -> if (!jobsOpen) chat.openJobs()
@@ -770,8 +777,13 @@ internal fun RemoteScreen(
     }
     /** Closes [tab] and what backs it; the tab before it becomes active. */
     fun closeTab(tab: InspectorTab) {
+        if (tab == InspectorTab.TERMINAL && terminalHasUnsent) {
+            terminalCloseConfirm = true
+            return
+        }
         inspectorTabs = inspectorTabs.close(tab)
         when (tab) {
+            InspectorTab.TERMINAL -> { terminalOpen = false; chatModel?.detachTerminal() }
             InspectorTab.CHANGES -> chatModel?.closeChanges()
             InspectorTab.FILES -> chatModel?.closeFiles()
             InspectorTab.JOBS -> chatModel?.closeJobs()
@@ -1456,6 +1468,9 @@ internal fun RemoteScreen(
                             Icon(Icons.AutoMirrored.Filled.List, stringResource(R.string.remote_chat_history))
                         }
                     }
+                    if (chatModel?.canAttachTerminal() == true) TextButton(onClick = { openInspector(InspectorTab.TERMINAL) }) {
+                        Text(stringResource(R.string.remote_terminal_title))
+                    }
                     ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, onAction = ::runAction)
                 }
             }
@@ -1730,8 +1745,20 @@ internal fun RemoteScreen(
         if (touchedSheet && chatKey != null && sideCapable) {
             { TouchedFilesPane(touched, onOpen = ::jumpTo, onClose = { closeTab(InspectorTab.TOUCHED) }) }
         } else null
+    // One terminal instance moves between inspector, hidden keeper and phone overlay without
+    // disposing its connection or losing buffered input during layout changes.
+    val movableTerminal = remember(key) {
+        movableContentOf<TerminalView?, ChatViewModel, () -> Unit, (Boolean) -> Unit> { terminal, model, close, unsent ->
+            TerminalPane(terminal, model, close, unsent)
+        }
+    }
+    val terminalContent: (@Composable () -> Unit)? =
+        if (terminalOpen && chatModel != null) ({
+            movableTerminal(state.terminal, chatModel, { closeTab(InspectorTab.TERMINAL) }, { terminalHasUnsent = it })
+        }) else null
     fun tabContent(tab: InspectorTab): (@Composable () -> Unit)? =
         when (tab) {
+            InspectorTab.TERMINAL -> terminalContent
             InspectorTab.CHANGES -> changesContent
             InspectorTab.FILES -> filesContent
             InspectorTab.JOBS -> jobsContent
@@ -1745,6 +1772,7 @@ internal fun RemoteScreen(
     // goes, and one that opened elsewhere (a notification, the jobs chip) joins.
     val availableTabs =
         buildList {
+            if (terminalContent != null) add(InspectorTab.TERMINAL)
             if (changesContent != null) add(InspectorTab.CHANGES)
             if (filesContent != null) add(InspectorTab.FILES)
             if (jobsContent != null) add(InspectorTab.JOBS)
@@ -1833,7 +1861,7 @@ internal fun RemoteScreen(
     // does an expanded inspector that leaves the chat only a strip.
     val paneOverChat =
         chatKey != null && chatModel != null && !panesBeside &&
-            (jobsOpen || changesOpen != null || filesOpen != null || openTool != null)
+            (terminalOpen || jobsOpen || changesOpen != null || filesOpen != null || openTool != null)
     // The strip reports itself a frame late; a pane no longer expanded gives the chat back at once.
     val composerCovered = paneOverChat || (chatKey != null && inspectorShown && chatStripped && twoPane?.inspectorExpanded == true)
     if (chatKey != null)
@@ -3683,6 +3711,15 @@ internal fun RemoteScreen(
             if (!panesBeside) filesContent?.invoke()
             if (!panesBeside) jobsContent?.invoke()
             if (!panesBeside) toolContent?.invoke()
+            if (!panesBeside) terminalContent?.invoke()
+            // The inspector may be hidden while its tab remains open. Measure the terminal at
+            // a real size without placing it, so it receives neither input nor semantics.
+            if (panesBeside && !inspectorShown && terminalContent != null) {
+                Box(Modifier.fillMaxSize().clearAndSetSemantics {}.layout { measurable, constraints ->
+                    val placeable = measurable.measure(constraints)
+                    layout(placeable.width, placeable.height) { }
+                }) { terminalContent() }
+            }
             }
             }
             if (dropHovered) DropScrim()
@@ -3691,6 +3728,17 @@ internal fun RemoteScreen(
     }
     }
     }
+    if (terminalCloseConfirm) AlertDialog(
+        onDismissRequest = { terminalCloseConfirm = false },
+        title = { Text(stringResource(R.string.remote_terminal_discard_title)) },
+        text = { Text(stringResource(R.string.remote_terminal_discard_body)) },
+        confirmButton = { TextButton(onClick = {
+            terminalCloseConfirm = false
+            terminalHasUnsent = false
+            closeTab(InspectorTab.TERMINAL)
+        }) { Text(stringResource(R.string.remote_terminal_close)) } },
+        dismissButton = { TextButton(onClick = { terminalCloseConfirm = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+    )
     val hideOfflineLabel = stringResource(R.string.remote_hide_offline_sessions)
     if (tuiInfoOpen && key is RemoteNavKey.Chat && state.session?.optionalText("origin") == "tui")
         AlertDialog(
