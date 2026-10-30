@@ -65,6 +65,15 @@ means the session is ready; a gray dot means it is offline or is a historical se
 Subagent sessions appear below their parent and keep their own status, preview and controls.
 The floating plus button starts a session in the selected shared project.
 
+The Tasks pill opens a read-only session task sheet with progress and task statuses. It requires
+host support for `session.tasks.v1` and stays hidden when tasks are unknown or empty. A cached
+list for the same session is marked stale when disconnected until refreshed; it does not persist
+across app restarts.
+
+The Files sheet keeps file jumps and offers View changes when available. The Errors sheet controls
+the error filter, and the Subagents sheet opens child sessions or requests an abort with confirmation.
+On tablets, the existing file and changes inspector panes remain available.
+
 Swipe a message to the left, or tap its quote icon, to reference it in your reply. The
 composer shows the selected excerpt and lets you remove it. Quotes belong to the current session's
 draft and survive app restarts. Sending includes the excerpt in ordinary prompt text, so pi and the
