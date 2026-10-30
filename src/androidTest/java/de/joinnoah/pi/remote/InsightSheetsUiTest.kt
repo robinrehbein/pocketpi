@@ -5,7 +5,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
@@ -19,15 +22,25 @@ class InsightSheetsUiTest {
 
     @Test
     fun zeroErrorsCanDisableSelectedFilter() {
-        var toggled = false
+        var toggleCount = 0
         compose.setContent {
             MaterialTheme {
                 var selected by remember { mutableStateOf(true) }
-                ErrorInsightSheet(0, selected, onToggle = { selected = !selected; toggled = true }, onDismiss = {})
+                ErrorInsightSheet(0, selected, onToggle = { selected = !selected; toggleCount++ }, onDismiss = {})
             }
         }
-        compose.onNodeWithTag("insightErrorFilter").assertIsOn().performClick().assertIsOff()
-        assertTrue(toggled)
+        val filter = compose.onNodeWithTag("insightErrorFilter")
+        filter.assertTextEquals(resources.getString(R.string.insight_errors_filter))
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch))
+            .assertHasClickAction()
+            .assertHeightIsAtLeast(48.dp)
+            .assertWidthIsAtLeast(48.dp)
+            .assertIsOn()
+            .performClick()
+            .assertIsOff()
+        assertEquals(1, toggleCount)
+        filter.performClick().assertIsOn()
+        assertEquals(2, toggleCount)
     }
 
     @Test

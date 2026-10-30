@@ -96,6 +96,31 @@ class TaskRepositoryTest {
         assertEquals(TaskFreshness.LIVE, repo.state.value.tasks.freshness)
     }
 
+    @Test fun contiguousEventDuringTaskSnapshotRetriesAtCurrentRevision() = runTest {
+        val transport = Transport().apply { advertised = false }
+        val repo = repository(transport)
+        repo.activate(selection); runCurrent()
+        transport.holdSnapshots = true
+        transport.advertised = true
+        repo.openNotification("host", "elsewhere"); runCurrent()
+        val old = transport.snapshots().last()
+        assertEquals(JsonPrimitive(true), old["includeTasks"])
+        transport.deliver(Wire.objectOf(
+            "type" to "event", "sessionId" to "session", "revision" to 4, "kind" to "message.upsert",
+            "message" to Wire.objectOf("id" to "m1", "role" to "assistant", "text" to "Hello", "state" to "complete"),
+        ))
+        transport.result(old, transport.snapshot(old, 3, tasks("outdated"))); runCurrent()
+        assertEquals(TaskFreshness.UNKNOWN, repo.state.value.tasks.freshness)
+        assertTrue(repo.state.value.tasks.items.isEmpty())
+        val fresh = transport.snapshots().last()
+        assertNotEquals(old.text("requestId"), fresh.text("requestId"))
+        assertEquals("session", fresh.text("sessionId"))
+        assertEquals(JsonPrimitive(true), fresh["includeTasks"])
+        transport.result(fresh, transport.snapshot(fresh, 4, tasks("current"))); runCurrent()
+        assertEquals(TaskFreshness.LIVE, repo.state.value.tasks.freshness)
+        assertEquals("current", repo.state.value.tasks.items.single().text)
+    }
+
     @Test fun lateDiscoveryDuringOlderPageWaitsForItThenRefreshesSelectedSession() = runTest {
         val transport = Transport().apply { advertised = false; cursor = "older" }
         val repo = repository(transport)

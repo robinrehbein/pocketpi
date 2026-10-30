@@ -2395,12 +2395,14 @@ class DefaultRemoteRepository(
                     )
             checkEpoch(epoch)
             if (current !== timeline) return
-            val accepted = !older && data.optionalText("sessionId") == current.sessionId && data.long("revision") >= current.revision
+            val sameSession = data.optionalText("sessionId") == current.sessionId
+            val outdated = !older && sameSession && data.long("revision") < current.revision
+            val accepted = !older && sameSession && !outdated
             current.snapshot(data, older)
             if (accepted && includedTasks && !current.needsSnapshot) {
                 taskRefreshPending = false
                 update { it.copy(tasks = parseSessionTasks(data["tasks"])) }
-            } else if (!older && !includedTasks && canReadTasks()) {
+            } else if ((includedTasks && outdated) || (!older && !includedTasks && canReadTasks())) {
                 taskRefreshPending = true
             }
             current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
