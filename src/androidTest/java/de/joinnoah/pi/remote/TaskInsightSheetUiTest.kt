@@ -4,9 +4,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -53,5 +57,24 @@ class TaskInsightSheetUiTest {
         tasks = SessionTasks(freshness = TaskFreshness.UNAVAILABLE)
         compose.onNodeWithText("First task").assertDoesNotExist()
         compose.onNodeWithTag("taskInsightSheet").assertExists()
+    }
+
+    @Test
+    fun longSessionTitleLeavesTasksVisibleAndScrollable() {
+        val tasks = SessionTasks(
+            (1..20).map { SessionTask(it.toLong(), "Task $it", TaskStatus.PENDING) },
+            TaskFreshness.LIVE,
+        )
+        val longTitle = "Long session title ".repeat(200)
+        compose.setContent { MaterialTheme { TaskInsightSheet(tasks, longTitle, {}) } }
+        compose.onNodeWithText(longTitle).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action ->
+            val results = mutableListOf<TextLayoutResult>()
+            assertTrue(action(results))
+            assertEquals(2, results.single().lineCount)
+            assertTrue(results.single().hasVisualOverflow)
+        }
+        compose.onNodeWithText("Task 1").assertIsDisplayed()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Task 20"))
+        compose.onNodeWithText("Task 20").assertIsDisplayed()
     }
 }
