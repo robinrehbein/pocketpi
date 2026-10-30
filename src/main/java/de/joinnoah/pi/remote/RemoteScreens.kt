@@ -723,6 +723,14 @@ internal fun RemoteScreen(
         state.jobs?.let { (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId } == true
     // The touched files and the session's artifacts: sheets on a phone, tabs beside the chat.
     var touchedSheet by rememberSaveable(key) { mutableStateOf(false) }
+    var insightSheet by remember(key, state.selection.sessionId) { mutableStateOf<InsightSheetKind?>(null) }
+    LaunchedEffect(chatKey, strip.entries.isEmpty()) {
+        if (strip.entries.isEmpty() && insightSheet == InsightSheetKind.SUBAGENTS) insightSheet = null
+    }
+    fun openInsightSheet(sheet: InsightSheetKind) {
+        if (!sideCapable) touchedSheet = false
+        insightSheet = sheet
+    }
     var artifactsSheetRequested by remember(key) { mutableStateOf(false) }
     // The artifact or image open in the ARTIFACT tab, and the newest versions a gallery listed.
     val viewerScope = rememberCoroutineScope()
@@ -3402,31 +3410,23 @@ internal fun RemoteScreen(
                     }
                     // Held here so the row knows whether a chip shows; finished jobs stay behind the Jobs action.
                     val jobsExpanded = rememberSaveable(statusJobs?.sessionId) { mutableStateOf(false) }
-                    // Emptied entries close it, so returning ones never reopen the overview untapped.
-                    val subagentsExpanded =
-                        rememberSaveable(chatKey?.sessionId, strip.entries.isEmpty()) { mutableStateOf(false) }
                     val insightsShown =
                         touched.total > 0 || errorCount > 0 || onlyErrorsShown ||
-                            subagentChipShown(strip, subagentsExpanded.value) ||
-                            jobsChipShown(statusJobs, jobsExpanded.value) || state.pullRequest != null
+                            subagentChipShown(strip, insightSheet == InsightSheetKind.SUBAGENTS) ||
+                            jobsChipShown(statusJobs, jobsExpanded.value) || state.pullRequest != null ||
+                            taskInsightShown(state.tasks)
                     // The chips sit in their own row above the composer, never inside it. While the chat is
                     // compact the row also holds the status chip that stands in for the banners.
                     val pullRequest = state.pullRequest
                     val chipOrder =
-                        insightChipOrder(compact, pullRequest?.let { pullRequestChipModel(it).needsAttention } == true)
+                        insightChipOrder(compact, pullRequest?.let { pullRequestChipModel(it).needsAttention } == true, includeTasks = true)
                     val insightChips: @Composable RowScope.() -> Unit = {
                         for (chip in chipOrder)
                             when (chip) {
                                 InsightChip.ERRORS ->
-                                    ErrorFilterChip(errorCount, onlyErrorsShown) {
-                                        onlyErrorsShown = !onlyErrorsShown
-                                        if (onlyErrorsShown) autoFollow = false
-                                        else if (chatKey != null && viewportPositions != null) {
-                                            savedViewport = viewportPositions[chatKey]
-                                            viewportRestorePending = savedViewport?.following == false
-                                            autoFollow = savedViewport?.following ?: false
-                                        }
-                                    }
+                                    ErrorFilterChip(errorCount, onlyErrorsShown) { openInsightSheet(InsightSheetKind.ERRORS) }
+                                InsightChip.TASKS ->
+                                    TaskInsightPill(state.tasks) { openInsightSheet(InsightSheetKind.TASKS) }
                                 InsightChip.JOBS ->
                                     statusJobs?.let { jobs ->
                                         key(jobs.sessionId) {
@@ -3452,7 +3452,8 @@ internal fun RemoteScreen(
                                         },
                                         onAbort = { entry -> if (entry.sessionId != null) abortChild = entry },
                                         sessionId = chatKey?.sessionId,
-                                        expandedState = subagentsExpanded,
+                                        expandedState = remember(insightSheet) { mutableStateOf(insightSheet == InsightSheetKind.SUBAGENTS) },
+                                        onOpenSummary = { openInsightSheet(InsightSheetKind.SUBAGENTS) },
                                     )
                                 InsightChip.PULL_REQUEST ->
                                     pullRequest?.let { pr ->
@@ -3466,15 +3467,16 @@ internal fun RemoteScreen(
                                     }
                                 InsightChip.TOUCHED ->
                                     TouchedFilesSummary(touched, touchedLines) {
-                                        val target = touchedFilesTarget(
-                                            canViewChanges(state) && state.connected,
-                                            touched.changed.isNotEmpty(),
-                                        )
-                                        when (target) {
-                                            TouchedFilesTarget.CHANGES -> openInspector(InspectorTab.CHANGES)
-                                            TouchedFilesTarget.SHEET -> {
-                                                touchedSheet = true
-                                                if (sideCapable) showTab(InspectorTab.TOUCHED)
+                                        if (!sideCapable) openInsightSheet(InsightSheetKind.FILES)
+                                        else {
+                                            insightSheet = null
+                                            val target = touchedFilesTarget(
+                                                canViewChanges(state) && state.connected,
+                                                touched.changed.isNotEmpty(),
+                                            )
+                                            when (target) {
+                                                TouchedFilesTarget.CHANGES -> openInspector(InspectorTab.CHANGES)
+                                                TouchedFilesTarget.SHEET -> openInspector(InspectorTab.TOUCHED)
                                             }
                                         }
                                     }
@@ -3721,7 +3723,40 @@ internal fun RemoteScreen(
                 }
             },
         )
-    if (touchedSheet && key is RemoteNavKey.Chat && !panesBeside)
+    if (key is RemoteNavKey.Chat) {
+        when (insightSheet) {
+            InsightSheetKind.FILES -> CompositionLocalProvider(LocalFileOpener provides fileOpener) {
+                TouchedFilesSheet(
+                    touched, onDismiss = { insightSheet = null }, onOpen = ::jumpTo,
+                    onViewChanges = if (canViewChanges(state) && state.connected && touched.changed.isNotEmpty()) {
+                        { openInspector(InspectorTab.CHANGES) }
+                    } else null,
+                )
+            }
+            InsightSheetKind.ERRORS -> ErrorInsightSheet(errorCount, onlyErrorsShown, onToggle = {
+                onlyErrorsShown = !onlyErrorsShown
+                if (onlyErrorsShown) autoFollow = false
+                else if (chatKey != null && viewportPositions != null) {
+                    savedViewport = viewportPositions[chatKey]
+                    viewportRestorePending = savedViewport?.following == false
+                    autoFollow = savedViewport?.following ?: false
+                }
+            }, onDismiss = { insightSheet = null })
+            InsightSheetKind.TASKS -> TaskInsightSheet(
+                state.tasks, state.session?.optionalText("title")?.takeIf(String::isNotBlank),
+                onDismiss = { insightSheet = null },
+            )
+            InsightSheetKind.SUBAGENTS -> SubagentInsightSheet(
+                strip,
+                canAbort = { entry -> entry.sessionId?.let { canAbortSubagent(state, it) } == true },
+                onOpen = { entry -> entry.sessionId?.takeIf { entry.openable }?.let(::openChildSession) },
+                onAbort = { entry -> if (entry.sessionId != null) abortChild = entry },
+                onDismiss = { insightSheet = null },
+            )
+            null -> Unit
+        }
+    }
+    if (touchedSheet && key is RemoteNavKey.Chat && !panesBeside && insightSheet == null)
         CompositionLocalProvider(LocalFileOpener provides fileOpener) {
             TouchedFilesSheet(touched, onDismiss = { touchedSheet = false }, onOpen = ::jumpTo)
         }
@@ -4568,8 +4603,13 @@ private fun rememberTouchExploring(): State<Boolean> {
     return exploring
 }
 
+internal enum class InsightSheetKind { FILES, ERRORS, TASKS, SUBAGENTS }
+
+internal fun taskInsightShown(tasks: SessionTasks): Boolean =
+    tasks.items.isNotEmpty() && tasks.freshness in setOf(TaskFreshness.LIVE, TaskFreshness.STALE)
+
 /** The chips of the chat's insights row. */
-internal enum class InsightChip { TOUCHED, ERRORS, JOBS, SUBAGENTS, PULL_REQUEST }
+internal enum class InsightChip { TOUCHED, ERRORS, JOBS, SUBAGENTS, PULL_REQUEST, TASKS }
 
 /**
  * The order of the insights chips: the touched files first, as they always were. On a compact chat,
@@ -4577,13 +4617,15 @@ internal enum class InsightChip { TOUCHED, ERRORS, JOBS, SUBAGENTS, PULL_REQUEST
  * with failing checks or requested changes) come first and the touched files after them, behind the
  * status chip.
  */
-internal fun insightChipOrder(compact: Boolean, pullRequestNeedsAttention: Boolean = false): List<InsightChip> =
-    if (compact) {
+internal fun insightChipOrder(compact: Boolean, pullRequestNeedsAttention: Boolean = false, includeTasks: Boolean = false): List<InsightChip> {
+    val existing = if (compact) {
         val attention = listOf(InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS)
         // Failing checks or requested changes need attention too, so the pull request leads the row.
         if (pullRequestNeedsAttention) listOf(InsightChip.PULL_REQUEST) + attention + InsightChip.TOUCHED
         else attention + listOf(InsightChip.PULL_REQUEST, InsightChip.TOUCHED)
     } else listOf(InsightChip.TOUCHED, InsightChip.ERRORS, InsightChip.JOBS, InsightChip.SUBAGENTS, InsightChip.PULL_REQUEST)
+    return if (includeTasks) existing + InsightChip.TASKS else existing
+}
 
 /**
  * Hides the compact header while the user drags the list down and shows it again on a drag up or at

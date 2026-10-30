@@ -147,6 +147,7 @@ data class RemoteState(
     /** [sessions] came from a sessions.list on the current connection, not from a cache. */
     val sessionsFresh: Boolean = false,
     val session: JsonObject? = null,
+    val tasks: SessionTasks = SessionTasks(),
     val messages: List<JsonObject> = emptyList(),
     val questions: List<JsonObject> = emptyList(),
     val status: String = "offline",

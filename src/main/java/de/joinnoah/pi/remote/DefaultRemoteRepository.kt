@@ -268,9 +268,11 @@ class DefaultRemoteRepository(
             SESSION_BASH_WORKER_CAPABILITY,
             // Only on the capabilities.v2 route; writes need the project's `writable` flag as well.
             TICKETS_CAPABILITY,
+            SESSION_TASKS_CAPABILITY,
         )
     /** The request ID prefix of `projects.list`; falls back to v1 once for a host without v2. */
     private var capabilityRoute = CAPABILITIES_V2_ROUTE
+    private var tasksCapabilityKnown = false
     private val mutable = MutableStateFlow(RemoteState())
     override val state = mutable.asStateFlow()
     private val attachmentMutex = Mutex()
@@ -517,6 +519,8 @@ class DefaultRemoteRepository(
     private val removedRoutes = mutableSetOf<String>()
     private val removalJobs = mutableMapOf<String, Job>()
     private var resynchronizing = false
+    private var taskRefreshPending = false
+    private var taskActivationEpoch: Long? = null
     /**
      * The connection was opened by [connectEarly] and no [connect] took it over yet: the caches
      * hold the saved navigation, not lists this connection read, and push is not registered.
@@ -540,7 +544,7 @@ class DefaultRemoteRepository(
      * lists, an open of a live chat alongside `sessions.open`. The chat's events that arrive
      * meanwhile wait here for that Timeline, so none is lost before it exists.
      */
-    private class HeldSnapshot(val sessionId: String) {
+    private class HeldSnapshot(val sessionId: String, val includeTasks: Boolean) {
         lateinit var reply: Deferred<Result<JsonObject>>
         val events = ArrayDeque<JsonObject>()
     }
@@ -725,6 +729,8 @@ class DefaultRemoteRepository(
                     // accepts and then drops connections at once does not cause a tight loop.
                     connectionReady()
                     capabilityRoute = CAPABILITIES_V2_ROUTE
+                    tasksCapabilityKnown = false
+                    taskRefreshPending = false
                     update {
                         it.copy(
                             connected = true,
@@ -855,6 +861,7 @@ class DefaultRemoteRepository(
             questions = emptyList(),
             capabilities = emptySet(),
             capabilitiesKnown = false,
+            tasks = SessionTasks(),
             unavailableCapabilities = emptySet(),
             childControlUnsupported = emptySet(),
             configuration = null,
@@ -1535,6 +1542,7 @@ class DefaultRemoteRepository(
         stopToolOutput()
         sessionRefreshJob?.cancel()
         selectionEpoch++
+        taskActivationEpoch = null
         configurationVersion++
         configurationNeedsRefresh = false
         contextVersion++
@@ -1790,7 +1798,9 @@ class DefaultRemoteRepository(
                     ?.takeIf { it.size <= MAX_ROUTE_CAPABILITIES }
                     ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                     .orEmpty()
-                val merged = routeCapabilities.filter { it in advertised }
+                val merged = routeCapabilities.filter { it in advertised && (it != SESSION_TASKS_CAPABILITY || id.startsWith(CAPABILITIES_V2_ROUTE)) }
+                val hadTasks = canReadTasks()
+                if (id.startsWith(CAPABILITIES_V2_ROUTE) && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
                 val hadTickets = TICKETS_CAPABILITY in state.value.capabilities
                 if (merged.isNotEmpty()) {
                     // Capabilities merge in additively as later projects.list replies arrive; a list
@@ -1801,6 +1811,10 @@ class DefaultRemoteRepository(
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
                 update { it.copy(capabilitiesKnown = true) }
+                if (!hadTasks && canReadTasks()) {
+                    taskRefreshPending = true
+                    drainTaskRefresh()
+                }
                 if (PROJECT_OPEN_CAPABILITY in merged) resumeClone()
                 if (PROVIDER_AUTH_CAPABILITY in merged) resumeProviderAuth()
                 if (TICKETS_CAPABILITY in merged && !hadTickets) ticketsLoader.refresh(force = false)
@@ -1834,12 +1848,29 @@ class DefaultRemoteRepository(
             }
         }
 
+    private fun canReadTasks() = state.value.capabilitiesKnown && tasksCapabilityKnown && SESSION_TASKS_CAPABILITY in state.value.capabilities
+
+    private fun drainTaskRefresh() {
+        val current = timeline ?: return
+        val selected = state.value.selection
+        if (!taskRefreshPending || !canReadTasks() || !state.value.connected ||
+            taskActivationEpoch == selectionEpoch || resynchronizing || snapshotPending === current ||
+            selected.sessionId != current.sessionId || selected.routeId != activeHost?.routeId
+        ) return
+        taskRefreshPending = false
+        snapshotAsync()
+    }
+
+    private fun snapshotFields(sessionId: String, includeTasks: Boolean): Array<Pair<String, Any?>> =
+        if (includeTasks) arrayOf("sessionId" to sessionId, "includeTasks" to true)
+        else arrayOf("sessionId" to sessionId)
+
     /** Asks for the snapshot of [sessionId] before select() makes its Timeline; see [HeldSnapshot]. */
     private fun CoroutineScope.holdSnapshot(sessionId: String, epoch: Long): HeldSnapshot {
-        val held = HeldSnapshot(sessionId)
+        val held = HeldSnapshot(sessionId, canReadTasks())
         // Set first: an event that follows the request is kept for the Timeline.
         heldSnapshot = held
-        held.reply = alongside { request("session.snapshot", epoch, "sessionId" to sessionId) }
+        held.reply = alongside { request("session.snapshot", epoch, *snapshotFields(sessionId, held.includeTasks)) }
         return held
     }
 
@@ -1954,8 +1985,10 @@ class DefaultRemoteRepository(
         try {
             // The snapshot select() set up takes in what this buffered; asking for another
             // one would only be discarded.
-            if (current.event(event) && !resynchronizing && snapshotPending !== current)
-                snapshotAsync()
+            if (current.event(event)) {
+                update { it.copy(tasks = staleTasks(it.tasks)) }
+                if (!resynchronizing && snapshotPending !== current) snapshotAsync()
+            }
         } catch (malformed: Exception) {
             Diagnostics.caught("repo.receive.timeline", malformed)
             current.unknownKindSeen = true
@@ -2321,10 +2354,13 @@ class DefaultRemoteRepository(
         older: Boolean = false,
         timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
         held: Deferred<Result<JsonObject>>? = null,
+        heldIncludesTasks: Boolean = false,
     ) {
         val current = timeline ?: return
         val cursor = if (older) current.nextCursor ?: return else null
         resynchronizing = true
+        if (!older) update { it.copy(tasks = staleTasks(it.tasks)) }
+        var includedTasks = if (held != null && cursor == null) heldIncludesTasks else !older && canReadTasks()
         if (snapshotPending === current) snapshotPending = null
         try {
             val data =
@@ -2334,10 +2370,11 @@ class DefaultRemoteRepository(
                         // error may not hold any more: it is asked once again. A reply that never
                         // came fails as any other would.
                         if (failed.requestKind != RemoteRequestException.Kind.HOST_ERROR) throw failed
+                        includedTasks = canReadTasks()
                         request(
                             "session.snapshot",
                             epoch,
-                            "sessionId" to current.sessionId,
+                            *snapshotFields(current.sessionId, includedTasks),
                             timeoutMillis = timeoutMillis,
                         )
                     }
@@ -2345,7 +2382,7 @@ class DefaultRemoteRepository(
                     request(
                         "session.snapshot",
                         epoch,
-                        "sessionId" to current.sessionId,
+                        *snapshotFields(current.sessionId, includedTasks),
                         timeoutMillis = timeoutMillis,
                     )
                 else
@@ -2358,7 +2395,14 @@ class DefaultRemoteRepository(
                     )
             checkEpoch(epoch)
             if (current !== timeline) return
+            val accepted = !older && data.optionalText("sessionId") == current.sessionId && data.long("revision") >= current.revision
             current.snapshot(data, older)
+            if (accepted && includedTasks && !current.needsSnapshot) {
+                taskRefreshPending = false
+                update { it.copy(tasks = parseSessionTasks(data["tasks"])) }
+            } else if (!older && !includedTasks && canReadTasks()) {
+                taskRefreshPending = true
+            }
             current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
             if (!older) recheckFollowUps(current.sessionId)
             publishTimeline(persist = !older)
@@ -2378,7 +2422,12 @@ class DefaultRemoteRepository(
         } finally {
             if (epoch == selectionEpoch) resynchronizing = false
         }
-        if (!older && current.needsSnapshot && epoch == selectionEpoch) snapshotAsync()
+        if (epoch == selectionEpoch) {
+            if (current.needsSnapshot) {
+                taskRefreshPending = false
+                snapshotAsync()
+            } else drainTaskRefresh()
+        }
     }
 
     private fun snapshotAsync(older: Boolean = false) {
@@ -2531,6 +2580,7 @@ class DefaultRemoteRepository(
         update {
             it.copy(
                 selection = selection,
+                tasks = if (sameSession) staleTasks(it.tasks) else SessionTasks(),
                 compaction = null,
                 suggestion = null,
                 pullRequest = null,
@@ -2688,6 +2738,7 @@ class DefaultRemoteRepository(
         stopReconnectTimer()
         requestedSelection = selection
         activationStartedAt = now()
+        taskActivationEpoch = epoch
         activationBackgrounds = backgrounds
         update { it.copy(loading = true, deniedRouteId = null) }
         val started = Diagnostics.now()
@@ -2901,7 +2952,7 @@ class DefaultRemoteRepository(
             refreshAdvisor()
             refreshCommands()
             try {
-                snapshot(epoch, held = heldReply)
+                snapshot(epoch, held = heldReply, heldIncludesTasks = held?.includeTasks == true)
             } catch (e: CancellationException) {
                 throw e
             } catch (swallowed: Exception) {
@@ -2970,6 +3021,7 @@ class DefaultRemoteRepository(
             )
             if (epoch == selectionEpoch) {
                 activationStartedAt = null
+                taskActivationEpoch = null
                 // A cached chat whose snapshot never started (the activation failed before it)
                 // asks for one itself when its events need it.
                 timeline?.takeIf { snapshotPending === it }?.let { pending ->
@@ -2986,6 +3038,7 @@ class DefaultRemoteRepository(
                     if (projectsCached) revalidateProjects()
                     if (sessionsCached && state.value.selection.sessionId == null) revalidateSessions()
                 }
+                drainTaskRefresh()
                 // A foreground or network signal that came in while this loaded runs now.
                 resumeDeferredRecovery()
             }
@@ -3598,7 +3651,7 @@ class DefaultRemoteRepository(
             }
         update {
             val shown =
-                if (keep) it.copy(stale = true, staleSince = it.staleSince ?: now())
+                if (keep) it.copy(stale = true, staleSince = it.staleSince ?: now(), tasks = staleTasks(it.tasks))
                 else lastKnownCleared(it)
             shown.copy(
                 connected = false,
