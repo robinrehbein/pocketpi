@@ -1,0 +1,13 @@
+<resources>
+    <string name="task_insight_title">Tasks</string>
+    <string name="task_insight_count">Tasks %1$d/%2$d</string>
+    <string name="task_insight_description">Tasks, %1$d of %2$d completed, %3$d in progress</string>
+    <string name="task_insight_progress">%1$d of %2$d completed</string>
+    <string name="task_insight_stale">Offline. Showing the last known tasks.</string>
+    <string name="task_insight_unavailable">Tasks are unavailable.</string>
+    <string name="task_insight_empty">No tasks in this session.</string>
+    <string name="task_insight_id_status">#%1$d · %2$s</string>
+    <string name="task_insight_pending">Pending</string>
+    <string name="task_insight_in_progress">In progress</string>
+    <string name="task_insight_completed">Completed</string>
+</resources>

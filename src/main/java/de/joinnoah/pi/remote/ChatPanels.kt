@@ -119,18 +119,24 @@ internal fun middleEllipsis(text: String, maxChars: Int = 40): String {
 }
 
 @Composable
-internal fun TouchedFilesSheet(files: TouchedFiles, onDismiss: () -> Unit, onOpen: (itemId: String) -> Unit) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+internal fun TouchedFilesSheet(
+    files: TouchedFiles,
+    onDismiss: () -> Unit,
+    onOpen: (itemId: String) -> Unit,
+    onViewChanges: (() -> Unit)? = null,
+) {
+    InsightSheet(title = stringResource(R.string.remote_panel_files_title), onDismiss = onDismiss) {
+        if (onViewChanges != null) {
+            TextButton(onClick = { onDismiss(); onViewChanges() }, modifier = Modifier.padding(horizontal = 16.dp)) {
+                Text(stringResource(R.string.insight_files_view_changes))
+            }
+        }
         TouchedFilesList(
             files,
-            onOpen = {
-                onOpen(it)
-                onDismiss()
-            },
-            Modifier.fillMaxWidth().testTag("touchedFilesSheet").navigationBarsPadding(),
-            // Files opens over the chat; the sheet would cover it.
+            onOpen = { onOpen(it); onDismiss() },
+            Modifier.fillMaxWidth().heightIn(max = 600.dp).testTag("touchedFilesSheet"),
             onOpenedInFiles = onDismiss,
+            showTitle = false,
         )
     }
 }
@@ -154,9 +160,10 @@ private fun TouchedFilesList(
     onOpen: (itemId: String) -> Unit,
     modifier: Modifier,
     onOpenedInFiles: () -> Unit = {},
+    showTitle: Boolean = true,
 ) {
     LazyColumn(modifier, contentPadding = PaddingValues(bottom = 16.dp)) {
-        item {
+        if (showTitle) item {
             Text(
                 stringResource(R.string.remote_panel_files_title),
                 Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
@@ -262,6 +269,7 @@ internal fun SubagentStrip(
     onAbort: (SubagentStripEntry) -> Unit,
     sessionId: String? = null,
     expandedState: MutableState<Boolean> = rememberSaveable(sessionId) { mutableStateOf(false) },
+    onOpenSummary: (() -> Unit)? = null,
 ) {
     var expanded by expandedState
     if (!subagentChipShown(strip, expanded)) return
@@ -276,8 +284,8 @@ internal fun SubagentStrip(
     StatusPopover(
         summary = summary,
         icon = Icons.Outlined.SmartToy,
-        expanded = expanded,
-        onExpandedChange = { expanded = it },
+        expanded = if (onOpenSummary == null) expanded else false,
+        onExpandedChange = { if (onOpenSummary != null) onOpenSummary() else expanded = it },
         expandDescription = stringResource(R.string.remote_panel_subagents_expand),
         collapseDescription = stringResource(R.string.remote_panel_subagents_collapse),
         title = stringResource(R.string.remote_subagent_popover_title),
@@ -289,6 +297,23 @@ internal fun SubagentStrip(
             items(strip.entries) { entry ->
                 SubagentStripRow(entry, canAbort(entry),
                     onOpen = { expanded = false; onOpen(it) }, onAbort = onAbort)
+            }
+        }
+    }
+}
+
+@Composable
+internal fun SubagentInsightSheet(
+    strip: SubagentStrip,
+    canAbort: (SubagentStripEntry) -> Boolean,
+    onOpen: (SubagentStripEntry) -> Unit,
+    onAbort: (SubagentStripEntry) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    InsightSheet(title = stringResource(R.string.remote_subagent_popover_title), onDismiss = onDismiss) {
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 600.dp).testTag("subagentInsightSheet")) {
+            items(strip.entries) { entry ->
+                SubagentStripRow(entry, canAbort(entry), onOpen = { onDismiss(); onOpen(it) }, onAbort = onAbort)
             }
         }
     }
