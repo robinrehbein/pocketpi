@@ -12,6 +12,89 @@ import org.junit.Test
 
 class RemoteNavigationTest {
     @Test
+    fun `session switch waits for terminal discard and cancel keeps current chat`() = runTest {
+        val repository = NavigationFakeRepository()
+        val current = RemoteNavKey.Chat("host", "project", "one")
+        repository.state.value = RemoteState(selection = current.selection())
+        val stack = current.selection().keys().toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        var held: (() -> Unit)? = null
+        var cancel: (() -> Unit)? = null
+        navigation.registerTerminalGuard(current) { action, keep -> held = action; cancel = keep; true }
+
+        navigation.open(RemoteNavKey.Chat("host", "project", "two"))
+        assertEquals(current, stack.last())
+        val cancelled = checkNotNull(held)
+        checkNotNull(cancel)()
+        cancelled() // A cancelled confirmation cannot be replayed.
+        assertEquals(current, stack.last())
+
+        navigation.open(RemoteNavKey.Chat("host", "project", "two"))
+        val confirm = checkNotNull(held)
+        confirm()
+        confirm()
+        runCurrent()
+        assertEquals(RemoteNavKey.Chat("host", "project", "two"), stack.last())
+        assertEquals(1, repository.activations.count { it.second == ActivationMode.USER_OPEN })
+    }
+
+    @Test
+    fun `back waits for terminal discard and stale confirmation does nothing`() = runTest {
+        val repository = NavigationFakeRepository()
+        val current = RemoteNavKey.Chat("host", "project", "one")
+        repository.state.value = RemoteState(selection = current.selection())
+        val stack = current.selection().keys().toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        var held: (() -> Unit)? = null
+        navigation.registerTerminalGuard(current) { action, _ -> held = action; true }
+        navigation.back()
+        assertEquals(current, stack.last())
+        stack.removeAt(stack.lastIndex)
+        checkNotNull(held)()
+        assertEquals(RemoteNavKey.Sessions("host", "project"), stack.last())
+    }
+
+    @Test
+    fun `notification cancellation consumes once without leaving terminal`() = runTest {
+        val repository = NavigationFakeRepository()
+        val current = RemoteNavKey.Chat("host", "project", "one")
+        repository.state.value = RemoteState(selection = current.selection())
+        val stack = current.selection().keys().toMutableList<NavKey>()
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        var cancel: (() -> Unit)? = null
+        navigation.registerTerminalGuard(current) { _, keep -> cancel = keep; true }
+        var consumed = 0
+        navigation.notification("host", "two", consumed = { consumed++ })
+        assertEquals(0, consumed)
+        checkNotNull(cancel)()
+        checkNotNull(cancel)()
+        runCurrent()
+        assertEquals(1, consumed)
+        assertEquals(current, stack.last())
+        assertTrue(repository.activations.isEmpty())
+    }
+
+    @Test
+    fun `reopening selected stacked child asks before replacing its entry`() = runTest {
+        for (notification in listOf(false, true)) {
+            val repository = NavigationFakeRepository()
+            val parent = RemoteNavKey.Chat("host", "project", "parent")
+            val child = RemoteNavKey.Chat("host", "project", "child")
+            repository.state.value = RemoteState(selection = child.selection())
+            val stack = (parent.selection().keys() + child).toMutableList<NavKey>()
+            val before = stack.toList()
+            val navigation = RemoteNavigator(repository, stack, backgroundScope)
+            var held: (() -> Unit)? = null
+            navigation.registerTerminalGuard(child) { action, _ -> held = action; true }
+            if (notification) navigation.notification("host", "child") else navigation.open(child)
+            runCurrent()
+            assertNotNull(held)
+            assertEquals(before, stack)
+            assertTrue(repository.activations.isEmpty())
+        }
+    }
+
+    @Test
     fun `explicit open replaces requested history ID with canonical live ID`() = runTest {
         val repository = NavigationFakeRepository()
         repository.activation = { selection, mode ->

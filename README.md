@@ -298,9 +298,9 @@ started terminal sessions and RPC sessions do not offer this view.
 
 The renderer bundles xterm.js 6.0.0 locally and has no network access. Its license and pinned package
 integrity are in `src/main/assets/terminal/`. Local tests cover an encrypted relay, a macOS PTY and
-an API 36 WebView. Samsung and Linux/container qualification remain open. Finish pending terminal
-input before navigating away from the whole chat: the close confirmation currently covers explicit
-terminal closure, while full chat navigation can still discard unsent terminal input.
+an API 36 WebView. Samsung and Linux/container qualification remain open. Leaving the chat or
+closing the terminal asks before discarding a draft or queued input. Cancelling keeps the current
+chat; confirmation is bound to the navigation that requested it and cannot be replayed.
 
 ## Appearance
 

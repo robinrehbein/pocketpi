@@ -725,6 +725,23 @@ internal fun RemoteScreen(
     var terminalOpen by remember(key) { mutableStateOf(false) }
     var terminalHasUnsent by remember(key) { mutableStateOf(false) }
     var terminalCloseConfirm by remember(key) { mutableStateOf(false) }
+    var terminalLeave by remember(key) { mutableStateOf<Pair<() -> Unit, () -> Unit>?>(null) }
+    val unsentNow by rememberUpdatedState(terminalHasUnsent)
+    val terminalSelectionNow by rememberUpdatedState(state.selection)
+    DisposableEffect(navigator, key) {
+        val guard: (() -> Unit, () -> Unit) -> Boolean = { action, cancel ->
+            if (key is RemoteNavKey.Chat && terminalSelectionNow == key.selection() && unsentNow) {
+                terminalLeave?.second?.invoke()
+                terminalLeave = action to cancel
+                true
+            } else false
+        }
+        if (key is RemoteNavKey.Chat) navigator.registerTerminalGuard(key, guard)
+        onDispose {
+            if (key is RemoteNavKey.Chat) navigator.unregisterTerminalGuard(key, guard)
+            terminalLeave?.second?.invoke()
+        }
+    }
     // The touched files and the session's artifacts: sheets on a phone, tabs beside the chat.
     var touchedSheet by rememberSaveable(key) { mutableStateOf(false) }
     var insightSheet by remember(key, state.selection.sessionId) { mutableStateOf<InsightSheetKind?>(null) }
@@ -3730,6 +3747,17 @@ internal fun RemoteScreen(
     }
     }
     }
+    if (terminalLeave != null) AlertDialog(
+        onDismissRequest = { terminalLeave?.second?.invoke(); terminalLeave = null },
+        title = { Text(stringResource(R.string.remote_terminal_discard_title)) },
+        text = { Text(stringResource(R.string.remote_terminal_discard_body)) },
+        confirmButton = { TextButton(onClick = {
+            val action = terminalLeave
+            terminalLeave = null
+            action?.first?.invoke()
+        }) { Text(stringResource(R.string.remote_terminal_close)) } },
+        dismissButton = { TextButton(onClick = { terminalLeave?.second?.invoke(); terminalLeave = null }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+    )
     if (terminalCloseConfirm) AlertDialog(
         onDismissRequest = { terminalCloseConfirm = false },
         title = { Text(stringResource(R.string.remote_terminal_discard_title)) },

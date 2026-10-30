@@ -1,5 +1,19 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Verified local progress on 2026-10-30
+
+The native terminal increment is implemented in local feature branches: PocketPi `284b5be`
+and NOAH `5ab7e475d`. It provides opt-in, device/project-authorized native-worker terminal
+control, ordered encrypted output, explicit takeover and an offline Android terminal pane.
+An encrypted relay regression, a real macOS PTY smoke test and an API 36 WebView rendering
+regression passed. The app gate passed 2,876 unit tests, debug assembly and lint; the host
+Remote suite passed 2,825 tests with 23 skipped. These results precede later branch updates
+and are increment evidence, not qualification of the entire goal.
+
+Shared browser control, protected previews, emulator streaming and qualification on Linux,
+devcontainers and both physical Samsung devices remain open. No release, deployment or live
+host activation has been performed.
+
 ## Expanded goal agreed on 2026-10-30
 
 PocketPi is Robin's complete mobile agentic development environment on Galaxy Tab S11 and
