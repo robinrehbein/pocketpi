@@ -111,33 +111,46 @@ internal fun LazyListScope.connectionStatusItem(@StringRes line: Int?, topInset:
     }
 }
 
-/**
- * The chat's notices, right above the composer field, so they stay in view however far the chat
- * is scrolled: the connection state ([connection], see [connectionStatusLine]) and, after a send
- * the connection may have lost ([uncertain]), the request to check the conversation first.
- */
+internal enum class DraftDeliverySeverity { NEUTRAL, WARNING }
+
+internal data class DraftDeliveryNotice(@StringRes val text: Int, val severity: DraftDeliverySeverity)
+
+/** Uncertainty is expected while awaiting acknowledgement, but unsafe to retry after sending stops. */
+internal fun draftDeliveryNotice(sending: Boolean, uncertain: Boolean, connected: Boolean): DraftDeliveryNotice? =
+    when {
+        !uncertain -> null
+        sending && connected -> DraftDeliveryNotice(R.string.remote_draft_confirmation_pending, DraftDeliverySeverity.NEUTRAL)
+        else -> DraftDeliveryNotice(R.string.remote_draft_uncertain, DraftDeliverySeverity.WARNING)
+    }
+
+/** Connection and delivery notices stay above the composer while the conversation scrolls. */
 @Composable
-internal fun ChatComposerNotices(@StringRes connection: Int?, uncertain: Boolean) {
-    if (connection == null && !uncertain) return
+internal fun ChatComposerNotices(@StringRes connection: Int?, delivery: DraftDeliveryNotice?) {
+    if (connection == null && delivery == null) return
     Column(
         Modifier.fillMaxWidth().testTag("chatComposerNotices"),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (connection != null) ConnectionStatusChip(connection)
-        if (uncertain)
+        if (delivery != null)
             FloatingSurface(
                 Modifier.fillMaxWidth().testTag("uncertainDraftNotice"),
                 shape = MaterialTheme.shapes.medium,
-                color = MaterialTheme.colorScheme.errorContainer,
+                color = if (delivery.severity == DraftDeliverySeverity.WARNING)
+                    MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer,
             ) {
                 Row(
                     Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Default.ErrorOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(
+                        if (delivery.severity == DraftDeliverySeverity.WARNING) Icons.Default.ErrorOutline else Icons.Default.HourglassEmpty,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
                     Text(
-                        stringResource(R.string.remote_draft_uncertain),
+                        stringResource(delivery.text),
                         Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
                         style = MaterialTheme.typography.bodyMedium,
                     )
