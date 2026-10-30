@@ -339,6 +339,38 @@ class DefaultRemoteRepository(
     private val followUpsToRecheck = mutableMapOf<DraftKey, Set<String>>()
     private var selectionEpoch = 0L
     private var generation = 0L
+    // Connection-scoped attempts and UI owners start at the send tap.
+    private val promptAttempts = mutableMapOf<DraftKey, Any>()
+    private val promptOwners = mutableMapOf<DraftKey, Any>()
+    // Journal ownership starts only on publication and survives disconnects.
+    private val journalOwners = mutableMapOf<DraftKey, Any>()
+    // IDs are remembered for the whole connection: a reused ID cannot identify an attempt.
+    private val issuedRequestIds = mutableSetOf<String>()
+    private val ambiguousRequestIds = mutableSetOf<String>()
+    private var lateAcknowledgementsDisabled = false
+    private data class LateAcknowledgement(val at: Long, val sessionId: String, val accept: (JsonObject) -> Unit)
+    private val lateAcknowledgements = linkedMapOf<String, LateAcknowledgement>()
+    private fun clearLateAcknowledgements() {
+        promptAttempts.clear()
+        issuedRequestIds.clear()
+        ambiguousRequestIds.clear()
+        lateAcknowledgements.clear()
+        lateAcknowledgementsDisabled = false
+    }
+
+    private fun recordIssuedRequest(id: String) {
+        if (lateAcknowledgementsDisabled) return
+        if (id in issuedRequestIds) {
+            ambiguousRequestIds.add(id)
+            lateAcknowledgements.remove(id)
+        } else if (issuedRequestIds.size >= 4096) {
+            lateAcknowledgementsDisabled = true
+            lateAcknowledgements.clear()
+            issuedRequestIds.clear()
+            ambiguousRequestIds.clear()
+        } else issuedRequestIds.add(id)
+    }
+
     private val requests = RequestLedger()
     private val completions = mutableMapOf<String, CompletableDeferred<JsonObject>>()
     private var activeHost: PairedHost? = null
@@ -549,6 +581,17 @@ class DefaultRemoteRepository(
     private var pushToken: String? = null
     private var pushTokenKnown = false
     private val drafts = mutableMapOf<DraftKey, StoredDraft>()
+    private data class ComposerVersions(val text: Long = 0, val quote: Long = 0, val attachments: Long = 0)
+    private val composerVersions = mutableMapOf<DraftKey, ComposerVersions>()
+    private fun composerVersion(key: DraftKey) = composerVersions[key] ?: ComposerVersions()
+    private fun composerEdited(key: DraftKey, field: String) {
+        val version = composerVersion(key)
+        composerVersions[key] = when (field) {
+            "text" -> version.copy(text = version.text + 1)
+            "quote" -> version.copy(quote = version.quote + 1)
+            else -> version.copy(attachments = version.attachments + 1)
+        }
+    }
     private val closingSessions = mutableSetOf<String>()
     private val unsharingProjects = mutableSetOf<String>()
     private val sessionStatusRevisions = linkedMapOf<String, Long>()
@@ -1670,6 +1713,7 @@ class DefaultRemoteRepository(
         // A connection replaced on purpose is no failure.
         connectionEnded()
         generation++
+        clearLateAcknowledgements()
         failConnectionRequests()
         cloneStatusJob?.cancel()
         providerStatusJob?.cancel()
@@ -1729,12 +1773,14 @@ class DefaultRemoteRepository(
         timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
         // Runs once the request went out, for one that follows it without waiting for its reply.
         thenSend: (() -> Unit)? = null,
+        onLateAccepted: ((JsonObject) -> Unit)? = null,
     ): JsonObject {
         checkEpoch(epoch)
         check(state.value.connected)
         // Older hosts accept this as an opaque request ID and return ordinary projects.
         val id = if (type == "projects.list") "$capabilityRoute$requestId" else sessionsListRequestId(type, requestId)
         val payload = Wire.objectOf("type" to type, "requestId" to id, *fields)
+        recordIssuedRequest(id)
         val completion = CompletableDeferred<JsonObject>()
         requests.add(
             id,
@@ -1764,6 +1810,14 @@ class DefaultRemoteRepository(
                 withTimeoutOrNull(timeoutMillis) { completion.await() }
                     ?: run {
                         outcome = "timeout"
+                        if (type == "session.prompt" && onLateAccepted != null &&
+                            connection == generation && !lateAcknowledgementsDisabled && id !in ambiguousRequestIds) {
+                            lateAcknowledgements.entries.removeAll { Diagnostics.now() - it.value.at >= 120_000 }
+                            while (lateAcknowledgements.size >= 64) lateAcknowledgements.remove(lateAcknowledgements.keys.first())
+                            payload.optionalText("sessionId")?.let { sessionId ->
+                                lateAcknowledgements[id] = LateAcknowledgement(Diagnostics.now(), sessionId, onLateAccepted)
+                            }
+                        }
                         // Not a frame since the read went out: the socket is dead, not the host slow.
                         if (
                             type in LIVENESS_READS &&
@@ -1897,7 +1951,22 @@ class DefaultRemoteRepository(
         val completion =
             connectionCompletions.remove(id)
                 ?: run {
-                    requests.take(id, selectionEpoch) ?: return
+                    if (requests.take(id, selectionEpoch) == null) {
+                        val late = lateAcknowledgements[id] ?: return
+                        if (lateAcknowledgementsDisabled || id in ambiguousRequestIds || Diagnostics.now() - late.at >= 120_000) {
+                            lateAcknowledgements.remove(id)
+                            return
+                        }
+                        try {
+                            val data = payload.obj("data")
+                            if (payload.flag("ok") && data.text("kind") == "accepted" &&
+                                data.text("sessionId") == late.sessionId) {
+                                lateAcknowledgements.remove(id)
+                                late.accept(data)
+                            }
+                        } catch (_: Exception) { /* Ignore malformed late results. */ }
+                        return
+                    }
                     completions.remove(id) ?: return
                 }
         try {
@@ -2121,6 +2190,7 @@ class DefaultRemoteRepository(
                     followUps = latest.followUps + PendingFollowUp(id, latest.submittedText, "delivered", delivery),
                 )
                 drafts[key] = confirmed
+                journalOwners.remove(key)
                 persist()
                 if (currentDraftKey() == key) update { it.copy(
                     draft = confirmed.text, quote = confirmed.quote, attachments = confirmed.attachments,
@@ -3428,6 +3498,7 @@ class DefaultRemoteRepository(
         retry?.cancel()
         connectionEnded()
         generation++
+        clearLateAcknowledgements()
         transport.close()
         ready?.cancel()
         pairing?.cancel()
@@ -3473,6 +3544,7 @@ class DefaultRemoteRepository(
                 pairingWrites.withLock {
                     val remaining = state.value.hosts
                     drafts.keys.filter { it.routeId == routeId }.forEach { drafts.remove(it) }
+                    journalOwners.keys.removeAll { it.routeId == routeId }
                     persistNow()
                     cleanupAttachments()
                     // The kept images go before the unpair is saved: a crash in between keeps the
@@ -3539,6 +3611,7 @@ class DefaultRemoteRepository(
         cancelHostWaitHint()
         deferredRecovery = null
         generation++
+        clearLateAcknowledgements()
         folderVersion++
         folderSession++
         ticketsLoader.connectionLost()
@@ -4559,6 +4632,14 @@ class DefaultRemoteRepository(
         done.await()
     }
 
+    /** Writes a prospective snapshot without publishing it to the shared drafts. */
+    private suspend fun persistSnapshot(values: Map<DraftKey, StoredDraft>) {
+        if (!draftsAvailable) throw IllegalStateException("Draft storage unavailable")
+        val done = CompletableDeferred<Unit>()
+        check(writes.trySend(Write(values, done)).isSuccess)
+        done.await()
+    }
+
     /** Queues a write of the drafts as they are now, which replaces any debounced write still waiting. */
     private fun queueDrafts(done: CompletableDeferred<Unit>) {
         draftWriteTimer?.cancel()
@@ -4575,9 +4656,9 @@ class DefaultRemoteRepository(
     override suspend fun flush() {
         initialized.await()
         val done = CompletableDeferred<Unit>()
-        // Keystrokes still waiting for their debounce are written now; otherwise this only waits
-        // behind the writes already queued.
-        if (draftWriteTimer != null) queueDrafts(done)
+        // Write pending keystrokes or retry the current snapshot after a known storage failure.
+        // Never save an empty map when loading drafts failed.
+        if (draftWriteTimer != null || (draftsAvailable && storageFailure != null)) queueDrafts(done)
         else writes.send(Write(null, done))
         done.await()
     }
@@ -4585,6 +4666,7 @@ class DefaultRemoteRepository(
     override fun draft(text: String) {
         if (text.toByteArray().size > 128 * 1024) return
         val key = currentDraftKey() ?: return
+        if ((drafts[key] ?: StoredDraft()).text != text) composerEdited(key, "text")
         drafts[key] = (drafts[key] ?: StoredDraft()).copy(text = text)
         update { it.copy(draft = text) }
         persist()
@@ -4600,6 +4682,7 @@ class DefaultRemoteRepository(
         if (text.toByteArray().size > 128 * 1024) return
         val stored = drafts[key] ?: StoredDraft()
         if (stored.text == text) return
+        composerEdited(key, "text")
         drafts[key] = stored.copy(text = text)
         persist()
     }
@@ -4613,6 +4696,7 @@ class DefaultRemoteRepository(
                 val message = state.value.messages.find { it.text("id") == messageId } ?: return
                 quoteFromMessage(message) ?: return
             }
+        if ((drafts[key] ?: StoredDraft()).quote != quote) composerEdited(key, "quote")
         drafts[key] = (drafts[key] ?: StoredDraft()).copy(quote = quote)
         update { it.copy(quote = quote) }
         persist()
@@ -4678,6 +4762,7 @@ class DefaultRemoteRepository(
                             check(currentDraftKey() == key)
                             val attachments = latest.attachments + imported
                             require(validAttachmentSet(attachments))
+                            composerEdited(key, "attachments")
                             drafts[key] = latest.copy(attachments = attachments)
                             persistNow()
                             update { it.copy(attachments = attachments) }
@@ -4723,6 +4808,7 @@ class DefaultRemoteRepository(
         val key = currentDraftKey() ?: return
         val latest = drafts[key] ?: return
         if (latest.attachments.none { it.id == id }) return
+        composerEdited(key, "attachments")
         drafts[key] = latest.copy(attachments = latest.attachments.filterNot { it.id == id })
         update { it.copy(attachments = drafts.getValue(key).attachments) }
         val epoch = selectionEpoch
@@ -5036,6 +5122,8 @@ class DefaultRemoteRepository(
         // keep their draft until the host acknowledges them.
         val plain = !queued && command == null
         val kind = delivery ?: if (command != null) "command" else "prompt"
+        val submitted = PromptSnapshot(current.draft, current.quote, current.attachments)
+        val sentRevision = composerVersion(key)
         val tapped = Diagnostics.now()
         val id = (if (plain) unconfirmedMutationId(key, current) else null) ?: Wire.random()
         attachmentInFlight.addAll(current.attachments.map { it.id })
@@ -5055,6 +5143,12 @@ class DefaultRemoteRepository(
         // Set once the host acknowledges the request: a write that fails after that still leaves the
         // plain prompt confirmed in the chat.
         var acknowledged = false
+        var restoredAfterTimeout: RestoredComposer? = null
+        var clearedComposer: ClearedComposer? = null
+        val connection = generation
+        val attempt = Any()
+        promptAttempts[key] = attempt
+        promptOwners[key] = attempt
         sendJob = scope.launch {
             try {
                 val uploaded =
@@ -5068,20 +5162,26 @@ class DefaultRemoteRepository(
                 val stored = drafts[key] ?: StoredDraft()
                 // Text and attachments typed since the send began stay; what was sent leaves the
                 // composer and lives in the journal. Uploads stay, so a resend reuses them.
-                val unchanged = stored.text == current.draft && stored.quote == current.quote
+                val version = composerVersion(key)
+                val clearTextAndQuote = plain && version.text == sentRevision.text &&
+                    version.quote == sentRevision.quote && stored.text == current.draft && stored.quote == current.quote
+                val clearText = clearTextAndQuote
+                val clearQuote = clearTextAndQuote
+                val clearAttachments = plain && version.attachments == sentRevision.attachments &&
+                    stored.attachments == current.attachments
+                clearedComposer = ClearedComposer(version, clearText, clearQuote, clearAttachments)
                 drafts[key] =
                     stored.copy(
-                        text = if (plain && unchanged) "" else stored.text,
-                        quote = if (plain && unchanged) null else stored.quote,
-                        attachments =
-                            if (plain && stored.attachments == current.attachments) emptyList()
-                            else stored.attachments,
+                        text = if (clearText) "" else stored.text,
+                        quote = if (clearQuote) null else stored.quote,
+                        attachments = if (clearAttachments) emptyList() else stored.attachments,
                         mutationId = id,
                         submittedText = current.draft,
                         submittedQuote = current.quote,
                         submittedAttachments = current.attachments,
                         submittedDelivery = kind,
                     )
+                journalOwners[key] = attempt
                 persistNow()
                 checkEpoch(epoch)
                 val journaled = drafts.getValue(key)
@@ -5122,6 +5222,29 @@ class DefaultRemoteRepository(
                         *fields.toTypedArray(),
                         draft = current.draft,
                         requestId = id,
+                        onLateAccepted = if (command != null) null else { result ->
+                            if (result.optionalText("kind") == "accepted" && result.optionalText("sessionId") == key.sessionId &&
+                                connection == generation && activeHost?.routeId == key.routeId) {
+                                scope.launch {
+                                    try {
+                                        if (connection == generation && activeHost?.routeId == key.routeId &&
+                                            !lateAcknowledgementsDisabled && id !in ambiguousRequestIds &&
+                                            settlePrompt(key, id, submitted, queued, plain, kind, connection,
+                                                attempt, sentRevision, restoredAfterTimeout)) {
+                                            if (plain) confirmPendingSend(key, id, attempt, tapped, late = true)
+                                        }
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        Diagnostics.caught("repo.sendPrompt.late", e)
+                                        if (storageFailure == null) reportError(R.string.remote_storage_error)
+                                    } finally {
+                                        if (promptAttempts[key] === attempt) promptAttempts.remove(key)
+                                        if (promptOwners[key] === attempt) promptOwners.remove(key)
+                                    }
+                                }
+                            }
+                        },
                     )
                 acknowledged = true
                 if (queued) require(acknowledgement.text("kind") == "accepted" &&
@@ -5134,47 +5257,8 @@ class DefaultRemoteRepository(
                     )
                 if (command != null && state.value.commandNotice == null)
                     update { it.copy(commandNotice = R.string.remote_command_dispatched) }
-                val latest = drafts[key]
-                if (latest?.mutationId == id) {
-                    val pending = if (queued) {
-                        val receipt = earlyFollowUpReceipts.remove(Triple(key, id, delivery))
-                        check(latest.followUps.size < 64)
-                        latest.followUps + PendingFollowUp(id, current.draft, receipt ?: "accepted", delivery)
-                    } else latest.followUps
-                    // A plain prompt left the composer at the journal, so what is in it now was typed
-                    // or quoted since the send began; none of it is the sent text to bring back.
-                    val unchanged = !plain && latest.text == current.draft && latest.quote == current.quote
-                    val attachments =
-                        if (latest.attachments == current.attachments) emptyList()
-                        else latest.attachments
-                    drafts[key] =
-                        StoredDraft(
-                            text = if (unchanged) "" else latest.text,
-                            quote = if (unchanged) null else latest.quote,
-                            attachments = attachments,
-                            uploads =
-                                latest.uploads.filter { upload ->
-                                    attachments.any { it.id == upload.localId }
-                                },
-                            followUps = pending,
-                            // A sent message leaves the changes view's pending review alone.
-                            reviewComments = latest.reviewComments,
-                        )
-                    persistNow()
-                    if (epoch == selectionEpoch && currentDraftKey() == key) {
-                        val stored = drafts.getValue(key)
-                        update {
-                            it.copy(
-                                draft = stored.text,
-                                quote = stored.quote,
-                                attachments = stored.attachments,
-                                uncertain = false,
-                                followUps = stored.followUps,
-                            )
-                        }
-                    }
-                }
-            } catch (_: CancellationException) {} catch (e: Exception) {
+                settlePrompt(key, id, submitted, queued, plain, kind, connection, attempt, sentRevision)
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 Diagnostics.caught("repo.sendPrompt.2", e)
                 if (
                     current.attachments.isNotEmpty() &&
@@ -5204,7 +5288,7 @@ class DefaultRemoteRepository(
                 ) {
                     // The child finished: the host did not take the input, so the draft stays
                     // for a resume and no submission is left to reconcile.
-                    drafts[key]?.let {
+                    drafts[key]?.takeIf { journalOwners[key] === attempt }?.let {
                         drafts[key] =
                             it.copy(
                                 mutationId = null,
@@ -5213,6 +5297,7 @@ class DefaultRemoteRepository(
                                 submittedAttachments = emptyList(),
                                 submittedDelivery = null,
                             )
+                        if (journalOwners[key] === attempt) journalOwners.remove(key)
                         persist()
                     }
                     setChildControl(key.sessionId, ChildControl(ChildControlPhase.NOT_RUNNING))
@@ -5240,17 +5325,83 @@ class DefaultRemoteRepository(
                 // The host's acknowledgement confirms a plain prompt whatever the writes after it did.
                 // Without one it is not confirmed: failed, cancelled by leaving the chat, or still
                 // unanswered when the coroutine ends.
-                if (plain) {
-                    if (acknowledged) confirmPendingSend(key, id, tapped)
-                    else unconfirmPendingSend(key, id)
+                val ownsAttempt = promptOwners[key] === attempt
+                if (plain && ownsAttempt) {
+                    if (acknowledged) {
+                        if (connection == generation && activeHost?.routeId == key.routeId)
+                            confirmPendingSend(key, id, attempt, tapped)
+                    } else restoredAfterTimeout = unconfirmPendingSend(key, id, attempt, clearedComposer)
                 }
-                attachmentInFlight.removeAll(current.attachments.map { it.id }.toSet())
-                if (epoch == selectionEpoch)
+                if (ownsAttempt || promptOwners[key] == null)
+                    attachmentInFlight.removeAll(current.attachments.map { it.id }.toSet())
+                if (ownsAttempt && epoch == selectionEpoch)
                     update { it.copy(sending = false, attachmentProgress = null) }
+                if (ownsAttempt && (acknowledged || lateAcknowledgements[id] == null)) {
+                    if (promptAttempts[key] === attempt) promptAttempts.remove(key)
+                    promptOwners.remove(key)
+                }
                 resumeDeferredRecovery()
                 withContext(NonCancellable) { runCatching { cleanupAttachments() } }
             }
         }
+    }
+
+    private data class PromptSnapshot(val draft: String, val quote: MessageQuote?, val attachments: List<LocalAttachment>)
+    private data class ClearedComposer(val revision: ComposerVersions, val text: Boolean, val quote: Boolean, val attachments: Boolean)
+    private data class RestoredComposer(val revision: ComposerVersions, val quote: Boolean, val attachments: Boolean)
+
+    private suspend fun settlePrompt(
+        key: DraftKey, id: String, submitted: PromptSnapshot, queued: Boolean, plain: Boolean,
+        delivery: String, connection: Long, attempt: Any, sentRevision: ComposerVersions,
+        restored: RestoredComposer? = null,
+    ): Boolean {
+        fun owns(draft: StoredDraft) = journalOwners[key] === attempt && draft.mutationId == id &&
+            draft.submittedText == submitted.draft && draft.submittedQuote == submitted.quote &&
+            draft.submittedAttachments == submitted.attachments && draft.submittedDelivery == delivery
+        val receiptKey = Triple(key, id, delivery)
+        fun settled(latest: StoredDraft): StoredDraft? {
+            if (queued && latest.followUps.size >= 64) return null
+            val version = composerVersion(key)
+            val originalText = !plain && version.text == sentRevision.text && version.quote == sentRevision.quote
+            // Any edit makes the whole timeout-restored composer the user's again.
+            val restoredText = plain && restored != null && version == restored.revision
+            val originalAttachments = !plain && version.attachments == sentRevision.attachments
+            val restoredAttachments = restoredText && restored?.attachments == true
+            val attachments = if (originalAttachments || restoredAttachments) emptyList() else latest.attachments
+            return StoredDraft(
+                text = if (originalText || restoredText) "" else latest.text,
+                quote = if (originalText || (restoredText && restored?.quote == true)) null else latest.quote,
+                attachments = attachments,
+                uploads = latest.uploads.filter { upload -> attachments.any { it.id == upload.localId } },
+                followUps = if (queued) latest.followUps + PendingFollowUp(id, submitted.draft,
+                    earlyFollowUpReceipts[receiptKey] ?: "accepted", delivery) else latest.followUps,
+                reviewComments = latest.reviewComments,
+            )
+        }
+        val before = drafts[key] ?: return false
+        if (!owns(before)) return false
+        val prospective = settled(before) ?: return false
+        // Until this succeeds, every concurrent composer write still contains the journal.
+        persistSnapshot(drafts.toMap() + (key to prospective))
+        val current = drafts[key]
+        if (current == null || !owns(current)) return false
+        val reconciled = settled(current) ?: return false
+        drafts[key] = reconciled
+        if (journalOwners[key] === attempt) journalOwners.remove(key)
+        if (connection == generation && activeHost?.routeId == key.routeId && currentDraftKey() == key) {
+            update { it.copy(draft = reconciled.text, quote = reconciled.quote, attachments = reconciled.attachments,
+                uncertain = false, followUps = reconciled.followUps) }
+        }
+        try {
+            // The staged acceptance is committed; this orders intervening composer and metadata edits.
+            persistNow()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The writer reported the failure. Do not undo the known acceptance in memory.
+            Diagnostics.caught("repo.settlePrompt.reconcile", e)
+        }
+        return connection == generation && activeHost?.routeId == key.routeId && promptAttempts[key] === attempt
     }
 
     /**
@@ -5270,9 +5421,10 @@ class DefaultRemoteRepository(
      * The host acknowledged the plain prompt [id]: the chat keeps it until its timeline has it. The
      * chat shown decides, not the selection epoch: a chat left and opened again keeps its send.
      */
-    private fun confirmPendingSend(key: DraftKey, id: String, tapped: Long) {
-        if (currentDraftKey() != key) return
-        val pending = state.value.pendingSend?.takeIf { it.mutationId == id && it.state == PendingSendState.SENDING }
+    private fun confirmPendingSend(key: DraftKey, id: String, attempt: Any, tapped: Long, late: Boolean = false) {
+        if (promptOwners[key] !== attempt || currentDraftKey() != key) return
+        val pending = state.value.pendingSend?.takeIf { it.mutationId == id &&
+            (it.state == PendingSendState.SENDING || (late && it.state == PendingSendState.NOT_CONFIRMED)) }
             ?: return
         update { it.copy(pendingSend = settledSend(pending.copy(state = PendingSendState.CONFIRMED), it.messages)) }
         Diagnostics.record(Diagnostics.Kind.REQUEST, "send.confirmed", Diagnostics.now() - tapped)
@@ -5284,13 +5436,24 @@ class DefaultRemoteRepository(
      * marked even when the journal was already resolved, so it never waits for a confirmation that
      * cannot come; the composer is only restored from a journal that still holds the send.
      */
-    private fun unconfirmPendingSend(key: DraftKey, id: String) {
-        val restored = drafts[key]?.takeIf { it.mutationId == id }?.restoringSubmitted()
+    private fun unconfirmPendingSend(key: DraftKey, id: String, attempt: Any, cleared: ClearedComposer?): RestoredComposer? {
+        if (promptOwners[key] !== attempt) return null
+        val before = drafts[key]?.takeIf { it.mutationId == id }
+        val version = composerVersion(key)
+        val restoreText = before != null && cleared != null && cleared.text &&
+            version.text == cleared.revision.text && before.text.isEmpty() && before.submittedText != null
+        val restoreQuote = restoreText && cleared!!.quote && version.quote == cleared.revision.quote && before!!.quote == null
+        val restoreAttachments = restoreText && cleared!!.attachments &&
+            version.attachments == cleared.revision.attachments && before!!.attachments.isEmpty()
+        val restored = if (restoreText) before!!.copy(text = before.submittedText!!,
+            quote = if (restoreQuote) before.submittedQuote else before.quote,
+            attachments = if (restoreAttachments) before.submittedAttachments else before.attachments) else before
+        val ownership = if (restoreText) RestoredComposer(version, restoreQuote, restoreAttachments) else null
         if (restored != null) {
             drafts[key] = restored
             persist()
         }
-        if (currentDraftKey() != key) return
+        if (currentDraftKey() != key) return ownership
         update { state ->
             val pending = state.pendingSend?.let { p ->
                 if (p.mutationId == id && p.state != PendingSendState.CONFIRMED)
@@ -5306,6 +5469,7 @@ class DefaultRemoteRepository(
                     pendingSend = pending,
                 )
         }
+        return ownership
     }
 
     override fun abort() {
@@ -5859,6 +6023,7 @@ class DefaultRemoteRepository(
         record: Boolean,
     ): JsonObject {
         val payload = Wire.objectOf("type" to type, "requestId" to requestId, *fields)
+        recordIssuedRequest(requestId)
         val completion = CompletableDeferred<JsonObject>()
         connectionCompletions[requestId] = completion
         val started = Diagnostics.now()

@@ -37,16 +37,24 @@ class RemoteRepositoryTest {
     private class Drafts : DraftStorage {
         var values = emptyMap<DraftKey, StoredDraft>()
         var fail = false
+        var failLoad = false
+        var beforeSave: (() -> Unit)? = null
+        var afterSave: (() -> Unit)? = null
 
         /** Writes made, so a test can tell one coalesced write from several. */
         var saves = 0
 
-        override fun load() = values.toMap()
+        override fun load(): Map<DraftKey, StoredDraft> {
+            if (failLoad) error("Disk unavailable")
+            return values.toMap()
+        }
 
         override fun save(drafts: Map<DraftKey, StoredDraft>) {
+            beforeSave?.also { beforeSave = null }?.invoke()
             if (fail) error("Disk unavailable")
             saves++
             values = drafts.toMap()
+            afterSave?.also { afterSave = null }?.invoke()
         }
     }
 
@@ -3835,6 +3843,813 @@ class RemoteRepositoryTest {
         assertTrue(repository.state.value.uncertain)
         assertEquals("keep this", repository.state.value.draft)
         assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun latePromptAcceptanceSettlesWithoutOverwritingNewDraft() = runTest {
+        val transport = Transport().also { configure(it) }
+        val drafts = Drafts()
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.draft("new draft")
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("new draft", repository.state.value.draft)
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        assertFalse(repository.state.value.uncertain)
+        assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("new draft", repository.state.value.draft)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun lateAcceptancePreservesNewAttachments() = runTest {
+        val bytes = byteArrayOf(1)
+        val sent = localFile(bytes)
+        val added = localFile(bytes, id = "CCCCCCCCCCCCCCCCCCCCCC")
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, sent, prompt = false) }
+        val repository = repository(transport, attachmentStorage = storage) { uri, _ ->
+            val local = if (uri == "content:sent") sent else added
+            storage.write(local, bytes)
+            local
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.importAttachments(repository.state.value.selection, listOf("content:sent"), false)
+        runCurrent()
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        advanceTimeBy(201)
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.draft("new")
+        repository.removeAttachment(sent.id)
+        repository.importAttachments(repository.state.value.selection, listOf("content:new"), false)
+        runCurrent()
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("new", repository.state.value.draft)
+        assertEquals(listOf(added), repository.state.value.attachments)
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun lateAcceptancePreservesRestoredAttachmentAfterTextEdit() = runTest {
+        restoredAttachmentSurvivesLateAcceptance(editQuote = false)
+    }
+
+    @Test
+    fun lateAcceptancePreservesRestoredAttachmentAfterQuoteEdit() = runTest {
+        restoredAttachmentSurvivesLateAcceptance(editQuote = true)
+    }
+
+    private suspend fun TestScope.restoredAttachmentSurvivesLateAcceptance(editQuote: Boolean) {
+        val bytes = byteArrayOf(1)
+        val attachment = localFile(bytes)
+        val storage = Attachments()
+        val drafts = Drafts()
+        val transport = Transport().also { attachmentResponses(it, attachment, prompt = false); quoteMessages(it) }
+        val repository = repository(transport, drafts, storage) { _, _ ->
+            storage.write(attachment, bytes)
+            attachment
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.importAttachments(repository.state.value.selection, listOf("content:sent"), false)
+        runCurrent()
+        repository.draft("sent")
+        repository.quote("a")
+        repository.prompt()
+        runCurrent()
+        advanceTimeBy(201)
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(listOf(attachment), repository.state.value.attachments)
+        if (editQuote) repository.quote("b") else repository.draft("new draft")
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        repository.flush()
+        val expectedText = if (editQuote) "sent" else "new draft"
+        val expectedQuote = if (editQuote) "b" else "a"
+        assertEquals(expectedText, repository.state.value.draft)
+        assertEquals(expectedQuote, repository.state.value.quote?.messageId)
+        assertEquals(listOf(attachment), repository.state.value.attachments)
+        val stored = drafts.load().getValue(DraftKey("host", "session"))
+        assertEquals(expectedText, stored.text)
+        assertEquals(expectedQuote, stored.quote?.messageId)
+        assertEquals(listOf(attachment), stored.attachments)
+        assertNull(stored.mutationId)
+    }
+
+    @Test
+    fun lateAcceptanceKeepsComposerEditedBeforeTimeout() = runTest {
+        val bytes = byteArrayOf(1)
+        val attachment = localFile(bytes)
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, attachment, prompt = false); quoteMessages(it) }
+        val repository = repository(transport, attachmentStorage = storage) { _, _ ->
+            storage.write(attachment, bytes)
+            attachment
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.importAttachments(repository.state.value.selection, listOf("content:sent"), false)
+        runCurrent()
+        repository.draft("sent")
+        repository.quote("a")
+        repository.prompt()
+        runCurrent()
+        advanceTimeBy(201)
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        repository.draft("typed before timeout")
+        repository.quote("b")
+        advanceTimeBy(30_000)
+        runCurrent()
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("typed before timeout", repository.state.value.draft)
+        assertEquals("b", repository.state.value.quote?.messageId)
+        assertTrue(repository.state.value.attachments.isEmpty())
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun lateSettlementStorageFailureKeepsUncertainJournal() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        drafts.fail = true
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(R.string.remote_storage_error, repository.state.value.error)
+        assertTrue(repository.state.value.uncertain)
+        assertEquals("sent", repository.state.value.draft)
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals(request.text("requestId"), drafts.values.getValue(DraftKey("host", "session")).mutationId)
+        drafts.fail = false
+    }
+
+    @Test
+    fun failedStagedSettlementDoesNotStripJournalFromQueuedComposerWrite() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        drafts.beforeSave = {
+            repository.draft("new text")
+            val queue = repository.javaClass.getDeclaredMethod("queueDrafts", CompletableDeferred::class.java)
+            queue.isAccessible = true
+            queue.invoke(repository, CompletableDeferred<Unit>())
+            error("Disk unavailable")
+        }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        val stored = drafts.load().getValue(DraftKey("host", "session"))
+        assertEquals("new text", stored.text)
+        assertEquals(request.text("requestId"), stored.mutationId)
+        assertEquals("sent", stored.submittedText)
+    }
+
+    @Test
+    fun reconnectDuringFailedStagedSettlementKeepsJournal() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        drafts.beforeSave = {
+            transport.listener.failed(false, R.string.remote_connection_error)
+            error("Disk unavailable")
+        }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(request.text("requestId"), drafts.load().getValue(DraftKey("host", "session")).mutationId)
+    }
+
+    @Test
+    fun reconnectDuringSuccessfulStageReconcilesQueuedJournalAndComposer() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        drafts.beforeSave = {
+            repository.draft("new composer")
+            val queue = repository.javaClass.getDeclaredMethod("queueDrafts", CompletableDeferred::class.java)
+            queue.isAccessible = true
+            queue.invoke(repository, CompletableDeferred<Unit>())
+            transport.listener.failed(false, R.string.remote_connection_error)
+        }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        repository.flush()
+        val stored = drafts.load().getValue(DraftKey("host", "session"))
+        assertEquals("new composer", stored.text)
+        assertNull(stored.mutationId)
+        assertNull(stored.submittedText)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun failedNewUploadDuringSuccessfulStageCannotRestoreOldJournal() = runTest {
+        val bytes = byteArrayOf(1)
+        val attachment = localFile(bytes)
+        val storage = Attachments()
+        val drafts = Drafts()
+        val transport = Transport().also { attachmentResponses(it, attachment, prompt = false) }
+        val repository = repository(transport, drafts, storage) { _, _ ->
+            storage.write(attachment, bytes)
+            attachment
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.importAttachments(repository.state.value.selection, listOf("content:new"), false)
+        runCurrent()
+        transport.failure = { if (it.text("type") == "session.attachments.begin") "forbidden" else null }
+        drafts.beforeSave = {
+            repository.prompt()
+            repository.draft("new composer")
+            val queue = repository.javaClass.getDeclaredMethod("queueDrafts", CompletableDeferred::class.java)
+            queue.isAccessible = true
+            queue.invoke(repository, CompletableDeferred<Unit>())
+            runCurrent()
+            assertFalse(repository.state.value.sending)
+        }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        repository.flush()
+        val stored = drafts.load().getValue(DraftKey("host", "session"))
+        assertNull(stored.mutationId)
+        assertNull(stored.submittedText)
+        assertEquals("new composer", stored.text)
+        assertNotEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        val freshTransport = Transport().also { attachmentResponses(it, attachment, prompt = false) }
+        val fresh = repository(freshTransport, drafts, storage)
+        fresh.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals("new composer", fresh.state.value.draft)
+        assertFalse(freshTransport.sent.any { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun queuedAcceptanceClearsTextAndQuoteWhenOnlyAttachmentWasRemoved() = runTest {
+        val bytes = byteArrayOf(1)
+        val attachment = localFile(bytes)
+        val storage = Attachments()
+        val drafts = Drafts()
+        val transport = Transport().also {
+            attachmentResponses(it, attachment, prompt = false)
+            quoteMessages(it)
+            it.capabilities = it.capabilities + FOLLOW_UP_CAPABILITY
+        }
+        val repository = repository(transport, drafts, storage) { _, _ ->
+            storage.write(attachment, bytes)
+            attachment
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        repository.importAttachments(repository.state.value.selection, listOf("content:sent"), false)
+        runCurrent()
+        repository.draft("queued")
+        repository.quote("a")
+        repository.followUp()
+        runCurrent()
+        advanceTimeBy(201)
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        repository.removeAttachment(attachment.id)
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        repository.flush()
+        assertEquals("", repository.state.value.draft)
+        assertNull(repository.state.value.quote)
+        assertTrue(repository.state.value.attachments.isEmpty())
+        val stored = drafts.load().getValue(DraftKey("host", "session"))
+        assertEquals("", stored.text)
+        assertNull(stored.quote)
+        assertTrue(stored.attachments.isEmpty())
+        assertEquals(1, stored.followUps.size)
+    }
+
+    @Test
+    fun metadataCopyDoesNotKeepAcceptedQueuedComposer() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it); it.capabilities = setOf(FOLLOW_UP_CAPABILITY) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("queued")
+        repository.followUp()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        val comment = ReviewComment("README.md", null, 2, "New line", "Why?", GitBase.SESSION)
+        assertTrue(repository.setReviewComment(comment))
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("", repository.state.value.draft)
+        assertEquals(listOf(comment), drafts.load().getValue(DraftKey("host", "session")).reviewComments)
+    }
+
+    @Test
+    fun metadataCopyDoesNotKeepLateAcceptedRestoredComposer() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        val comment = ReviewComment("README.md", null, 2, "New line", "Why?", GitBase.SESSION)
+        assertTrue(repository.setReviewComment(comment))
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("", repository.state.value.draft)
+        assertEquals(listOf(comment), drafts.load().getValue(DraftKey("host", "session")).reviewComments)
+    }
+
+    @Test
+    fun lateAcceptanceKeepsComposerEditedAwayAndBack() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.draft("other")
+        repository.draft("sent")
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("sent", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun finalSettlementFailureKeepsKnownAcceptanceAndNewComposer() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        drafts.afterSave = {
+            repository.draft("new composer")
+            drafts.fail = true
+        }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(R.string.remote_storage_error, repository.state.value.error)
+        assertFalse(repository.state.value.uncertain)
+        assertEquals("new composer", repository.state.value.draft)
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        assertNull(drafts.load().getValue(DraftKey("host", "session")).mutationId)
+        assertNotEquals("new composer", drafts.load().getValue(DraftKey("host", "session")).text)
+        drafts.fail = false
+        repository.flush()
+        val recovered = drafts.load().getValue(DraftKey("host", "session"))
+        assertEquals("new composer", recovered.text)
+        assertNull(recovered.mutationId)
+    }
+
+    @Test
+    fun flushAfterDraftLoadFailureNeverOverwritesStoredDrafts() = runTest {
+        val key = DraftKey("host", "session")
+        val drafts = Drafts().apply { values = mapOf(key to StoredDraft("keep")); failLoad = true }
+        val repository = repository(Transport().also { configure(it) }, drafts)
+        runCurrent()
+        assertTrue(runCatching { repository.flush() }.isFailure)
+        assertEquals(mapOf(key to StoredDraft("keep")), drafts.values)
+        assertEquals(0, drafts.saves)
+    }
+
+    @Test
+    fun reconnectDuringFailedFinalWriteDoesNotUndoAcceptanceOrNewComposer() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        drafts.afterSave = {
+            repository.draft("new composer")
+            drafts.beforeSave = {
+                transport.listener.failed(false, R.string.remote_connection_error)
+                drafts.fail = true
+            }
+        }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(R.string.remote_storage_error, repository.state.value.error)
+        assertFalse(repository.state.value.uncertain)
+        assertEquals("new composer", repository.state.value.draft)
+        assertNull(drafts.load().getValue(DraftKey("host", "session")).mutationId)
+    }
+
+    @Test
+    fun deliveredReceiptSurvivesFailedFinalSettlementWrite() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it); it.capabilities = setOf(FOLLOW_UP_CAPABILITY) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("queued")
+        repository.followUp()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        drafts.afterSave = {
+            repository.draft("new composer")
+            drafts.beforeSave = {
+                transport.deliver(Wire.objectOf("type" to "event", "kind" to "follow_up.status",
+                    "sessionId" to "session", "requestId" to request.text("requestId"),
+                    "status" to "delivered", "revision" to 2))
+                drafts.fail = true
+            }
+        }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(R.string.remote_storage_error, repository.state.value.error)
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+        assertEquals("new composer", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun editedAwayAndBackDuringUploadIsNotOwnedByLateAcceptance() = runTest {
+        val bytes = byteArrayOf(1)
+        val attachment = localFile(bytes)
+        val storage = Attachments()
+        val transport = Transport().also { attachmentResponses(it, attachment, prompt = false); quoteMessages(it) }
+        val repository = repository(transport, attachmentStorage = storage) { _, _ ->
+            storage.write(attachment, bytes)
+            attachment
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.importAttachments(repository.state.value.selection, listOf("content:sent"), false)
+        runCurrent()
+        repository.draft("sent")
+        repository.quote("a")
+        repository.prompt()
+        runCurrent()
+        repository.draft("other")
+        repository.draft("sent")
+        repository.quote("b")
+        repository.quote("a")
+        advanceTimeBy(201)
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("sent", repository.state.value.draft)
+        assertEquals("a", repository.state.value.quote?.messageId)
+        assertTrue(repository.state.value.attachments.isEmpty())
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun textEditedDuringUploadKeepsUnchangedQuoteOnTimeoutAndDisk() = runTest {
+        val bytes = byteArrayOf(1)
+        val attachment = localFile(bytes)
+        val storage = Attachments()
+        val drafts = Drafts()
+        val transport = Transport().also { attachmentResponses(it, attachment, prompt = false); quoteMessages(it) }
+        val repository = repository(transport, drafts, storage) { _, _ ->
+            storage.write(attachment, bytes)
+            attachment
+        }
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.importAttachments(repository.state.value.selection, listOf("content:sent"), false)
+        runCurrent()
+        repository.draft("sent")
+        repository.quote("a")
+        repository.prompt()
+        runCurrent()
+        repository.draft("new text")
+        advanceTimeBy(201)
+        runCurrent()
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.flush()
+        assertEquals("new text", repository.state.value.draft)
+        assertEquals("a", repository.state.value.quote?.messageId)
+        val stored = drafts.load().getValue(DraftKey("host", "session"))
+        assertEquals("new text", stored.text)
+        assertEquals("a", stored.quote?.messageId)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun lateAcceptanceSynchronizesChatReopenedOnSameConnection() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        val chat = RemoteSelection("host", "project", "session")
+        repository.activate(chat)
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project"))
+        repository.activate(chat)
+        repository.draft("new")
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("new", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun newerSendDuringLateSettlementWriteKeepsItsUncertainState() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("first")
+        repository.prompt()
+        runCurrent()
+        val first = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        drafts.afterSave = {
+            repository.draft("second")
+            repository.prompt()
+        }
+        transport.result(first, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        val second = transport.sent.last { it.text("type") == "session.prompt" }
+        assertNotEquals(first.text("requestId"), second.text("requestId"))
+        assertTrue(repository.state.value.uncertain)
+        assertEquals(second.text("requestId"), repository.state.value.pendingSend?.mutationId)
+        assertEquals(PendingSendState.SENDING, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun oldNormalAcknowledgementCannotConfirmRetryWithSameWireId() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, drafts)
+        val chat = RemoteSelection("host", "project", "session")
+        repository.activate(chat)
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val first = transport.sent.last { it.text("type") == "session.prompt" }
+        drafts.beforeSave = {
+            backgroundScope.launch {
+                repository.activate(RemoteSelection("host", "project"))
+                repository.activate(chat)
+                repository.draft("sent")
+                repository.prompt()
+            }
+            runCurrent()
+        }
+        transport.result(first, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        val requests = transport.sent.filter { it.text("type") == "session.prompt" }
+        assertEquals(2, requests.size)
+        assertEquals(first.text("requestId"), requests.last().text("requestId"))
+        assertEquals(PendingSendState.SENDING, repository.state.value.pendingSend?.state)
+        assertTrue(repository.state.value.sending)
+        assertEquals(first.text("requestId"), drafts.load().getValue(DraftKey("host", "session")).mutationId)
+        transport.result(requests.last(), Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun lateErrorAndMalformedResultsDoNotConsumeValidAcceptance() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        val id = request.text("requestId")
+        transport.deliver(Wire.objectOf("type" to "result", "requestId" to id, "ok" to false,
+            "error" to Wire.objectOf("code" to "failed")))
+        transport.deliver(Wire.objectOf("type" to "result", "requestId" to id, "ok" to true,
+            "data" to Wire.objectOf("kind" to "accepted", "sessionId" to 42)))
+        runCurrent()
+        assertTrue(repository.state.value.uncertain)
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun lateAcceptanceExpiresAtItsDeadline() = runTest {
+        val clock = Diagnostics.clock
+        Diagnostics.clock = { testScheduler.currentTime }
+        try {
+            val transport = Transport().also { configure(it) }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", "session"))
+            val normal = transport.response
+            transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+            repository.draft("sent")
+            repository.prompt()
+            runCurrent()
+            val request = transport.sent.last { it.text("type") == "session.prompt" }
+            advanceTimeBy(30_000)
+            runCurrent()
+            advanceTimeBy(120_000)
+            runCurrent()
+            transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+            runCurrent()
+            assertTrue(repository.state.value.uncertain)
+            assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        } finally {
+            Diagnostics.clock = clock
+        }
+    }
+
+    @Test
+    fun lateMalformedResultAndReusedIdCannotConfirm() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val first = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        transport.result(first, Wire.objectOf("kind" to "accepted", "sessionId" to "foreign"))
+        runCurrent()
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        repository.prompt()
+        runCurrent()
+        val retry = transport.sent.last { it.text("type") == "session.prompt" }
+        assertEquals(first.text("requestId"), retry.text("requestId"))
+        advanceTimeBy(30_000)
+        runCurrent()
+        transport.result(retry, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertTrue(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun lateQueuedAcceptanceIsNotDeliveryAndKeepsNewDraft() = runTest {
+        val transport = Transport().also { configure(it); it.capabilities = setOf(FOLLOW_UP_CAPABILITY) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session",
+            "revision" to 1, "kind" to "session.status", "status" to "running"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("queued")
+        repository.followUp()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.draft("new")
+        transport.deliver(Wire.objectOf("type" to "event", "kind" to "follow_up.status",
+            "sessionId" to "session", "requestId" to request.text("requestId"),
+            "status" to "cancelled", "revision" to 2))
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals("cancelled", repository.state.value.followUps.single().status)
+        assertEquals("new", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun issuedIdOverflowDisablesLateAcceptanceUntilDisconnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        // Exercise the bound without sending thousands of unrelated network requests.
+        val record = repository.javaClass.getDeclaredMethod("recordIssuedRequest", String::class.java)
+        record.isAccessible = true
+        repeat(4097) { record.invoke(repository, "extra-$it") }
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertTrue(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun lateAcknowledgementFromOldConnectionIsIgnored() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = repository(transport, hosts = listOf(host, host.copy(routeId = "other")))
+        repository.activate(RemoteSelection("host", "project", "session"))
+        val normal = transport.response
+        transport.response = { if (it.text("type") == "session.prompt") null else normal(it) }
+        repository.draft("sent")
+        repository.prompt()
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "session.prompt" }
+        advanceTimeBy(30_000)
+        runCurrent()
+        repository.activate(RemoteSelection("other", "project", "session"))
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", "session"))
+        assertTrue(repository.state.value.uncertain)
+        assertEquals("sent", repository.state.value.draft)
     }
 
     @Test
