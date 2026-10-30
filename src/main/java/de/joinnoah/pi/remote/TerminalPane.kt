@@ -102,28 +102,7 @@ internal fun TerminalPane(view: TerminalView?, model: ChatViewModel, onClose: ()
                 }
             }
             OutlinedTextField(
-                value = draft, onValueChange = { draft = it; onUnsentChanged(it.isNotEmpty() || input.isNotEmpty()) }, modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
-                    val native = event.nativeKeyEvent
-                    if (event.type != KeyEventType.KeyDown || native.isCtrlPressed || native.isAltPressed || native.isMetaPressed) false else {
-                        val name = when (native.keyCode) {
-                            android.view.KeyEvent.KEYCODE_DPAD_UP -> "up"
-                            android.view.KeyEvent.KEYCODE_DPAD_DOWN -> "down"
-                            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> "left"
-                            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> "right"
-                            android.view.KeyEvent.KEYCODE_ESCAPE -> "escape"
-                            android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> "enter"
-                            android.view.KeyEvent.KEYCODE_TAB -> if (native.isShiftPressed) "shift_tab" else "tab"
-                            android.view.KeyEvent.KEYCODE_MOVE_HOME -> "home"
-                            android.view.KeyEvent.KEYCODE_MOVE_END -> "end"
-                            android.view.KeyEvent.KEYCODE_PAGE_UP -> "page_up"
-                            android.view.KeyEvent.KEYCODE_PAGE_DOWN -> "page_down"
-                            android.view.KeyEvent.KEYCODE_FORWARD_DEL -> "delete"
-                            android.view.KeyEvent.KEYCODE_DEL -> if (draft.isEmpty()) "backspace" else null
-                            else -> null
-                        }
-                        if (name != null) { enqueueKey(name); true } else false
-                    }
-                }, label = { Text(stringResource(R.string.remote_terminal_input)) },
+                value = draft, onValueChange = { draft = it; onUnsentChanged(it.isNotEmpty() || input.isNotEmpty()) }, modifier = Modifier.fillMaxWidth().then(rememberTerminalInputKeys(draft.isEmpty(), ::enqueueKey)), label = { Text(stringResource(R.string.remote_terminal_input)) },
                 trailingIcon = { TextButton(onClick = {
                     val value = terminalInputForDraft(draft)
                     if (value == null) notice = R.string.remote_terminal_rejected

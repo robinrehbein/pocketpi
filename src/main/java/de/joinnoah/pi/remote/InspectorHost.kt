@@ -208,7 +208,9 @@ internal fun InspectorHost(
                             layout(placeable.width, placeable.height) { }
                         }
                         Box(hiddenModifier.fillMaxSize()) {
-                            holder.SaveableStateProvider(InspectorTab.TERMINAL.name) { body() }
+                            androidx.compose.runtime.CompositionLocalProvider(LocalTerminalKeyboardActive provides visible) {
+                                holder.SaveableStateProvider(InspectorTab.TERMINAL.name) { body() }
+                            }
                         }
                     }
                 }

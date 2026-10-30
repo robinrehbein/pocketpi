@@ -3738,7 +3738,7 @@ internal fun RemoteScreen(
                 Box(Modifier.fillMaxSize().clearAndSetSemantics {}.layout { measurable, constraints ->
                     val placeable = measurable.measure(constraints)
                     layout(placeable.width, placeable.height) { }
-                }) { terminalContent() }
+                }) { CompositionLocalProvider(LocalTerminalKeyboardActive provides false) { terminalContent() } }
             }
             }
             }

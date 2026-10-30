@@ -1,10 +1,22 @@
 package de.joinnoah.pi.remote
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createComposeRule
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -31,4 +43,39 @@ class TerminalInspectorLifecycleTest {
         compose.runOnIdle { assertEquals(1, attached); assertEquals(0, detached); tabs = tabs.close(InspectorTab.TERMINAL) }
         compose.runOnIdle { assertEquals(1, detached) }
     }
+    @Test fun retainedHiddenTerminalReleasesKeyboardOwnership() {
+        var tabs by mutableStateOf(InspectorTabs().open(InspectorTab.TERMINAL))
+        val focus = TerminalInputFocus()
+        val sent = mutableListOf<String>()
+        compose.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(LocalTerminalInputFocus provides focus) {
+                    InspectorHost(tabs, content = { tab ->
+                        if (tab == InspectorTab.TERMINAL) ({
+                            OutlinedTextField("", {}, modifier = Modifier.testTag("terminalKeyboardInput")
+                                .then(rememberTerminalInputKeys(true) { sent += it }))
+                        }) else ({})
+                    }, onSelect = {}, onClose = {}, expanded = false, onExpand = {})
+                }
+            }
+        }
+        compose.onNodeWithTag("terminalKeyboardInput").performClick()
+        compose.runOnIdle { assertTrue(focus.focused) }
+        compose.onNodeWithTag("terminalKeyboardInput").performKeyInput { pressKey(Key.Escape) }
+        compose.runOnIdle {
+            assertEquals(listOf("escape"), sent)
+            tabs = tabs.open(InspectorTab.FILES)
+        }
+        compose.runOnIdle {
+            assertFalse(focus.focused)
+            tabs = tabs.open(InspectorTab.TERMINAL)
+        }
+        compose.onNodeWithTag("terminalKeyboardInput").performClick()
+        compose.runOnIdle {
+            assertTrue(focus.focused)
+            tabs = tabs.close(InspectorTab.TERMINAL)
+        }
+        compose.runOnIdle { assertFalse(focus.focused) }
+    }
+
 }

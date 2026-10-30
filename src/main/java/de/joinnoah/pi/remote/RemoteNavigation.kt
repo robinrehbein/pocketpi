@@ -461,6 +461,7 @@ internal class RemoteNavigator(
 
     /** Where keyboard focus is relative to the code editor; the editor reports it. */
     val editorFocus = EditorFocus()
+    val terminalInputFocus = TerminalInputFocus()
 
     /**
      * Keyboard focus is in the session's code editor, whose keys then win over the layout's
@@ -1448,6 +1449,7 @@ internal fun RemoteNavigation(
             LocalTwoPane provides twoPane.takeIf { layout.twoPane },
             LocalHardwareKeyboard provides hardwareKeyboard,
             LocalEditorFocus provides navigator.editorFocus,
+            LocalTerminalInputFocus provides navigator.terminalInputFocus,
             LocalShortcutTargets provides targets,
             LocalFocusRingColor provides MaterialTheme.colorScheme.primary,
         ) {
@@ -1507,10 +1509,14 @@ internal fun RemoteNavigation(
  * past here (Android would turn it into Back), and a printable key nothing took goes into the
  * composer. With focus in the code editor its keys are its own; an Esc it leaves comes back.
  */
-private fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets: ShortcutTargets, unhandled: Boolean): Boolean {
+internal fun RemoteNavigator.key(event: KeyEvent, twoPane: TwoPaneState?, targets: ShortcutTargets, unhandled: Boolean): Boolean {
     // Beside the activity board the chat keeps its keys, but Esc stays Back and closes the board.
     val chat = chatInView(twoPane)?.let(targets::chat)
     val native = event.nativeKeyEvent
+    if (terminalInputFocus.focused) {
+        val region = resolveShortcut(event, if (chat != null) KeyContext.CHAT else KeyContext.GLOBAL)
+        if (region != Shortcut.NEXT_REGION && region != Shortcut.PREVIOUS_REGION) return false
+    }
     if (event.key == Key.Escape) {
         val escaping = topChat?.let(targets::chat)
         if (escaping == null || (editing && !unhandled)) return false
