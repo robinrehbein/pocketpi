@@ -5,4 +5,5 @@
     <string name="remote_tool_write">Write file</string>
     <string name="remote_tool_bash">Run command</string>
     <string name="remote_tool_bash_background">Background shell</string>
+    <string name="remote_chat_activity_working">pi is working</string>
 </resources>
