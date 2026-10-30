@@ -264,6 +264,8 @@ class DefaultRemoteRepository(
             ARTIFACTS_CAPABILITY,
             // Only on the capabilities.v2 route, and only while the Mac's switch is on.
             SESSION_BASH_CAPABILITY,
+            // Also v2 only: it lets terminal sessions and host workers run them as well.
+            SESSION_BASH_WORKER_CAPABILITY,
             // Only on the capabilities.v2 route; writes need the project's `writable` flag as well.
             TICKETS_CAPABILITY,
         )

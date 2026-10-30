@@ -6101,6 +6101,87 @@ class RemoteRepositoryTest {
         assertTrue(request.flag("excludeFromContext"))
     }
 
+    private fun workerBashing(transport: Transport, opened: JsonObject, capabilities: List<String>) {
+        configure(transport, sessions = listOf(opened), opened = opened)
+        advertising(transport, JsonArray(capabilities.map(::JsonPrimitive)))
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.bash") null else original(request) }
+    }
+
+    @Test
+    fun aHostWorkerRunsABangCommandAndAHiddenOneStaysOutOfTheTranscript() = runTest {
+        val transport =
+            Transport().also {
+                workerBashing(it, fixtureWorker(), listOf(SESSION_BASH_CAPABILITY, SESSION_BASH_WORKER_CAPABILITY))
+            }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "worker-session"), ActivationMode.USER_OPEN)
+        runCurrent()
+        assertTrue(isHostWorker(checkNotNull(repository.state.value.session)))
+        assertTrue(canRunShellCommands(repository.state.value))
+        assertNotNull(shellDraft(repository.state.value.copy(draft = "!echo hi")))
+        val before = repository.state.value.messages
+        assertTrue(repository.runBash("echo hi", false))
+        runCurrent()
+        val shown = transport.bashRequests().single()
+        assertEquals("worker-session", shown.text("sessionId"))
+        assertEquals("echo hi", shown.text("command"))
+        assertFalse("excludeFromContext" in shown)
+        transport.deliver(bashOutput(shown, 0, "hi\n"))
+        transport.result(shown, bashResult(shown, output = "hi\n"))
+        runCurrent()
+        assertEquals(BashResult(0, false, false, "hi\n"), repository.state.value.bash?.result)
+        repository.closeBash()
+        assertTrue(repository.runBash("echo hi", true))
+        runCurrent()
+        val hidden = transport.bashRequests().last()
+        assertTrue(hidden.flag("excludeFromContext"))
+        transport.result(hidden, bashResult(hidden, output = "hi\n"))
+        runCurrent()
+        assertEquals(BashResult(0, false, false, "hi\n"), repository.state.value.bash?.result)
+        // The Mac adds the shown run to the transcript; the app and a `!!` run add nothing.
+        assertEquals(before, repository.state.value.messages)
+    }
+
+    @Test
+    fun aTerminalSessionRunsABangCommandWithTheWorkerCapability() = runTest {
+        val unmarked = session("session", "tui")
+        val transport =
+            Transport().also {
+                workerBashing(it, unmarked, listOf(SESSION_BASH_CAPABILITY, SESSION_BASH_WORKER_CAPABILITY))
+            }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertFalse(isHostWorker(checkNotNull(repository.state.value.session)))
+        assertTrue(SESSION_BASH_WORKER_CAPABILITY in repository.state.value.capabilities)
+        assertTrue(repository.runBash("echo hi", false))
+        runCurrent()
+        val request = transport.bashRequests().single()
+        assertEquals("session", request.text("sessionId"))
+        transport.result(request, bashResult(request, output = "a\nb"))
+        runCurrent()
+        assertEquals(BashResult(0, false, false, "a\nb"), repository.state.value.bash?.result)
+    }
+
+    @Test
+    fun aTerminalSessionSendsNothingWithoutTheWorkerCapabilityAndTheRouteDropsUnknownOnes() = runTest {
+        val transport = Transport().also { workerBashing(it, session("session", "tui"), listOf(SESSION_BASH_CAPABILITY)) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertFalse(SESSION_BASH_WORKER_CAPABILITY in repository.state.value.capabilities)
+        assertFalse(repository.runBash("echo hi", false))
+        runCurrent()
+        assertTrue(transport.bashRequests().isEmpty())
+        // Only the worker capability: the plain one is missing, so the gate stays shut.
+        val partial = Transport().also { workerBashing(it, session("session", "tui"), listOf(SESSION_BASH_WORKER_CAPABILITY)) }
+        val other = repository(partial)
+        other.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertFalse(other.runBash("echo hi", false))
+    }
+
     @Test
     fun runBashStreamsOutputUntilTheResultEndsTheRun() = runTest {
         val transport = Transport().also { bashing(it) }
@@ -6242,6 +6323,7 @@ class RemoteRepositoryTest {
                 ("unsupported" to BASH_SWITCHED_OFF_MESSAGE) to BashFailure.SWITCHED_OFF,
                 ("unsupported" to BASH_TERMINAL_SESSION_MESSAGE) to BashFailure.TERMINAL_SESSION,
                 ("unsupported" to BASH_UPDATE_PI_MESSAGE) to BashFailure.UPDATE_PI,
+                ("unsupported" to "Reload the pi remote extension to use this control") to BashFailure.RELOAD_EXTENSION,
                 ("busy" to "Session is busy") to BashFailure.BUSY,
                 ("offline" to "Session is offline") to BashFailure.CONNECTION,
             )) {

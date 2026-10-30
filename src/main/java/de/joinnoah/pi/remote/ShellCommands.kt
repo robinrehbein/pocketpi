@@ -26,6 +26,13 @@ import kotlinx.serialization.json.JsonObject
  */
 internal const val SESSION_BASH_CAPABILITY = "session.bash.v1"
 
+/**
+ * Shell commands in a session a terminal pi runs (`origin` "tui"): host workers and sessions
+ * started in a terminal, but not a subagent child. Also on the `capabilities.v2:` route only, and
+ * it adds to [SESSION_BASH_CAPABILITY] rather than replacing it.
+ */
+internal const val SESSION_BASH_WORKER_CAPABILITY = "session.bash.worker.v1"
+
 /** The longest command the host accepts, in UTF-8 bytes. */
 internal const val MAX_BASH_COMMAND_BYTES = 16_384
 private const val MAX_BASH_RESULT_OUTPUT_BYTES = 65_536
@@ -43,14 +50,18 @@ internal const val BASH_REQUEST_TIMEOUT_MILLIS = Long.MAX_VALUE
 internal const val BASH_SWITCHED_OFF_MESSAGE = "Shell commands are turned off on this Mac"
 internal const val BASH_TERMINAL_SESSION_MESSAGE = "Shell commands are only available for sessions started from the phone"
 internal const val BASH_UPDATE_PI_MESSAGE = "Update pi to run shell commands"
+internal const val BASH_RELOAD_EXTENSION_MESSAGE = "Reload the pi remote extension"
 
 /** Why a shell command did not run to its result. */
 enum class BashFailure {
     /** The Mac's `bashCommands` switch is off. */
     SWITCHED_OFF,
 
-    /** A terminal pi registered the session; only phone-started sessions run commands. */
+    /** The host does not run commands in this session, such as a subagent child. */
     TERMINAL_SESSION,
+
+    /** The session's pi runs an older remote extension that does not know the command. */
+    RELOAD_EXTENSION,
 
     /** pi on the Mac does not know the `bash` RPC command. */
     UPDATE_PI,
@@ -157,16 +168,23 @@ internal fun bashOutputEvent(payload: JsonObject): BashOutput? {
 
 /**
  * Whether the selected session runs shell commands: the host advertises [SESSION_BASH_CAPABILITY],
- * no refusal took it back, the session is host-owned and the Mac is connected. An older host
- * closes the connection on a command it does not know, so nothing is sent without it.
+ * no refusal took it back and the Mac is connected. A phone-started session (`rpc`) runs them. A
+ * terminal session (`tui`) does too, unless it is a subagent child, when the host also advertises
+ * [SESSION_BASH_WORKER_CAPABILITY]. An older host closes the connection on a command it does not
+ * know, so nothing is sent without it.
  */
-internal fun canRunShellCommands(state: RemoteState): Boolean =
-    SESSION_BASH_CAPABILITY in state.capabilities &&
-        SESSION_BASH_CAPABILITY !in state.unavailableCapabilities &&
+internal fun canRunShellCommands(state: RemoteState): Boolean {
+    fun offered(capability: String) = capability in state.capabilities && capability !in state.unavailableCapabilities
+    return offered(SESSION_BASH_CAPABILITY) &&
         state.connected &&
         state.session != null &&
-        state.session.optionalText("origin") == "rpc" &&
-        state.session.optionalText("id") == state.selection.sessionId
+        state.session.optionalText("id") == state.selection.sessionId &&
+        when (state.session.optionalText("origin")) {
+            "rpc" -> true
+            "tui" -> offered(SESSION_BASH_WORKER_CAPABILITY) && !isChildSession(state)
+            else -> false
+        }
+}
 
 /** A composer draft that runs as a shell command: `!command`, or `!!command` kept out of pi's context. */
 internal data class ShellDraft(val command: String, val excludeFromContext: Boolean)
@@ -222,6 +240,7 @@ internal fun bashFailure(e: Exception): BashFailure =
                         message.startsWith(BASH_SWITCHED_OFF_MESSAGE) -> BashFailure.SWITCHED_OFF
                         message.startsWith(BASH_TERMINAL_SESSION_MESSAGE) -> BashFailure.TERMINAL_SESSION
                         message.startsWith(BASH_UPDATE_PI_MESSAGE) -> BashFailure.UPDATE_PI
+                        message.startsWith(BASH_RELOAD_EXTENSION_MESSAGE) -> BashFailure.RELOAD_EXTENSION
                         else -> BashFailure.UNSUPPORTED
                     }
                 }
@@ -241,6 +260,7 @@ internal fun bashFailureText(failure: BashFailure): Int =
     when (failure) {
         BashFailure.SWITCHED_OFF -> R.string.remote_shell_switched_off
         BashFailure.TERMINAL_SESSION -> R.string.remote_shell_terminal_session
+        BashFailure.RELOAD_EXTENSION -> R.string.remote_shell_reload_extension
         BashFailure.UPDATE_PI -> R.string.remote_shell_update_pi
         BashFailure.UNSUPPORTED -> R.string.remote_shell_unsupported
         BashFailure.BUSY -> R.string.remote_shell_busy
