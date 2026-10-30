@@ -24,7 +24,8 @@ import org.robolectric.annotation.Config
  * instrumented EncryptedStoresTest covers the real one.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35])
+// Store tests own their files and cache; app startup must not rebuild that cache concurrently.
+@Config(sdk = [35], application = android.app.Application::class)
 class StoreRecoveryTest {
     private val application = ApplicationProvider.getApplicationContext<Context>()
     private val directory = File(application.cacheDir, "store-recovery-${UUID.randomUUID()}")
