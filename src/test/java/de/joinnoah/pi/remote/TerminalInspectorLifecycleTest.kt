@@ -10,6 +10,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.withKeyDown
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,13 +48,15 @@ class TerminalInspectorLifecycleTest {
         var tabs by mutableStateOf(InspectorTabs().open(InspectorTab.TERMINAL))
         val focus = TerminalInputFocus()
         val sent = mutableListOf<String>()
+        val chords = mutableListOf<TerminalInput.Chord>()
+        var draft by mutableStateOf("unsent")
         compose.setContent {
             MaterialTheme {
                 CompositionLocalProvider(LocalTerminalInputFocus provides focus) {
                     InspectorHost(tabs, content = { tab ->
                         if (tab == InspectorTab.TERMINAL) ({
-                            OutlinedTextField("", {}, modifier = Modifier.testTag("terminalKeyboardInput")
-                                .then(rememberTerminalInputKeys(true) { sent += it }))
+                            OutlinedTextField(draft, { draft = it }, modifier = Modifier.testTag("terminalKeyboardInput")
+                                .then(rememberTerminalInputKeys(false, true, false, { sent += it }, { chords += it })))
                         }) else ({})
                     }, onSelect = {}, onClose = {}, expanded = false, onExpand = {})
                 }
@@ -61,6 +64,11 @@ class TerminalInspectorLifecycleTest {
         }
         compose.onNodeWithTag("terminalKeyboardInput").performClick()
         compose.runOnIdle { assertTrue(focus.focused) }
+        compose.onNodeWithTag("terminalKeyboardInput").performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.C) } }
+        compose.runOnIdle {
+            assertEquals("unsent", draft)
+            assertEquals(listOf(TerminalInput.Chord("c", ctrl = true)), chords)
+        }
         compose.onNodeWithTag("terminalKeyboardInput").performKeyInput { pressKey(Key.Escape) }
         compose.runOnIdle {
             assertEquals(listOf("escape"), sent)

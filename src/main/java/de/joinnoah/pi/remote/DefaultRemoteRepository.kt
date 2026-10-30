@@ -234,6 +234,7 @@ class DefaultRemoteRepository(
     private val jitter: () -> Double = { Random.nextDouble() },
     /** Sent and project images kept on disk between runs; null keeps them in memory only. */
     private val media: MediaDiskCache? = null,
+    private val terminalNow: () -> Long = android.os.SystemClock::elapsedRealtime,
 ) : RemoteRepository {
     private val routeCapabilities =
         setOf(
@@ -266,6 +267,7 @@ class DefaultRemoteRepository(
             // Only on the capabilities.v2 route, and only while the Mac's switch is on.
             SESSION_BASH_CAPABILITY,
             SESSION_TERMINAL_CAPABILITY,
+            SESSION_TERMINAL_KEYS_CAPABILITY,
             // Also v2 only: it lets terminal sessions and host workers run them as well.
             SESSION_BASH_WORKER_CAPABILITY,
             // Only on the capabilities.v2 route; writes need the project's `writable` flag as well.
@@ -781,7 +783,7 @@ class DefaultRemoteRepository(
                     update {
                         it.copy(
                             connected = true,
-                            capabilities = capabilities - FILES_SEARCH_CAPABILITY,
+                            capabilities = capabilities - setOf(FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY),
                             capabilitiesKnown = false,
                             connection = R.string.remote_connected,
                             error = null,
@@ -1858,7 +1860,7 @@ class DefaultRemoteRepository(
                     .orEmpty()
                 if (id.startsWith(CAPABILITIES_V2_ROUTE) && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY) || id.startsWith(CAPABILITIES_V2_ROUTE))
+                    it in advertised && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY) || id.startsWith(CAPABILITIES_V2_ROUTE))
                 }
                 val hadTasks = canReadTasks()
                 if (id.startsWith(CAPABILITIES_V2_ROUTE) && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
@@ -7895,6 +7897,21 @@ class DefaultRemoteRepository(
     private var pendingTerminal: PendingTerminal? = null
     private var terminalAttachment: TerminalAttachment? = null
     private var terminalInputBusy = false
+    private var terminalInputJob: Job? = null
+    private val terminalSendMutex = Mutex()
+    private var terminalNextSendAt: Long? = null
+    private var terminalResizeJob: Job? = null
+    private var terminalResize: Pair<Int, Int>? = null
+
+    private suspend fun paceTerminal() {
+        val wait = terminalNextSendAt?.let { (it - terminalNow()).coerceIn(0, 125) } ?: 0
+        if (wait > 0) delay(wait)
+        terminalNextSendAt = terminalNow() + 125
+    }
+
+    private fun terminalKeysEnabled() = capabilityRoute == CAPABILITIES_V2_ROUTE &&
+        terminalRouteOffered && SESSION_TERMINAL_KEYS_CAPABILITY in state.value.capabilities &&
+        SESSION_TERMINAL_KEYS_CAPABILITY !in state.value.unavailableCapabilities
     private val terminalOutputLimit = 256 * 1024
 
     override fun canAttachTerminal(): Boolean {
@@ -7930,7 +7947,7 @@ class DefaultRemoteRepository(
                         sendTerminalDetach(session, result.generation, pending.connection)
                     } else {
                         terminalAttachment = TerminalAttachment(pending.connection.toString(), session, result.generation)
-                        update { it.copy(terminal = TerminalView(session, attaching = false, generation = result.generation)) }
+                        update { it.copy(terminal = TerminalView(session, attaching = false, generation = result.generation, keysEnabled = terminalKeysEnabled())) }
                         pending.early.forEach { acceptTerminalEvent(it) }
                     }
                 } else if (!pending.abandoned && pending.connection == generation && result is TerminalResult.Held) {
@@ -7977,6 +7994,11 @@ class DefaultRemoteRepository(
         when (event) {
             is TerminalEvent.Detached -> {
                 terminalAttachment = null
+                terminalInputJob?.cancel()
+                terminalInputJob = null
+                terminalResize = null
+                terminalResizeJob?.cancel()
+                terminalResizeJob = null
                 terminalInputBusy = false
                 update { it.copy(terminal = it.terminal?.copy(inputPending = false, ended = event.reason, exitCode = event.exitCode)) }
             }
@@ -8004,6 +8026,11 @@ class DefaultRemoteRepository(
         val attachment = terminalAttachment
         terminalAttachment = null
         terminalInputBusy = false
+        terminalInputJob?.cancel()
+        terminalInputJob = null
+        terminalResize = null
+        terminalResizeJob?.cancel()
+        terminalResizeJob = null
         if (attachment != null && sendDetach && view.generation != null) sendTerminalDetach(view.sessionId, view.generation, generation)
         if (view.ended == null) update { it.copy(terminal = it.terminal?.copy(attaching = false, inputPending = false, ended = reason)) }
     }
@@ -8015,23 +8042,37 @@ class DefaultRemoteRepository(
     }
     override fun sendTerminalInput(input: TerminalInput): Boolean {
         val field = terminalInputField(input) ?: return false
+        if (input is TerminalInput.Chord && !terminalKeysEnabled()) return false
         val attachment = terminalAttachment ?: return false
         val view = state.value.terminal ?: return false
         if (terminalInputBusy || !state.value.connected || view.ended != null) return false
-        val seq = attachment.nextInputSequence(generation.toString()) ?: return false
         val connection = generation
         terminalInputBusy = true
         update { it.copy(terminal = it.terminal?.copy(inputPending = true)) }
-        scope.launch {
-            if (connection != generation || terminalAttachment !== attachment || !state.value.connected) return@launch
+        terminalInputJob = scope.launch {
+            var rejected = false
             try {
-                val result = connectionRequest("session.terminal.input", "sessionId" to view.sessionId, "attachmentGeneration" to view.generation, "inputSeq" to seq, field)
-                validatedBashAborted(result, view.sessionId)
-            } catch (_: Exception) {
-                if (terminalAttachment === attachment) endTerminal("input_failed", sendDetach = true)
+                terminalSendMutex.withLock {
+                    if (connection != generation || terminalAttachment !== attachment || !state.value.connected) return@withLock
+                    paceTerminal()
+                    if (connection != generation || terminalAttachment !== attachment || !state.value.connected) return@withLock
+                    if (input is TerminalInput.Chord && !terminalKeysEnabled()) return@withLock
+                    val seq = attachment.nextInputSequence(connection.toString()) ?: return@withLock
+                    val type = if (input is TerminalInput.Chord) "session.terminal.key" else "session.terminal.input"
+                    val result = connectionRequest(type, "sessionId" to view.sessionId, "attachmentGeneration" to view.generation, "inputSeq" to seq, field)
+                    validatedBashAborted(result, view.sessionId)
+                }
+            } catch (e: Exception) {
+                if (connection == generation && terminalAttachment === attachment) {
+                    if (input is TerminalInput.Chord && e is RemoteRequestException &&
+                        e.kind == RemoteRequestException.Kind.UNSUPPORTED && e.code == "unsupported") rejected = true
+                    else endTerminal("input_failed", sendDetach = true)
+                }
             } finally { if (connection == generation && terminalAttachment === attachment) {
                 terminalInputBusy = false
-                update { it.copy(terminal = it.terminal?.copy(inputPending = false)) }
+                update { state -> state.copy(terminal = state.terminal?.let { terminal ->
+                    terminal.copy(inputPending = false, inputRejected = terminal.inputRejected + if (rejected) 1 else 0)
+                }) }
             } }
         }
         return true
@@ -8041,12 +8082,23 @@ class DefaultRemoteRepository(
         val view = state.value.terminal ?: return false
         if (!state.value.connected || view.ended != null || cols !in 20..500 || rows !in 5..300) return false
         val connection = generation
-        scope.launch {
-            if (connection != generation || terminalAttachment !== attachment || !state.value.connected) return@launch
+        terminalResize = cols to rows
+        if (terminalResizeJob?.isActive == true) return true
+        terminalResizeJob = scope.launch {
             try {
-                val result = connectionRequest("session.terminal.resize", "sessionId" to view.sessionId, "attachmentGeneration" to view.generation, "cols" to cols, "rows" to rows)
-                validatedBashAborted(result, view.sessionId)
-            } catch (_: Exception) { if (terminalAttachment === attachment) endTerminal("resize_failed", sendDetach = true) }
+                while (terminalResize != null) {
+                    terminalSendMutex.withLock {
+                        if (connection != generation || terminalAttachment !== attachment || !state.value.connected) return@launch
+                        paceTerminal()
+                        if (connection != generation || terminalAttachment !== attachment || !state.value.connected) return@launch
+                        val (width, height) = terminalResize ?: return@withLock
+                        terminalResize = null
+                        val result = connectionRequest("session.terminal.resize", "sessionId" to view.sessionId, "attachmentGeneration" to view.generation, "cols" to width, "rows" to height)
+                        validatedBashAborted(result, view.sessionId)
+                    }
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { if (terminalAttachment === attachment) endTerminal("resize_failed", sendDetach = true) }
         }
         return true
     }

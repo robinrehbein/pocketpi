@@ -5,6 +5,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TerminalProtocolTest {
+    @Test fun structuredKeyMatchesSharedFixtureAndNeverSendsFalseModifiers() {
+        val fixture = Wire.json.parseToJsonElement(javaClass.getResource("/terminal-keys-v1.json")!!.readText()).jsonObject
+        val valid = fixture.getValue("valid").jsonArray.map { it.jsonObject.obj("payload").obj("key") }
+        assertEquals(valid[0], terminalInputField(TerminalInput.Chord("c", ctrl = true))!!.second)
+        assertEquals(valid[1], terminalInputField(TerminalInput.Chord("enter", alt = true))!!.second)
+        assertEquals(valid[2], terminalInputField(TerminalInput.Chord("2", alt = true, shift = true, shifted = "\""))!!.second)
+        val invalid = fixture.getValue("invalid").jsonArray.map { it.jsonObject.obj("payload").obj("key") }
+        assertNull(terminalInputField(TerminalInput.Chord(invalid[0].text("name"))))
+        assertNotEquals(invalid[1], terminalInputField(TerminalInput.Chord("c"))!!.second)
+        assertNotEquals(invalid[2], terminalInputField(TerminalInput.Chord("2"))!!.second)
+        assertNull(terminalInputField(TerminalInput.Chord("shift_tab", ctrl = true)))
+    }
+
     @Test fun hostFixturesValidateResultsAndEvents() {
         val fixture = Wire.json.parseToJsonElement(javaClass.getResourceAsStream("/terminal-v1.json")!!.bufferedReader().readText()).jsonObject
         for (key in listOf("wireValid", "wireInvalid")) {

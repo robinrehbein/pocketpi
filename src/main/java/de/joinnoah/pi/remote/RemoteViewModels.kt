@@ -322,6 +322,8 @@ internal class ChatViewModel(
     fun detachTerminal() = repository.detachTerminal()
     fun takeTerminalOutput() = repository.takeTerminalOutput()
     fun sendTerminalInput(input: TerminalInput) = repository.sendTerminalInput(input)
+    /** The live attachment, without waiting for the screen's collected state to recompose. */
+    fun terminalViewNow(): TerminalView? = repository.state.value.let { if (matches(it) && !cleared) it.terminal else null }
     fun resizeTerminal(cols: Int, rows: Int) = repository.resizeTerminal(cols, rows)
 
     fun recordChatAction(action: ChatAction) = settings.recordChatAction(action)

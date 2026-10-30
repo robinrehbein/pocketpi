@@ -694,4 +694,10 @@
     <string name="remote_files_search_incomplete">Results may be incomplete</string>
     <string name="remote_files_search_empty">No matches</string>
     <string name="remote_files_search_close">Close</string>
+    <string name="remote_terminal_character">Character</string>
+    <string name="remote_terminal_character_hint">One printable ASCII character</string>
+    <string name="remote_terminal_shifted_character">Shifted character (optional)</string>
+    <string name="remote_terminal_ctrl_alt_shortcuts">Send Ctrl+Alt shortcuts</string>
+    <string name="remote_terminal_key_unsupported">This key combination is not supported by the current terminal mode. Pending input was cleared.</string>
+    <string name="remote_terminal_draft_busy">Wait for pending terminal input before sending the draft.</string>
 </resources>

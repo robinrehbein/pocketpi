@@ -13,6 +13,24 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class TerminalKeyboardTest {
+    @Test fun hardwareChordsDoNotConsumeAltGrOrF6() {
+        val sent = mutableListOf<TerminalInput.Chord>()
+        val ctrlC = NativeKeyEvent(0, 0, NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.KEYCODE_C, 0, NativeKeyEvent.META_CTRL_ON)
+        assertTrue(terminalHardwareChord(ctrlC, sent::add))
+        assertEquals(listOf(TerminalInput.Chord("c", ctrl = true)), sent)
+        val altGr = NativeKeyEvent(0, 0, NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.KEYCODE_E, 0, NativeKeyEvent.META_CTRL_ON or NativeKeyEvent.META_ALT_ON)
+        assertFalse(terminalHardwareChord(altGr, sent::add))
+        assertTrue(terminalHardwareChord(altGr, sent::add, allowCtrlAlt = true))
+        assertEquals(TerminalInput.Chord("e", ctrl = true, alt = true), sent.last())
+        val rightAlt = NativeKeyEvent(0, 0, NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.KEYCODE_E, 0, NativeKeyEvent.META_ALT_ON or NativeKeyEvent.META_ALT_RIGHT_ON)
+        assertFalse(terminalHardwareChord(rightAlt, sent::add, allowCtrlAlt = true))
+        val shifted = NativeKeyEvent(0, 0, NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.KEYCODE_A, 0, NativeKeyEvent.META_CTRL_ON or NativeKeyEvent.META_SHIFT_ON)
+        assertTrue(terminalHardwareChord(shifted, sent::add))
+        assertEquals(TerminalInput.Chord("a", ctrl = true, shift = true, shifted = "A"), sent.last())
+        assertFalse(terminalHardwareChord(NativeKeyEvent(NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.KEYCODE_F6), sent::add))
+        assertTrue(terminalHardwareChord(NativeKeyEvent(NativeKeyEvent.ACTION_DOWN, NativeKeyEvent.KEYCODE_F1), sent::add))
+        assertEquals("f1", sent.last().name)
+    }
     @Test fun focusedTerminalKeepsEscapeBeforeChatNavigation() = runTest {
         val chat = RemoteNavKey.Chat("host", "project", "session")
         val repository = NavigationFakeRepository()

@@ -309,6 +309,17 @@ an explicit takeover. Closing the terminal releases input ownership and keeps th
 After a disconnect, open it explicitly again; inputs are never automatically replayed. Externally
 started terminal sessions and RPC sessions do not offer this view.
 
+Hosts advertising `session.terminal.keys.v1` also offer Ctrl, Alt, Shift and F1-F12 controls.
+The character picker accepts a base character and, for shifted symbols, the actual shifted
+character from the keyboard layout. Hardware AltGr remains local text input; the optional Ctrl+Alt
+shortcut toggle enables ambiguous left-side chords. F6 still moves between app panes.
+
+Named keys use mode-aware host encoding when this addon is present; older hosts keep terminal v1.
+Repeated queued navigation keys are grouped, and input shares a paced queue with terminal resizes.
+Control chords preserve the local draft. Sending a draft waits until earlier input is settled;
+an explicitly unsupported chord shows a notice and keeps the attachment open. The shared
+`terminal-keys-v1.json` fixture comes from noah-monorepo `6dc453c5995aa65c03eebd819c4111ad993d1441`.
+
 The renderer bundles xterm.js 6.0.0 locally and has no network access. Its license and pinned package
 integrity are in `src/main/assets/terminal/`. Local tests cover an encrypted relay, a macOS PTY and
 an API 36 WebView. Samsung and Linux/container qualification remain open. Leaving the chat or

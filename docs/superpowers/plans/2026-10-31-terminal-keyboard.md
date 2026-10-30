@@ -20,7 +20,7 @@ The existing Android navigation intercepted Escape before the terminal field. A 
 
 Add `session.terminal.keys.v1` only on the v2 capabilities route, and only while terminal control is enabled. Keep `session.terminal.v1` for attach/output. The new `session.terminal.key` command carries `requestId`, `sessionId`, `attachmentGeneration`, `inputSeq` and `key`.
 
-`key.name` is one printable ASCII character or one of the v1 named keys plus `f1` through `f12`. Optional `ctrl`, `alt` and `shift` are literal true when present. Optional `repeat` is an integer from 1 through 16. Reject extra fields, controls in names and invalid combinations. No raw bytes or escape sequences are accepted from the device.
+`key.name` is one printable ASCII character or one of the v1 named keys plus `f1` through `f12`. Optional `ctrl`, `alt` and `shift` are literal true when present. Optional `shifted` is one printable ASCII character produced by the device layout, only with `shift: true` and a printable base name. Letter names use lowercase unshifted identity. Uppercase names with Shift are rejected. Legacy encoding may infer alphabetic uppercase, but must not infer US punctuation for a German keyboard; shifted digits or punctuation need explicit `shifted` or an unsupported result before writing. Optional `repeat` is an integer from 1 through 16. Reject extra fields, controls in names and invalid combinations. No raw bytes or escape sequences are accepted from the device.
 
 The command uses the same input sequence as text/paste/v1 keys, the same captured peer/runtime/attachment binding, project/device grant, rate budget, duplicate suppression and cleanup. An unsupported encoding must fail before writing or advancing the accepted sequence. Do not silently turn an unsupported chord into another key.
 
@@ -30,23 +30,37 @@ Encode legacy keys when that mode applies and Kitty/modifyOtherKeys forms accord
 
 Files: remote `protocol/terminal-keys.ts`, `protocol/parse.ts`, `protocol/types.ts`, `host/terminal-modes.ts`, `host/terminal-bridge.ts`, `host/daemon.ts`, their tests, shared `terminal-keys-v1.json` fixture and protocol README.
 
-- [ ] Add strict command/fixture tests first and observe the missing-route failure.
-- [ ] Add the separate capability and command; preserve the byte-identical terminal-v1 fixture and all v1 rejections.
-- [ ] Implement mode-aware structured encoding through the current bound input path. Cover raw Ctrl+C in a normal PTY, Kitty Alt+Enter, modified arrows, function keys and unsupported combinations.
-- [ ] Exercise the actual encrypted daemon path with grants, stale generation, duplicate input, revocation and mixed v1/new-key sequences. Assert the maximum advertised capability list fits the client's 32-entry limit.
-- [ ] Run focused tests, then the Remote suite, extension check and root formatting. Main commits the host and obtains independent immutable-diff review before committing Android integration.
+- [x] Add strict command/fixture tests first and observe the missing-route failure.
+- [x] Add the separate capability and command; preserve the byte-identical terminal-v1 fixture and all v1 rejections.
+- [x] Implement mode-aware structured encoding through the current bound input path. Cover raw Ctrl+C in a normal PTY, Kitty Alt+Enter, modified arrows, function keys and unsupported combinations.
+- [x] Exercise the actual encrypted daemon path with grants, stale generation, duplicate input, revocation and mixed v1/new-key sequences. Assert the maximum advertised capability list fits the client's 32-entry limit.
+- [x] Run focused tests, then the Remote suite, extension check and root formatting. Main commits the host and obtains independent immutable-diff review before committing Android integration.
 
 ## Task 2: Android input, touch controls and pacing
 
 Files: `TerminalProtocol.kt`, `TerminalUiPolicy.kt`, `TerminalKeyboard.kt`, `TerminalPane.kt`, `DefaultRemoteRepository.kt`, localized strings, fixture and relevant tests.
 
-- [ ] Parse/validate structured keys and require the v2-only addon; old hosts keep existing controls.
-- [ ] Forward hardware modifiers and function keys while the field has focus, retaining F6 as a local pane-cycle escape hatch. Preserve AltGr text entry and do not reinterpret Android/Meta system shortcuts blindly.
-- [ ] Add touch modifier controls and common Pi chords. All supported chords must remain reachable without hardware. Make modifier state visible and accessible.
-- [ ] Ctrl/Alt actions must not implicitly send or discard the local draft. Enter variants may atomically queue the draft followed by the chord. Reject the whole batch when it cannot fit.
-- [ ] Pace input and coalesced resize together below the host's shared ten-per-second limit. Allocate input sequence only at dispatch, preserve order, and never replay uncertain writes after a connection change. Test with a virtual clock and a fast ACK source.
-- [ ] Test actual focus routing, hidden-tab ownership, touch/hardware parity, draft preservation, bounds and old-host refusal; then run one serialized quick-check and an independent scoped review.
+- [x] Parse/validate structured keys and require the v2-only addon; old hosts keep existing controls.
+- [x] Forward hardware modifiers and function keys while the field has focus, retaining F6 as a local pane-cycle escape hatch. Preserve AltGr text entry and do not reinterpret Android/Meta system shortcuts blindly.
+- [x] Add touch modifier controls and common Pi chords. All supported chords must remain reachable without hardware. Make modifier state visible and accessible.
+- [x] Ctrl/Alt actions must not implicitly send or discard the local draft. Enter variants may atomically queue the draft followed by the chord. Reject the whole batch when it cannot fit.
+- [x] Pace input and coalesced resize together below the host's shared ten-per-second limit. Allocate input sequence only at dispatch, preserve order, and never replay uncertain writes after a connection change. Test with a virtual clock and a fast ACK source.
+- [x] Test actual focus routing, hidden-tab ownership, touch/hardware parity, draft preservation, bounds and old-host refusal; then run one serialized quick-check and an independent scoped review.
 
 ## Acceptance still open
 
 Actual unattended Pi dialogs and shortcuts on Galaxy Tab S11/S25, Mac and Linux/devcontainer PTYs need qualification. This keyboard increment does not implement shared browsers, previews or emulator streaming, and does not complete the full goal.
+
+
+## Verification checkpoint on 2026-10-31
+
+Host implementation commit `6dc453c5995aa65c03eebd819c4111ad993d1441` passed the full Remote suite:
+2,858 passed and 23 skipped. Extension checks and root formatting passed. Independent review
+verified the exact immutable committed diff. The existing terminal-v1 fixture is unchanged.
+Android passed `scripts/quick-check.sh` with 2,954 app tests and 34 Wear tests, all successful;
+shared terminal-v1 and terminal-keys-v1 fixtures are byte-identical to the host copies.
+
+An isolated public Pi 1.4.0 CLI/PTY smoke observed Kitty flags 7 and bracketed paste, but could not
+identify the expected settings/shortcut screen effects. Its result is inconclusive, not passed.
+Public key-matcher, normal-PTY SIGINT, encrypted daemon and local UI/state tests do not substitute
+for that complete runtime workflow or the physical Samsung and Linux qualification above.

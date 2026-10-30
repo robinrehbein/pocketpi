@@ -4,6 +4,7 @@ import kotlinx.serialization.json.JsonObject
 
 /** Only offered on the capabilities.v2 route; no terminal UI is enabled by this declaration. */
 internal const val SESSION_TERMINAL_CAPABILITY = "session.terminal.v1"
+internal const val SESSION_TERMINAL_KEYS_CAPABILITY = "session.terminal.keys.v1"
 private const val MAX_SAFE_COUNT = 9_007_199_254_740_991L
 private val DETACH_REASONS = setOf("detached", "revoked", "slow", "exit", "forbidden", "unsupported", "offline", "idle")
 
@@ -116,17 +117,35 @@ data class TerminalView(
     val output: List<String> = emptyList(),
     val ended: String? = null,
     val exitCode: Int? = null,
+    val keysEnabled: Boolean = false,
+    /** Count of definitively rejected structured inputs for this attachment. */
+    val inputRejected: Long = 0,
 )
 
 sealed interface TerminalInput {
     data class Text(val text: String) : TerminalInput
     data class Paste(val text: String) : TerminalInput
     data class Key(val name: String, val repeat: Int = 1) : TerminalInput
+    data class Chord(val name: String, val ctrl: Boolean = false, val alt: Boolean = false, val shift: Boolean = false, val repeat: Int = 1, val shifted: String? = null) : TerminalInput
 }
 
 internal fun terminalInputField(input: TerminalInput): Pair<String, Any?>? = when (input) {
     is TerminalInput.Text -> input.text.takeIf { scalarText(it, 4096) && it.none { c -> c.code < 32 || c.code in 127..159 } }?.let { "text" to it }
     is TerminalInput.Paste -> input.text.takeIf { scalarText(it, 16384) && it.none { c -> (c.code < 32 && c != '\n') || c.code in 127..159 } }?.let { "paste" to it }
+    is TerminalInput.Chord -> {
+        val keys = setOf("enter", "escape", "up", "down", "left", "right", "tab", "shift_tab", "home", "end", "page_up", "page_down", "backspace", "delete") + (1..12).map { "f$it" }
+        val printable = input.name.length == 1 && input.name[0].code in 32..126
+        val validShifted = input.shifted == null || (input.shift && printable && input.shifted.length == 1 && input.shifted[0].code in 32..126)
+        if (!validShifted || ((input.ctrl || input.alt || input.shift) && input.name.length == 1 && input.name[0] in 'A'..'Z') || (input.name !in keys && !(input.name.length == 1 && input.name[0].code in 32..126)) || input.repeat !in 1..16 || (input.name == "shift_tab" && (input.ctrl || input.alt || input.shift))) null
+        else "key" to Wire.objectOf(*buildList<Pair<String, Any?>> {
+            add("name" to input.name)
+            if (input.ctrl) add("ctrl" to true)
+            if (input.alt) add("alt" to true)
+            if (input.shift) add("shift" to true)
+            if (input.shifted != null) add("shifted" to input.shifted)
+            if (input.repeat != 1) add("repeat" to input.repeat)
+        }.toTypedArray())
+    }
     is TerminalInput.Key -> {
         val keys = setOf("enter", "escape", "up", "down", "left", "right", "tab", "shift_tab", "home", "end", "page_up", "page_down", "backspace", "delete")
         val repeatable = keys - setOf("enter", "escape", "home", "end")

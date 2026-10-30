@@ -177,6 +177,7 @@ class RemoteRepositoryTest {
             attachmentStorage,
             attachmentImporter,
             now = { testScheduler.currentTime },
+            terminalNow = { testScheduler.currentTime },
             navigationStorage = navigationStorage,
             projectHint = projectHint,
             jitter = { 0.5 },
@@ -6911,6 +6912,104 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun terminalKeysCannotBeEnabledByHandshakeOrV1Route() = runTest {
+        val transport = Transport()
+        transport.capabilities = setOf(SESSION_TERMINAL_KEYS_CAPABILITY)
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        val original = transport.response
+        transport.response = { request ->
+            val result = original(request)
+            if (request.text("type") == "projects.list" && result != null &&
+                !request.text("requestId").startsWith("capabilities.v2:"))
+                JsonObject(result + ("capabilities" to JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_KEYS_CAPABILITY)))))
+            else result
+        }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(transport.sent.any { it.text("type") == "projects.list" && !it.text("requestId").startsWith("capabilities.v2:") })
+        assertFalse(SESSION_TERMINAL_KEYS_CAPABILITY in repo.state.value.capabilities)
+        assertFalse(repo.sendTerminalInput(TerminalInput.Chord("c", ctrl = true)))
+    }
+
+    @Test
+    fun unsupportedTerminalChordLeavesAttachmentOpenAndNextSequenceAdvances() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY), JsonPrimitive(SESSION_TERMINAL_KEYS_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            "session.terminal.key" -> Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else -> original(request)
+        } }
+        transport.failure = { request -> if (request.text("type") == "session.terminal.key" && request.obj("key").text("name") == "1") "unsupported" else null }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        assertTrue(repo.sendTerminalInput(TerminalInput.Chord("1", ctrl = true))); runCurrent()
+        assertNull(repo.state.value.terminal?.ended)
+        assertEquals(1L, repo.state.value.terminal?.inputRejected)
+        assertFalse(repo.state.value.terminal!!.inputPending)
+        assertTrue(repo.sendTerminalInput(TerminalInput.Chord("c", ctrl = true)))
+        advanceTimeBy(126); runCurrent()
+        val sent = transport.sent.filter { it.text("type") == "session.terminal.key" }
+        assertEquals(listOf(0L, 1L), sent.map { it.long("inputSeq") })
+        assertNull(repo.state.value.terminal?.ended)
+    }
+
+    @Test
+    fun terminalInputAndResizeSharePacingAndSequence() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY), JsonPrimitive(SESSION_TERMINAL_KEYS_CAPABILITY))))
+        val original = transport.response
+        val sentAt = mutableListOf<Long>()
+        transport.response = { request -> when (request.text("type")) {
+            "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            "session.terminal.input", "session.terminal.key", "session.terminal.resize" -> {
+                sentAt += testScheduler.currentTime
+                Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            }
+            else -> original(request)
+        } }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        assertTrue(repo.state.value.terminal!!.keysEnabled)
+        assertTrue(repo.sendTerminalInput(TerminalInput.Text("x"))); runCurrent()
+        assertTrue(repo.resizeTerminal(90, 25))
+        assertTrue(repo.resizeTerminal(100, 30))
+        assertTrue(repo.sendTerminalInput(TerminalInput.Chord("c", ctrl = true)))
+        advanceTimeBy(251); runCurrent()
+        val sent = transport.sent.filter { it.text("type") in setOf("session.terminal.input", "session.terminal.key", "session.terminal.resize") }
+        assertEquals(listOf("session.terminal.input", "session.terminal.resize", "session.terminal.key"), sent.map { it.text("type") })
+        assertEquals(100L, sent[1].long("cols"))
+        assertEquals(0L, sent[0].long("inputSeq"))
+        assertEquals(1L, sent[2].long("inputSeq"))
+        assertTrue(sentAt.zipWithNext().all { (a, b) -> b - a >= 125 })
+    }
+
+    @Test
+    fun oldTerminalRejectsStructuredKeys() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.terminal.attach")
+            Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+        else original(request) }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        assertFalse(repo.sendTerminalInput(TerminalInput.Chord("c", ctrl = true)))
+        assertTrue(transport.sent.none { it.text("type") == "session.terminal.key" })
+    }
+
+    @Test
     fun terminalDraftAndEnterAreAcknowledgedInOrder() = runTest {
         val transport = Transport()
         val worker = session(origin = "worker")
@@ -6931,7 +7030,7 @@ class RemoteRepositoryTest {
         assertFalse(repo.sendTerminalInput(batch[1]))
         runCurrent()
         assertEquals(false, repo.state.value.terminal?.inputPending)
-        assertTrue(repo.sendTerminalInput(batch[1])); runCurrent()
+        assertTrue(repo.sendTerminalInput(batch[1])); advanceTimeBy(126); runCurrent()
         val sent = transport.sent.filter { it.text("type") == "session.terminal.input" }
         assertEquals(2, sent.size)
         assertEquals("ls", sent[0].text("text"))
@@ -7067,6 +7166,10 @@ class RemoteRepositoryTest {
         transport.deliver(Wire.objectOf("type" to "host.event", "kind" to "session.terminal.detached", "sessionId" to "session", "attachmentGeneration" to 3, "reason" to "revoked"))
         assertTrue(repo.attachTerminal(80, 24)); runCurrent()
         assertTrue(repo.sendTerminalInput(TerminalInput.Text("y")))
+        advanceTimeBy(126); runCurrent()
+        val inputs = transport.sent.filter { it.text("type") == "session.terminal.input" }
+        assertEquals(listOf("x", "y"), inputs.map { it.text("text") })
+        assertEquals(0L, inputs.last().long("inputSeq"))
     }
 
     @Test

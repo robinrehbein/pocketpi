@@ -694,4 +694,10 @@
     <string name="remote_files_search_incomplete">Ergebnisse sind möglicherweise unvollständig</string>
     <string name="remote_files_search_empty">Keine Treffer</string>
     <string name="remote_files_search_close">Schließen</string>
+    <string name="remote_terminal_character">Zeichen</string>
+    <string name="remote_terminal_character_hint">Ein druckbares ASCII-Zeichen</string>
+    <string name="remote_terminal_shifted_character">Zeichen mit Umschalt (optional)</string>
+    <string name="remote_terminal_ctrl_alt_shortcuts">Strg+Alt-Kürzel senden</string>
+    <string name="remote_terminal_key_unsupported">Diese Tastenkombination wird im aktuellen Terminalmodus nicht unterstützt. Wartende Eingaben wurden verworfen.</string>
+    <string name="remote_terminal_draft_busy">Warte auf die ausstehende Terminaleingabe, bevor du den Entwurf sendest.</string>
 </resources>
