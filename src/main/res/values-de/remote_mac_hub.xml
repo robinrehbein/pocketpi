@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Die Seite des Macs: Name und Verbindung (RemoteScreens.kt), sein Überlaufmenü und die Verbindungsdetails (MacConnectionDetailsDialog.kt) sowie die Projektmarkierungen (RemoteDesignComponents.kt). -->
-    <string name="remote_mac_menu">Optionen für den Mac</string>
+    <string name="remote_mac_menu">Optionen für den Rechner</string>
     <string name="remote_mac_details">Verbindungsdetails</string>
     <string name="remote_mac_details_status">Status</string>
     <string name="remote_mac_details_relay">Relay</string>

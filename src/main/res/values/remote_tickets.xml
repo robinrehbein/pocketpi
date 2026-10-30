@@ -15,8 +15,8 @@
     <string name="remote_tickets_section_todo">To do</string>
     <string name="remote_tickets_empty_title">No open tickets</string>
     <string name="remote_tickets_empty_body">Tickets that are assigned to you or wait for your acceptance show up here.</string>
-    <string name="remote_tickets_no_projects_title">No tickets on this Mac</string>
-    <string name="remote_tickets_no_projects_body">None of the Mac\'s shared projects has tickets set up.</string>
+    <string name="remote_tickets_no_projects_title">No tickets on this computer</string>
+    <string name="remote_tickets_no_projects_body">None of the computer\'s shared projects has tickets set up.</string>
     <string name="remote_tickets_pr_open">PR open</string>
     <plurals name="remote_tickets_chats_caption">
         <item quantity="one">%d chat</item>
@@ -30,14 +30,14 @@
     <string name="remote_tickets_stale">Updated %d min ago</string>
 
     <!-- Why Plane has no tickets (TicketReason) and how a request failed (TicketsFailure) -->
-    <string name="remote_tickets_reason_not_configured">Tickets are not set up on the Mac.</string>
-    <string name="remote_tickets_reason_missing_bot_key">The Mac has no Plane key for tickets yet.</string>
+    <string name="remote_tickets_reason_not_configured">Tickets are not set up on the computer.</string>
+    <string name="remote_tickets_reason_missing_bot_key">The computer has no Plane key for tickets yet.</string>
     <string name="remote_tickets_reason_plane_unreachable">Plane is not reachable.</string>
-    <string name="remote_tickets_reason_plane_rejected">Plane rejected the request. Check the Plane key on the Mac.</string>
+    <string name="remote_tickets_reason_plane_rejected">Plane rejected the request. Check the Plane key on the computer.</string>
     <string name="remote_tickets_reason_unknown">Tickets are not available right now.</string>
-    <string name="remote_tickets_failure_offline">The Mac is not connected.</string>
-    <string name="remote_tickets_failure_unsupported">This Mac does not support tickets.</string>
-    <string name="remote_tickets_failure_busy">The Mac is busy. Try again in a moment.</string>
+    <string name="remote_tickets_failure_offline">The computer is not connected.</string>
+    <string name="remote_tickets_failure_unsupported">This computer does not support tickets.</string>
+    <string name="remote_tickets_failure_busy">The computer is busy. Try again in a moment.</string>
     <string name="remote_tickets_failure_forbidden">This project does not share its tickets.</string>
     <string name="remote_tickets_failure_not_found">The ticket was not found.</string>
     <string name="remote_tickets_failure_failed">The tickets could not be loaded.</string>
@@ -55,9 +55,9 @@
     <string name="remote_ticket_comment">Comment</string>
     <string name="remote_ticket_status">Change status</string>
     <string name="remote_ticket_open_chat">Go to chat</string>
-    <string name="remote_ticket_write_block_writes_off">Editing tickets is turned off on the Mac.</string>
-    <string name="remote_ticket_write_block_missing_user_key">Your personal Plane key is missing on the Mac, so tickets are read-only.</string>
-    <string name="remote_ticket_offline">The Mac is offline. Changes work again once it is back.</string>
+    <string name="remote_ticket_write_block_writes_off">Editing tickets is turned off on the computer.</string>
+    <string name="remote_ticket_write_block_missing_user_key">Your personal Plane key is missing on the computer, so tickets are read-only.</string>
+    <string name="remote_ticket_offline">The computer is offline. Changes work again once it is back.</string>
     <string name="remote_ticket_chats">Chats for this ticket</string>
     <string name="remote_ticket_chat_untitled">Chat</string>
     <string name="remote_ticket_description">Description</string>
@@ -101,8 +101,8 @@
     <string name="remote_tickets_start_failed_move">The ticket could not be moved to In Progress.</string>
     <string name="remote_tickets_start_failed_session">The chat could not be started.</string>
     <string name="remote_tickets_start_failed_prompt">The prompt could not be sent.</string>
-    <string name="remote_tickets_start_failed_timeout">Starting took too long. The Mac may still be working on it.</string>
-    <string name="remote_tickets_start_failed_unsupported">This Mac can not start tickets.</string>
+    <string name="remote_tickets_start_failed_timeout">Starting took too long. The computer may still be working on it.</string>
+    <string name="remote_tickets_start_failed_unsupported">This computer can not start tickets.</string>
     <string name="remote_tickets_start_failed">Starting failed.</string>
     <string name="remote_tickets_fact_reused">The worktree already existed and was reused.</string>
     <string name="remote_tickets_fact_moved">The ticket is now In Progress.</string>

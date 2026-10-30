@@ -14,5 +14,5 @@
     <!-- Opens a plan in the app when it is too long to approve from the notification. -->
     <string name="remote_notification_review_plan">Review in app</string>
     <!-- Title of the notification group of a Mac whose name is not known yet. -->
-    <string name="remote_notification_group_mac">Your Mac</string>
+    <string name="remote_notification_group_mac">Your computer</string>
 </resources>

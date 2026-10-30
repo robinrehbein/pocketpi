@@ -67,7 +67,7 @@ class ConversationSentImagesUiTest {
 
     @Test fun unsupportedHostShowsItsText() {
         show(bubble(image), source { _, _ -> AttachmentReadResult.Unsupported })
-        compose.onNodeWithText("Update pi Remote on your Mac to view sent images.").assertIsDisplayed()
+        compose.onNodeWithText("Update pi Remote on your computer to view sent images.").assertIsDisplayed()
     }
 
     @Test fun expiredImageSendsNoRequest() {

@@ -10,5 +10,5 @@
     <string name="remote_notification_reply_uncertain">Öffne die Sitzung und prüfe, ob pi sie bekommen hat, bevor du sie noch mal sendest.</string>
     <string name="remote_notification_reply_empty">Die Antwort war leer und wurde nicht gesendet.</string>
     <string name="remote_notification_review_plan">In der App prüfen</string>
-    <string name="remote_notification_group_mac">Dein Mac</string>
+    <string name="remote_notification_group_mac">Dein Rechner</string>
 </resources>

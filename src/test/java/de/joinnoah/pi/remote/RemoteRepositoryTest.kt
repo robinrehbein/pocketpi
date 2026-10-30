@@ -61,6 +61,7 @@ class RemoteRepositoryTest {
         /** Routes whose handshake never completes, as when that Mac is asleep. */
         var unreachable: Set<String> = emptySet()
         var failureOnConnect: Int? = null
+        var sendFailure: (JsonObject) -> Boolean = { false }
         var response: (JsonObject) -> JsonObject? = { null }
         var failure: (JsonObject) -> String? = { null }
         var failureMessage: (JsonObject) -> String? = { null }
@@ -91,6 +92,7 @@ class RemoteRepositoryTest {
         }
 
         override fun send(payload: JsonObject) {
+            if (sendFailure(payload)) error("send failed")
             sent += payload
             val code = failure(payload)
             if (code != null) {
@@ -133,6 +135,7 @@ class RemoteRepositoryTest {
                 "sessions.list" -> data("sessions", sessions)
                 "sessions.open",
                 "sessions.create" -> Wire.objectOf("kind" to "session", "session" to opened)
+                "session.terminal.detach" -> Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
                 "session.snapshot" ->
                     Wire.objectOf(
                         "kind" to "snapshot",
@@ -6039,6 +6042,235 @@ class RemoteRepositoryTest {
             else null
         }
         assertEquals(ReloadResult.Failed(ReloadFailure.Failed(null)), repository.reloadSession("session"))
+    }
+
+    @Test
+    fun terminalBuffersEarlyEventsAndDetachesWhenNavigatingAway() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.terminal.attach") null else original(request) }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repo.attachTerminal(80, 24))
+        runCurrent()
+        val attach = transport.sent.last { it.text("type") == "session.terminal.attach" }
+        transport.deliver(Wire.objectOf("type" to "host.event", "kind" to "session.terminal.data", "sessionId" to "session", "attachmentGeneration" to 3, "seq" to 0, "text" to "hello"))
+        transport.result(attach, Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24))
+        runCurrent()
+        assertEquals(listOf("hello"), repo.state.value.terminal?.output)
+        repo.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertEquals("left", repo.state.value.terminal?.ended)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.detach" })
+    }
+
+    @Test
+    fun terminalNeverAttachesWithoutCapability() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertFalse(repo.attachTerminal(80, 24))
+        assertTrue(transport.sent.none { it.text("type") == "session.terminal.attach" })
+    }
+
+    @Test
+    fun terminalStopsOnSequenceGapAndDoesNotResendInput() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            "session.terminal.input" -> null
+            else -> original(request)
+        } }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repo.attachTerminal(80, 24))
+        runCurrent()
+        assertTrue(repo.sendTerminalInput(TerminalInput.Text("x")))
+        assertFalse(repo.sendTerminalInput(TerminalInput.Text("y")))
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.input" })
+        transport.deliver(Wire.objectOf("type" to "host.event", "kind" to "session.terminal.data", "sessionId" to "session", "attachmentGeneration" to 3, "seq" to 1, "text" to "gap"))
+        runCurrent()
+        assertEquals("sequence", repo.state.value.terminal?.ended)
+        assertFalse(repo.sendTerminalInput(TerminalInput.Text("again")))
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.input" })
+    }
+
+    @Test
+    fun lateTerminalAttachIsDetachedAfterLeavingSession() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.terminal.attach") null else original(request) }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repo.attachTerminal(80, 24))
+        runCurrent()
+        val attach = transport.sent.last { it.text("type") == "session.terminal.attach" }
+        repo.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        transport.result(attach, Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24))
+        runCurrent()
+        assertEquals("left", repo.state.value.terminal?.ended)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.detach" })
+    }
+
+    @Test
+    fun terminalGoesOfflineWithoutReplayingInput() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            "session.terminal.input" -> null
+            else -> original(request)
+        } }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repo.attachTerminal(80, 24))
+        runCurrent()
+        assertTrue(repo.sendTerminalInput(TerminalInput.Text("x")))
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertEquals("offline", repo.state.value.terminal?.ended)
+        assertFalse(repo.sendTerminalInput(TerminalInput.Text("x")))
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.input" })
+    }
+
+    @Test
+    fun queuedTerminalCommandsNeverGoOutAfterDisconnect() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.terminal.attach")
+            Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            else original(request) }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repo.attachTerminal(80, 24))
+        repo.disconnect()
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.terminal.attach" })
+
+        assertTrue(repo.attachTerminal(80, 24))
+        runCurrent()
+        assertTrue(repo.sendTerminalInput(TerminalInput.Text("x")))
+        assertTrue(repo.resizeTerminal(100, 30))
+        repo.disconnect()
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.terminal.input" || it.text("type") == "session.terminal.resize" })
+    }
+
+    @Test
+    fun terminalHostDetachClearsPendingInputForNextAttachment() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            "session.terminal.input" -> null
+            else -> original(request)
+        } }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        assertTrue(repo.sendTerminalInput(TerminalInput.Text("x"))); runCurrent()
+        transport.deliver(Wire.objectOf("type" to "host.event", "kind" to "session.terminal.detached", "sessionId" to "session", "attachmentGeneration" to 3, "reason" to "revoked"))
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        assertTrue(repo.sendTerminalInput(TerminalInput.Text("y")))
+    }
+
+    @Test
+    fun terminalDetachFailureClosesConnectionToReleaseLease() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.terminal.attach")
+            Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            else original(request) }
+        transport.failure = { if (it.text("type") == "session.terminal.detach") "offline" else null }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+        val closes = transport.closes
+        repo.detachTerminal(); runCurrent()
+        assertTrue(transport.closes > closes)
+    }
+
+    @Test
+    fun terminalDetachTimeoutAndSendFailureCloseConnection() = runTest {
+        for (failBeforeSend in listOf(false, true)) {
+            val transport = Transport()
+            val worker = session(origin = "worker")
+            configure(transport, sessions = listOf(worker), opened = worker)
+            advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+            val original = transport.response
+            transport.response = { request -> when (request.text("type")) {
+                "session.terminal.attach" -> Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+                "session.terminal.detach" -> null
+                else -> original(request)
+            } }
+            transport.sendFailure = { failBeforeSend && it.text("type") == "session.terminal.detach" }
+            val repo = repository(transport)
+            repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+            assertTrue(repo.attachTerminal(80, 24)); runCurrent()
+            val closes = transport.closes
+            repo.detachTerminal(); runCurrent()
+            if (!failBeforeSend) { advanceTimeBy(REQUEST_TIMEOUT_MILLIS); runCurrent() }
+            assertTrue("failed detach must close connection, pre-send=$failBeforeSend", transport.closes > closes)
+            repo.disconnect()
+        }
+    }
+
+    @Test
+    fun terminalCancelledBeforeSendCanAttachAgainOnSameConnection() = runTest {
+        val transport = Transport()
+        val worker = session(origin = "worker")
+        configure(transport, sessions = listOf(worker), opened = worker)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request -> if (request.text("type") == "session.terminal.attach")
+            Wire.objectOf("kind" to "terminal.attached", "sessionId" to "session", "attachmentGeneration" to 3, "cols" to 80, "rows" to 24)
+            else original(request) }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(repo.attachTerminal(80, 24))
+        repo.detachTerminal()
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.terminal.attach" })
+        assertTrue(repo.attachTerminal(80, 24))
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.terminal.attach" })
+        assertEquals(3L, repo.state.value.terminal?.generation)
     }
 
     private fun bashing(transport: Transport, origin: String = "rpc", advertise: Boolean = true) {

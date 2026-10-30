@@ -1,5 +1,36 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Expanded goal agreed on 2026-10-30
+
+PocketPi is Robin's complete mobile agentic development environment on Galaxy Tab S11 and
+Galaxy S25. From either device, Robin controls pi and can intervene directly in code, terminals,
+Git, pull requests, CI, browsers and emulators without anyone operating the development computer.
+Mac and independent remote Linux hosts, including Linux devcontainers, are equal priority.
+
+The qualifying workflow includes an interactive Android emulator, Wear OS emulator and an iOS
+simulator on a Mac. Agent and human share the same browser tabs and login state, with explicit
+handoff of input ownership. A separate forwarded web preview does not satisfy that requirement.
+
+Tablet acceptance includes keyboard, mouse, DeX, adaptive simultaneous work views and long work
+sessions. Phone acceptance includes all core actions through touch. Device switching and network
+interruptions preserve drafts and work context, and never silently repeat an uncertain operation.
+Host or container failure must show interrupted work and permit controlled recovery; it does not
+promise that a process survives the machine or container that owns it.
+
+An available host means a previously configured, powered and reachable machine. This goal does
+not imply waking an arbitrary powered-off machine or bypassing initial trust and pairing.
+
+The earlier gap list below is a historical baseline, not a current capability inventory.
+PocketPi `main` at `6836146` already includes host-worker opt-in, PR/CI presentation and worker
+shell capability support. Neither this code inspection nor a build proves the qualifying run.
+The host at NOAH `dev` `a1e18a22` defines `session.terminal.v1`, but does not yet serve its commands.
+
+Implementation follows independently verified increments: host readiness and native terminal,
+Android terminal interaction and recovery, remaining worker parity and direct development tools,
+protected previews and shared browser interaction, emulator streaming and input, then full
+device qualification across Mac, Linux and devcontainers. Each capability stays hidden until
+the host actually implements it. Existing trust and Git-write decisions below remain binding.
+
 Status: decisions taken, 2026-10-29. Baseline: PocketPi `main` at `f313a8b`, noah-monorepo at
 `976824417` (`packages/pi-atlas/extensions/remote`).
 

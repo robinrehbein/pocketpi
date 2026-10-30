@@ -1,6 +1,6 @@
 <resources>
     <!-- English fallback for all unsupported locales. -->
-    <string name="remote_waiting_for_mac">Waiting for your Mac…</string>
+    <string name="remote_waiting_for_mac">Waiting for your computer…</string>
     <string name="remote_diagnostics_title">Diagnostics</string>
     <string name="remote_diagnostics_help">Connection and request timings on this phone, kept in memory until the app closes. They contain no messages, IDs or keys.</string>
     <string name="remote_diagnostics_open">Show diagnostics</string>
@@ -12,7 +12,7 @@
     <string name="remote_diagnostics_connect_pending">In progress</string>
     <string name="remote_diagnostics_milliseconds">%1$d ms</string>
     <string name="remote_diagnostics_phase_opening">Relay</string>
-    <string name="remote_diagnostics_phase_challenge">Mac answer</string>
+    <string name="remote_diagnostics_phase_challenge">computer answer</string>
     <string name="remote_diagnostics_phase_ready">Encryption</string>
     <string name="remote_diagnostics_phase_authenticating">Sign-in</string>
     <string name="remote_diagnostics_phase_approval">Approval</string>

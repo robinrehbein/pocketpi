@@ -264,12 +264,14 @@ class DefaultRemoteRepository(
             ARTIFACTS_CAPABILITY,
             // Only on the capabilities.v2 route, and only while the Mac's switch is on.
             SESSION_BASH_CAPABILITY,
+            SESSION_TERMINAL_CAPABILITY,
             // Also v2 only: it lets terminal sessions and host workers run them as well.
             SESSION_BASH_WORKER_CAPABILITY,
             // Only on the capabilities.v2 route; writes need the project's `writable` flag as well.
             TICKETS_CAPABILITY,
         )
     /** The request ID prefix of `projects.list`; falls back to v1 once for a host without v2. */
+    private var terminalRouteOffered = false
     private var capabilityRoute = CAPABILITIES_V2_ROUTE
     private val mutable = MutableStateFlow(RemoteState())
     override val state = mutable.asStateFlow()
@@ -725,6 +727,7 @@ class DefaultRemoteRepository(
                     // accepts and then drops connections at once does not cause a tight loop.
                     connectionReady()
                     capabilityRoute = CAPABILITIES_V2_ROUTE
+                    terminalRouteOffered = false
                     update {
                         it.copy(
                             connected = true,
@@ -1790,7 +1793,8 @@ class DefaultRemoteRepository(
                     ?.takeIf { it.size <= MAX_ROUTE_CAPABILITIES }
                     ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                     .orEmpty()
-                val merged = routeCapabilities.filter { it in advertised }
+                if (id.startsWith(CAPABILITIES_V2_ROUTE) && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
+                val merged = routeCapabilities.filter { it in advertised && (it != SESSION_TERMINAL_CAPABILITY || id.startsWith(CAPABILITIES_V2_ROUTE)) }
                 val hadTickets = TICKETS_CAPABILITY in state.value.capabilities
                 if (merged.isNotEmpty()) {
                     // Capabilities merge in additively as later projects.list replies arrive; a list
@@ -1873,7 +1877,9 @@ class DefaultRemoteRepository(
                 "event" -> receiveEvent(payload)
                 "host.event" ->
                     try {
-                        if (payload.optionalText("kind")?.startsWith("provider.auth.") == true) {
+                        if (payload.optionalText("kind")?.startsWith("session.terminal.") == true) {
+                            receiveTerminalEvent(payload)
+                        } else if (payload.optionalText("kind")?.startsWith("provider.auth.") == true) {
                             receiveProviderAuthEvent(payload)
                         } else {
                             cloneEvent(payload)?.let(::applyCloneUpdate)
@@ -2500,6 +2506,7 @@ class DefaultRemoteRepository(
         sessionsFresh: Boolean = false,
     ) {
         val previous = state.value.selection
+        if (selection.routeId != previous.routeId || selection.sessionId != previous.sessionId) endTerminal("left", sendDetach = true)
         // The same chat of the same Mac selected again (a reconnect, a resume, a restore): what it
         // shows stays until the snapshot and the reads after it replace it.
         val sameSession = selection.sessionId != null && selection.routeId == previous.routeId &&
@@ -3789,6 +3796,9 @@ class DefaultRemoteRepository(
      * never proven, and lost within [SHORT_LIVED_CONNECTION_MILLIS].
      */
     private fun connectionEnded(): Boolean {
+        endTerminal("offline", sendDetach = false)
+        pendingTerminal = null
+        terminalRouteOffered = false
         val lived = readyAt?.let { now() - it }
         val shortLived = lived != null && !connectionProven && lived < SHORT_LIVED_CONNECTION_MILLIS
         readyAt = null
@@ -7645,6 +7655,156 @@ class DefaultRemoteRepository(
         commandsVersion++
         update { it.copy(commandsLoading = false) }
         refreshCommands()
+    }
+
+    // ---- Terminal v1: connection-owned, never automatically reattached -----------------------
+    private data class PendingTerminal(val session: String, val connection: Long, val early: MutableList<TerminalEvent> = mutableListOf(), var bytes: Int = 0, var abandoned: Boolean = false)
+    private var pendingTerminal: PendingTerminal? = null
+    private var terminalAttachment: TerminalAttachment? = null
+    private var terminalInputBusy = false
+    private val terminalOutputLimit = 256 * 1024
+
+    override fun attachTerminal(cols: Int, rows: Int, takeoverGeneration: Long?): Boolean {
+        val current = state.value
+        val session = current.selection.sessionId ?: return false
+        if (!current.connected || current.stale || activeHost?.routeId != current.selection.routeId ||
+            !terminalRouteOffered || SESSION_TERMINAL_CAPABILITY !in current.capabilities || capabilityRoute != CAPABILITIES_V2_ROUTE ||
+            current.session?.let(::isHostWorker) != true || cols !in 20..500 || rows !in 5..300 ||
+            (takeoverGeneration != null && takeoverGeneration !in 0..9_007_199_254_740_991L) ||
+            pendingTerminal != null || terminalAttachment != null) return false
+        val pending = PendingTerminal(session, generation)
+        pendingTerminal = pending
+        update { it.copy(terminal = TerminalView(session)) }
+        scope.launch {
+            if (pendingTerminal !== pending || pending.abandoned || pending.connection != generation || !state.value.connected) {
+                if (pendingTerminal === pending) pendingTerminal = null
+                return@launch
+            }
+            try {
+                val fields = mutableListOf<Pair<String, Any?>>("sessionId" to session, "cols" to cols, "rows" to rows)
+                if (takeoverGeneration != null) { fields += "takeover" to true; fields += "expectedAttachmentGeneration" to takeoverGeneration }
+                val result = parseTerminalResult(connectionRequest("session.terminal.attach", *fields.toTypedArray()), session)
+                if (pendingTerminal === pending) pendingTerminal = null
+                if (result is TerminalResult.Attached && pending.connection == generation && state.value.connected) {
+                    if (pending.abandoned || state.value.selection.sessionId != session) {
+                        sendTerminalDetach(session, result.generation, pending.connection)
+                    } else {
+                        terminalAttachment = TerminalAttachment(pending.connection.toString(), session, result.generation)
+                        update { it.copy(terminal = TerminalView(session, attaching = false, generation = result.generation)) }
+                        pending.early.forEach { acceptTerminalEvent(it) }
+                    }
+                } else if (!pending.abandoned && pending.connection == generation && result is TerminalResult.Held) {
+                    update { it.copy(terminal = TerminalView(session, attaching = false, generation = result.generation, holder = result.holder)) }
+                }
+            } catch (e: Exception) {
+                if (pendingTerminal === pending) pendingTerminal = null
+                if (!pending.abandoned && pending.connection == generation) endTerminal("failed", sendDetach = false)
+                // A lost or malformed attach reply may hide a successful attach. Closing the connection releases it.
+                if (pending.connection == generation && state.value.connected && (e !is RemoteRequestException || e.kind != RemoteRequestException.Kind.HOST_ERROR))
+                    connectionStale("session.terminal.attach")
+            }
+        }
+        return true
+    }
+
+    private fun receiveTerminalEvent(payload: JsonObject) {
+        val event = try { parseTerminalEvent(payload) } catch (e: Exception) {
+            endTerminal("protocol", sendDetach = true); return
+        }
+        val pending = pendingTerminal
+        if (pending != null && pending.connection == generation && event.sessionId == pending.session && !pending.abandoned) {
+            val bytes = if (event is TerminalEvent.Data) event.text.toByteArray().size else 0
+            if (pending.early.size >= 256 || pending.bytes + bytes > terminalOutputLimit) {
+                pending.abandoned = true
+                update { it.copy(terminal = it.terminal?.copy(attaching = false, ended = "overflow")) }
+            } else { pending.bytes += bytes; pending.early += event }
+            return
+        }
+        acceptTerminalEvent(event)
+    }
+
+    private fun acceptTerminalEvent(event: TerminalEvent) {
+        val attachment = terminalAttachment ?: return
+        val view = state.value.terminal ?: return
+        if (event.sessionId != view.sessionId) return
+        if (event.generation != view.generation) {
+            if (view.generation != null && event.generation > view.generation) endTerminal("ownership", sendDetach = true)
+            return
+        }
+        if (!attachment.receive(generation.toString(), event)) {
+            endTerminal("sequence", sendDetach = true); return
+        }
+        when (event) {
+            is TerminalEvent.Detached -> {
+                terminalAttachment = null
+                terminalInputBusy = false
+                update { it.copy(terminal = it.terminal?.copy(ended = event.reason, exitCode = event.exitCode)) }
+            }
+            is TerminalEvent.Data -> {
+                val size = view.output.sumOf { it.toByteArray().size } + event.text.toByteArray().size
+                if (size > terminalOutputLimit || view.output.size >= 256) endTerminal("overflow", sendDetach = true)
+                else update { it.copy(terminal = it.terminal?.copy(output = it.terminal.output + event.text)) }
+            }
+        }
+    }
+
+    private fun sendTerminalDetach(session: String, attachedGeneration: Long, connection: Long) {
+        scope.launch {
+            if (generation != connection || !state.value.connected) return@launch
+            try {
+                validatedBashAborted(connectionRequest("session.terminal.detach", "sessionId" to session, "attachmentGeneration" to attachedGeneration), session)
+            } catch (_: Exception) {
+                if (generation == connection && state.value.connected) connectionStale("session.terminal.detach")
+            }
+        }
+    }
+    private fun endTerminal(reason: String, sendDetach: Boolean) {
+        pendingTerminal?.abandoned = true
+        val view = state.value.terminal ?: return
+        val attachment = terminalAttachment
+        terminalAttachment = null
+        terminalInputBusy = false
+        if (attachment != null && sendDetach && view.generation != null) sendTerminalDetach(view.sessionId, view.generation, generation)
+        if (view.ended == null) update { it.copy(terminal = it.terminal?.copy(attaching = false, ended = reason)) }
+    }
+    override fun detachTerminal() = endTerminal("detached", sendDetach = true)
+    override fun takeTerminalOutput(): List<String> {
+        val output = state.value.terminal?.output.orEmpty()
+        update { it.copy(terminal = it.terminal?.copy(output = emptyList())) }
+        return output
+    }
+    override fun sendTerminalInput(input: TerminalInput): Boolean {
+        val field = terminalInputField(input) ?: return false
+        val attachment = terminalAttachment ?: return false
+        val view = state.value.terminal ?: return false
+        if (terminalInputBusy || !state.value.connected || view.ended != null) return false
+        val seq = attachment.nextInputSequence(generation.toString()) ?: return false
+        val connection = generation
+        terminalInputBusy = true
+        scope.launch {
+            if (connection != generation || terminalAttachment !== attachment || !state.value.connected) return@launch
+            try {
+                val result = connectionRequest("session.terminal.input", "sessionId" to view.sessionId, "attachmentGeneration" to view.generation, "inputSeq" to seq, field)
+                validatedBashAborted(result, view.sessionId)
+            } catch (_: Exception) {
+                if (terminalAttachment === attachment) endTerminal("input_failed", sendDetach = true)
+            } finally { if (connection == generation && terminalAttachment === attachment) terminalInputBusy = false }
+        }
+        return true
+    }
+    override fun resizeTerminal(cols: Int, rows: Int): Boolean {
+        val attachment = terminalAttachment ?: return false
+        val view = state.value.terminal ?: return false
+        if (!state.value.connected || view.ended != null || cols !in 20..500 || rows !in 5..300) return false
+        val connection = generation
+        scope.launch {
+            if (connection != generation || terminalAttachment !== attachment || !state.value.connected) return@launch
+            try {
+                val result = connectionRequest("session.terminal.resize", "sessionId" to view.sessionId, "attachmentGeneration" to view.generation, "cols" to cols, "rows" to rows)
+                validatedBashAborted(result, view.sessionId)
+            } catch (_: Exception) { if (terminalAttachment === attachment) endTerminal("resize_failed", sendDetach = true) }
+        }
+        return true
     }
 
     // ---- Shell commands (session.bash.v1) -------------------------------------------------

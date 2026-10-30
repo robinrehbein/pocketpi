@@ -3,7 +3,7 @@
     <!-- Die Aktivitätsübersicht (ActivityBoard.kt), ihre Einstiegspunkte und die Markierungen der Sitzungszeilen (SessionMarksStore.kt). -->
     <string name="remote_activity_title">Aktivität</string>
     <string name="remote_activity_empty">Nichts braucht dich, nichts arbeitet und nichts ist fertig geworden, während du weg warst.</string>
-    <string name="remote_activity_last_known">Dein Mac ist offline. Das sind seine zuletzt bekannten Zustände.</string>
+    <string name="remote_activity_last_known">Dein Rechner ist offline. Das sind seine zuletzt bekannten Zustände.</string>
     <plurals name="remote_activity_needs_you_count">
         <item quantity="one">%d braucht dich</item>
         <item quantity="other">%d brauchen dich</item>

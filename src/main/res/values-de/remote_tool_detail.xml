@@ -40,9 +40,9 @@
     <string name="remote_tool_detail_loading_progress_percent">Vollständige Ausgabe wird geladen: %1$d Prozent</string>
     <string name="remote_tool_detail_cancel_load">Laden abbrechen</string>
     <string name="remote_tool_detail_retry">Erneut versuchen</string>
-    <string name="remote_tool_detail_failure_unsupported">Dein Mac kann die vollständige Ausgabe noch nicht senden. Lade die Remote-Erweiterung in pi neu oder aktualisiere pi Remote.</string>
+    <string name="remote_tool_detail_failure_unsupported">Dein Rechner kann die vollständige Ausgabe noch nicht senden. Lade die Remote-Erweiterung in pi neu oder aktualisiere pi Remote.</string>
     <string name="remote_tool_detail_failure_not_found">Die vollständige Ausgabe ist noch nicht gespeichert. Versuche es erneut, sobald das Werkzeug fertig ist.</string>
-    <string name="remote_tool_detail_failure_offline">Dein Mac ist offline. Versuche es erneut, sobald er wieder da ist.</string>
+    <string name="remote_tool_detail_failure_offline">Dein Rechner ist offline. Versuche es erneut, sobald er wieder da ist.</string>
     <string name="remote_tool_detail_failure_failed">Die vollständige Ausgabe konnte nicht geladen werden.</string>
     <string name="remote_tool_detail_full_loaded">Vollständige Ausgabe wird angezeigt</string>
     <string name="remote_tool_detail_capped">Die Ausgabe war länger als 1 MiB und ist dort abgeschnitten.</string>

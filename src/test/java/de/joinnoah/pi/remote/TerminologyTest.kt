@@ -16,7 +16,7 @@ import org.w3c.dom.Element
 
 /**
  * One vocabulary on every surface: the session status words match between the phone, the widget,
- * the live-run notification and the watch, and the strings keep to the glossary ("Mac" for the
+ * the live-run notification and the watch, and the strings keep to the glossary ("computer" for the
  * machine, "session" for a pi session) in English and German.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -56,15 +56,14 @@ class TerminologyTest {
             mapOf(
                 "values" to
                     listOf(
-                        Regex("""\bcomputers?\b""", RegexOption.IGNORE_CASE),
-                        // "host key" and "user@host:path" are SSH terms, not the Mac.
+                        // "host key" and "user@host:path" are SSH terms, not the computer.
                         Regex("""(?<!@)\bhosts?\b(?! key)""", RegexOption.IGNORE_CASE),
                         Regex("""\bconversations?\b""", RegexOption.IGNORE_CASE),
                         Regex("""pi remote extension""", RegexOption.IGNORE_CASE),
                     ),
                 "values-de" to
                     listOf(
-                        Regex("""Computer|Rechner|Telefon|Smartphone"""),
+                        Regex("""Computer|Telefon|Smartphone"""),
                         Regex("""(?<!@)\bHosts?\b"""),
                         Regex("""Gespräch|Unterhaltung"""),
                         Regex("""\bSessions?\b"""),

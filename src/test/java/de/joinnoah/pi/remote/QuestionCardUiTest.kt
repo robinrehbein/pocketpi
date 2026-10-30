@@ -133,7 +133,7 @@ class QuestionCardUiTest {
             questionnaire,
         )
         for ((blocked, hint) in listOf(
-            QuestionBlock.LOCAL_ONLY to "Answer this on the Mac",
+            QuestionBlock.LOCAL_ONLY to "Answer this on the computer",
             QuestionBlock.UNCERTAIN to "The answer may have been delivered; waiting for the session",
         )) {
             compose.runOnIdle { block.value = blocked }
@@ -169,7 +169,7 @@ class QuestionCardUiTest {
         render("""{"id":"q","kind":"local_required"}""")
         for (kind in listOf("local_required", "custom", "editor", "future")) {
             change("""{"id":"$kind","kind":"$kind"}""")
-            compose.onNodeWithText("Input needed on the Mac").assertIsDisplayed()
+            compose.onNodeWithText("Input needed on the computer").assertIsDisplayed()
             compose.onAllNodes(hasClickAction()).assertCountEquals(0)
             compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
             compose.onNodeWithText("Cancel").assertDoesNotExist()

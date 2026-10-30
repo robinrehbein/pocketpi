@@ -28,8 +28,8 @@
     <string name="remote_tree_moving">Wechsle zu diesem Punkt…</string>
     <string name="remote_tree_summarizing">Zweig wird zusammengefasst…</string>
     <string name="remote_tree_cancel">Abbrechen</string>
-    <string name="remote_tree_offline">Die Verbindung zu deinem Mac ist unterbrochen.</string>
-    <string name="remote_tree_unsupported">Das wird noch nicht unterstützt. Aktualisiere pi Remote auf deinem Mac und lade die Remote-Erweiterung in pi neu, dann versuche es erneut.</string>
+    <string name="remote_tree_offline">Die Verbindung zu deinem Rechner ist unterbrochen.</string>
+    <string name="remote_tree_unsupported">Das wird noch nicht unterstützt. Aktualisiere pi Remote auf deinem Rechner und lade die Remote-Erweiterung in pi neu, dann versuche es erneut.</string>
     <string name="remote_tree_busy">Die Sitzung ist beschäftigt. Versuche es gleich noch einmal.</string>
     <string name="remote_tree_cancelled">Abgebrochen. Die Sitzung ist am selben Punkt geblieben.</string>
     <string name="remote_tree_not_found">Diesen Schritt gibt es nicht mehr. Der Baum wurde aktualisiert.</string>

@@ -1,6 +1,8 @@
 # PocketPi for Android
 
-This separate application controls pi sessions on paired Macs through the pi Remote relay. It uses
+This separate application controls pi sessions on paired host computers through the pi Remote relay.
+The goal is to support Macs, independent Linux hosts, and development containers equally; Linux and
+container runtime qualification is still pending. It uses
 application ID `de.robinrehbein.pocketpi` and does not share Noah accounts or data.
 
 ## Build and install

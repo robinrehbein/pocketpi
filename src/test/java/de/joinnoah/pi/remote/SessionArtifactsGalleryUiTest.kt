@@ -207,7 +207,7 @@ class SessionArtifactsGalleryUiTest {
     fun anOlderHostAsksForAnUpdateWithoutRetry() {
         show({ SessionArtifactListResult.Unsupported })
         waitFor("artifactsError")
-        compose.onNodeWithText("Update pi Remote on your Mac to browse artifacts.").assertIsDisplayed()
+        compose.onNodeWithText("Update pi Remote on your computer to browse artifacts.").assertIsDisplayed()
         compose.onNodeWithTag("artifactsRetry").assertDoesNotExist()
     }
 

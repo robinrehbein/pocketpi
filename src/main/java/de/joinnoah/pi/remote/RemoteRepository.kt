@@ -96,6 +96,7 @@ data class PendingSend(
 )
 
 data class RemoteState(
+    val terminal: TerminalView? = null,
     val hosts: List<PairedHost> = emptyList(),
     /**
      * [hosts] were read from storage. Until then an empty list says nothing, so screens show a
@@ -291,6 +292,12 @@ interface RemoteRepository {
     fun remove(routeId: String)
 
     fun disconnect()
+
+    fun attachTerminal(cols: Int, rows: Int, takeoverGeneration: Long? = null): Boolean = false
+    fun detachTerminal() {}
+    fun takeTerminalOutput(): List<String> = emptyList()
+    fun sendTerminalInput(input: TerminalInput): Boolean = false
+    fun resizeTerminal(cols: Int, rows: Int): Boolean = false
 
     fun setForeground(foreground: Boolean) {}
 
