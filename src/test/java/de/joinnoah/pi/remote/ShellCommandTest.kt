@@ -102,14 +102,55 @@ class ShellCommandTest {
         assertEquals(BashFailure.SWITCHED_OFF, failure(turnedOff.text("code"), turnedOff.text("message")))
     }
 
-    private fun shellState(origin: String = "rpc", capable: Boolean = true) =
+    private fun shellState(origin: String = "rpc", capable: Boolean = true, worker: Boolean = false) =
         RemoteState(
             selection = RemoteSelection("host", "project", "session"),
             connected = true,
             status = "idle",
             session = Wire.objectOf("id" to "session", "origin" to origin, "status" to "idle"),
-            capabilities = if (capable) setOf(SESSION_BASH_CAPABILITY) else emptySet(),
+            capabilities =
+                if (!capable) emptySet()
+                else if (worker) setOf(SESSION_BASH_CAPABILITY, SESSION_BASH_WORKER_CAPABILITY)
+                else setOf(SESSION_BASH_CAPABILITY),
         )
+
+    @Test
+    fun aTerminalSessionRunsCommandsOnlyWithTheWorkerCapability() {
+        // A marked host worker and an unmarked terminal session look alike to the gate.
+        val marked = shellState(origin = "tui", worker = true)
+        val markedSession = withHostWorker(Wire.objectOf("id" to "session", "origin" to "worker", "status" to "idle"))
+        assertTrue(isHostWorker(markedSession))
+        assertTrue(canRunShellCommands(marked))
+        assertTrue(canRunShellCommands(marked.copy(session = markedSession)))
+        assertFalse(canRunShellCommands(shellState(origin = "tui")))
+        assertFalse(canRunShellCommands(shellState(origin = "tui", capable = false)))
+        // The worker capability alone is not enough, and a refusal takes it back.
+        assertFalse(canRunShellCommands(marked.copy(capabilities = setOf(SESSION_BASH_WORKER_CAPABILITY))))
+        assertFalse(canRunShellCommands(marked.copy(unavailableCapabilities = setOf(SESSION_BASH_WORKER_CAPABILITY))))
+        assertFalse(canRunShellCommands(marked.copy(unavailableCapabilities = setOf(SESSION_BASH_CAPABILITY))))
+        assertFalse(canRunShellCommands(marked.copy(connected = false)))
+        // A subagent child never runs commands.
+        val child =
+            Wire.objectOf("id" to "session", "origin" to "tui", "status" to "idle", "parentSessionId" to "parent")
+        assertFalse(canRunShellCommands(marked.copy(session = child)))
+        // Phone-started sessions are unchanged, with or without the worker capability.
+        assertTrue(canRunShellCommands(shellState()))
+        assertTrue(canRunShellCommands(shellState(worker = true)))
+        assertFalse(canRunShellCommands(shellState(origin = "worker", worker = true)))
+        assertTrue(shellDraft(marked.copy(draft = "!echo hi")) != null)
+    }
+
+    @Test
+    fun theReloadRefusalHasItsOwnFailureAndText() {
+        val failure = bashFailure(RemoteRequestException("unsupported", hostMessage = "Reload the pi remote extension to use this control"))
+        assertEquals(BashFailure.RELOAD_EXTENSION, failure)
+        assertEquals(R.string.remote_shell_reload_extension, bashFailureText(failure))
+        assertNotEquals(R.string.remote_shell_terminal_session, bashFailureText(failure))
+        val outside = valid("outside-gate").obj("error")
+        assertEquals(BashFailure.TERMINAL_SESSION, bashFailure(RemoteRequestException(outside.text("code"), hostMessage = outside.text("message"))))
+        val tooOld = valid("extension-too-old").obj("error")
+        assertEquals(BashFailure.RELOAD_EXTENSION, bashFailure(RemoteRequestException(tooOld.text("code"), hostMessage = tooOld.text("message"))))
+    }
 
     @Test
     fun aBangDraftRunsAsAShellCommandOnlyWhenTheGatePasses() {
@@ -123,6 +164,8 @@ class ShellCommandTest {
         // Without the capability, for a terminal session, offline or after a refusal it is a prompt.
         assertFalse(runShellDraft(shellState(capable = false), "!!x", run) {})
         assertFalse(runShellDraft(shellState(origin = "tui"), "!!x", run) {})
+        assertTrue(runShellDraft(shellState(origin = "tui", worker = true), "!!x", run) {})
+        runs.removeAt(runs.lastIndex)
         assertFalse(runShellDraft(shellState().copy(connected = false), "!!x", run) {})
         assertFalse(
             runShellDraft(shellState().copy(unavailableCapabilities = setOf(SESSION_BASH_CAPABILITY)), "!!x", run) {}
