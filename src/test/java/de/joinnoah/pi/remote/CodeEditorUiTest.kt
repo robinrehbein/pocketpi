@@ -38,6 +38,16 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class CodeEditorUiTest {
+    @Test
+    @Config(qualifiers = "w320dp-h640dp")
+    fun projectSearchAndEditorActionsAreAccessibleOnNarrowScreen() {
+        render(editing(text = "changed").copy(searchEnabled = true))
+        compose.onNodeWithTag("filesEditorBack").assertIsDisplayed()
+        compose.onNodeWithTag("filesEditorSave").assertIsDisplayed()
+        compose.onNodeWithTag("filesSearch").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("filesSearchQuery").assertIsDisplayed()
+    }
+
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     private val texts = mutableListOf<String>()

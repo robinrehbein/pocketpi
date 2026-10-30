@@ -231,6 +231,8 @@ internal fun filesActions(
 ) =
     FilesActions(
         onClose = model::closeFiles,
+        onSearch = model::searchFiles,
+        onOpenSearchHit = model::openSearchHit,
         onOpenDir = model::openFilesDir,
         onOpenFile = model::openFilesFile,
         onLoadMore = model::loadMoreFiles,

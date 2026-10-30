@@ -460,6 +460,9 @@ internal class ChatViewModel(
 
     fun closeFiles() = repository.closeFiles()
 
+    fun searchFiles(query: String) = active { repository.searchFiles(query) }
+    fun openSearchHit(hit: FileSearchHit) = active { repository.openSearchHit(hit) }
+
     fun openFilesDir(path: String) = active { repository.openFilesDir(path) }
 
     fun openFilesFile(path: String?) = active { repository.openFilesFile(path) }

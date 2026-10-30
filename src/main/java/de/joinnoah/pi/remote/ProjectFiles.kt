@@ -10,6 +10,7 @@ import kotlinx.serialization.json.JsonPrimitive
  * (protocol README, "Project files"). Advertised only through the `projects.list` route.
  */
 internal const val FILES_CAPABILITY = "session.files.v1"
+internal const val FILES_SEARCH_CAPABILITY = "session.files.search.v1"
 
 /**
  * The host replaces an existing text file with `session.files.write`, checked against the version
@@ -63,6 +64,12 @@ data class FileChunk(
     val nextOffset: Long? = null,
     val tooLarge: Boolean = false,
 )
+
+data class FileSearchHit(val path: String, val line: Int, val column: Int, val snippet: String)
+data class FileSearchResult(val matches: List<FileSearchHit>, val truncated: Boolean)
+data class FileSearchState(val query: String = "", val loading: Boolean = false, val failure: FilesFailure? = null, val result: FileSearchResult? = null)
+
+internal fun validSearchQuery(query: String): Boolean = query.isNotEmpty() && query.encodeToByteArray().size <= 256 && query.none { it == '\u0000' || it == '\r' || it == '\n' }
 
 /** Why the file browser shows no data. */
 enum class FilesFailure {
@@ -177,6 +184,7 @@ data class PendingWrite(val requestId: String, val baseVersion: String, val cont
 enum class EditorLeave {
     /** Opening the changes pane, which takes the files pane's place. */
     CHANGES,
+    SEARCH,
 }
 
 /** Whether [content] fits a `session.files.write` frame: at most [MAX_FILES_CONTENT_JSON_BYTES] as a JSON string. */
@@ -205,6 +213,8 @@ data class FilesState(
     val peek: FilesPeek? = null,
     /** The open file in the editor; null while it is shown read-only. */
     val editor: FileEditor? = null,
+    val search: FileSearchState = FileSearchState(),
+    val searchEnabled: Boolean = false,
 )
 
 internal fun canBrowseFiles(state: RemoteState): Boolean =
@@ -302,6 +312,34 @@ private fun fileEntry(value: JsonObject): FileEntry {
     val type = requireNotNull(FileEntryType.entries.firstOrNull { it.wire == value.text("type") })
     val size = if (value.containsKey("size")) value.count("size").also { require(type == FileEntryType.FILE) } else null
     return FileEntry(name, type, size)
+}
+
+private fun searchDeniedPath(path: String): Boolean {
+    val names = setOf(".git", ".ssh", ".aws", ".gnupg", ".docker", ".kube", ".npmrc", ".netrc", ".pgpass", ".git-credentials", ".pypirc", ".dockercfg", "credentials.json", "local.properties", "kubeconfig")
+    val prefixes = listOf(".env", "id_rsa", "id_dsa", "id_ed25519", "id_ecdsa", "secrets.")
+    val suffixes = listOf(".pem", ".key", ".jks", ".keystore", ".p12", ".pfx", ".bks", ".p8", ".ppk", ".mobileprovision", ".kdbx", ".tfvars", ".tfstate", ".tfstate.backup")
+    return path.split('/').map(::foldSegment).any { segment ->
+        segment in names || prefixes.any(segment::startsWith) || suffixes.any(segment::endsWith) ||
+            (segment.startsWith("service-account") && segment.endsWith(".json"))
+    }
+}
+
+internal fun parseFilesSearch(data: JsonObject, sessionId: String, query: String): FileSearchResult {
+    require(validSearchQuery(query))
+    data.onlyKeys(setOf("kind", "sessionId", "query", "matches", "truncated"))
+    require(data.text("kind") == "files.search" && data.text("sessionId") == sessionId && data.text("query") == query)
+    require(data.toString().encodeToByteArray().size <= 128 * 1024)
+    val entries = data.array("matches")
+    require(entries.size <= 100)
+    val matches = entries.map { hit ->
+        hit.onlyKeys(setOf("path", "line", "column", "snippet"))
+        val path = hit.text("path").also { require(validPath(it) && isSessionPath(it) && '\\' !in it && !searchDeniedPath(it)) }
+        val line = hit.count("line", Int.MAX_VALUE.toLong()).toInt().also { require(it > 0) }
+        val column = hit.count("column", Int.MAX_VALUE.toLong()).toInt().also { require(it > 0) }
+        val snippet = hit.text("snippet").also { require(it.encodeToByteArray().size <= 1024 && query in it && it.none { c -> c == '\u0000' || c == '\r' || c == '\n' }) }
+        FileSearchHit(path, line, column, snippet)
+    }
+    return FileSearchResult(matches, data.flag("truncated"))
 }
 
 /** Validates one `files.list` page against the request that produced it. */

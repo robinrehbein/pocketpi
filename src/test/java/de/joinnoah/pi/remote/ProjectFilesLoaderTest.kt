@@ -7,6 +7,47 @@ import org.junit.Test
 
 /** The file browser through the real repository and loader, against a scripted host. */
 class ProjectFilesLoaderTest {
+    @Test
+    fun searchHitNeverConfirmsAgainstAReplacementEditorOrSelection() = runTest {
+        val hit = FileSearchHit("b.kt", 2, 1, "needle")
+        val original = FileEditor("a.kt", "version", "old", "changed")
+        var epoch = 1L
+        var state = RemoteState(connected = true, selection = RemoteSelection("host", "project", "session"),
+            files = FilesState("session", editor = original, search = FileSearchState("needle", result = FileSearchResult(listOf(hit), false))))
+        val source = object : FileSource {
+            override suspend fun filesList(sessionId: String, path: String, after: String?) = error("unexpected")
+            override suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?) = error("unexpected")
+        }
+        val loader = ProjectFilesLoader(backgroundScope, source, { state }, { epoch }) { state = it(state) }
+        loader.openSearchHit(hit)
+        assertTrue(loader.canConfirmSearchHit())
+        epoch++
+        assertFalse(loader.canConfirmSearchHit())
+        epoch--
+        state = state.copy(files = state.files!!.copy(editor = state.files!!.editor!!.copy(buffer = EditorBuffer())))
+        assertFalse(loader.canConfirmSearchHit())
+        assertEquals("changed", state.files!!.editor!!.latestText)
+    }
+
+    @Test
+    fun changedQueryRejectsLateSearchResults() = runTest {
+        val old = kotlinx.coroutines.CompletableDeferred<FileSearchResult>()
+        var state = RemoteState(connected = true, selection = RemoteSelection("host", "project", "session"), files = FilesState("session"))
+        val source = object : FileSource {
+            override suspend fun filesList(sessionId: String, path: String, after: String?) = error("unexpected")
+            override suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?) = error("unexpected")
+            override suspend fun filesSearch(sessionId: String, query: String): FileSearchResult = old.await()
+        }
+        val loader = ProjectFilesLoader(backgroundScope, source, { state }) { state = it(state) }
+        loader.search("needle")
+        runCurrent()
+        loader.search("")
+        old.complete(FileSearchResult(listOf(FileSearchHit("a", 1, 1, "needle")), false))
+        runCurrent()
+        assertEquals("", state.files!!.search.query)
+        assertNull(state.files!!.search.result)
+    }
+
     private val host = PairedHost("host", "https://relay.test", "device", "secret", "Host")
     private val sessionId = "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
     private val version = "RmlsZVZlcnNpb25BYmMxMg"
@@ -46,7 +87,9 @@ class ProjectFilesLoaderTest {
         /** `session.git.*` answers; held by default. */
         var git: (JsonObject) -> JsonObject? = { null }
 
-        override fun connect(host: PairedHost) = listener.ready(emptySet())
+        var handshake: Set<String> = emptySet()
+        var useV1 = false
+        override fun connect(host: PairedHost) = listener.ready(handshake)
 
         override fun pair(value: JsonObject) {}
 
@@ -84,7 +127,9 @@ class ProjectFilesLoaderTest {
         private fun response(request: JsonObject): JsonObject? {
             return when (request.text("type")) {
                 "projects.list" ->
-                    Wire.objectOf(
+                    if (useV1 && request.text("requestId").startsWith("capabilities.v2:"))
+                        Wire.objectOf("kind" to "projects", "items" to JsonArray(emptyList()))
+                    else Wire.objectOf(
                         "kind" to "projects",
                         "items" to JsonArray(listOf(Wire.objectOf("id" to "project"))),
                         "capabilities" to JsonArray(advertised.map(::JsonPrimitive)),
@@ -167,6 +212,30 @@ class ProjectFilesLoaderTest {
         )
 
     private fun offset(request: JsonObject) = request["offset"]?.jsonPrimitive?.int ?: 0
+
+    @Test
+    fun searchRequiresV2EvenWhenHandshakeAndV1AdvertiseIt() = runTest {
+        val transport = Transport(capabilities + FILES_SEARCH_CAPABILITY) { request -> listing(request) }
+        transport.handshake = setOf(FILES_SEARCH_CAPABILITY)
+        transport.useV1 = true
+        val repository = opened(transport)
+        assertFalse(FILES_SEARCH_CAPABILITY in repository.state.value.capabilities)
+        assertTrue(runCatching { repository.filesSearch(sessionId, "needle") }.isFailure)
+        assertTrue(transport.files().none { it.text("type") == "session.files.search" })
+    }
+
+    @Test
+    fun searchRequestEchoesQueryAndRejectsAnotherQueryInResult() = runTest {
+        val transport = Transport(capabilities + FILES_SEARCH_CAPABILITY) { request ->
+            if (request.text("type") == "session.files.search") Wire.objectOf(
+                "kind" to "files.search", "sessionId" to sessionId, "query" to "wrong",
+                "matches" to JsonArray(emptyList()), "truncated" to false,
+            ) else listing(request)
+        }
+        val repository = opened(transport)
+        assertTrue(runCatching { repository.filesSearch(sessionId, "needle") }.isFailure)
+        assertEquals("needle", transport.files().last { it.text("type") == "session.files.search" }.text("query"))
+    }
 
     @Test
     fun sendsNoFilesCommandWithoutTheCapability() = runTest {
@@ -835,6 +904,33 @@ class ProjectFilesLoaderTest {
     }
 
     @Test
+    fun parkedEditorKeepsItsBufferButClearsSearchOnSessionSwitch() = runTest {
+        val transport = Transport(writeCapabilities + FILES_SEARCH_CAPABILITY) { request ->
+            when (request.text("type")) {
+                "session.files.read" -> page(request, "hello\n", 6)
+                "session.files.search" -> Wire.objectOf(
+                    "kind" to "files.search", "sessionId" to sessionId, "query" to "hello",
+                    "matches" to JsonArray(listOf(Wire.objectOf("path" to "src/app/main.ts", "line" to 1, "column" to 1, "snippet" to "hello"))),
+                    "truncated" to false,
+                )
+                else -> listing(request, "main.ts")
+            }
+        }
+        val repository = editing(transport)
+        repository.updateFileEditorText("unsaved\n")
+        repository.searchFiles("hello")
+        runCurrent()
+        assertEquals(1, repository.state.value.files?.search?.result?.matches?.size)
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        runCurrent()
+        val restored = checkNotNull(repository.state.value.files)
+        assertEquals("unsaved\n", restored.editor?.latestText)
+        assertEquals(FileSearchState(), restored.search)
+    }
+
+    @Test
     fun anUnsavedEditIsParkedWithItsSessionAndComesBack() = runTest {
         val held = mutableListOf<JsonObject>()
         val transport = editorTransport { held += it; null }
@@ -1127,7 +1223,7 @@ class ProjectFilesLoaderTest {
                         error("must not be sent")
                 },
                 { state },
-                { state = it(state) },
+                update = { state = it(state) },
             )
         loader.saveEditor()
         runCurrent()

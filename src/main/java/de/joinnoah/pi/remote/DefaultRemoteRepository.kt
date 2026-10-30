@@ -251,6 +251,7 @@ class DefaultRemoteRepository(
             SESSION_FORK_CAPABILITY,
             GIT_CAPABILITY,
             FILES_CAPABILITY,
+            FILES_SEARCH_CAPABILITY,
             // Only on the capabilities.v2 route, and only when the host enables writes.
             FILES_WRITE_CAPABILITY,
             PROVIDER_AUTH_CAPABILITY,
@@ -737,7 +738,7 @@ class DefaultRemoteRepository(
                     update {
                         it.copy(
                             connected = true,
-                            capabilities = capabilities,
+                            capabilities = capabilities - FILES_SEARCH_CAPABILITY,
                             capabilitiesKnown = false,
                             connection = R.string.remote_connected,
                             error = null,
@@ -1803,7 +1804,7 @@ class DefaultRemoteRepository(
                     .orEmpty()
                 if (id.startsWith(CAPABILITIES_V2_ROUTE) && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY) || id.startsWith(CAPABILITIES_V2_ROUTE))
+                    it in advertised && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY) || id.startsWith(CAPABILITIES_V2_ROUTE))
                 }
                 val hadTasks = canReadTasks()
                 if (id.startsWith(CAPABILITIES_V2_ROUTE) && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
@@ -2470,7 +2471,7 @@ class DefaultRemoteRepository(
         if (previousRoute != null && leaving != null && leaving.sessionId == previous.sessionId && leaving.editor?.changed == true) {
             val key = DraftKey(previousRoute, leaving.sessionId)
             parkedFiles.remove(key)
-            parkedFiles[key] = leaving
+            parkedFiles[key] = leaving.copy(search = FileSearchState())
             if (parkedFiles.size > MAX_PARKED_EDITORS) {
                 while (parkedFiles.size > MAX_PARKED_EDITORS) parkedFiles.remove(parkedFiles.keys.first())
                 // The oldest edit is gone for good: say so once instead of losing it silently.
@@ -2487,6 +2488,7 @@ class DefaultRemoteRepository(
             moreLoading = false,
             previews = emptyMap(),
             peek = null,
+            search = FileSearchState(),
             file = parked.file?.copy(loading = false, moreLoading = false),
             editor = editor.copy(
                 saving = false,
@@ -7000,6 +7002,15 @@ class DefaultRemoteRepository(
         ) throw RemoteRequestException.unsupported()
     }
 
+    override suspend fun filesSearch(sessionId: String, query: String): FileSearchResult {
+        requireFiles(sessionId)
+        val current = state.value
+        if (FILES_SEARCH_CAPABILITY !in current.capabilities || FILES_SEARCH_CAPABILITY in current.unavailableCapabilities)
+            throw RemoteRequestException.unsupported()
+        require(validSearchQuery(query))
+        return parseFilesSearch(request("session.files.search", selectionEpoch, "sessionId" to sessionId, "query" to query), sessionId, query)
+    }
+
     override suspend fun filesList(sessionId: String, path: String, after: String?): FileListing {
         requireFiles(sessionId)
         val fields = listOfNotNull("sessionId" to sessionId, "path" to path, after?.let { "after" to it })
@@ -8073,6 +8084,9 @@ class DefaultRemoteRepository(
         ProjectFilesLoader(
             scope,
             object : FileSource {
+                override suspend fun filesSearch(sessionId: String, query: String) =
+                    this@DefaultRemoteRepository.filesSearch(sessionId, query)
+
                 override suspend fun filesList(sessionId: String, path: String, after: String?) =
                     this@DefaultRemoteRepository.filesList(sessionId, path, after)
 
@@ -8088,6 +8102,7 @@ class DefaultRemoteRepository(
                 ) = this@DefaultRemoteRepository.filesWrite(sessionId, path, baseVersion, content, requestId)
             },
             { state.value },
+            { selectionEpoch },
             ::update,
         )
 
@@ -8102,6 +8117,8 @@ class DefaultRemoteRepository(
     }
 
     override fun closeFiles() = filesLoader.close()
+    override fun searchFiles(query: String) = filesLoader.search(query)
+    override fun openSearchHit(hit: FileSearchHit) = filesLoader.openSearchHit(hit)
 
     override fun openFilesDir(path: String) = filesLoader.openDir(path)
 
@@ -8142,8 +8159,10 @@ class DefaultRemoteRepository(
     override fun fileEditorPrompt(intro: String?) = filesLoader.editorPrompt(intro)
 
     override fun confirmFileEditorLeave() {
+        if (state.value.files?.editor?.leaveRequest == EditorLeave.SEARCH && !filesLoader.canConfirmSearchHit()) return
         when (filesLoader.confirmLeave()) {
             EditorLeave.CHANGES -> openChanges()
+            EditorLeave.SEARCH -> filesLoader.confirmSearchHit()
             null -> {}
         }
     }

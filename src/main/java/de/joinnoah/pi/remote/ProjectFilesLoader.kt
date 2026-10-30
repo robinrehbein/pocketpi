@@ -15,6 +15,8 @@ private const val MAX_REMEMBERED_LISTINGS = 16
 
 /** The `session.files.*` commands. Implementations throw [RemoteRequestException] on errors. */
 internal interface FileSource {
+    suspend fun filesSearch(sessionId: String, query: String): FileSearchResult = throw RemoteRequestException.unsupported()
+
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing
 
     suspend fun filesRead(sessionId: String, path: String, offset: Long, version: String?): FileChunk
@@ -36,8 +38,15 @@ internal class ProjectFilesLoader(
     private val scope: CoroutineScope,
     private val source: FileSource,
     private val current: () -> RemoteState,
+    private val selectionIdentity: () -> Long = { 0L },
     private val update: ((RemoteState) -> RemoteState) -> Unit,
 ) {
+    private var searchJob: Job? = null
+    private var searchVersion = 0L
+    private data class PendingSearchHit(val hit: FileSearchHit, val sessionId: String, val routeId: String?, val selectionIdentity: Long, val editor: FileEditor)
+    private var pendingSearchHit: PendingSearchHit? = null
+    private var autoEditPath: String? = null
+    private var autoEditVersion: Long? = null
     private var listJob: Job? = null
     private var fileJob: Job? = null
     private var listVersion = 0L
@@ -266,7 +275,60 @@ internal class ProjectFilesLoader(
      * Opens the browser at the session folder, or at its folder [path] with [file] open: the
      * browser as a return to the session left it. [lines] are picked in [file] and scrolled to.
      */
-    fun open(path: String = "", file: String? = null, lines: LineSelection? = null) {
+    fun search(query: String) {
+        val files = files() ?: return
+        searchJob?.cancel()
+        val version = ++searchVersion
+        val routeId = current().selection.routeId
+        val selection = selectionIdentity()
+        write(files.sessionId) { it.copy(search = FileSearchState(query = query, loading = validSearchQuery(query))) }
+        if (!validSearchQuery(query)) return
+        searchJob = scope.launch {
+            try {
+                val result = source.filesSearch(files.sessionId, query)
+                if (version == searchVersion && selectionIdentity() == selection && current().selection.routeId == routeId && files()?.search?.query == query) write(files.sessionId) { it.copy(search = FileSearchState(query = query, result = result)) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                if (version == searchVersion && selectionIdentity() == selection && current().selection.routeId == routeId && files()?.search?.query == query) write(files.sessionId) { it.copy(search = FileSearchState(query = query, failure = failure(e))) }
+            }
+        }
+    }
+
+    fun openSearchHit(hit: FileSearchHit) {
+        val files = files() ?: return
+        if (hit !in (files.search.result?.matches ?: emptyList()) || !isSessionPath(hit.path)) return
+        val editor = files.editor
+        if (editor != null && editor.changed) {
+            pendingSearchHit = PendingSearchHit(hit, files.sessionId, current().selection.routeId, selectionIdentity(), editor)
+            requestLeave(EditorLeave.SEARCH)
+        } else openSearchHitNow(hit)
+    }
+
+    fun canConfirmSearchHit(): Boolean {
+        val pending = pendingSearchHit ?: return false
+        val files = files() ?: return false
+        val editor = files.editor ?: return false
+        return selectionIdentity() == pending.selectionIdentity && current().selection.routeId == pending.routeId && files.sessionId == pending.sessionId &&
+            editor.path == pending.editor.path && editor.baseVersion == pending.editor.baseVersion &&
+            editor.buffer === pending.editor.buffer && editor.leaveRequest == EditorLeave.SEARCH &&
+            pending.hit in (files.search.result?.matches ?: emptyList())
+    }
+
+    fun confirmSearchHit() {
+        val hit = pendingSearchHit?.hit ?: return
+        pendingSearchHit = null
+        openSearchHitNow(hit)
+    }
+
+    private fun openSearchHitNow(hit: FileSearchHit) {
+        open(parentPath(hit.path), hit.path, LineSelection(hit.line), editAfterLoad = true)
+    }
+
+    fun open(path: String = "", file: String? = null, lines: LineSelection? = null, editAfterLoad: Boolean = false) {
+        searchJob?.cancel()
+        searchVersion++
+        autoEditPath = file.takeIf { editAfterLoad }
+        autoEditVersion = null
         stopList()
         stopFile()
         stopPreviews()
@@ -285,6 +347,7 @@ internal class ProjectFilesLoader(
             it.copy(
                 files = FilesState(
                     sessionId,
+                    searchEnabled = FILES_SEARCH_CAPABILITY in state.capabilities && FILES_SEARCH_CAPABILITY !in state.unavailableCapabilities,
                     path = path,
                     loading = failure == null && known == null,
                     listing = known,
@@ -310,6 +373,10 @@ internal class ProjectFilesLoader(
     }
 
     fun close() {
+        searchJob?.cancel()
+        searchVersion++
+        pendingSearchHit = null
+        autoEditPath = null
         stopList()
         stopFile()
         stopPreviews()
@@ -573,6 +640,7 @@ internal class ProjectFilesLoader(
 
     private fun read(sessionId: String, path: String, offset: Long, version: String?, reopen: Boolean) {
         val requestVersion = ++fileVersion
+        if (offset == 0L && autoEditPath == path) autoEditVersion = requestVersion
         fun active() =
             requestVersion == fileVersion &&
                 files()?.let { it.sessionId == sessionId && it.file?.path == path } == true
@@ -605,6 +673,10 @@ internal class ProjectFilesLoader(
                                 file.copy(content = file.content + chunk.content, nextOffset = chunk.nextOffset, moreLoading = false)
                         }
                     revealed(read)
+                }
+                if (autoEditPath == path && autoEditVersion == requestVersion && canEditFile(current())) {
+                    autoEditPath = null
+                    startEditing()
                 }
                 // The lines the chat opened the file at lie further on: read on to them.
                 val file = files()?.file?.takeIf { it.path == path }
@@ -904,6 +976,7 @@ internal class ProjectFilesLoader(
     }
 
     fun cancelLeave() {
+        pendingSearchHit = null
         val files = files() ?: return
         val editor = files.editor ?: return
         writeEditor(files.sessionId, editor.path) { it.copy(leaveRequest = null) }

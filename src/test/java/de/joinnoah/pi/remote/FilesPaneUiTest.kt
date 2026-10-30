@@ -60,6 +60,8 @@ import org.robolectric.annotation.Config
 class FilesPaneUiTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
+    private val searches = mutableListOf<String>()
+    private val searchHits = mutableListOf<FileSearchHit>()
     private val opened = mutableListOf<String>()
     private val files = mutableListOf<String?>()
     private val sent = mutableListOf<String>()
@@ -82,6 +84,25 @@ class FilesPaneUiTest {
                 FileEntry("README.md", FileEntryType.FILE, 2048),
             ),
         )
+
+    @Test
+    @Config(qualifiers = "w320dp-h700dp")
+    fun projectSearchShowsIncompletePlainTextResultsAndOpensSelectedHit() {
+        val initial = FilesState("session", loading = false, listing = root, searchEnabled = true)
+        val update = render(initial)
+        compose.onNodeWithTag("filesMoreActions").performClick()
+        compose.onNodeWithTag("filesSearch").performClick()
+        compose.onNodeWithTag("filesSearchQuery").performTextInput("needle")
+        compose.onNodeWithTag("filesSearchSubmit").performClick()
+        assertEquals("needle", searches.last())
+        val hit = FileSearchHit("src/a.kt", 2, 4, "<b>needle</b>")
+        update(initial.copy(search = FileSearchState("needle", result = FileSearchResult(listOf(hit), truncated = true))))
+        compose.onNodeWithText(label(R.string.remote_files_search_incomplete)).assertIsDisplayed()
+        compose.onNodeWithText("<b>needle</b>").assertIsDisplayed()
+        compose.onNodeWithText("src/a.kt:2:4").performClick()
+        assertEquals(listOf(hit), searchHits)
+        compose.onNodeWithTag("filesSearchQuery").assertDoesNotExist()
+    }
 
     private fun label(id: Int, vararg args: Any) = compose.activity.getString(id, *args)
 
@@ -110,6 +131,8 @@ class FilesPaneUiTest {
                     state,
                     FilesActions(
                         onClose = { closed++ },
+                        onSearch = { searches += it },
+                        onOpenSearchHit = { searchHits += it },
                         onOpenDir = { opened += it },
                         onOpenFile = { files += it },
                         onLoadMore = { moreLoads++ },

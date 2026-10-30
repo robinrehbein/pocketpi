@@ -282,6 +282,19 @@ the denied-device message, prompt suggestions, and the ticket commands and resul
 A built APK does not establish Samsung device, TalkBack, mobile-network or real Firebase
 delivery acceptance; those require the configured host, relay and device.
 
+## Project code search
+
+On an updated host, open Files and choose Search project. Search matches literal text with case
+sensitivity across the permitted project files. Results show the path, line, column and a text
+snippet. Incomplete results are marked when the host reaches a limit or cannot read a candidate.
+Ignored and denied paths remain outside the file browser's access policy.
+
+A result opens the current file at the matching line and enters the editor when the complete file
+can be edited. Otherwise the file stays in the reader. Changing files asks before discarding an
+unsaved edit; cancelling preserves the buffer. Search is also available in the editor header.
+Hosts without `session.files.search.v1` do not show this action. Protocol tests use the shared
+`files-search-v1.json` fixture.
+
 ## Native worker terminal
 
 An updated host can offer an interactive terminal for sessions it owns as native PTY workers.

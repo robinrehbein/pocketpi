@@ -139,7 +139,7 @@ class EditorBuffer {
  * before it drops unsaved changes, as does anything else that would ([FileEditor.leaveRequest]).
  */
 @Composable
-internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Modifier = Modifier) {
+internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Modifier = Modifier, onProjectSearch: (() -> Unit)? = null) {
     val textState = editor.buffer.state(editor.text, editor.cursor)
     val current by rememberUpdatedState(editor)
     val intro by rememberUpdatedState(stringResource(R.string.remote_files_editor_intro, editor.path))
@@ -423,6 +423,7 @@ internal fun CodeEditor(editor: FileEditor, actions: FilesActions, modifier: Mod
             changed = changed,
             notice = notice,
             onFind = ::openFind,
+            onProjectSearch = onProjectSearch,
             onSend = ::sendToAgent,
             onRetry = ::save,
             onReload = ::reload,
@@ -656,6 +657,7 @@ private fun EditorFooter(
     changed: Boolean,
     notice: EditorNotice?,
     onFind: () -> Unit,
+    onProjectSearch: (() -> Unit)?,
     onSend: () -> Unit,
     onRetry: () -> Unit,
     onReload: () -> Unit,
@@ -715,6 +717,9 @@ private fun EditorFooter(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             IconButton(onClick = onFind, modifier = Modifier.testTag("filesEditorFind")) {
                 Icon(Icons.Default.Search, stringResource(R.string.remote_files_editor_find))
+            }
+            if (onProjectSearch != null) IconButton(onClick = onProjectSearch, modifier = Modifier.testTag("filesSearch")) {
+                Icon(Icons.Default.Search, stringResource(R.string.remote_files_search_title))
             }
             Button(onClick = onSend, enabled = changed, modifier = Modifier.weight(1f).testTag("filesEditorSend")) {
                 Text(stringResource(R.string.remote_files_editor_send), textAlign = TextAlign.Center)

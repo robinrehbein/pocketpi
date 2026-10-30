@@ -688,4 +688,10 @@
     <string name="remote_terminal_stopped">Das Terminal ist nicht mehr verfügbar.</string>
     <string name="remote_terminal_discard_title">Nicht gesendete Eingabe verwerfen?</string>
     <string name="remote_terminal_discard_body">Beim Schließen werden der Entwurf und die wartenden Eingaben verworfen.</string>
+    <string name="remote_files_search_title">Projekt durchsuchen</string>
+    <string name="remote_files_search_query">Suchtext</string>
+    <string name="remote_files_search_failed">Suche fehlgeschlagen</string>
+    <string name="remote_files_search_incomplete">Ergebnisse sind möglicherweise unvollständig</string>
+    <string name="remote_files_search_empty">Keine Treffer</string>
+    <string name="remote_files_search_close">Schließen</string>
 </resources>

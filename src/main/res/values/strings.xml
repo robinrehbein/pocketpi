@@ -688,4 +688,10 @@
     <string name="remote_terminal_stopped">Terminal is no longer available.</string>
     <string name="remote_terminal_discard_title">Discard unsent input?</string>
     <string name="remote_terminal_discard_body">Closing the terminal will discard the draft and queued input.</string>
+    <string name="remote_files_search_title">Search project</string>
+    <string name="remote_files_search_query">Search text</string>
+    <string name="remote_files_search_failed">Search failed</string>
+    <string name="remote_files_search_incomplete">Results may be incomplete</string>
+    <string name="remote_files_search_empty">No matches</string>
+    <string name="remote_files_search_close">Close</string>
 </resources>

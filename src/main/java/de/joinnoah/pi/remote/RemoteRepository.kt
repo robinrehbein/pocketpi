@@ -533,6 +533,11 @@ interface RemoteRepository {
     /** Clears the failure or unknown outcome of the last ticket write after the user saw it. */
     fun dismissTicketNotice() {}
 
+    suspend fun filesSearch(sessionId: String, query: String): FileSearchResult = throw RemoteRequestException.unsupported()
+
+    fun searchFiles(query: String) {}
+    fun openSearchHit(hit: FileSearchHit) {}
+
     /** `session.files.list`; only with [FILES_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun filesList(sessionId: String, path: String, after: String?): FileListing =
         throw RemoteRequestException.unsupported()

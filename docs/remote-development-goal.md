@@ -10,6 +10,13 @@ regression passed. The app gate passed 2,876 unit tests, debug assembly and lint
 Remote suite passed 2,825 tests with 23 skipped. These results precede later branch updates
 and are increment evidence, not qualification of the entire goal.
 
+A later local increment adds project-wide, case-sensitive literal code search through a separately
+negotiated host capability. The host applies the file browser's existing access checks and bounds
+its scan and response. Android shows matching paths and locations, opens current files through
+the existing reader/editor, and protects unsaved edits. Host commit `7dd096981` passed the full
+Remote suite with 2,836 tests and 23 skipped, extension checks and root formatting. The Android
+increment passed `scripts/quick-check.sh`; physical Samsung and Linux qualification remains open.
+
 Shared browser control, protected previews, emulator streaming and qualification on Linux,
 devcontainers and both physical Samsung devices remain open. No release, deployment or live
 host activation has been performed.
