@@ -3813,10 +3813,25 @@ class RemoteRepositoryTest {
         repository.draft("keep this")
         repository.prompt()
         runCurrent()
-        advanceTimeBy(30000)
+        advanceTimeBy(29_999)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertTrue(repository.state.value.sending)
+        assertTrue(repository.state.value.uncertain)
+        assertNull(repository.state.value.error)
+        assertEquals(PendingSendState.SENDING, repository.state.value.pendingSend?.state)
+
+        advanceTimeBy(1)
         runCurrent()
         assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertTrue(repository.state.value.connected)
         assertFalse(repository.state.value.sending)
+        assertTrue(repository.state.value.uncertain)
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("keep this", repository.state.value.draft)
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
         assertTrue(repository.state.value.uncertain)
         assertEquals("keep this", repository.state.value.draft)
         assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
@@ -10080,9 +10095,17 @@ class RemoteRepositoryTest {
         assertEquals("", repository.state.value.draft)
         assertEquals(PendingSendState.SENDING, repository.state.value.pendingSend?.state)
         assertEquals("Hello pi", repository.state.value.pendingSend?.text)
+        assertTrue(repository.state.value.connected)
+        assertTrue(repository.state.value.sending)
+        assertTrue(repository.state.value.uncertain)
+        assertNull(repository.state.value.error)
         val request = transport.sent.last { it.text("type") == "session.prompt" }
-        transport.result(request, Wire.objectOf("kind" to "accepted"))
+        transport.result(request, Wire.objectOf("kind" to "accepted", "sessionId" to "session"))
         runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertFalse(repository.state.value.sending)
+        assertFalse(repository.state.value.uncertain)
+        assertNull(repository.state.value.error)
         assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
         transport.deliver(userMessage(1, "user-1", "Hello pi"))
         runCurrent()
@@ -10100,6 +10123,30 @@ class RemoteRepositoryTest {
         transport.result(transport.sent.last { it.text("type") == "session.prompt" }, Wire.objectOf("kind" to "accepted"))
         runCurrent()
         assertNull(repository.state.value.pendingSend)
+    }
+
+    @Test
+    fun transportFailureWhileAwaitingPromptAcknowledgementRetainsUncertaintyWithoutReplay() = runTest {
+        val drafts = Drafts()
+        val transport = Transport().also(::configure)
+        val repository = inFlightPrompt(transport, drafts, "Keep after disconnect")
+        val request = transport.sent.single { it.text("type") == "session.prompt" }
+
+        transport.listener.failed(false, R.string.remote_connection_error)
+        runCurrent()
+
+        assertFalse(repository.state.value.connected)
+        assertFalse(repository.state.value.sending)
+        assertTrue(repository.state.value.uncertain)
+        assertEquals("Keep after disconnect", repository.state.value.draft)
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        repository.flush()
+        val stored = drafts.values.getValue(DraftKey("host", "session"))
+        assertEquals(request.text("requestId"), stored.mutationId)
+        assertEquals("Keep after disconnect", stored.submittedText)
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
     }
 
     @Test
@@ -10153,12 +10200,16 @@ class RemoteRepositoryTest {
         val mutationId = drafts.values.getValue(key).mutationId
         assertNotNull(mutationId)
         // A new process reads only what the first one stored.
-        val reopened = repository(Transport().also(::configure), Drafts().apply { values = drafts.values })
+        val reopenedTransport = Transport().also(::configure)
+        val reopened = repository(reopenedTransport, Drafts().apply { values = drafts.values })
         reopened.activate(RemoteSelection("host", "project", "session"))
         runCurrent()
         assertEquals("Lost in flight", reopened.state.value.draft)
+        assertTrue(reopened.state.value.connected)
+        assertFalse(reopened.state.value.sending)
         assertTrue(reopened.state.value.uncertain)
         assertNull(reopened.state.value.pendingSend)
+        assertTrue(reopenedTransport.sent.none { it.text("type") == "session.prompt" })
     }
 
     @Test
