@@ -141,7 +141,8 @@
     <string name="remote_stop">Stop pi</string>
     <string name="remote_abort_run">Stop pi</string>
     <string name="remote_abort_run_confirmation">Stop pi now? Pending answers will not be sent.</string>
-    <string name="remote_draft_uncertain">Connection lost. Check the session before sending your draft again.</string>
+    <string name="remote_draft_confirmation_pending">Waiting for delivery confirmation…</string>
+    <string name="remote_draft_uncertain">Delivery not confirmed. Check the session before sending your draft again.</string>
     <string name="remote_steer_accepted">Sending now, into the running step: %1$s</string>
     <string name="remote_tui_info_title">Mac terminal session</string>
     <string name="remote_tui_info_body">While this session is busy, Send now and Send when done work only on the Mac itself. Send a message when it is ready, or stop pi to interrupt it.</string>
