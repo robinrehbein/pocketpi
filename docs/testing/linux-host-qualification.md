@@ -1,5 +1,45 @@
 # Linux host qualification
 
+## Persistent core image, 2026-10-31
+
+A repository-maintained multi-stage core image now builds from the locked standalone archive and
+pinned Node base. Its final runtime is nonroot, starts the installed Host CLI in the foreground,
+and keeps private Pi/Remote state in an explicit owner volume. The entrypoint forwards original
+arguments with exec and removes provisioning variables for normal Host and Pi invocations.
+It never configures a relay, grants project trust or imports host credentials automatically.
+
+Actual local qualification uses Docker Engine 29.7.2 (6a43e3d), Linux arm64 / kernel
+7.0.12-linuxkit, Node 24.22.0 and final image ID
+sha256:dbcab2780f5e8174626669b309ee3deb5b876e8b0fa00b8ecd9e00afbd2bffaa.
+The installed Pi/CLI/native PTY verifier passes as node with read-only root, no network and no
+capabilities. A separate image-level lifecycle flow passes explicit setup, private 0700 state /
+0600 configuration and secrets, refused duplicate setup, refused simultaneous host ownership,
+identity persistence across container replacement, actual Host-process environment scrubbing,
+SIGTERM and SIGINT shutdown, restart and owned-resource cleanup.
+
+The first final-runtime check failed because copied metadata was readable only by root; the
+runtime COPY modes were corrected and the actual nonroot check then passed. Independent review
+also found that an initial test helper could delete an existing resource after a name collision.
+The corrected helper tracks successful Docker create IDs, verifies an instance label and immutable
+image identity before start/removal, and checks volume ownership before and after creation and
+before removal. Four failure regressions cover foreign resources, collisions and changed labels.
+The final bounded review found the reported defect resolved.
+
+Sixteen helper/resource tests and Biome pass. The local lifecycle fixture uses a synthetic token,
+network none and no published ports; it removes only its owned test containers/volume. This is
+not a connected relay, worker turn, Chromium renderer, Dev Containers or independent-host proof.
+The image intentionally contains no configured Chromium renderer or Android SDK. Same-UID project
+code is trusted; separate state and workspace paths are not a secret-isolation boundary.
+
+Build, explicit owner setup, status and stop commands are maintained in the Host repository under
+packages/pi-atlas/deploy/linux-host/README.md. Evidence:
+ /private/tmp/pocketpi-linux-core-build2.log,
+ /private/tmp/pocketpi-linux-core-readonly2.log,
+ /private/tmp/pocketpi-linux-core-lifecycle-final.log,
+ /private/tmp/pocketpi-linux-core-verified-tests.log,
+ /private/tmp/pocketpi-linux-core-verified-biome.log.
+
+
 ## Current standalone package installation, 2026-10-31
 
 The current Atlas archive was built from Host commit `1db5fcb4`, then installed into a separate

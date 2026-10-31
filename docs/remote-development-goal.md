@@ -1,5 +1,14 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Persistent Linux core checkpoint on 2026-10-31
+
+The standalone package now builds into a nonroot core host image with explicit persistent private
+state. Actual local read-only/runtime tests pass setup, duplicate identity protection, restart,
+provisioning-variable removal, SIGTERM/SIGINT and owned cleanup. This is an offline core-service
+qualification; connected Android/relay use, Chromium, the Dev Containers adapter and an independent
+remote Linux host remain open. See [Linux qualification](testing/linux-host-qualification.md).
+
+
 ## Standalone Linux package checkpoint on 2026-10-31
 
 The current Atlas distribution now passes a separate Linux installation and offline/read-only

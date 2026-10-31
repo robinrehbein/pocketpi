@@ -25,7 +25,7 @@
 
 - [x] Establish a real clean-consumer install from the current archive, exact SDK cohort and locked dependencies; prove Linux PTY, public Pi CLI and Host CLI resolve from that consumer.
 - [x] Add safe build-context preparation and regression checks for artifact integrity, existing-output preservation and no checkout fallback.
-- [ ] Build a versioned OCI runtime with private persistent state, explicit project mount, init/signal handling and documented owner setup/start/status/stop.
+- [x] Build a versioned OCI core runtime with private persistent state, explicit project mount, init/signal handling and documented owner setup/start/status/stop.
 - [ ] Qualify Chromium with its own sandbox enabled and a reviewed, provenance-bound outer profile for each advertised architecture; reject unsupported configurations.
 - [ ] Add a Dev Containers adapter and qualify real native worker, encrypted Android transport, browser/preview ownership, reconnect, persistence and controlled failure against the packaged environment.
 - [ ] Independent bounded review, required checks and local commits; record exact remaining independent-host/architecture/device gates without shrinking the goal.
