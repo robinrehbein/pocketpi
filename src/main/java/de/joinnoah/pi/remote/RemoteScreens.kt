@@ -1514,6 +1514,9 @@ internal fun RemoteScreen(
                 if (action == ChatAction.CLOSE) closing = closableSession
                 else runChatAction(action)
             }
+            // Not ::runAction: references to one local function compare equal whatever they captured,
+            // so the pill's remembered row callbacks and rememberUpdatedState would keep the first one.
+            val currentRunAction by rememberUpdatedState { action: ChatAction -> runAction(action) }
             val actionsControl: @Composable (ChatActionLayout, Boolean) -> Unit = { actionLayout, standaloneHistory ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (standaloneHistory) FloatingSurface(shape = CircleShape, color = headerColor) {
@@ -1527,7 +1530,7 @@ internal fun RemoteScreen(
                     if (chatModel?.canAttachTerminal() == true) TextButton(onClick = { openInspector(InspectorTab.TERMINAL) }) {
                         Text(stringResource(R.string.remote_terminal_title))
                     }
-                    ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, onAction = ::runAction)
+                    ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, onAction = { currentRunAction(it) })
                 }
             }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
