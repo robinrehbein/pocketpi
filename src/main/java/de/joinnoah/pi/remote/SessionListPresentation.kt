@@ -320,7 +320,7 @@ internal fun canCloseSession(
     loading: Boolean,
     capabilities: Set<String>,
 ): Boolean =
-    item.daemonOwned &&
+    hostOwned(item, capabilities) &&
         item.availability != SessionAvailability.OFFLINE &&
         connected &&
         !loading &&

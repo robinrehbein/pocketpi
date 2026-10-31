@@ -23,6 +23,9 @@ sealed interface ReloadFailure {
     /** No answer arrived in time; pi may or may not have reloaded. */
     data object Unknown : ReloadFailure
 
+    /** This session's pi must reload its Remote extension before the phone can reload it. */
+    data object ReloadPi : ReloadFailure
+
     /** The session or the connection was gone. */
     data object ConnectionFailure : ReloadFailure
 }
@@ -73,6 +76,7 @@ internal fun reloadFailureText(failure: ReloadFailure): Int =
     when (failure) {
         ReloadFailure.Busy -> R.string.remote_reload_busy
         ReloadFailure.Unsupported -> R.string.remote_reload_unsupported
+        ReloadFailure.ReloadPi -> R.string.remote_session_control_reload_pi
         is ReloadFailure.Failed ->
             if (failure.message == null) R.string.remote_reload_failed else R.string.remote_reload_failed_detail
         ReloadFailure.Unknown -> R.string.remote_reload_unknown
