@@ -1233,7 +1233,7 @@ internal fun RemoteScreen(
                 else state.selection.sessionId?.let(::startReload)
             LocalCommand.ARTIFACTS ->
                 if (artifactsAvailable) openGallery()
-                else showFeedback(R.string.remote_artifacts_host_outdated)
+                else showFeedback(artifactsUnavailableNotice(state))
             LocalCommand.NAME -> {
                 val session = state.session ?: return
                 if (argument.isEmpty()) startRename(session.text("id"), session.text("title"))
@@ -3627,7 +3627,7 @@ internal fun RemoteScreen(
                                         if (composer.text.trimStart().startsWith("/")) composer.replace("")
                                         if (command == LocalCommand.TREE) treeSheetRequested = true
                                         else if (artifactsAvailable) openGallery()
-                                        else showFeedback(R.string.remote_artifacts_host_outdated)
+                                        else showFeedback(artifactsUnavailableNotice(state))
                                     }
                                     // A terminal session only explains itself; nothing to send.
                                     else if (command == LocalCommand.RELOAD &&

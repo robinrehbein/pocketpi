@@ -369,6 +369,17 @@ class SessionControlsTest {
     }
 
     @Test
+    fun artifactsNoticeNamesTheOutdatedHostOnlyForOne() {
+        val base = chatState.copy(selection = RemoteSelection(sessionId = "s1"), capabilitiesKnown = true)
+        assertEquals(R.string.remote_artifacts_host_outdated, artifactsUnavailableNotice(base))
+        val plain = R.string.remote_artifacts_not_now
+        assertEquals(plain, artifactsUnavailableNotice(base.copy(loading = true)))
+        assertEquals(plain, artifactsUnavailableNotice(base.copy(connected = false)))
+        assertEquals(plain, artifactsUnavailableNotice(base.copy(selection = RemoteSelection())))
+        assertEquals(plain, artifactsUnavailableNotice(base.copy(capabilitiesKnown = false)))
+    }
+
+    @Test
     fun artifactsExplainAHostWithoutTheCapability() {
         val base = chatState.copy(selection = RemoteSelection(sessionId = "s1"), capabilitiesKnown = true)
         assertTrue(artifactsNeedNewerHost(base))
