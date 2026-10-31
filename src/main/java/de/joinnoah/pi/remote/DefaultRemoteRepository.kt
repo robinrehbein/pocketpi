@@ -257,6 +257,7 @@ class DefaultRemoteRepository(
             PROJECT_OPEN_CAPABILITY,
             SESSION_FORK_CAPABILITY,
             GIT_CAPABILITY,
+            GIT_WRITE_CAPABILITY,
             FILES_CAPABILITY,
             FILES_SEARCH_CAPABILITY,
             // Only on capability routes v2 and later, and only when the host enables writes.
@@ -7178,6 +7179,36 @@ class DefaultRemoteRepository(
     }
 
     // ---- Git changes (session.git.v1) ----------------------------------------------------
+
+    override suspend fun gitCommit(sessionId: String, snapshotId: String, message: String, paths: List<String>, requestId: String, onDispatch: () -> Unit): GitWriteResult.Commit {
+        val selectedPaths = paths.toList()
+        require(selectedPaths.isNotEmpty())
+        val encoded = encodeGitWriteCommand(GitWriteCommand.Commit(requestId, sessionId, snapshotId, message, selectedPaths))
+        val current = state.value
+        if (!current.connected) throw RemoteRequestException("offline")
+        if (GIT_WRITE_CAPABILITY !in current.capabilities || GIT_WRITE_CAPABILITY in current.unavailableCapabilities)
+            throw RemoteRequestException.unsupported()
+        require(current.selection.sessionId == sessionId && current.selection.routeId == activeHost?.routeId)
+        require(requestId !in completions) { "Request is already in flight" }
+        var dispatched = false
+        try {
+            val result = request("session.git.commit", selectionEpoch,
+                "sessionId" to sessionId, "snapshotId" to snapshotId, "message" to message,
+                "paths" to encoded.getValue("paths"), requestId = requestId,
+                onSent = { dispatched = true; onDispatch() })
+            return parseGitWriteResult(result, sessionId) as? GitWriteResult.Commit
+                ?: GitWriteResult.Commit.Unknown
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: RemoteRequestException) {
+            if (dispatched && (!error.answered || error.reason == "outcome_unknown" || error.code == "outcome_unknown"))
+                return GitWriteResult.Commit.Unknown
+            throw error
+        } catch (error: Exception) {
+            if (dispatched) return GitWriteResult.Commit.Unknown
+            throw error
+        }
+    }
 
     private fun requireGit(sessionId: String) {
         val current = state.value

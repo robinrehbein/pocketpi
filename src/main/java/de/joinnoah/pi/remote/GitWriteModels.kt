@@ -2,23 +2,25 @@ package de.joinnoah.pi.remote
 
 import kotlinx.serialization.json.*
 
-internal enum class GitBranchReason { GIT_UNAVAILABLE, NOT_A_REPOSITORY, SESSION_UNSUPPORTED, DETACHED_HEAD, UNBORN_BRANCH, OPERATION_IN_PROGRESS, PROTECTED_BRANCH, NO_ORIGIN, UNSUPPORTED_REMOTE, LFS_UNSUPPORTED }
-internal enum class GitCommitReason { GIT_UNAVAILABLE, NOT_A_REPOSITORY, SESSION_UNSUPPORTED, DETACHED_HEAD, UNBORN_BRANCH, OPERATION_IN_PROGRESS, PROTECTED_BRANCH, LFS_UNSUPPORTED, NOTHING_TO_COMMIT, IDENTITY_MISSING, SIGNING_FAILED, LOCAL_TRANSPORT_CONFIG }
-internal enum class GitPushReason { GIT_UNAVAILABLE, NOT_A_REPOSITORY, SESSION_UNSUPPORTED, DETACHED_HEAD, UNBORN_BRANCH, OPERATION_IN_PROGRESS, PROTECTED_BRANCH, NO_ORIGIN, UNSUPPORTED_REMOTE, LFS_UNSUPPORTED, LOCAL_TRANSPORT_CONFIG, UP_TO_DATE, AUTH_FAILED, HOST_KEY, NETWORK, REJECTED_NON_FAST_FORWARD, REJECTED_REMOTE }
-internal enum class GitPullRequestReason { GIT_UNAVAILABLE, NOT_A_REPOSITORY, SESSION_UNSUPPORTED, DETACHED_HEAD, UNBORN_BRANCH, OPERATION_IN_PROGRESS, PROTECTED_BRANCH, NO_ORIGIN, UNSUPPORTED_REMOTE, NOT_PUSHED, GH_UNAVAILABLE, GH_AUTH, NOT_GITHUB, REJECTED }
-internal enum class GitWriteHook { PRE_COMMIT, COMMIT_MSG, PRE_PUSH }
-internal enum class GitRemoteTip { ABSENT, EQUAL, AHEAD, BEHIND, DIVERGED }
-internal enum class GitSkippedReason { OMITTED, DENIED, SUBMODULE }
-internal data class GitWriteUpstream(val remote: String, val branch: String)
-internal data class GitWriteTarget(val remote: String, val branch: String, val host: String, val repo: String)
-internal data class GitSkippedPath(val path: String, val reason: GitSkippedReason)
+enum class GitBranchReason { GIT_UNAVAILABLE, NOT_A_REPOSITORY, SESSION_UNSUPPORTED, DETACHED_HEAD, UNBORN_BRANCH, OPERATION_IN_PROGRESS, PROTECTED_BRANCH, NO_ORIGIN, UNSUPPORTED_REMOTE, LFS_UNSUPPORTED }
+enum class GitCommitReason { GIT_UNAVAILABLE, NOT_A_REPOSITORY, SESSION_UNSUPPORTED, DETACHED_HEAD, UNBORN_BRANCH, OPERATION_IN_PROGRESS, PROTECTED_BRANCH, LFS_UNSUPPORTED, NOTHING_TO_COMMIT, IDENTITY_MISSING, SIGNING_FAILED, LOCAL_TRANSPORT_CONFIG }
+enum class GitPushReason { GIT_UNAVAILABLE, NOT_A_REPOSITORY, SESSION_UNSUPPORTED, DETACHED_HEAD, UNBORN_BRANCH, OPERATION_IN_PROGRESS, PROTECTED_BRANCH, NO_ORIGIN, UNSUPPORTED_REMOTE, LFS_UNSUPPORTED, LOCAL_TRANSPORT_CONFIG, UP_TO_DATE, AUTH_FAILED, HOST_KEY, NETWORK, REJECTED_NON_FAST_FORWARD, REJECTED_REMOTE }
+enum class GitPullRequestReason { GIT_UNAVAILABLE, NOT_A_REPOSITORY, SESSION_UNSUPPORTED, DETACHED_HEAD, UNBORN_BRANCH, OPERATION_IN_PROGRESS, PROTECTED_BRANCH, NO_ORIGIN, UNSUPPORTED_REMOTE, NOT_PUSHED, GH_UNAVAILABLE, GH_AUTH, NOT_GITHUB, REJECTED }
+enum class GitWriteHook { PRE_COMMIT, COMMIT_MSG, PRE_PUSH }
+enum class GitRemoteTip { ABSENT, EQUAL, AHEAD, BEHIND, DIVERGED }
+enum class GitSkippedReason { OMITTED, DENIED, SUBMODULE }
+data class GitWriteUpstream(val remote: String, val branch: String)
+data class GitWriteTarget(val remote: String, val branch: String, val host: String, val repo: String)
+data class GitSkippedPath(val path: String, val reason: GitSkippedReason)
 
-internal sealed interface GitWriteResult {
+sealed interface GitWriteResult {
     sealed interface Branch : GitWriteResult {
         data class Available(val writeId: String, val branch: String, val upstream: GitWriteUpstream?, val remoteTip: GitRemoteTip, val ahead: Long, val pushTarget: GitWriteTarget, val pullRequestBases: List<String>, val suggestedTitle: String?, val hooksSkipped: List<GitWriteHook>) : Branch
         data class Unavailable(val reason: GitBranchReason) : Branch
     }
     sealed interface Commit : GitWriteResult {
+        /** Dispatch may have reached the host; inspect state before trying again. */
+        data object Unknown : Commit
         data class Committed(val branch: String, val commit: String, val files: Int, val skipped: List<GitSkippedPath>, val indexUpdated: Boolean) : Commit
         data class Refused(val reason: GitCommitReason) : Commit
     }

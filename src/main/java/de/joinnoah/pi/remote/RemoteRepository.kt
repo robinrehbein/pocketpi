@@ -8,6 +8,7 @@ internal const val STEER_CAPABILITY = "session.steer.v1"
 internal const val PROJECT_UNSHARE_CAPABILITY = "project.unshare.v1"
 internal const val TOOL_OUTPUT_CAPABILITY = "session.tool_output.v1"
 internal const val SESSION_FORK_CAPABILITY = "session.fork.v1"
+internal const val GIT_WRITE_CAPABILITY = "session.git.write.v1"
 
 /** How `session.fork` continues: resend the message, or put it back into the composer. */
 enum class ForkMode(val wire: String) {
@@ -487,6 +488,15 @@ interface RemoteRepository {
     fun closeBash() {}
 
     fun answer(questionId: String, answer: JsonObject)
+
+    /**
+     * Commits explicitly selected paths from a confirmed HEAD snapshot. The caller owns the
+     * request ID and must retain the confirmed inputs for any intentional same-ID recovery.
+     * Unknown means the request may have been applied; it must not be automatically retried.
+     * If the coroutine is cancelled after [onDispatch], the outcome is likewise unknown.
+     */
+    suspend fun gitCommit(sessionId: String, snapshotId: String, message: String, paths: List<String>, requestId: String, onDispatch: () -> Unit = {}): GitWriteResult.Commit =
+        throw UnsupportedOperationException("Git writes are unavailable")
 
     /** `session.git.status`; only with [GIT_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun gitStatus(sessionId: String, base: GitBase): GitStatus =

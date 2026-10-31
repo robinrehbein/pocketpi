@@ -1,5 +1,6 @@
 package de.joinnoah.pi.remote
 
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.*
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
@@ -197,6 +198,48 @@ class GitChangesTest {
     }
 
     // ---- Repository ---------------------------------------------------------------------
+
+    @Test
+    fun selectiveCommitRequiresWriteCapabilityAndKeepsTheConfirmedRequest() = runTest {
+        val transport = Transport()
+        transport.configure(gitCapabilities) { error("commit must not be sent") }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        assertTrue(runCatching { repository.gitCommit(sessionId, snapshotId, "subject", listOf("a.kt"), "commit-id") }.isFailure)
+        assertTrue(transport.git().isEmpty())
+        transport.configure(gitCapabilities + GIT_WRITE_CAPABILITY) { request ->
+            Wire.objectOf("kind" to "git.commit", "sessionId" to request.text("sessionId"), "committed" to true,
+                "branch" to "feature", "commit" to "a".repeat(40), "files" to 1,
+                "skipped" to JsonArray(emptyList()), "indexUpdated" to false)
+        }
+        val readyRepository = repository(transport)
+        readyRepository.activate(RemoteSelection("host", "project", sessionId))
+        assertTrue(GIT_WRITE_CAPABILITY in readyRepository.state.value.capabilities)
+        assertTrue(runCatching { readyRepository.gitCommit(sessionId, snapshotId, "subject", emptyList(), "commit-id") }.isFailure)
+        assertTrue(transport.git().isEmpty())
+        val result = readyRepository.gitCommit(sessionId, snapshotId, "subject", listOf("a.kt"), "commit-id")
+        assertFalse((result as GitWriteResult.Commit.Committed).indexUpdated)
+        val sent = transport.git().single()
+        assertEquals("commit-id", sent.text("requestId"))
+        assertEquals(snapshotId, sent.text("snapshotId"))
+        assertEquals(listOf("a.kt"), sent.getValue("paths").jsonArray.map { it.jsonPrimitive.content })
+    }
+
+    @Test
+    fun unansweredCommitIsUnknownAndNeverAutomaticallyResent() = runTest {
+        val transport = Transport()
+        transport.configure(gitCapabilities + GIT_WRITE_CAPABILITY) { null }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        var dispatched = false
+        val result = async { repository.gitCommit(sessionId, snapshotId, "subject", listOf("a.kt"), "unknown-id") { dispatched = true } }
+        runCurrent()
+        assertTrue(dispatched)
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS + 1)
+        runCurrent()
+        assertEquals(GitWriteResult.Commit.Unknown, result.await())
+        assertEquals(listOf("unknown-id"), transport.git().map { it.text("requestId") })
+    }
 
     @Test
     fun sendsNoGitCommandWithoutTheCapability() = runTest {
