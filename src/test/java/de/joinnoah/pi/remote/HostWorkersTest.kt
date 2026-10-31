@@ -79,6 +79,7 @@ class HostWorkersTest {
         assertTrue(RemoteRequestException(error.text("code"), hostMessage = error.text("message")).isExtensionControlRefusal)
         assertFalse(RemoteRequestException("busy", hostMessage = error.text("message")).isExtensionControlRefusal)
         assertFalse(RemoteRequestException(error.text("code"), hostMessage = "Reload the pi remote extension").isExtensionControlRefusal)
+        assertFalse(RemoteRequestException(error.text("code"), hostMessage = "Reload the pi remote extension to use attachments").isExtensionControlRefusal)
         assertFalse(RemoteRequestException(error.text("code")).isExtensionControlRefusal)
     }
 
@@ -100,7 +101,10 @@ class HostWorkersTest {
         assertFalse(extensionControls(child, ExtensionControl.FOLLOW_UP))
         assertFalse(canFollowUp(child))
         assertFalse(canSteer(child))
-        assertEquals(ReloadAvailability.NONE, reloadAvailability(child))
+        val connected = child.copy(connected = true, status = "idle", capabilities = capable + RELOAD_CAPABILITY)
+        assertEquals(ReloadAvailability.NONE, reloadAvailability(connected))
+        val sibling = tuiState(capabilities = capable + RELOAD_CAPABILITY).copy(connected = true, status = "idle")
+        assertEquals(ReloadAvailability.RUNS, reloadAvailability(sibling))
     }
 
     @Test

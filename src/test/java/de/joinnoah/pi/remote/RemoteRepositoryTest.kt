@@ -11514,6 +11514,12 @@ class RemoteRepositoryTest {
         transport.failure = { null }
         assertEquals("other-session", repository.state.value.selection.sessionId)
         assertTrue(canFollowUp(repository.state.value))
+        // Back on the refused session nothing is left to reconcile and the draft is still there.
+        repository.activate(RemoteSelection("host", "project", "terminal-session"))
+        runCurrent()
+        assertEquals("terminal-session", repository.state.value.selection.sessionId)
+        assertFalse(repository.state.value.uncertain)
+        assertEquals("After this", repository.state.value.draft)
     }
 
     @Test

@@ -274,7 +274,8 @@ internal fun reloadAvailability(state: RemoteState): ReloadAvailability =
             state.status == "offline" -> ReloadAvailability.NONE
         state.session?.optionalText("origin") == "rpc" || extensionControls(state, ExtensionControl.RELOAD) ->
             ReloadAvailability.RUNS
-        state.session?.optionalText("origin") == "tui" -> ReloadAvailability.TERMINAL_ONLY
+        // A subagent child never reloads from the phone, so the hint to update pi on the Mac would change nothing.
+        state.session?.optionalText("origin") == "tui" && !isChildSession(state) -> ReloadAvailability.TERMINAL_ONLY
         else -> ReloadAvailability.NONE
     }
 

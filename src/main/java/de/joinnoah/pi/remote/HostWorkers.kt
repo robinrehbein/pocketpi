@@ -17,8 +17,8 @@ internal const val HOST_WORKER_REQUEST_PREFIX = "host_worker.v1:"
  */
 internal const val HOST_WORKER_V2_CAPABILITY = "session.host_worker.v2"
 
-/** How the host's `unsupported` message starts when this session's pi predates a control. */
-internal const val EXTENSION_CONTROL_REFUSAL_PREFIX = "Reload the pi remote extension to use"
+/** The host's `unsupported` message when this session's pi predates a control (the protocol's fixed sentence). */
+internal const val EXTENSION_CONTROL_REFUSAL_MESSAGE = "Reload the pi remote extension to use this control"
 
 /** A control that needs the session's pi to know it; a refusal hides it for that session only. */
 enum class ExtensionControl {
@@ -71,7 +71,7 @@ private fun hostWorkerV2(capabilities: Set<String>, unavailable: Set<String>): B
 
 /** The host refused because this session's pi has to reload its Remote extension first. */
 internal val Throwable.isExtensionControlRefusal: Boolean
-    get() = isUnsupported && (this as? RemoteRequestException)?.hostMessage?.startsWith(EXTENSION_CONTROL_REFUSAL_PREFIX) == true
+    get() = isUnsupported && (this as? RemoteRequestException)?.hostMessage == EXTENSION_CONTROL_REFUSAL_MESSAGE
 
 /** The chat explains why a terminal session takes no input while it runs, unless it does. */
 internal fun showsTuiInfo(state: RemoteState): Boolean =
