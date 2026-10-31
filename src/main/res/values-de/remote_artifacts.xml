@@ -3,6 +3,7 @@
     <string name="remote_local_command_artifacts">Artefakte dieser Sitzung ansehen</string>
     <string name="remote_local_command_artifacts_host_outdated">Braucht ein aktualisiertes, neu gestartetes pi Remote auf deinem Mac</string>
     <string name="remote_artifacts_host_outdated">Aktualisiere pi Remote auf deinem Mac und starte es neu, um Artefakte hier zu sehen.</string>
+    <string name="remote_artifacts_not_now">Artefakte sind gerade nicht verfügbar. Versuche es gleich noch einmal.</string>
     <string name="remote_artifacts_title">Artefakte</string>
     <string name="remote_artifacts_loading">Artefakte werden geladen…</string>
     <string name="remote_artifacts_empty">Noch keine Artefakte. HTML-Seiten, SVG-Bilder und Mermaid-Diagramme, die pi in dieser Sitzung als Artefakte speichert, erscheinen hier.</string>
