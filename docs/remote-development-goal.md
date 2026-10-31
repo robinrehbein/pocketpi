@@ -1,5 +1,16 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Transactional local controls checkpoint on 2026-10-31
+
+All eight local control groups now persist independently from concurrent unrelated saves. Failed
+browser/terminal/preview grants or write-switch/root changes cannot leak into a later device save;
+successful changes survive stale snapshots. The effective browse root changes only after successful
+persistence. Actual encrypted browser-grant and folder-listing regressions reproduce the original
+defects and pass after correction. The host/client/protocol suite passes 2,878 tests with 17 skipped;
+package checks and independent review pass. See the
+[implementation/qualification plan](superpowers/plans/2026-10-31-control-transactions.md).
+
+
 ## User-facing protected preview checkpoint on 2026-10-31
 
 The host policy/runtime is now connected to session authorization, owner CLI commands and a
@@ -12,7 +23,7 @@ actionable finding in the final patch. Exact scope, commands, evidence and remai
 [preview integration qualification](testing/protected-preview-integration.md). Earlier checkpoints
 below describe their historical component state; daemon/app wiring is now implemented. Physical
 Galaxy devices, independent remote Linux/devcontainer, simulator streaming and whole-workflow
-qualification remain open, along with equivalent transactional protection for older control fields.
+qualification remain open. Equivalent transactional protection for older control fields is now implemented as described above.
 
 
 ## Functional host preview runtime checkpoint on 2026-10-31
