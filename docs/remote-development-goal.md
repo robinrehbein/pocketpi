@@ -1,5 +1,16 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Functional host preview runtime checkpoint on 2026-10-31
+
+An endpoint-scoped host renderer now runs ordinary HTTP, POST and WebSocket preview traffic with
+separate cookies/profiles, bounded input and captured frames. Real Mac/Linux tests pass (47/49),
+including a foreign-server denial and controlled WebRTC UDP check with a working positive control.
+A Linux-only runtime difference was reproduced and fixed using both Chromium variant switches.
+The component preserves Chromium sandboxing and does not relax artifact/terminal WebViews.
+Daemon session/grant wiring, owner commands, app pane, encrypted Android acceptance and actual
+framework HMR remain open; preview support is not yet advertised. Exact evidence and limits are
+in [protected preview runtime](testing/protected-preview-runtime.md).
+
 ## Protected preview and bounded Linux sandbox checkpoint on 2026-10-31
 
 A separately authorized exact-port preview policy now passes nine tests, including atomic saved

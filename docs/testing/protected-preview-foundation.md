@@ -40,12 +40,10 @@ Root evidence: `/private/tmp/preview-policy-final-root-tests.log`,
 `/private/tmp/preview-isolation-webview-provider.log`. The preserved probe is independent of
 PocketPi's build and does not add components to its APK.
 
-## Next implementation
+## Current renderer decision
 
-Resolve a renderer approach that can support ordinary dev HTTP/fetch/WS/HMR while enforcing the
-endpoint boundary: a proven permissionless Android renderer with brokered streams, or a separate
-host renderer with constrained egress. Then implement the authenticated bounded tunnel and local
-owner grant commands, wire the daemon lifecycle and add app UI. Verify both artifact/preview startup
-orders, exact endpoint denial, cookie/storage separation, active-stream revoke and process loss.
-Do not advertise preview support until the complete path works. The full remote-development goal
-remains active, including remote Linux/devcontainer, emulator streams and physical device gates.
+A separate host Chromium renderer now provides the preview runtime component; dev HTTP/WS remains
+on the host and frames/input can use the encrypted channel. The actual Mac/Linux component evidence,
+network boundaries and remaining daemon/app work are recorded in
+[protected preview runtime](protected-preview-runtime.md). This supersedes the earlier proposed need
+for a separate HTTP/WS tunnel to an Android WebView. The user-facing preview is still not advertised.

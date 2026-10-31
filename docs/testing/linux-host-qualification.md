@@ -107,6 +107,16 @@ Exact scratch provenance, delta verifier and invocation are in
 `/private/tmp/pocketpi-linux-environment/SECCOMP-EXPERIMENT.md`, `verify-moby-profile-delta.py` and
 `verify-linux-moby-experiment.sh`; the independent output is `root-moby-profile-tests.log`.
 
+## Protected preview runtime, 2026-10-31
+
+The endpoint-scoped preview component now passes 49 local Linux tests, including the real Chromium
+preview, 25 browser-runtime tests, 10 proxy tests, 11 lifecycle tests and two real Pi worker tests.
+The final invocation uses a disposable internal Docker network so the unprotected STUN control can
+actually transmit; `--network none` could not supply that positive control. This exposed and fixed
+an effective-runtime difference between Full Chromium and Headless Shell WebRTC switches. The
+assertion of zero preview UDP packets was preserved. See [runtime qualification](protected-preview-runtime.md)
+for the exact failed and passing runs and remaining security/production boundaries.
+
 ## Remaining gates
 
 Local host review and device-only phone/tablet reconnect qualification passed. Package and qualify a reproducible Linux environment
