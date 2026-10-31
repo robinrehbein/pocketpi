@@ -4100,6 +4100,7 @@ class DefaultRemoteRepository(
         ready?.cancel()
         pairing?.cancel()
         if (markPendingFollowUpsUncertain(activeHost?.routeId)) persist()
+        forgetQueuedPrompt()
         activeHost = null
         timedOutRoute = null
         trailingPublish?.cancel()
@@ -4118,6 +4119,7 @@ class DefaultRemoteRepository(
         ) clearNavigationCache()
         if (activeHost?.routeId == routeId) reconnectEnabled = false
         if (activeHost?.routeId == routeId) disconnect()
+        if (queuedPrompt?.key?.routeId == routeId) forgetQueuedPrompt()
         if (timedOutRoute == routeId) timedOutRoute = null
         attachmentBytes.clearRoute(routeId)
         SentImageThumbnails.clearRoute(routeId)
@@ -6176,7 +6178,15 @@ class DefaultRemoteRepository(
                 source.needsSnapshot ||
                 // Events held during the snapshot are still to be fetched by the owed resume, which
                 // reads the chat again and comes back here.
-                source.resumeIsOwed
+                source.resumeIsOwed ||
+                // The view may miss the newest message: a focus that lapsed while the reply was
+                // awaited (a push wake's empty focus) schedules a fresh read, a detached chat
+                // applies nothing, and a reply still awaited may move the chat. That read's own
+                // snapshot comes back here.
+                source.focusLapsed ||
+                source.detached ||
+                source.awaitingReply ||
+                snapshotPending === source
         )
             return
         val newest = source.messages.lastOrNull()?.optionalText("id")?.ifEmpty { null }
@@ -6204,6 +6214,19 @@ class DefaultRemoteRepository(
         if (promptOwners[queued.key] === queued.attempt) promptOwners.remove(queued.key)
         if (journaled && currentDraftKey() == queued.key) update { it.copy(uncertain = true) }
         Diagnostics.record(Diagnostics.Kind.OFFLINE, "prompt.queue_dropped", outcome = reason)
+    }
+
+    /**
+     * The screen the queued prompt waits on goes (a disconnect, or its Mac removed): the wait and
+     * its expiry end, and the journal entry stays, so opening the chat again shows the prompt as not
+     * confirmed, as after a process death.
+     */
+    private fun forgetQueuedPrompt() {
+        val queued = queuedPrompt ?: return
+        queuedPrompt = null
+        queued.expiry.cancel()
+        if (promptOwners[queued.key] === queued.attempt) promptOwners.remove(queued.key)
+        Diagnostics.record(Diagnostics.Kind.OFFLINE, "prompt.queue_dropped", outcome = "disconnected")
     }
 
     override fun cancelQueuedPrompt() {

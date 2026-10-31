@@ -90,6 +90,8 @@ class RemoteMessagingServiceTest {
     ) : PushHost {
         val log = mutableListOf<String>()
         val wakes = mutableListOf<String>()
+        /** The state records and wakes in the order they ran. */
+        val order = mutableListOf<String>()
 
         override fun paired(routeId: String) = routeId in routes
 
@@ -103,10 +105,12 @@ class RemoteMessagingServiceTest {
 
         override fun recordState(payload: PushPayload) {
             log += "state:${payload.eventId}"
+            order += "state"
         }
 
         override fun wake(payload: PushPayload) {
             wakes += "${payload.routeId}:${payload.eventId}"
+            order += "wake"
         }
 
         override fun postAttention(payload: PushPayload) {
@@ -148,6 +152,17 @@ class RemoteMessagingServiceTest {
         val silent = Host(canPost = false)
         receivePush(question, silent)
         assertEquals(listOf("r:e2"), silent.wakes)
+    }
+
+    @Test
+    fun theWakeIsAskedForBeforeTheStateRecordStartsTheQuestionUpgrade() {
+        // Recording the state enqueues the question upgrade, whose worker waits for a wake it can
+        // see; asked for later, the worker would open a second socket of its own.
+        for (payload in listOf(question, complete)) {
+            val host = Host()
+            receivePush(payload, host)
+            assertEquals(listOf("wake", "state"), host.order)
+        }
     }
 
     @Test

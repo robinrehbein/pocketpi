@@ -117,8 +117,10 @@ internal fun receivePush(payload: PushPayload, host: PushHost) {
         host.postAttention(payload)
         return
     }
-    host.recordState(payload)
+    // The wake goes first: recording the state enqueues the question upgrade, whose worker uses the
+    // woken connection only if it sees the wake, and opens a socket of its own otherwise.
     host.wake(payload)
+    host.recordState(payload)
     if (!host.canPost()) return
     // The open chat already shows the question or the result.
     if (host.isShowing(payload.routeId, payload.sessionId)) return

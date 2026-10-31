@@ -11487,6 +11487,46 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun disconnectingOrRemovingTheMacEndsTheQueuedPromptAndKeepsItsJournal() = runTest {
+        for (remove in listOf(false, true)) {
+            val drafts = Drafts()
+            val transport = Transport()
+            val repository = offlineChat(transport, drafts, reconnect = false)
+            val key = DraftKey("host", "session")
+            repository.draft("Left behind")
+            repository.prompt()
+            runCurrent()
+            val id = repository.state.value.pendingSend?.mutationId
+
+            if (remove) repository.remove("host") else repository.disconnect()
+            runCurrent()
+            assertNull(repository.state.value.pendingSend)
+
+            // The expiry is gone with the screen: it does not put the text back into a composer
+            // nobody looks at.
+            advanceTimeBy(QUEUED_PROMPT_MILLIS + 1)
+            runCurrent()
+            assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+            repository.flush()
+            if (remove) {
+                // Nor does it write the removed Mac's journal back.
+                assertNull(drafts.values[key])
+                continue
+            }
+            val stored = drafts.values.getValue(key)
+            assertEquals("", stored.text)
+            assertEquals(id, stored.mutationId)
+            assertEquals("Left behind", stored.submittedText)
+
+            // Opened again, the chat reconciles the journal as after a process death.
+            repository.activate(RemoteSelection("host", "project", "session"))
+            runCurrent()
+            assertNull(repository.state.value.pendingSend)
+            assertTrue(repository.state.value.uncertain)
+        }
+    }
+
+    @Test
     fun queuedPromptOlderThanFifteenMinutesIsNotSentWhenTheReconnectComesLate() = runTest {
         val transport = Transport()
         val repository = offlineChat(transport, Drafts(), reconnect = false)
@@ -13253,6 +13293,93 @@ class RemoteRepositoryTest {
         runCurrent()
         assertTrue(repository.state.value.connected)
         assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    /**
+     * A streamed chat with a prompt queued while its connection was down, the app in the background
+     * and the Mac's first pages held in [held], answered only when the test says so.
+     */
+    private suspend fun TestScope.queuedPromptInTheBackground(
+        held: MutableList<JsonObject>,
+    ): Triple<Transport, JournalHost, DefaultRemoteRepository> {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        dropConnection(transport)
+        repository.draft("Queued while offline")
+        repository.prompt()
+        runCurrent()
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        assertFalse(repository.state.value.connected)
+        val normal = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && "cursor" !in request) {
+                held += request
+                null
+            } else normal(request)
+        }
+        return Triple(transport, host, repository)
+    }
+
+    @Test
+    fun aQueuedPromptWaitsForTheRereadWhenTheForegroundComesBeforeTheWokenChatsReply() = runTest {
+        val held = mutableListOf<JsonObject>()
+        val (transport, host, repository) = queuedPromptInTheBackground(held)
+
+        // The wake connects with an empty focus, and the chat's first page is answered late.
+        repository.pushWake("host")
+        runCurrent()
+        val woken = held.single()
+        // Back in front before that reply lands; the reply that follows was read out of focus.
+        repository.setForeground(true)
+        runCurrent()
+        // Meanwhile pi's terminal wrote to the chat, unseen by the woken connection's empty focus.
+        val reply = host.answer(woken)
+        host.record("message.upsert", "message" to Wire.objectOf("id" to "u1", "role" to "user", "text" to "From the terminal", "state" to "complete"))
+        transport.result(woken, reply)
+        runCurrent()
+
+        // The chat is read again in focus, and the prompt waits for that read.
+        val rereads = held.drop(1)
+        assertTrue(rereads.isNotEmpty())
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+
+        // The fresh read shows the message the late reply missed: the chat moved on.
+        rereads.forEach { transport.result(it, host.answer(it)) }
+        runCurrent()
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+        assertEquals(listOf("m1", "u1"), shownIds(repository))
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Queued while offline", repository.state.value.draft)
+    }
+
+    @Test
+    fun aQueuedPromptGoesOutAfterTheRereadWhenTheForegroundComesBeforeTheWokenChatsReply() = runTest {
+        val held = mutableListOf<JsonObject>()
+        val (transport, host, repository) = queuedPromptInTheBackground(held)
+        repository.pushWake("host")
+        runCurrent()
+        val woken = held.single()
+        repository.setForeground(true)
+        runCurrent()
+        transport.result(woken, host.answer(woken))
+        runCurrent()
+        val rereads = held.drop(1)
+        assertTrue(rereads.isNotEmpty())
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+
+        // The fresh read shows the chat as it was: the prompt goes out once, after it.
+        rereads.forEach { transport.result(it, host.answer(it)) }
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
     }
 
     @Test
