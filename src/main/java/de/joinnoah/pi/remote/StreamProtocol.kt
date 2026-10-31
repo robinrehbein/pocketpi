@@ -46,8 +46,8 @@ private fun isBase64UrlChar(c: Char): Boolean = c in 'A'..'Z' || c in 'a'..'z' |
 
 /** JavaScript's `\s`: the host's grammar for the part of a request ID that is not the base. */
 private fun isScriptWhitespace(c: Char): Boolean =
-    c in '\t'..'\r' || c == ' ' || c == ' ' || c == ' ' || c in ' '..' ' ||
-        c == ' ' || c == ' ' || c == ' ' || c == ' ' || c == '　' || c == '﻿'
+    c in '\t'..'\r' || c == ' ' || c == '\u00A0' || c == '\u1680' || c in '\u2000'..'\u200A' ||
+        c == '\u2028' || c == '\u2029' || c == '\u202F' || c == '\u205F' || c == '\u3000' || c == '\uFEFF'
 
 /**
  * A request ID in the resume form, `resume.v1:<epoch>:<revision>:<rest>`: [epoch] is the journal
