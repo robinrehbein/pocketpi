@@ -337,3 +337,50 @@ fixture typing warnings. Evidence:
 `/private/tmp/pocketpi-connected-supervisor-{reconnect,unit,biome}.log`.
 This exercises the real entrypoint and supervisor in an isolated container, not
 an actual connected Dev Containers CLI `up`; that composition remains open.
+
+## Actual connected Dev Containers CLI up — 2026-10-31
+
+After Git-first refresh, Host merged origin/dev at `e80a795203`; its reload/offline
+and package-path tests pass all 68 cases. The updated archive SHA-256 is
+`12002c70df64fe5a6af62dfa070b5dedc5cefe8be110fa51a5fb7d0531cb5633`.
+The new core image is
+`sha256:43194838911f0eb1e6c80e205001643e4731ab5f49211e4e76901319f9d73be9`.
+A qualification-only derived image,
+`sha256:40d893719c042bf7ef303e129cd4122695e05a732110c3527e414fae4e35d983`,
+adds only fixed CA/trace paths and offline-test environment flags. It contains no
+fixture credentials or private keys. The CA and keys are created in the private
+volume before the supervisor starts its Host child; TLS verification stays enabled.
+
+The real public CLI 0.90.0, invoked through the unchanged guarded runner and generated
+profile, successfully starts that image. The owner fixture runs via Docker exec and
+uses the already running supervisor, with no nested Host/Supervisor spawn. It passes
+unconfigured waiting, explicit setup, TLS relay connection, encrypted pairing,
+native Pi/PTY, public snapshot, deterministic provider turn, shell and reconnect
+with the original worker. The outer owner runner then confirms container stop exit
+zero, restart with identical configuration digest and live host IPC, a second clean
+stop and removal of only its verified container/nonce-labelled volume. After the
+fixture relay closes, restart proves IPC readiness, not a second connected relay.
+
+Review found the external fixture could accept preexisting secrets without config.
+It now requires remote and agent directories to be entirely empty before writes.
+An actual negative container test confirms an existing synthetic Secret file is
+unchanged and no qualification directory is created. The final positive Devcontainer
+flow was repeated with a new instance and volume after this correction.
+
+The external fixture intentionally returns `owner-container-stop-required`; its own
+PASS does not claim the outer container/volume cleanup. The outer runner's final
+proof and `cleaned: true` are in
+`/private/tmp/pocketpi-devcontainer-connected-current.json`; commands are retained in
+`/private/tmp/pocketpi-devcontainer-connected-run.py`. Other evidence:
+`/private/tmp/pocketpi-devcontainer-connected-{up,flow,negative,core-build,qualification-build}.log`,
+`/private/tmp/pocketpi-devcontainer-upstream-tests.log`, and
+`/private/tmp/pocketpi-devcontainer-connected-unit.log` (52 helper tests).
+
+This is local macOS/Docker Desktop Linux arm64 with a qualification-derived image,
+synthetic credentials and an offline provider. It does not qualify an independent
+Linux host, physical Galaxy devices, containerized Chromium/Android SDK, real provider
+access, lost ACK/replay protection or connected-worker recovery after Host restart.
+The ordinary self-contained supervisor/reconnect fixture also passes against the
+updated core image after the external-mode refactor
+(`/private/tmp/pocketpi-devcontainer-connected-core-normal.log`). Final Biome has
+zero errors and eight existing fixture typing warnings.

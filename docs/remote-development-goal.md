@@ -6,10 +6,11 @@ The repository now contains a guarded Dev Containers adapter with explicit owner
 private persistent state, nonroot/read-only operation and verified restart/container replacement.
 The corrected standalone image also passes the regular Host CLI connected flow: private TLS
 relay, authenticated encrypted pairing, native Pi worker/PTY, public snapshot, deterministic
-provider turn, remote shell and clean shutdown. These are separate local Docker Desktop proofs;
-the connected flow has not yet run through the Dev Containers supervisor. Independent remote
-Linux, Chromium packaging, network interruption/recovery and physical Samsung qualification
-remain open. See [Linux qualification](testing/linux-host-qualification.md) for exact boundaries.
+provider turn, remote shell and clean shutdown. A qualification-only image now also passes that connected flow through actual Dev Containers
+CLI up and its supervisor, including a deliberate relay cut, preserved worker and clean
+container restart with unchanged configuration. This remains local Docker Desktop evidence.
+Independent remote Linux, Chromium packaging, lost-ACK/process-recovery and physical Samsung
+qualification remain open. See [Linux qualification](testing/linux-host-qualification.md) for exact boundaries.
 
 
 ## Persistent Linux core checkpoint on 2026-10-31
