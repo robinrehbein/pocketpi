@@ -36,8 +36,42 @@
 
 ## Qualification boundaries
 
-The runtime fixture can prove actual Pi extension/event/IPC/Host/encryption behavior with controlled CI data. It does not prove live GitHub CI, full Android navigation, physical Samsung devices, production relay/network behavior or an independent Linux host. These remain separate gates; the user currently has no physical devices or SSH testhost available.
+The runtime fixture can prove actual Pi extension/event/IPC/Host/encryption behavior with controlled CI data. It does not by itself prove live GitHub CI, Android navigation, physical Samsung devices, production relay/network behavior or an independent Linux host. These remain separate gates for that fixture; the user currently has no physical devices or SSH testhost available.
 
 ## Current evidence
 
-App merge `595daae` passed 3,320 Android and 34 Wear unit tests and Wear debug assembly. Host merge `ce44cca47` retains Git admissions around native/reopen/fork starts and the original source-file guard. The missing bus listener produced the expected regression failure; its focused runtime test then passed. A real external Pi 1.4.0 process passed the isolated encrypted status probe (pending, named failure, passed, cleared; cleanup failures zero). The independent review found a mutable producer-reference cache issue. Its regression failed before the fix and passed after the cache copied validated scalar, checks and failing-name values. A fresh actual-Pi run passed all four transitions after that correction. Host full regression passed 3,799 tests with 38 skips using two test workers; type and format checks passed. The two composite Git scenarios hit their global test limits in the earlier default-concurrency run; product limits stayed unchanged. Host source is saved locally as `ca38943a5`. The separate real-repository-to-whole-screen Android integration test passed, covering chip/Changes presentation, check-state changes, clearing and reconnect restoration with a deterministic transport. A combined Android/real-Pi run remains a separate gate.
+App merge `595daae` passed 3,320 Android and 34 Wear unit tests and Wear debug assembly. Host merge `ce44cca47` retains Git admissions around native/reopen/fork starts and the original source-file guard. The missing bus listener produced the expected regression failure; its focused runtime test then passed. A real external Pi 1.4.0 process passed the isolated encrypted status probe (pending, named failure, passed, cleared; cleanup failures zero). The independent review found a mutable producer-reference cache issue. Its regression failed before the fix and passed after the cache copied validated scalar, checks and failing-name values. A fresh actual-Pi run passed all four transitions after that correction. Host full regression passed 3,799 tests with 38 skips using two test workers; type and format checks passed. The two composite Git scenarios hit their global test limits in the earlier default-concurrency run; product limits stayed unchanged. Host source is saved locally as `ca38943a5`. The separate real-repository-to-whole-screen Android integration test passed, covering chip/Changes presentation, check-state changes, clearing and reconnect restoration with a deterministic transport. The later scoped combined Android/real-Pi and native-worker results are recorded below.
+
+
+## Combined Android and native-worker qualification
+
+The next increment closes two remaining runtime seams without changing the product protocol.
+
+4. Actual Pi and Android (`remote/runtime-test/pr-status-android-e2e`, Android `PrStatusTransportEndToEndTest`).
+   - [x] Start an isolated actual Pi producer, Host, private CA/TLS relay and paired device identity.
+   - [x] Drive pending, named failure, passed and cleared status through real encrypted transport, repository and production navigation/screens.
+   - [x] Disconnect/block the Android socket while the status is cleared; generate pending only while offline, then allow reconnect and require the new state in the UI.
+   - [x] Inspect committed-frame screenshots at phone/tablet display sizes and English/German resources. These are display-profile checks, not physical Samsung qualification.
+5. Actual Host-managed native startup (`remote/runtime-test/pr-status-native-harness`).
+   - [x] Ask the Host to create its native worker with real PTY/Pi, controlled PR producer and temporary settings.
+   - [x] Refuse RPC fallback; verify the same PID, registered peer, session and native runtime across all four Host snapshot states.
+   - [x] Verify worker termination and private-state cleanup; do not infer an agent turn or causal prompt acknowledgement from startup/status alone.
+
+Root owns all emulator, ADB, server and process execution. Fixtures use new private paths and separate ports; the default ADB server and personal Host remain untouched. No GitHub calls, owner credentials, external mutations or neural-model turns are needed. The Android activity supplies explicit foreground/network signals and a private CA; MainActivity lifecycle, production network monitoring and physical devices remain separate gates.
+
+### Results and remaining limits
+
+The combined fixture passed on the English phone profile (8.663 s) and the German and English
+tablet profiles (8.870 s and 8.629 s), and the German phone profile (8.014 s).
+The private CA, explicit foreground/network signals and test activity bound this result: it does
+not exercise MainActivity or the system network monitor. The pending recovery value was produced
+only after the actual device socket was cut. Phone English failed/recovered, tablet German
+failed/recovered, tablet English failed and phone German failed screenshots were inspected and
+legible. Owned fixture and emulator cleanup was verified as described in the qualification record. See [qualification details](../testing/pr-status-parity-qualification.md).
+
+The separate native-worker harness passed twice with the same Pi PID/session/runtime and no RPC
+fallback across four snapshots; PTY exit and temporary-directory cleanup were verified. Its
+injected spawn adds flags and a wrapper. It does not prove a production spawn configuration, a
+process-group audit, native input or a model turn. Android combined with that native worker, live
+GitHub CI, physical Samsung/DeX, independent Linux and production internet remain open. Earlier
+full-suite counts remain historical baselines and were not rerun for these fixtures.

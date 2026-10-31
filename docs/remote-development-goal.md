@@ -491,7 +491,7 @@ Each criterion is checked in the qualifying run, on a real phone, with the Mac u
 | 4a | Answer every forwarded question and approval from the phone, including oversized ones and editors | noah-monorepo, then app | Open (gap 3) |
 | 4b | Answer custom dialogs from the phone through the relayed terminal | noah-monorepo, then app | Open (gaps 4 and 7) |
 | 5 | Commit, push and open a pull request, confirmed on the phone and logged on the Mac | noah-monorepo, then app | Commit, Push and PR implemented locally; full unattended workflow and physical-device qualification remain open |
-| 6 | See the pull request and its CI status per session | noah-monorepo, then app | Display is wired; local actual-Pi bus/Host/encrypted-client proof passed. Live GitHub CI and the combined Android path remain open. |
+| 6 | See the pull request and its CI status per session | noah-monorepo, then app | Display is wired; scoped actual-Pi to Android navigation and separate Host-managed native-worker proofs passed. Live GitHub CI and Android combined with that native worker remain open. |
 
 ## Order
 
@@ -534,6 +534,9 @@ Host ingestion and independent cache copies for registration/reconnect. An isola
 process drove the actual producer/parser and Remote extension; an encrypted simulated device
 observed pending, named failed, passing and cleared status. This uses controlled gh JSON and an
 external RPC Pi whose stdout is not consumed by the Host: it proves the bus/IPC path, not actual
-GitHub CI, host-managed native-worker launch or combined Android navigation. See
-[the scoped qualification](testing/pr-status-parity-qualification.md). Physical devices and an
-independent Linux testhost remain unavailable.
+GitHub CI. Subsequent separate fixtures passed the actual-Pi-to-Android navigation path on phone
+and tablet emulator profiles and Host-managed native startup with a real PTY. All four English/German phone/tablet profile runs passed, and owned fixture cleanup was verified.
+The native harness uses an
+injected spawn wrapper and flags; the two fixtures do not prove Android combined with that native
+worker. See [the scoped qualification](testing/pr-status-parity-qualification.md). Physical
+devices and an independent Linux testhost remain unavailable.

@@ -43,10 +43,52 @@ bus messages. Pi's RPC stdout is drained rather than consumed by the Host, so th
 the repaired bus/IPC path rather than the host-owned RPC status-key path. No neural model, real
 gh authentication, GitHub request or owner configuration was used. Temporary state was deleted.
 
+## Combined Android and native-worker qualification
+
+A subsequent isolated combined run used an external Pi 1.4.0 CLI process with the actual
+PR-status producer/parser and Remote extension, the real Host, a private-CA TLS relay, and
+Android's encrypted `SecureRemoteTransport`, `DefaultRemoteRepository`, production navigation
+and screens. Controlled producer input drove pending, `fixture-build` failure, passing and null
+states. For recovery, the socket was cut and upgrades blocked while the status was null;
+pending was produced only while the device was offline, then restored after reconnect. The
+fixture verified the Pi owner PID and, in each fresh run, one cut and two upgrades.
+
+JUnit passed on the 1080×2340, 420-dpi phone profile in English (8.663 s), and on the
+2560×1600, 320-dpi tablet profile in German (8.870 s) and English (8.629 s); the German phone profile passed in 8.014 s. App locales were set explicitly. Committed-frame
+screenshots of phone English failed/recovered, tablet German failed/recovered and tablet English
+failed, and phone German failed were inspected and legible. These are
+emulator display profiles, not physical devices. The test activity supplies `MaterialTheme` and
+explicit foreground/validated-network signals; it does not exercise `MainActivity` or the system
+network monitor. It does not invoke GitHub, a `gh` binary or a neural-model turn.
+
+The owned fixtures exited after graceful SIGINT, the device fixture CA and JSON were deleted before
+the emulator stopped, and the owned ADB server was stopped. The fixture ports had no listeners and
+no fixture or native process with the private prefix remained in the checked process list. Host-side temporary
+device JSON/CA copies and one invalid navigation artifact were removed; sanitized evidence,
+screenshots, logs and the old owned AVD backing were retained. The default ADB server was untouched.
+The final TypeScript check passed; Biome passed for the two new fixtures with zero errors.
+
+Two setup assumptions were corrected without product changes. An empty unsaved terminal session
+was omitted by the Host, so the fixture seeds user context via the public SessionManager before
+Pi's `--session` launch, checks the same session ID and asserts the Host lists it. A reused,
+verified sessions list deliberately has `sessionsFresh == false` (covered by the existing
+`sessionsFreshOnlyWhenTheListWasActuallyFetchedThisTime` test); the Android test waits for the
+positive list entry and then performs the real session open and snapshot.
+
+A separate Host-managed native-worker harness passed twice with a real PTY and Pi 1.4.0. It
+verified the same PID, session and native runtime with no RPC fallback across all four Host
+snapshots, then verified PTY exit and temporary-directory cleanup. The injected spawn adds flags
+and a wrapper, so this is not an unmodified production spawn configuration. It does not prove
+process-group cleanup, native input or a model decision.
+
 ## Remaining gates
 
-Host implementation is saved locally as `ca38943a5`, on merged base `ce44cca47`; no push or
-release was performed. The real-Pi fixture does not prove host-managed native-worker launch or TUI interaction, actual GitHub CI, combined Android
-navigation, production relay/network behavior, physical Samsung/DeX or an independent Linux host.
-The user currently has no physical devices or SSH testhost available. These limits must not be
-replaced by the local fixture's passing result.
+The product source under test was App `deadfee` and Host `ca38943a5`; these qualification
+fixtures do not change production source. Host qualification fixtures are saved locally as
+`18edf5384`. The earlier 3,320 Android plus 34 Wear and 3,799 Host
+plus 38 skipped results above are historical baselines, not reruns for the new fixtures. The
+combined Android and native-worker proofs are separate: they do not yet prove Android against
+the Host-managed native worker. Live GitHub CI, that combined path, unmodified native spawn,
+native input and a model turn, physical Samsung/DeX hardware, an independent Linux host,
+`MainActivity` and production internet/network behavior remain open. No push or release is
+claimed by this qualification.
