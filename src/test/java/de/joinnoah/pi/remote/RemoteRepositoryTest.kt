@@ -8843,6 +8843,144 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun destinationDraftDuringDelayedOpenPreservesActiveChatAndReloadsWhenReady() = runTest {
+        val a = RemoteSelection("host", "project", "a")
+        val b = a.copy(sessionId = "b")
+        val aKey = DraftKey("host", "a")
+        val bKey = DraftKey("host", "b")
+        val storedA = StoredDraft(text = "A draft")
+        val drafts = Drafts().apply { values = mapOf(aKey to storedA) }
+        val transport = Transport().also { configure(it, sessions = listOf(session("a"), session("b")), opened = session("b")) }
+        val repository = repository(transport, drafts)
+        assertEquals(a, repository.activate(a, ActivationMode.RESTORE))
+        runCurrent()
+        val answer = transport.response
+        val hostReply = CompletableDeferred<JsonObject>()
+        transport.response = { if (it.text("type") == "sessions.open") null else answer(it) }
+        val opening = async { repository.activate(b, ActivationMode.USER_OPEN) }
+        runCurrent()
+        val request = transport.sent.last { it.text("type") == "sessions.open" }
+        val delivery = launch { transport.result(request, hostReply.await()) }
+
+        assertEquals(a, repository.state.value.selection)
+        repository.draft(b, "B prepared while A is selected")
+        assertEquals("A draft", repository.state.value.draft)
+        assertEquals("B prepared while A is selected", repository.peekDraftText(b))
+        repository.flush()
+        assertEquals(storedA, drafts.load().getValue(aKey))
+        assertEquals("B prepared while A is selected", drafts.load().getValue(bKey).text)
+
+        hostReply.complete(checkNotNull(answer(request)))
+        delivery.join()
+        assertEquals(b, opening.await())
+        runCurrent()
+        assertEquals("B prepared while A is selected", repository.state.value.draft)
+        assertFalse(repository.state.value.loading)
+        repository.flush()
+        val reloaded = repository(Transport().also { configure(it, sessions = listOf(session("a"), session("b"))) }, drafts)
+        runCurrent()
+        assertEquals("A draft", reloaded.peekDraftText(a))
+        assertEquals("B prepared while A is selected", reloaded.peekDraftText(b))
+    }
+
+    @Test
+    fun failedAndCancelledDestinationOpensKeepBothDraftsRecoverableFromStorage() = runTest {
+        for (cancelled in listOf(false, true)) {
+            val a = RemoteSelection("host", "project", "a")
+            val b = a.copy(sessionId = "b")
+            val aKey = DraftKey("host", "a")
+            val bKey = DraftKey("host", "b")
+            val storedA = StoredDraft(text = "A draft")
+            val drafts = Drafts().apply { values = mapOf(aKey to storedA) }
+            val transport = Transport().also { configure(it, sessions = listOf(session("a"), session("b")), opened = session("b")) }
+            val repository = repository(transport, drafts)
+            assertEquals(a, repository.activate(a, ActivationMode.RESTORE))
+            runCurrent()
+            val answer = transport.response
+            val hostReply = CompletableDeferred<Unit>()
+            transport.response = { if (it.text("type") == "sessions.open") null else answer(it) }
+            val opening = async { repository.activate(b, ActivationMode.USER_OPEN) }
+            runCurrent()
+            val request = transport.sent.last { it.text("type") == "sessions.open" }
+            val delivery = launch {
+                hostReply.await()
+                transport.deliver(Wire.objectOf(
+                    "type" to "result", "requestId" to request.text("requestId"), "ok" to false,
+                    "error" to Wire.objectOf("code" to "busy", "message" to "Open refused"),
+                ))
+            }
+            assertEquals(a, repository.state.value.selection)
+            repository.draft(b, "B retained")
+            assertEquals("A draft", repository.state.value.draft)
+            if (cancelled) {
+                repository.cancelSelection()
+                opening.cancelAndJoin()
+                delivery.cancelAndJoin()
+            } else {
+                hostReply.complete(Unit)
+                delivery.join()
+                opening.await()
+            }
+            runCurrent()
+            assertEquals(a, repository.state.value.selection)
+            assertEquals("A draft", repository.state.value.draft)
+            assertEquals("B retained", repository.peekDraftText(b))
+            repository.flush()
+            assertEquals(storedA, drafts.load().getValue(aKey))
+            assertEquals("B retained", drafts.load().getValue(bKey).text)
+            val reloaded = repository(Transport().also { configure(it, sessions = listOf(session("a"), session("b"))) }, drafts)
+            runCurrent()
+            assertEquals("A draft", reloaded.peekDraftText(a))
+            assertEquals("B retained", reloaded.peekDraftText(b))
+            assertEquals(b, reloaded.activate(b, ActivationMode.RESTORE))
+            assertEquals("B retained", reloaded.state.value.draft)
+        }
+    }
+
+    @Test
+    fun previewDraftStaysWithSourceUntilDelayedOpenCompletes() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val parent = RemoteSelection("host", "project")
+        val source = parent.copy(sessionId = "session")
+        repository.activate(parent)
+        runCurrent()
+        val original = transport.response
+        transport.response = { if (it.text("type") == "sessions.open") null else original(it) }
+        val opening = async { repository.activate(source, ActivationMode.USER_OPEN) }
+        runCurrent()
+        repository.draft(source, "prepared")
+        assertEquals(parent, repository.state.value.selection)
+        assertEquals("prepared", repository.peekDraftText(source))
+        val open = transport.sent.last { it.text("type") == "sessions.open" }
+        transport.response = original
+        transport.result(open, original(open)!!)
+        runCurrent()
+        assertEquals(source, opening.await())
+        assertEquals("prepared", repository.state.value.draft)
+    }
+
+    @Test
+    fun cancelledOpenKeepsItsSourceDraft() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val parent = RemoteSelection("host", "project")
+        val source = parent.copy(sessionId = "session")
+        repository.activate(parent)
+        runCurrent()
+        val original = transport.response
+        transport.response = { if (it.text("type") == "sessions.open") null else original(it) }
+        val opening = async { repository.activate(source, ActivationMode.USER_OPEN) }
+        runCurrent()
+        repository.draft(source, "retained")
+        repository.cancelSelection()
+        opening.cancel()
+        runCurrent()
+        assertEquals("retained", repository.peekDraftText(source))
+        assertEquals(parent, repository.state.value.selection)
+    }
+
+    @Test
     fun aReplacedNetworkWhileLoadingReconnectsAtOnce() = runTest {
         val transport = Transport().also { configure(it) }
         val repository = chatRepository(transport)
@@ -9866,6 +10004,35 @@ class RemoteRepositoryTest {
         runCurrent()
         assertEquals(moved, repository.state.value.selection)
         assertEquals(listOf("a", "b"), repository.state.value.messages.map { it.text("id") })
+    }
+
+    @Test
+    fun historyOpenPreservesBothDraftsAndLateSourceFlushUpdatesRecovery() = runTest {
+        val transport = Transport()
+        configure(transport, sessions = listOf(session("old", origin = "history")), opened = session("fork"))
+        val sourceKey = DraftKey("host", "old")
+        val canonicalKey = DraftKey("host", "fork")
+        val drafts = Drafts().apply {
+            values = mapOf(
+                sourceKey to StoredDraft(text = "source"),
+                canonicalKey to StoredDraft(text = "canonical", mutationId = "unconfirmed", submittedText = "sent"),
+            )
+        }
+        val repository = repository(transport, drafts)
+        val source = RemoteSelection("host", "project", "old")
+        val canonical = source.copy(sessionId = "fork")
+        assertEquals(canonical, repository.activate(source, ActivationMode.USER_OPEN))
+        assertEquals("canonical", repository.state.value.draft)
+        assertEquals("source", repository.state.value.preparedText)
+        repository.draft(source, "late source")
+        assertEquals("late source", repository.state.value.preparedText)
+        assertEquals("canonical", repository.state.value.draft)
+        repository.flush()
+        assertEquals("late source", drafts.values.getValue(sourceKey).text)
+        assertEquals("canonical", drafts.values.getValue(canonicalKey).text)
+        assertEquals("unconfirmed", drafts.values.getValue(canonicalKey).mutationId)
+        repository.cancelSelection()
+        assertNull(repository.state.value.preparedText)
     }
 
     @Test

@@ -2527,7 +2527,7 @@ class UiRemoteRepository(private val drafts: DraftStorage) : RemoteRepository {
     override fun setPushToken(token: String?) {}
 }
 
-private class UiSettingsRepository : SettingsRepository {
+internal class UiSettingsRepository : SettingsRepository {
     override val state = MutableStateFlow(RemoteSettings())
 
     override fun setTheme(theme: ThemePalette) {

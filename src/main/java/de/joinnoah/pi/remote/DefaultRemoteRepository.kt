@@ -1559,6 +1559,13 @@ class DefaultRemoteRepository(
      * The chat [selection] as the caches last held it, with its stored draft. A history session
      * without a cached chat still gets its list row, so the preview can say it continues as a copy.
      */
+    override fun peekDraftText(selection: RemoteSelection): String? {
+        val route = selection.routeId ?: return null
+        val session = selection.sessionId ?: return null
+        if (!draftsAvailable || route in removedRoutes || state.value.hosts.none { it.routeId == route }) return null
+        return drafts[DraftKey(route, session)]?.text.orEmpty()
+    }
+
     override fun peekCachedChat(selection: RemoteSelection): ChatPreview? {
         val routeId = selection.routeId ?: return null
         val projectId = selection.projectId ?: return null
@@ -1575,7 +1582,11 @@ class DefaultRemoteRepository(
         )
     }
 
+    private var preparedSource: DraftKey? = null
+
     override fun cancelSelection() {
+        preparedSource = null
+        update { it.copy(preparedText = null) }
         cacheCurrentScreen(immediate = true)
         // The project lists' reads are bound to the connection, not the selection: a project
         // opened from Projects keeps the replies still on their way.
@@ -3013,6 +3024,10 @@ class DefaultRemoteRepository(
                 chatCache[canonical]?.takeIf { useCache },
                 sessionsFresh = sessionsFetchedNow,
             )
+            if (mode == ActivationMode.USER_OPEN && selection.sessionId != canonical.sessionId) {
+                preparedSource = DraftKey(host.routeId, checkNotNull(selection.sessionId))
+                update { it.copy(preparedText = drafts[preparedSource]?.text?.takeIf(String::isNotEmpty)) }
+            }
             // Only a snapshot of the chat now selected is taken; another one is dropped below. The
             // events that waited for it go to the new Timeline, which buffers them until it is in.
             val heldReply = held?.takeIf { it.sessionId == canonical.sessionId }?.reply
@@ -3056,7 +3071,9 @@ class DefaultRemoteRepository(
                 configurationVersion++
                 advisorVersion++
                 commandsVersion++
+                preparedSource = null
                 select(parent, host, projects, project, sessions, sessionsFresh = sessionsFetchedNow)
+                update { it.copy(preparedText = null) }
                 reportError(R.string.remote_request_error)
                 outcome = "snapshot_failed"
                 return parent
@@ -4739,6 +4756,7 @@ class DefaultRemoteRepository(
         if (stored.text == text) return
         composerEdited(key, "text")
         drafts[key] = stored.copy(text = text)
+        if (preparedSource == key) update { it.copy(preparedText = text.takeIf(String::isNotEmpty)) }
         persist()
     }
 
