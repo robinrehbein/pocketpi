@@ -40,6 +40,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.annotation.StringRes
@@ -95,6 +96,8 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
@@ -366,7 +369,7 @@ internal fun RemoteScreen(
             rememberComposerDraft(
                 chatKey.selection(),
                 state.draft,
-                editable = state.selection == chatKey.selection(),
+                editable = state.selection == chatKey.selection() || state.previewDraftAvailable,
                 push = model::draft,
             )
         else null
@@ -2865,7 +2868,7 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_waiting_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_needs_you))
                                 }
-                                projectChatRows(waitingChats, routeMarks, state.connected, !state.loading, homeTicketRef) { chat ->
+                                projectChatRows(waitingChats, routeMarks, state.connected, homeTicketRef) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
                             }
@@ -2873,7 +2876,7 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_running_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_working))
                                 }
-                                projectChatRows(runningChats, routeMarks, state.connected, !state.loading, homeTicketRef) { chat ->
+                                projectChatRows(runningChats, routeMarks, state.connected, homeTicketRef) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
                                 // Directly under the group it expands, so it is not far down the page.
@@ -2943,7 +2946,7 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_projects_quick_chats))
                                 }
-                                projectChatRows(recentChats, routeMarks, state.connected, !state.loading, homeTicketRef) { chat ->
+                                projectChatRows(recentChats, routeMarks, state.connected, homeTicketRef) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
                                 if (quick.recentExpandable) item(key = "project_chats_recent_show_all") {
@@ -3038,7 +3041,7 @@ internal fun RemoteScreen(
                                                     sessionMarkStore?.markSeen(key.routeId, session.id, session.updatedAt, System.currentTimeMillis())
                                                 }
                                             },
-                                        enabled = !state.connected || !state.loading,
+                                        enabled = true,
                                         closeAvailable =
                                             canCloseSession(
                                                 session,
@@ -3554,6 +3557,16 @@ internal fun RemoteScreen(
                             busy = navigator.mutating,
                         )
                     ChatPreviewHint(state)
+                    state.preparedText?.takeIf(String::isNotEmpty)?.let { prepared ->
+                        val clipboard = LocalClipboardManager.current
+                        Column(Modifier.fillMaxWidth().padding(8.dp)) {
+                            Text(stringResource(R.string.remote_prepared_text_explanation))
+                            SelectionContainer { Text(prepared, modifier = Modifier.testTag("preparedText")) }
+                            TextButton(onClick = { clipboard.setText(AnnotatedString(prepared)) }) {
+                                Text(stringResource(R.string.remote_prepared_text_copy))
+                            }
+                        }
+                    }
                     val shellRun = state.bash?.takeIf { it.sessionId == state.selection.sessionId }
                     if (shellRun != null && chatModel != null)
                         ShellCommandPanel(shellRun, state.connected, onStop = chatModel::abortBash, onClose = chatModel::closeBash)
@@ -3649,11 +3662,12 @@ internal fun RemoteScreen(
                             attachmentSelection = state.selection
                             filePicker.launch(arrayOf("*/*"))
                         },
-                        onPasteAttachments = { items, onDone ->
-                            val selection = chatKey?.selection()
-                            if (selection != null && chatModel != null) chatModel.acceptAttachments(selection, items, onDone)
-                            else onDone()
-                        },
+                        onPasteAttachments =
+                            if (state.selection != chatKey?.selection() || state.loading) null
+                            else { items, onDone ->
+                                if (chatModel != null) chatModel.acceptAttachments(chatKey.selection(), items, onDone)
+                                else onDone()
+                            },
                         onTakePhoto =
                             if (!hasCamera) null
                             else {
@@ -4302,7 +4316,6 @@ private fun LazyListScope.projectChatRows(
     chats: List<ProjectChatSummary>,
     marks: Map<String, SessionMark>,
     connected: Boolean,
-    enabled: Boolean,
     ticketRef: (String) -> String?,
     onOpen: (ProjectChatSummary) -> Unit,
 ) {
@@ -4310,7 +4323,6 @@ private fun LazyListScope.projectChatRows(
         ProjectChatRow(
             chat = chat,
             connected = connected,
-            enabled = enabled,
             mark = chat.session.optionalText("id")?.let(marks::get),
             ticketRef = chat.session.optionalText("id")?.let(ticketRef),
             onClick = { onOpen(chat) },
@@ -4322,7 +4334,6 @@ private fun LazyListScope.projectChatRows(
 private fun ProjectChatRow(
     chat: ProjectChatSummary,
     connected: Boolean,
-    enabled: Boolean,
     mark: SessionMark?,
     ticketRef: String?,
     onClick: () -> Unit,
@@ -4342,7 +4353,7 @@ private fun ProjectChatRow(
                         ticketRef = ticketRef,
                     )
                 },
-            enabled = enabled,
+            enabled = true,
             closeAvailable = false,
             onClick = onClick,
             onClose = {},

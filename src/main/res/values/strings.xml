@@ -663,4 +663,6 @@
     <string name="remote_markdown_task_open">Not done</string>
     <string name="remote_new_session_model_failed">The chosen model could not be set.</string>
     <string name="remote_new_session_model_failed_kept">The chosen model could not be set, so your first message was not sent. It waits in the message field.</string>
+    <string name="remote_prepared_text_explanation">Opening created a different session. Your prepared text remains available in the original session; copy and paste it here if you wish.</string>
+    <string name="remote_prepared_text_copy">Copy prepared text</string>
 </resources>

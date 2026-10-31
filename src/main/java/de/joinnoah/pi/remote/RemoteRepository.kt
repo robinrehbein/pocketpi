@@ -113,6 +113,10 @@ data class RemoteState(
      * that destination's own state, never the repository's.
      */
     val preview: Boolean = false,
+    /** Whether the requested chat's stored text is available for editing. */
+    val previewDraftAvailable: Boolean = false,
+    /** Text prepared for a source session that opened as a different session. */
+    val preparedText: String? = null,
     val connection: Int = R.string.remote_offline,
     val connected: Boolean = false,
     /**
@@ -283,6 +287,9 @@ interface RemoteRepository {
 
     /** The cached content of the chat [selection] for a preview while it opens, or null. */
     fun peekCachedChat(selection: RemoteSelection): ChatPreview? = null
+
+    /** Local draft text, or null until storage and the paired host are available. */
+    fun peekDraftText(selection: RemoteSelection): String? = peekCachedChat(selection)?.draft
 
     suspend fun pair(text: String): RemoteSelection?
 
