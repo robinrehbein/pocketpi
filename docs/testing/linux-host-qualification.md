@@ -384,3 +384,60 @@ The ordinary self-contained supervisor/reconnect fixture also passes against the
 updated core image after the external-mode refactor
 (`/private/tmp/pocketpi-devcontainer-connected-core-normal.log`). Final Biome has
 zero errors and eight existing fixture typing warnings.
+
+## Locked Chromium layer and read-only sandbox proof — 2026-10-31
+
+Git-first integrated the newer worker harness/busy fixes from origin/dev into Host
+`16382bc498`; affected runtime tests pass 26 cases with six explicit skips. The current
+archive SHA-256 is `a98f90b7266a91c9fbad66aad5ac3fd6078cdc36d2ca5930cec93bcfa6f7a45a`.
+The qualified Core image is
+`sha256:7415fea9b2afd8143436bcb98c8a88d7a5928105f36599547081546e364dbed9`.
+
+The experimental `Dockerfile.browser` installs Chromium 156.0.8078.73-1~deb12u1
+from signed Debian snapshots fixed at 20261030T000000Z. The maintained OS lock and
+verifier check the three signed Release files, SHA-256 manifest of 111 downloaded
+Debian packages and the installed package/version manifest. Only expiration checking
+is disabled on these archived sources; archive authentication remains enabled.
+The build wrapper binds its input alias to the exact qualified Linux-arm64 Core
+image ID, uses one immutable snapshot of the lock bytes, refuses an existing output
+tag, verifies the built image ID, and reports only after staging cleanup. The raw
+Dockerfile alone does not establish Core provenance; use the guarded wrapper.
+
+The Moby vendor profile was fetched again from its recorded official 6a43e3d URL:
+its SHA-256 matches `536529b665dd0972c37bfb569f5d4ac8a53592e7b00752bc39ff063ca9864c74`.
+The maintained experiment retains that baseline plus exactly three namespace/chroot
+rules. JSON byte preservation has a scoped formatter exception; profile hashes and
+structural-delta tests remain active. This is an experimental container-wide kernel
+policy, not equivalence to Docker's built-in default or a completed security audit.
+
+Actual installed production BrowserRuntime in the locked image passes local page
+loading, text input, a 390x600 JPEG, confirmed owned browser exit, root write refusal,
+nonroot UID 1000, zero outer effective capabilities, no-new-privileges and seccomp.
+Chromium's own sandbox is enabled. CDP identifies the renderer PID and `/proc`
+ancestry ties it to the owned browser; the renderer has two seccomp filters versus
+one outer filter. The first argv-based renderer check timed out because sandboxed
+child command lines were empty; CDP attribution fixed this test observation without
+changing runtime security flags. User-namespace creation works; mount, IPC and UTS
+namespace probes are denied. Those denials can also depend on dropped capabilities.
+
+Root proof images include the locked build
+`sha256:5f394f357f94ece34cbf05f487955255990e96b3a63ad77a033cfbd4d7cffc5e`
+and the Core-bound wrapper build
+`sha256:ac61ee5c95c1d3c2278b8d7ed1b474c7979744e6c28f8f40a7ba958d31749c4d`.
+The source fixture is maintained at
+`extensions/remote/runtime-test/linux-browser-layer/smoke.mjs` in Host. Evidence:
+`/private/tmp/pocketpi-browser-{locked-build,locked-readonly-proof,locked-namespace-proof,bound-build,bound-readonly-proof,final-unit,final-biome}.log`,
+`/private/tmp/pocketpi-browser-os-evidence.json` and component qualification metadata.
+All 66 deployment/profile helper tests pass. Final explicit Biome check has no errors
+and one optional-chain style warning in the fixture.
+
+This qualification is local Docker Desktop Engine Git 6a43e3d, LinuxKit arm64 only.
+The default Core/Devcontainer configuration does not automatically apply the profile
+or enable browser grants. Remaining gates include maintained fail-closed runtime
+engine/profile selection, broader sandbox review, encrypted browser/preview integration
+against this image, intended independent Linux-host qualification and physical devices.
+The final builder with the same-lock-bytes regression fix produced
+`sha256:df328119714be21be7a1d0a332e43ebda790dd12327d0407306463b517564b4e`;
+the exact image also passes the maintained read-only browser proof
+(`/private/tmp/pocketpi-browser-final-readonly-proof.log`). Its build record is
+`/private/tmp/pocketpi-browser-bound-build-final.log`.
