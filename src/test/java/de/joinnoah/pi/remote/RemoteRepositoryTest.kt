@@ -446,7 +446,7 @@ class RemoteRepositoryTest {
             repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
             val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
             assertEquals((3 downTo supported).map { "capabilities.v$it:" }, ids.map { it.substringBefore(':') + ":" })
-            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1:"))
+            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1:"))
             assertEquals(supported >= 2, FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
         }
     }
@@ -8606,6 +8606,82 @@ class RemoteRepositoryTest {
     }
 
     private val openQuestion = Wire.objectOf("id" to "q", "kind" to "confirm", "message" to "Go?")
+
+    private suspend fun TestScope.editorRepository(transport: Transport, question: JsonObject, capability: Boolean = true): DefaultRemoteRepository {
+        configure(transport)
+        val normal = transport.response
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(
+                if (capability) listOf(JsonPrimitive("session.question_editor.v1")) else emptyList())))
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0,
+                "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question)))
+            else -> normal(request)
+        } }
+        return repository(transport).also { it.activate(RemoteSelection("host", "project", "session")); it.flush() }
+    }
+
+    @Test fun editorAnswerRequiresNegotiatedCapabilityAndValidExactValue() = runTest {
+        val question = Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "hello")
+        for (capability in listOf(false, true)) {
+            val transport = Transport()
+            val repo = editorRepository(transport, question, capability)
+            for (value in listOf("x".repeat(65537), "bad\rvalue", "bad\u001bvalue", "\uD800")) {
+                repo.answer("e", Wire.objectOf("kind" to "editor", "value" to value)); runCurrent()
+            }
+            assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+            val value = "😀\n\t" + "x".repeat(65530)
+            repo.answer("e", Wire.objectOf("kind" to "editor", "value" to value)); runCurrent()
+            assertEquals(if (capability) 1 else 0, transport.sent.count { it.text("type") == "question.answer" })
+            if (capability) assertEquals(value, transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("value"))
+        }
+    }
+
+    @Test fun editorDraftScopeChangesWhenConnectionDropsEvenIfQuestionIsRetained() = runTest {
+        val transport = Transport()
+        val repo = editorRepository(transport, Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "original"))
+        val before = repo.state.value
+        transport.listener.failed(true, R.string.remote_connection_error)
+        val disconnected = repo.state.value
+        assertFalse(disconnected.connected)
+        assertTrue(disconnected.questions.single() === before.questions.single())
+        assertTrue("the retained draft must lose authority", disconnected.editorQuestionGeneration > before.editorQuestionGeneration)
+    }
+
+    @Test fun queuedEditorAnswerCannotSendAfterSameIdQuestionReplacement() = runTest {
+        val transport = Transport()
+        val repo = editorRepository(transport, Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "first"))
+        repo.answer("e", Wire.objectOf("kind" to "editor", "value" to "draft"))
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+            "kind" to "question.open", "question" to Wire.objectOf("id" to "e", "kind" to "editor", "prefill" to "replacement")))
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test fun editorDetailsCannotBeSubmittedButCancellationRemainsAvailable() = runTest {
+        val transport = Transport()
+        val repo = editorRepository(transport, Wire.parse("""{"id":"e","kind":"editor","prefill":"partial","details":{"id":"d","totalBytes":1,"sha256":"${"a".repeat(64)}"}}"""))
+        repo.answer("e", Wire.objectOf("kind" to "editor", "value" to "partial")); runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+        repo.answer("e", Wire.objectOf("kind" to "cancel")); runCurrent()
+        assertEquals("cancel", transport.sent.last { it.text("type") == "question.answer" }.obj("answer").text("kind"))
+    }
+
+    @Test fun editorCapabilityIsNeverGrantedByV2Fallback() = runTest {
+        val transport = Transport().also(::configure)
+        val original = transport.response
+        transport.response = { request ->
+            val result = original(request)
+            if (request.text("type") == "projects.list" && request.text("requestId").startsWith("capabilities.v2:"))
+                JsonObject(checkNotNull(result) + ("capabilities" to JsonArray(listOf(JsonPrimitive("session.question_editor.v1")))))
+            else result
+        }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
+        assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1+question_editor.v1:"))
+        assertTrue(ids[1].startsWith("capabilities.v2:"))
+        assertFalse("session.question_editor.v1" in repo.state.value.capabilities)
+    }
 
     @Test
     fun repositoryRejectsUnverifiedDetailsYesButStillSendsNo() = runTest {

@@ -109,6 +109,8 @@ data class PendingSend(
 )
 
 data class RemoteState(
+    /** Changes when editor authority or a question incarnation changes, including identical replacements. */
+    val editorQuestionGeneration: Long = 0,
     /** Changes whenever commit review authority or its selected target changes. */
     val gitReviewGeneration: Long = 0,
     val browser: BrowserView? = null,

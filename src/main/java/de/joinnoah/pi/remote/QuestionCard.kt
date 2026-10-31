@@ -11,6 +11,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -24,12 +25,15 @@ internal fun QuestionCard(
     block: QuestionBlock? = null,
     details: QuestionDetailsView? = null,
     onLoadDetails: () -> Unit = {},
+    editorScope: Any? = null,
+    editorAvailable: Boolean = true,
     onAnswer: (JsonObject) -> Unit,
 ) {
     val id = question.text("id")
     val kind = question.text("kind")
     val controlsEnabled = enabled && !pending && block == null
     val currentControlsEnabled by rememberUpdatedState(controlsEnabled)
+    val currentEditorAvailable by rememberUpdatedState(editorAvailable)
     fun submit(answer: JsonObject) {
         if (currentControlsEnabled) onAnswer(answer)
     }
@@ -184,6 +188,27 @@ internal fun QuestionCard(
                     Text(stringResource(R.string.remote_answer))
                 }
             }
+            "editor" -> {
+                val prefill = editorPrefill(question)
+                if (prefill == null) {
+                    Text(stringResource(R.string.remote_local_required))
+                } else {
+                    var text by remember(EditorQuestionKey(question), editorScope) { mutableStateOf(prefill) }
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { if (controlsEnabled) text = it },
+                        enabled = controlsEnabled,
+                        modifier = Modifier.fillMaxWidth().testTag("questionEditorField").then(rememberQuestionFieldKeys(text)),
+                        minLines = 4,
+                    )
+                    Button(
+                        enabled = controlsEnabled && editorAvailable && validEditorText(text, 65536),
+                        onClick = {
+                            if (currentEditorAvailable && validEditorText(text, 65536)) submit(Wire.objectOf("kind" to "editor", "value" to text))
+                        },
+                    ) { Text(stringResource(R.string.remote_send)) }
+                }
+            }
             "questionnaire" ->
                 QuestionnaireForm(
                     question = question,
@@ -193,7 +218,7 @@ internal fun QuestionCard(
                 )
             else -> Text(stringResource(R.string.remote_local_required))
         }
-        if (kind in setOf("confirm", "select", "input"))
+        if (kind in setOf("confirm", "select", "input", "editor"))
             TextButton(onClick = { submit(Wire.objectOf("kind" to "cancel")) }, enabled = controlsEnabled) {
                 Text(stringResource(R.string.remote_cancel))
             }

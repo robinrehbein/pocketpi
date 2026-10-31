@@ -26,32 +26,32 @@ Host paths below are relative to `packages/pi-atlas/extensions/remote` in the ho
 
 **Modify:** host `protocol/types.ts`, `protocol/parse.ts`, `protocol/README.md`, `host/question-details-projection.ts`, `host/daemon.ts`; **test:** `protocol/protocol_test.ts`, `host/daemon_test.ts` and projection tests. **Android:** `src/main/java/de/joinnoah/pi/remote/DefaultRemoteRepository.kt`; test `src/test/java/de/joinnoah/pi/remote/RemoteRepositoryTest.kt`.
 
-- [ ] Add failing tests for simultaneous editor and existing details opt-ins, legacy v2/v3 parsing, no implicit editor grant, and projection of editor to same-ID `local_required` across open, snapshot and replay. Preserve delivery guards and existing capability limits.
-- [ ] Root runs focused tests and records the expected failures. Define a backward-compatible v3 opt-in representation for both features, retaining existing single-feature parsers; add an explicit editor capability and connection-scoped negotiated flag. Ensure malformed or unsupported opt-ins never grant it.
-- [ ] Root reruns focused tests; verify opted-in editor delivery and legacy projection, including reconnect and revocation. Keep advertisement disabled until Tasks 2–3 are qualified.
+- [x] Add failing tests for simultaneous editor and existing details opt-ins, legacy v2/v3 parsing, no implicit editor grant, and projection of editor to same-ID `local_required` across open, snapshot and replay. Preserve delivery guards and existing capability limits.
+- [x] Root runs focused tests and records the expected failures. Define a backward-compatible v3 opt-in representation for both features, retaining existing single-feature parsers; add an explicit editor capability and connection-scoped negotiated flag. Ensure malformed or unsupported opt-ins never grant it.
+- [x] Root reruns focused tests; verify opted-in editor delivery and legacy projection, including reconnect and revocation. Keep advertisement disabled until Tasks 2–3 are qualified.
 
 ### 2. RPC source and answer ownership
 
 **Modify:** host `host/sessions.ts`; **test:** `host/sessions_test.ts`, `host/daemon_test.ts`, and a focused RPC integration test alongside them.
 
-- [ ] Write failing tests: RPC `{type: "extension_ui_request", id, method: "editor", title, prefill}` retains prefill exactly; an editor answer writes one `{type: "extension_ui_response", id, value}` and cancel writes `{type: "extension_ui_response", id, cancelled: true}`. Include empty, Unicode and newline text.
-- [ ] Add negative tests for oversized/malformed prefill, invalid control or oversized answer, stale question replacement, source/connection change, close and duplicate answer. Unsupported prefill must stay local-only and never be truncated into remote authority.
-- [ ] Root runs tests for RED. Map RPC editor to its actual editor question and prefill, route the matching value/cancel to its exact RPC owner, and recheck current source and question immediately before the owner write; retain existing first-settlement lifecycle. Enforce protocol byte and control limits.
-- [ ] Root reruns focused host tests and relevant protocol/daemon integration checks. Do not infer native support from RPC success.
+- [x] Write failing tests: RPC `{type: "extension_ui_request", id, method: "editor", title, prefill}` retains prefill exactly; an editor answer writes one `{type: "extension_ui_response", id, value}` and cancel writes `{type: "extension_ui_response", id, cancelled: true}`. Include empty, Unicode and newline text.
+- [x] Add negative tests for oversized/malformed prefill, invalid control or oversized answer, stale question replacement, source/connection change, close and duplicate answer. Unsupported prefill must stay local-only and never be truncated into remote authority.
+- [x] Root runs tests for RED. Map RPC editor to its actual editor question and prefill, route the matching value/cancel to its exact RPC owner, and recheck current source and question immediately before the owner write; retain existing first-settlement lifecycle. Enforce protocol byte and control limits.
+- [x] Root reruns focused host tests and relevant protocol/daemon integration checks. Do not infer native support from RPC success.
 
 ### 3. Android editor UI
 
 **Modify:** `src/main/java/de/joinnoah/pi/remote/QuestionCard.kt`, `DefaultRemoteRepository.kt`, `src/main/res/values/strings.xml`, `src/main/res/values-de/strings.xml`; **test:** `src/test/java/de/joinnoah/pi/remote/QuestionCardUiTest.kt`, `RemoteRepositoryTest.kt`.
 
-- [ ] Write failing UI and repository tests for initialized multiline prefill, exact whitespace/newline submission, explicit Cancel, UTF-8 byte boundaries and prohibited controls, and clearing draft on actual question replacement even when an ID is reused. Test stale selection/connection/question cannot send.
-- [ ] Root verifies RED. Add a bounded multiline field and localized Send/Cancel; key draft ownership to the actual question and connection/selection, not ID alone. Validate text as UTF-8 bytes before enabling or sending, without silent truncation. Send `kind: editor` and preserve cancel semantics.
-- [ ] Root runs the focused Android tests and integration checks, then enables editor advertisement only after Tasks 1–3 and independent review pass. Report local tests separately from device qualification.
+- [x] Write failing UI and repository tests for initialized multiline prefill, exact whitespace/newline submission, explicit Cancel, UTF-8 byte boundaries and prohibited controls, and clearing draft on actual question replacement even when an ID is reused. Test stale selection/connection/question cannot send.
+- [x] Root verifies RED. Add a bounded multiline field and localized Send/Cancel; key draft ownership to the actual question and connection/selection, not ID alone. Validate text as UTF-8 bytes before enabling or sending, without silent truncation. Send `kind: editor` and preserve cancel semantics.
+- [x] Root runs the focused Android tests and integration checks, then enables editor advertisement only after Tasks 1–3 and independent review pass. Report local tests separately from device qualification.
 
 ### 4. Actual Pi-to-Android qualification
 
-- [ ] Extend the private actual-Pi fixture with a public command that invokes `ctx.ui.editor` without a model turn or tool execution. Keep pairing data private and use only the owned emulator, isolated ADB server and disposable Host state.
-- [ ] Prove exact multiline Unicode prefill and submitted value through the actual Pi RPC process, encrypted transport, repository and rendered UI, including a separate explicit Cancel outcome. Cover phone/English and tablet/German layouts; inspect screenshots and distinguish an external RPC process from a Host-managed fallback.
-- [ ] Run the relevant regression suites, type and format checks, complete independent reviews, and enable only the qualified bounded capability. Record failed attempts and remaining physical-device/Linux boundaries. Clean up all owned runtime resources and credentials.
+- [x] Extend the private actual-Pi fixture with a public command that invokes `ctx.ui.editor` without a model turn or tool execution. Keep pairing data private and use only the owned emulator, isolated ADB server and disposable Host state.
+- [x] Prove exact multiline Unicode prefill and submitted value through the actual Pi RPC process, encrypted transport, repository and rendered UI, including a separate explicit Cancel outcome. Cover phone/English and tablet/German layouts; inspect screenshots and distinguish an external RPC process from a Host-managed fallback.
+- [x] Run the relevant regression suites, type and format checks, complete independent reviews, and enable only the qualified bounded capability. Record failed attempts and remaining physical-device/Linux boundaries. Clean up all owned runtime resources and credentials.
 
 ### 5. Native feasibility gate, separate from RPC completion
 
@@ -63,3 +63,15 @@ Host paths below are relative to `packages/pi-atlas/extensions/remote` in the ho
 ### 6. Oversized/paged prefill, separate gate
 
 - [ ] Keep oversized editor prefill local-only in the bounded slice. A later change must separately specify full, exact prefill delivery and verification, bounded memory, current source/connection/question ownership, compatibility and failure behavior; implement only after its own tests and review. Existing confirm-details support alone does not establish editor support.
+
+
+## Current status — 2026-10-31
+
+Tasks 1–4 are implemented and independently reviewed. The bounded RPC editor is enabled by
+default with explicit per-connection v3 opt-in; an explicit `questionEditorEnabled: false`
+disables it. No native editor bridge is advertised. The full Android/Wear checks, 980 covering
+Host tests and four actual Host-owned Pi-to-Android Submit/Cancel runs passed.
+
+Host implementation: `0cfd68d05`; the App implementation is included in this change.
+See [qualification](../testing/remote-editor-qualification.md) for exact results and boundaries.
+Tasks 5–6 and the full remote-development goal remain open.

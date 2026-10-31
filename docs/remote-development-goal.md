@@ -415,7 +415,7 @@ and scoped qualification. The full acceptance run and its device/host gates rema
    per-connection opt-in. Four default native and external RPC end-to-end scenarios passed; broad
    The affected Host files passed their targeted rerun and the full Android/Wear suite passed;
    physical-device, independent Linux and production qualification remain open.
-   Multiline editor dialogs require separate work. See [qualification](testing/question-details-delivery-qualification.md).
+   Bounded RPC editor dialogs are implemented locally and default-enabled with explicit v3 opt-in; actual Host-owned Pi 1.4 to Android phone Submit and tablet Cancel passed. Local checks and independent reviews passed. Native and oversized/paged editors remain open. See [confirm qualification](testing/question-details-delivery-qualification.md) and [editor qualification](testing/remote-editor-qualification.md).
 4. **Custom dialogs.** A relayed terminal is implemented locally, but the combined custom-dialog
    workflow remains unqualified. The earlier feasibility gate in
    noah-monorepo's `docs/superpowers/plans/2026-10-23-pocketpi-mobile-dialogs.md` failed on pi
@@ -492,7 +492,7 @@ established on `main`. Neither label by itself means the qualifying run has veri
 | 1 | Open a ticket and start a session from it | App, host switch and key | Implemented (`tickets.v1`, needs `config ticket-writes on` and `tickets set-key`) |
 | 2 | Edit and save a file, with a clear conflict when the Mac changed it | App | Implemented (`session.files.write.v1`) |
 | 3 | Run a shell command with live output and stop in the ticket's session | noah-monorepo, then app | Implemented locally for workers; combined ticket workflow and physical-device qualification open (gap 6) |
-| 4a | Answer every forwarded question and approval from the phone, including oversized ones and editors | noah-monorepo, then app | Confirm-details implementation reviewed and enabled by default; native and external RPC scenarios passed, broad Host run non-green, corrected files passed targeted rerun; hardware/Linux/production qualification open; editors separate (gap 3) |
+| 4a | Answer every forwarded question and approval from the phone, including oversized ones and editors | noah-monorepo, then app | Confirm-details implementation reviewed and enabled by default; native and external RPC scenarios passed, broad Host run non-green, corrected files passed targeted rerun; hardware/Linux/production qualification open; bounded RPC editors qualified locally on emulators, native/paged editors open (gap 3) |
 | 4b | Answer custom dialogs from the phone through the relayed terminal | noah-monorepo, then app | Terminal relay implemented locally; combined custom-dialog workflow and physical-device qualification open (gaps 4 and 7) |
 | 5 | Commit, push and open a pull request, confirmed on the phone and logged on the Mac | noah-monorepo, then app | Commit, Push and PR implemented locally; full unattended workflow and physical-device qualification remain open |
 | 6 | See the pull request and its CI status per session | noah-monorepo, then app | Display is wired; actual Pi through a Host-managed native worker to Android navigation passed on four emulator profiles. Live GitHub CI and physical-device qualification remain open. |

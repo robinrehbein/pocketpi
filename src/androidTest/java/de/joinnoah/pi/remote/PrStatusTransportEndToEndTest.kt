@@ -43,6 +43,7 @@ class PrStatusTransportEndToEndTest {
     private var inputExpected = false
     private var layoutDiagnostics = false
     private var questionDetailsExpected = false
+    private var editorExpected = false
     private lateinit var client: OkHttpClient
     private lateinit var scope: CoroutineScope
     private lateinit var repository: DefaultRemoteRepository
@@ -68,6 +69,10 @@ class PrStatusTransportEndToEndTest {
             val questionArg = args.getString("questionDetailsExpected")
             require(questionArg == null || questionArg == "true" || questionArg == "false") { "questionDetailsExpected must be true or false" }
             questionDetailsExpected = questionArg == "true"
+            val editorArg = args.getString("editorExpected")
+            require(editorArg == null || editorArg == "true" || editorArg == "false") { "editorExpected must be true or false" }
+            editorExpected = editorArg == "true"
+            require(!editorExpected || (!nativeExpected && !inputExpected && !questionDetailsExpected)) { "Editor fixture requires external RPC without input or question-details mode" }
             val path = args.getString("prStatusFixturePath")
             if (expected) require(!path.isNullOrBlank()) { "prStatusFixturePath is required" }
             assumeTrue("Pass prStatusFixturePath to run the actual Pi PR status integration", !path.isNullOrBlank())
@@ -80,6 +85,13 @@ class PrStatusTransportEndToEndTest {
                 require(fixture.getString("questionDetailsKind") in setOf("confirm", "approval")) { "Wrong question details kind" }
                 require(fixture.getString("questionProbeCommand").isNotBlank() && fixture.getString("questionProbeNonce").isNotBlank())
                 require(fixture.getString("questionExpectedText").toByteArray(Charsets.UTF_8).size > 49_152)
+            }
+            if (editorExpected) {
+                require(fixture.getBoolean("editorFixture")) { "Editor fixture is required" }
+                require(fixture.getBoolean("hostRpc")) { "Host-owned RPC is required for the editor fixture" }
+                require(fixture.getString("editorOutcome") in setOf("submit", "cancel")) { "Wrong editor outcome" }
+                require(fixture.getString("editorProbeCommand").isNotBlank() && fixture.getString("editorProbeNonce").isNotBlank())
+                require(fixture.has("editorPrefill") && fixture.has("editorExpectedValue")) { "Editor fixture values are required" }
             }
             println("PR_STATUS_NATIVE_EXPECTED=$nativeExpected")
             val cert = CertificateFactory.getInstance("X.509").generateCertificate(readFixtureFile(fixture.getString("caCertPath")).inputStream())
@@ -178,6 +190,7 @@ class PrStatusTransportEndToEndTest {
             }
         }
         if (questionDetailsExpected) exerciseQuestionDetails()
+        if (editorExpected) exerciseEditor()
         awaitTag("pullRequestChip")
         compose.onNodeWithTag("pullRequestChip").assertIsDisplayed().assertTextContains(compose.activity.getString(R.string.remote_pr_chip_number, 42L), substring = true)
         screenshot("pending")
@@ -230,9 +243,50 @@ class PrStatusTransportEndToEndTest {
         val recovered = status()
         assertTrue(recovered.getBoolean("ownerPidVerified"))
         assertTrue("Native worker must be verified after reconnect", nativeWorkerVerified(recovered))
+        if (editorExpected) assertTrue("Host-owned RPC must be verified after reconnect", recovered.getBoolean("hostRpcVerified"))
         screenshot("recovered")
     }
 
+    private fun exerciseEditor() {
+        val command = fixture.getString("editorProbeCommand")
+        val nonce = fixture.getString("editorProbeNonce")
+        val probeName = requireNotNull(commandName(command))
+        require(nonce.isNotBlank() && nonce.none { it.isWhitespace() })
+        val prefill = fixture.getString("editorPrefill")
+        val value = fixture.getString("editorExpectedValue")
+        val outcome = fixture.getString("editorOutcome")
+        compose.waitUntil(60_000) {
+            val state = repository.state.value
+            state.selection == selection && state.connected && !state.loading && state.capabilitiesKnown &&
+                QUESTION_EDITOR_CAPABILITY in state.capabilities && QUESTION_EDITOR_CAPABILITY !in state.unavailableCapabilities &&
+                COMMANDS_CAPABILITY in state.capabilities && COMMANDS_CAPABILITY !in state.unavailableCapabilities &&
+                !state.commandsLoading && state.commands.any { it.name == probeName }
+        }
+        compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput("$command $nonce")
+        compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
+        hideIme()
+        compose.waitUntil(60_000) {
+            repository.state.value.questions.any { it.text("kind") == "editor" } &&
+                statusOrNull()?.let { it.optBoolean("editorVerified") && it.optBoolean("hostRpcVerified") } == true
+        }
+        val question = repository.state.value.questions.single { it.text("kind") == "editor" }
+        val questionId = question.text("id")
+        assertTrue("Editor prefill must match the fixture", editorPrefill(question) == prefill)
+        compose.onNodeWithTag("questionEditorField").performScrollTo().assertIsDisplayed().assertTextEquals(prefill)
+        screenshot("editor-before")
+        compose.onNodeWithTag("questionEditorField").performTextReplacement(value)
+        compose.onNodeWithTag("questionEditorField").assertTextEquals(value)
+        val button = if (outcome == "submit") R.string.remote_send else R.string.remote_cancel
+        compose.onNodeWithText(compose.activity.getString(button)).performScrollTo().assertIsEnabled().performClick()
+        compose.waitUntil(60_000) {
+            val current = statusOrNull()
+            current?.let { it.optBoolean("editorVerified") && it.optBoolean("hostRpcVerified") && it.optBoolean("editorAnswered") &&
+                it.optBoolean("editorValueVerified") == (outcome == "submit") &&
+                it.optBoolean("editorCancelled") == (outcome == "cancel") } == true &&
+                repository.state.value.questions.none { it.text("id") == questionId }
+        }
+        screenshot("editor-after")
+    }
     private fun exerciseQuestionDetails() {
         val command = fixture.getString("questionProbeCommand")
         val nonce = fixture.getString("questionProbeNonce")

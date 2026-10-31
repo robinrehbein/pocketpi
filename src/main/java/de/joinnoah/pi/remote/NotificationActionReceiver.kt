@@ -227,6 +227,7 @@ internal class NotificationAnswerer(
     },
 ) {
     suspend fun answer(routeId: String, sessionId: String, questionId: String, answer: JsonObject): AnswerOutcome {
+        if (answer.optionalText("kind") == "editor") return AnswerOutcome.FAILED
         var error: Throwable? = null
         val finished =
             withTimeoutOrNull(timeoutMillis) {

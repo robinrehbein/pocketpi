@@ -65,7 +65,7 @@ private const val DRAFT_WRITE_DELAY_MILLIS = 300L
 private const val CAPABILITIES_V1_ROUTE = "capabilities.v1:"
 private const val CAPABILITIES_V2_ROUTE = "capabilities.v2:"
 private const val CAPABILITIES_V3_ROUTE = "capabilities.v3:"
-private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1:"
+private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1+question_editor.v1:"
 
 private fun capabilityRevision(route: String): Int = when {
     route.startsWith(CAPABILITIES_V3_ROUTE) -> 3
@@ -300,6 +300,7 @@ class DefaultRemoteRepository(
         setOf(
             STEER_CAPABILITY,
             QUESTION_DETAILS_CAPABILITY,
+            QUESTION_EDITOR_CAPABILITY,
             // Compact and session settings, too, arrive only here: the host's handshake list is frozen at eight.
             COMPACT_CAPABILITY,
             SETTINGS_CAPABILITY,
@@ -508,6 +509,7 @@ class DefaultRemoteRepository(
     override fun setPreviewVisible(visible: Boolean) = previewClient.setVisible(visible)
     private val detailsAuthority = QuestionDetailsAuthority()
     private var detailsQuestion: JsonObject? = null
+    private var editorAuthorityGeneration = 0L
     private var detailsLoadToken = 0L
     private fun clearQuestionDetails() {
         detailsLoadToken++
@@ -1145,7 +1147,16 @@ class DefaultRemoteRepository(
             (QUESTION_DETAILS_CAPABILITY in previous.capabilities && QUESTION_DETAILS_CAPABILITY !in next.capabilities) ||
             (QUESTION_DETAILS_CAPABILITY !in previous.unavailableCapabilities && QUESTION_DETAILS_CAPABILITY in next.unavailableCapabilities)
         if (invalidateDetails) { detailsLoadToken++; detailsAuthority.clear(); detailsQuestion = null }
+        val editorAuthorityChanged = previous.connected != next.connected || previous.selection != next.selection ||
+            previous.capabilitiesKnown != next.capabilitiesKnown ||
+            (QUESTION_EDITOR_CAPABILITY in previous.capabilities) != (QUESTION_EDITOR_CAPABILITY in next.capabilities) ||
+            (QUESTION_EDITOR_CAPABILITY in previous.unavailableCapabilities) != (QUESTION_EDITOR_CAPABILITY in next.unavailableCapabilities)
+        if (editorAuthorityChanged) editorAuthorityGeneration++
+        val oldEditors = previous.questions.filter { it.optionalText("kind") == "editor" }
+        val newEditors = next.questions.filter { it.optionalText("kind") == "editor" }
+        val editorsChanged = oldEditors.size != newEditors.size || oldEditors.zip(newEditors).any { (a, b) -> a !== b }
         mutable.value = next.copy(
+            editorQuestionGeneration = previous.editorQuestionGeneration + if (editorsChanged || editorAuthorityChanged) 1 else 0,
             questionDetails = if (invalidateDetails) emptyMap() else next.questionDetails,
             gitReviewGeneration = previous.gitReviewGeneration + if (reviewAuthority(previous) != reviewAuthority(next)) 1 else 0,
         )
@@ -2184,8 +2195,10 @@ class DefaultRemoteRepository(
                 }
                 if (revision >= 2 && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
+                    it in advertised && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
                 }
+                if (revision < 3 && QUESTION_EDITOR_CAPABILITY in state.value.capabilities)
+                    update { it.copy(capabilities = it.capabilities - QUESTION_EDITOR_CAPABILITY) }
                 val hadTasks = canReadTasks()
                 if (revision >= 2 && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
                 val hadTickets = TICKETS_CAPABILITY in state.value.capabilities
@@ -2194,10 +2207,10 @@ class DefaultRemoteRepository(
                     // lease that only now becomes possible starts leasing at once, not at the next
                     // session change or reconnect.
                     val hadLease = canLeaseJobsList(state.value)
-                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY) else it.capabilities) + merged) }
+                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY) else it.capabilities) + merged) }
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
-                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY)) }
+                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY, QUESTION_EDITOR_CAPABILITY)) }
                 update { it.copy(capabilitiesKnown = true) }
                 if (!hadTasks && canReadTasks()) {
                     taskRefreshPending = true
@@ -8082,16 +8095,25 @@ class DefaultRemoteRepository(
             return
         if (questionId in state.value.questionBlocks) return
         val positive = answer.optionalText("kind") == "confirm" && runCatching { answer.flag("value") }.getOrDefault(false)
+        val editor = answer.optionalText("kind") == "editor"
         val selection = state.value.selection
         val connection = generation
-        val question = if (positive) state.value.questions.filter { it.optionalText("id") == questionId }.singleOrNull() ?: return else null
+        val editorAuthority = editorAuthorityGeneration
+        val question = if (positive || editor) state.value.questions.filter { it.optionalText("id") == questionId }.singleOrNull() ?: return else null
         fun positiveStillAllowed(): Boolean {
-            if (!positive) return true
+            if (!positive && !editor) return true
             val current = state.value
             if (!current.connected || current.loading || generation != connection || current.selection != selection ||
                 activeHost?.routeId != selection.routeId || questionId in current.questionBlocks) return false
             val pending = current.questions.filter { it.optionalText("id") == questionId }.singleOrNull()
-            if (pending == null || pending !== question || pending.optionalText("kind") != "confirm") return false
+            if (pending == null || pending !== question) return false
+            if (editor) {
+                val value = answer["value"] as? JsonPrimitive ?: return false
+                return editorAuthority == editorAuthorityGeneration && pending.optionalText("kind") == "editor" && editorPrefill(pending) != null &&
+                    value.isString && validEditorText(value.content, 65536) && current.capabilitiesKnown &&
+                    QUESTION_EDITOR_CAPABILITY in current.capabilities && QUESTION_EDITOR_CAPABILITY !in current.unavailableCapabilities
+            }
+            if (pending.optionalText("kind") != "confirm") return false
             if (!pending.containsKey("details")) return true
             val descriptor = runCatching { parseQuestionDetails(pending.obj("details")) }.getOrNull() ?: return false
             return current.capabilitiesKnown && QUESTION_DETAILS_CAPABILITY in current.capabilities &&

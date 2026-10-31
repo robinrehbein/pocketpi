@@ -1273,6 +1273,9 @@ private fun QuestionComposer(
                     val questionId = question.text("id")
                     QuestionCard(
                         question = question,
+                        editorScope = state.editorQuestionGeneration,
+                        editorAvailable = state.capabilitiesKnown && QUESTION_EDITOR_CAPABILITY in state.capabilities &&
+                            QUESTION_EDITOR_CAPABILITY !in state.unavailableCapabilities,
                         enabled = state.connected && questionId !in state.answering,
                         pending = questionId in state.answering,
                         block = state.questionBlocks[questionId],

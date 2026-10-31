@@ -46,6 +46,16 @@ class NotificationActionReceiverTest {
         )
     }
 
+    @Test
+    fun backgroundEditorSubmissionFailsClosedWhileCancelCanSend() = runTest {
+        val socket = Recording()
+        val client = answerer(live = { _, _, block -> block(socket.commands) })
+        assertEquals(AnswerOutcome.FAILED, client.answer("r", "s", "q", Wire.objectOf("kind" to "editor", "value" to "draft")))
+        assertTrue(socket.sent.isEmpty())
+        assertEquals(AnswerOutcome.SENT, client.answer("r", "s", "q", Wire.objectOf("kind" to "cancel")))
+        assertEquals("cancel", socket.sent.single().obj("answer").text("kind"))
+    }
+
     private fun snapshot(question: JsonObject?, session: String = "s") = Wire.objectOf(
         "kind" to "snapshot", "sessionId" to session, "revision" to 1, "status" to "waiting",
         "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOfNotNull(question)),

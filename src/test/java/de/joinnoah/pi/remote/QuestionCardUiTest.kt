@@ -6,6 +6,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Modifier
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
@@ -27,7 +28,7 @@ class QuestionCardUiTest {
     private val pending = mutableStateOf(false)
     private val block = mutableStateOf<QuestionBlock?>(null)
     private val enabled = mutableStateOf(true)
-    private val question = mutableStateOf(parse("""{"id":"q","kind":"confirm","message":"Continue?"}"""))
+    private val question = mutableStateOf(parse("""{"id":"q","kind":"confirm","message":"Continue?"}"""), referentialEqualityPolicy())
 
     private fun parse(value: String) = Wire.json.parseToJsonElement(value).jsonObject
     private fun render(value: String) {
@@ -193,7 +194,7 @@ class QuestionCardUiTest {
 
     @Test fun localAndUnknownKindsOnlyShowTheMacHint() {
         render("""{"id":"q","kind":"local_required"}""")
-        for (kind in listOf("local_required", "custom", "editor", "future")) {
+        for (kind in listOf("local_required", "custom", "future")) {
             change("""{"id":"$kind","kind":"$kind"}""")
             compose.onNodeWithText("Input needed on the computer").assertIsDisplayed()
             compose.onAllNodes(hasClickAction()).assertCountEquals(0)
@@ -201,6 +202,51 @@ class QuestionCardUiTest {
             compose.onNodeWithText("Cancel").assertDoesNotExist()
         }
         assertTrue(answers.isEmpty())
+    }
+
+    @Test fun editorPreservesCompletePrefillAndRequiresExplicitSendOrCancel() {
+        render("""{"id":"e","kind":"editor","title":"Edit","prefill":"Grüße 😀\nsecond\tline"}""")
+        compose.onNode(hasSetTextAction()).assertTextContains("Grüße 😀\nsecond\tline")
+        assertTrue(answers.isEmpty())
+        compose.onNodeWithText("Send").performClick()
+        compose.onNodeWithText("Cancel").performClick()
+        assertEquals(listOf(
+            Wire.objectOf("kind" to "editor", "value" to "Grüße 😀\nsecond\tline"),
+            Wire.objectOf("kind" to "cancel"),
+        ), answers)
+    }
+
+    @Test fun editorEmptyPrefillAndReplacementResetDraftEvenWithSameId() {
+        render("""{"id":"e","kind":"editor","prefill":""}""")
+        compose.onNode(hasSetTextAction()).performTextInput("draft")
+        change("""{"id":"e","kind":"editor","prefill":""}""")
+        compose.onNode(hasSetTextAction()).assertTextEquals("")
+        compose.onNode(hasSetTextAction()).performTextInput("another draft")
+        change("""{"id":"e","kind":"editor","prefill":"replacement"}""")
+        compose.onNode(hasSetTextAction()).assertTextContains("replacement")
+        compose.onNodeWithText("Send").performClick()
+        assertEquals("replacement", answers.single().text("value"))
+    }
+
+    @Test fun editorRejectsUnsafeOrOversizedDraftWithoutTruncatingAndKeepsCancel() {
+        render("""{"id":"e","kind":"editor","prefill":""}""")
+        val field = compose.onNode(hasSetTextAction())
+        field.performTextReplacement("é".repeat(32768))
+        compose.onNodeWithText("Send").assertIsEnabled()
+        field.performTextReplacement("é".repeat(32769))
+        field.assertTextContains("é".repeat(32769))
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+        field.performTextReplacement("bad\rcontrol")
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+        compose.onNodeWithText("Cancel").performClick()
+        assertEquals(listOf(Wire.objectOf("kind" to "cancel")), answers)
+    }
+
+    @Test fun editorWithDetailsCannotSendButCanCancel() {
+        render("""{"id":"e","kind":"editor","prefill":"partial","details":{"id":"d","totalBytes":1,"sha256":"${"a".repeat(64)}"}}""")
+        compose.onAllNodesWithText("Send").assertCountEquals(0)
+        compose.onNodeWithText("Cancel").performClick()
+        assertEquals(listOf(Wire.objectOf("kind" to "cancel")), answers)
     }
 
     @Test fun questionnaireRetainsDefaultsRequiredValidationSkipAndStructuredSelections() {
