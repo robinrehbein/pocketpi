@@ -676,6 +676,11 @@ class DefaultRemoteRepository(
     @Volatile private var pushWakeRoute: String? = null
     /** Ends the push wake window after [PUSH_WAKE_WINDOW_MILLIS]. */
     private var pushWakeTimer: Job? = null
+    /**
+     * Counts the first-page reads [snapshot] started and [snapshotAsync] scheduled, so a failed read
+     * knows whether a later one will still come back to [releaseQueuedPrompt].
+     */
+    private var firstPageReads = 0L
     /** Sends `remote.ping` on a `remote.stream.v1` connection; see [startPings]. */
     private var pingJob: Job? = null
 
@@ -2811,6 +2816,11 @@ class DefaultRemoteRepository(
         // The first page the reread asked for replaced what the Timeline showed.
         var replaced = false
         var cancelled = false
+        // A drop ends this read with the connection already gone, though `connected` turns false
+        // only after the awaiter ran on an immediate dispatcher; see [queuedReadFailed].
+        val connection = generation
+        // Which first page this is; a later one, scheduled or running, owns the queued prompt.
+        val firstPage = if (older) -1L else ++firstPageReads
         try {
             // Cleared as the request goes out: a focus that excludes the session again while it is
             // awaited lapses it again.
@@ -2917,7 +2927,8 @@ class DefaultRemoteRepository(
             // or, back in focus, reads a fresh first page (not again right after a failed one).
             if (!older && current.focusLapsed && current === timeline) syncFocus(readLapsed = !rereadFailed)
             // No read follows that would release a queued prompt waiting on this one.
-            if (!older && !answered && !cancelled && epoch == selectionEpoch) queuedReadFailed(current)
+            if (!older && !answered && !cancelled && epoch == selectionEpoch && connection == generation && firstPage == firstPageReads)
+                queuedReadFailed(current)
         }
         if (staleCursor) {
             checkEpoch(epoch)
@@ -3005,6 +3016,8 @@ class DefaultRemoteRepository(
 
     private fun snapshotAsync(older: Boolean = false, intent: SnapshotIntent = SnapshotIntent.FRESH) {
         val epoch = selectionEpoch
+        // Counted when scheduled, so a read that fails meanwhile leaves the queued prompt to this one.
+        if (!older) firstPageReads++
         scope.launch {
             try {
                 snapshot(epoch, older, intent = intent)
@@ -6220,10 +6233,11 @@ class DefaultRemoteRepository(
     }
 
     /**
-     * A first page of [source] failed while connected. [releaseQueuedPrompt] relies on such a read
-     * to come back to it, so the queued prompt turns not confirmed instead of keeping its queued
-     * label until the expiry. In the background the foreground's read decides, as it does for a
-     * release.
+     * A first page of [source] failed on a connection that is still up, and no later read is
+     * scheduled or running for it ([snapshot] checks both). [releaseQueuedPrompt] relies on such a
+     * read to come back to it, so the queued prompt turns not confirmed instead of keeping its
+     * queued label until the expiry. A read a drop ended leaves the prompt for the reconnect. In
+     * the background the foreground's read decides, as it does for a release.
      */
     private fun queuedReadFailed(source: Timeline) {
         val queued = queuedPrompt ?: return
@@ -6235,6 +6249,8 @@ class DefaultRemoteRepository(
                 source.sessionId != queued.key.sessionId ||
                 currentDraftKey() != queued.key ||
                 activeHost?.routeId != queued.key.routeId ||
+                // A snapshot still owed for the chat reads it again and comes back to the release.
+                snapshotPending === source ||
                 current.pendingSend?.let { it.mutationId == queued.id && it.state == PendingSendState.QUEUED } != true
         )
             return

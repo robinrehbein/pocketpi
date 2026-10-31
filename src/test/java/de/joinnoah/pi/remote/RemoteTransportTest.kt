@@ -823,9 +823,11 @@ class RemoteTransportTest {
         val lane = Executors.newSingleThreadExecutor()
         val dispatcher = lane.asCoroutineDispatcher()
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
-        val http = OkHttpClient.Builder().pingInterval(200, TimeUnit.MILLISECONDS).build()
+        // Long enough that a slow box still answers every ping while the relay reads.
+        val http = OkHttpClient.Builder().pingInterval(1, TimeUnit.SECONDS).build()
         val events = Collections.synchronizedList(mutableListOf<String>())
         val ready = CountDownLatch(1)
+        val delivered = CountDownLatch(count)
         val failed = CountDownLatch(1)
         val listener =
             object : RemoteTransport.Listener {
@@ -842,6 +844,7 @@ class RemoteTransportTest {
 
                 override fun message(payload: JsonObject) {
                     events += "message:" + payload.long("n")
+                    delivered.countDown()
                 }
 
                 override fun failed(reconnect: Boolean, error: Int) {
@@ -855,6 +858,8 @@ class RemoteTransportTest {
             val relayUrl = server.url("/").toString().trimEnd('/')
             runBlocking(dispatcher) { transport.connect(PairedHost(Wire.random(), relayUrl, Wire.random(), deviceKey, "Mac")) }
             assertTrue(ready.await(10, TimeUnit.SECONDS))
+            // Every frame is in before the relay stops reading, so the failure cannot cut them short.
+            assertTrue(delivered.await(10, TimeUnit.SECONDS))
             runBlocking(dispatcher) { transport.send(Wire.objectOf("type" to "remote.ping", "requestId" to Wire.random())) }
             assertTrue(failed.await(10, TimeUnit.SECONDS))
             // Settles anything still on the lane before the events are read.
