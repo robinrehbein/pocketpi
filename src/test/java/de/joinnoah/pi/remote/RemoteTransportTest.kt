@@ -1,8 +1,14 @@
 package de.joinnoah.pi.remote
 
+import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.*
 import kotlinx.serialization.json.*
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
 import okhttp3.*
 import okio.ByteString
 import org.junit.Assert.*
@@ -765,6 +771,107 @@ class RemoteTransportTest {
             assertFalse(Diagnostics.export().contains("server_no_context_takeover"))
         } finally {
             Diagnostics.clear()
+        }
+    }
+
+    /**
+     * Real OkHttp against MockWebServer. The relay stops reading once the connection is up, so it
+     * answers no ping, and OkHttp fails the socket from its writer thread: that failure still
+     * reaches the listener after every frame the relay sent before it. The extensions of the real
+     * 101 response are recorded.
+     */
+    @Test
+    fun overRealOkHttpAWriterSideFailureFollowsTheDeliveredFramesAndTheExtensionsAreRecorded() {
+        val count = 50
+        val deviceKey = Wire.random(32)
+        val stopReading = CountDownLatch(1)
+        val relay =
+            object : WebSocketListener() {
+                var channel: SecureChannel? = null
+                var authenticated = false
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    val open = channel
+                    if (open == null) {
+                        val hello = Wire.parse(text)
+                        val nonce = Wire.random(32)
+                        webSocket.send(Wire.objectOf("v" to 1, "type" to "challenge",
+                            "connectionId" to hello.text("connectionId"), "serverNonce" to nonce).toString())
+                        val created = SecureChannel(deviceKey, JsonObject(hello + ("serverNonce" to JsonPrimitive(nonce))), false)
+                        channel = created
+                        webSocket.send(created.seal(Wire.objectOf("type" to "ready", "mode" to "device")).toString())
+                        return
+                    }
+                    val payload = open.open(Wire.parse(text))
+                    if (!authenticated) {
+                        check(payload.text("type") == "device.authenticate")
+                        authenticated = true
+                        webSocket.send(open.seal(Wire.objectOf("type" to "device.authenticated",
+                            "capabilities" to JsonArray(emptyList()))).toString())
+                        repeat(count) { webSocket.send(open.seal(Wire.objectOf("type" to "event", "n" to it)).toString()) }
+                        return
+                    }
+                    // Blocks the relay's reader: no pong goes back from here on.
+                    stopReading.await(30, TimeUnit.SECONDS)
+                }
+            }
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse.Builder().addHeader("Sec-WebSocket-Extensions", "permessage-deflate").webSocketUpgrade(relay).build()
+        )
+        server.start()
+        val lane = Executors.newSingleThreadExecutor()
+        val dispatcher = lane.asCoroutineDispatcher()
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        val http = OkHttpClient.Builder().pingInterval(200, TimeUnit.MILLISECONDS).build()
+        val events = Collections.synchronizedList(mutableListOf<String>())
+        val ready = CountDownLatch(1)
+        val failed = CountDownLatch(1)
+        val listener =
+            object : RemoteTransport.Listener {
+                override fun ready(capabilities: Set<String>) {
+                    events += "ready"
+                    ready.countDown()
+                }
+
+                override fun approval() {}
+
+                override suspend fun persistPairing(host: PairedHost) {}
+
+                override fun paired(host: PairedHost) {}
+
+                override fun message(payload: JsonObject) {
+                    events += "message:" + payload.long("n")
+                }
+
+                override fun failed(reconnect: Boolean, error: Int) {
+                    events += "failed:$reconnect"
+                    failed.countDown()
+                }
+            }
+        Diagnostics.clear()
+        try {
+            val transport = SecureRemoteTransport(scope, http) { "Test device" }.also { it.listener = listener }
+            val relayUrl = server.url("/").toString().trimEnd('/')
+            runBlocking(dispatcher) { transport.connect(PairedHost(Wire.random(), relayUrl, Wire.random(), deviceKey, "Mac")) }
+            assertTrue(ready.await(10, TimeUnit.SECONDS))
+            runBlocking(dispatcher) { transport.send(Wire.objectOf("type" to "remote.ping", "requestId" to Wire.random())) }
+            assertTrue(failed.await(10, TimeUnit.SECONDS))
+            // Settles anything still on the lane before the events are read.
+            runBlocking(dispatcher) {}
+
+            assertEquals(listOf("ready") + (0 until count).map { "message:$it" } + "failed:true", events.toList())
+            // It was OkHttp's ping task, which runs on the writer, that failed the socket.
+            assertEquals(1L, Diagnostics.report().link.count(Diagnostics.Counter.PING_FAILURES))
+            assertEquals(listOf("permessage-deflate"), Diagnostics.report().connects.first().extensions)
+        } finally {
+            stopReading.countDown()
+            Diagnostics.clear()
+            scope.cancel()
+            lane.shutdown()
+            http.dispatcher.executorService.shutdown()
+            http.connectionPool.evictAll()
+            server.close()
         }
     }
 

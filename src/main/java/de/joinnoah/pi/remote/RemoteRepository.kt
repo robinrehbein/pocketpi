@@ -300,8 +300,9 @@ interface RemoteRepository {
 
     /**
      * Waits up to [maxMillis] for the connection a [pushWake] for [routeId] started to be usable by
-     * [withHealthyConnection]; returns at once when no wake window is open or it already is. Any thread may
-     * call it.
+     * [withHealthyConnection]. It first checks on the repository's own dispatcher, so a wake already
+     * posted there is seen; it then returns when no wake window is open or the connection is usable.
+     * Any thread may call it.
      */
     suspend fun awaitPushWake(routeId: String, maxMillis: Long = PUSH_WAKE_WAIT_MILLIS) {}
 

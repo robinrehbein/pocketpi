@@ -13,6 +13,8 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import kotlin.random.Random
+import kotlin.coroutines.ContinuationInterceptor
+import kotlin.coroutines.EmptyCoroutineContext
 
 internal fun canAbortRemoteRun(state: RemoteState, activeRouteId: String?): Boolean =
     state.connected &&
@@ -2808,6 +2810,7 @@ class DefaultRemoteRepository(
         var answered = false
         // The first page the reread asked for replaced what the Timeline showed.
         var replaced = false
+        var cancelled = false
         try {
             // Cleared as the request goes out: a focus that excludes the session again while it is
             // awaited lapses it again.
@@ -2897,6 +2900,9 @@ class DefaultRemoteRepository(
             if (!older || !retryStaleCursor || e.kind != RemoteRequestException.Kind.HOST_ERROR || e.code != "stale_cursor") throw e
             staleCursor = true
             answered = true
+        } catch (e: CancellationException) {
+            cancelled = true
+            throw e
         } finally {
             // A reply that never came or was not taken: the events held for it apply now.
             val heldArrivals = awaited && current.heldArrivals
@@ -2910,6 +2916,8 @@ class DefaultRemoteRepository(
             // A focus that excluded the chat while this reply was awaited: the Timeline detaches now,
             // or, back in focus, reads a fresh first page (not again right after a failed one).
             if (!older && current.focusLapsed && current === timeline) syncFocus(readLapsed = !rereadFailed)
+            // No read follows that would release a queued prompt waiting on this one.
+            if (!older && !answered && !cancelled && epoch == selectionEpoch) queuedReadFailed(current)
         }
         if (staleCursor) {
             checkEpoch(epoch)
@@ -4620,8 +4628,15 @@ class DefaultRemoteRepository(
         // Stale until the activation after a reconnect has read the chat again; a healthy
         // connection (see [withHealthyConnection]) is neither.
         fun ready(current: RemoteState) = current.connected && !current.stale
-        if (pushWakeRoute != routeId || ready(state.value)) return
-        withTimeoutOrNull(maxMillis) { state.first(::ready) }
+        withTimeoutOrNull(maxMillis) {
+            // Checked on the repository's own dispatcher, the main thread in the app, so a worker
+            // that starts while the main thread is busy sees a [pushWake] posted before it started.
+            val waiting =
+                withContext(scope.coroutineContext[ContinuationInterceptor] ?: EmptyCoroutineContext) {
+                    pushWakeRoute == routeId && !ready(state.value)
+                }
+            if (waiting) state.first(::ready)
+        }
     }
 
     /**
@@ -6202,6 +6217,28 @@ class DefaultRemoteRepository(
                 else markQueuedNotConfirmed(queued, "not_sent")
             }
         }
+    }
+
+    /**
+     * A first page of [source] failed while connected. [releaseQueuedPrompt] relies on such a read
+     * to come back to it, so the queued prompt turns not confirmed instead of keeping its queued
+     * label until the expiry. In the background the foreground's read decides, as it does for a
+     * release.
+     */
+    private fun queuedReadFailed(source: Timeline) {
+        val queued = queuedPrompt ?: return
+        val current = state.value
+        if (
+            !current.connected ||
+                inBackground ||
+                source !== timeline ||
+                source.sessionId != queued.key.sessionId ||
+                currentDraftKey() != queued.key ||
+                activeHost?.routeId != queued.key.routeId ||
+                current.pendingSend?.let { it.mutationId == queued.id && it.state == PendingSendState.QUEUED } != true
+        )
+            return
+        markQueuedNotConfirmed(queued, "read_failed")
     }
 
     /** The queued prompt did not go out: not confirmed, with its text back in the composer. */

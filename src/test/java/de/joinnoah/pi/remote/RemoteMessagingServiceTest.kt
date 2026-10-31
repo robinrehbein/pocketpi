@@ -141,17 +141,24 @@ class RemoteMessagingServiceTest {
     }
 
     @Test
-    fun aPushForAPairedHostWithPushOnWakesTheMainConnectionOnceWhateverTheNotificationDoes() {
+    fun aPushForAPairedHostWithPushOnWakesTheMainConnectionOnce() {
         val host = Host(showing = "r" to "s")
         receivePush(complete, host)
         assertEquals(listOf("r:e1"), host.wakes)
         // A duplicate delivery wakes nothing again.
         receivePush(complete, host)
         assertEquals(listOf("r:e1"), host.wakes)
-        // The wake does not depend on the notification being posted.
-        val silent = Host(canPost = false)
-        receivePush(question, silent)
-        assertEquals(listOf("r:e2"), silent.wakes)
+    }
+
+    @Test
+    fun withNotificationsBlockedAPushRecordsTheStateButWakesNoConnection() {
+        // No notification can show, so no upgrade runs that would use the woken connection.
+        for (payload in listOf(question, complete)) {
+            val silent = Host(canPost = false)
+            receivePush(payload, silent)
+            assertEquals(emptyList<String>(), silent.wakes)
+            assertEquals(listOf("state"), silent.order)
+        }
     }
 
     @Test

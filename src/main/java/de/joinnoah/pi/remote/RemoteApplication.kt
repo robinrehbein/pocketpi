@@ -250,6 +250,7 @@ class RemoteApplication : Application() {
             object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) {
                     foreground = true
+                    diagnosticsStore.onForeground()
                     repository.state.value.let { state ->
                         val route = state.selection.routeId
                         val session = state.selection.sessionId
