@@ -702,4 +702,9 @@
     <string name="remote_terminal_draft_busy">Wait for pending terminal input before sending the draft.</string>
     <string name="remote_prepared_text_explanation">Opening created a different session. Your prepared text remains available in the original session; copy and paste it here if you wish.</string>
     <string name="remote_prepared_text_copy">Copy prepared text</string>
+    <string name="preview_title">Preview</string>
+    <string name="preview_port">Port</string>
+    <string name="preview_open">Open</string>
+    <string name="preview_title_port">Preview · %1$d</string>
+    <string name="preview_hide">Hide</string>
 </resources>

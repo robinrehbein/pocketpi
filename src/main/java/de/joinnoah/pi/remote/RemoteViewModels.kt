@@ -326,6 +326,19 @@ internal class ChatViewModel(
     private val settings: SettingsRepository,
 ) : DestinationViewModel(repository, key) {
     val preferences = settings.state
+    fun canOpenPreview() = repository.canOpenPreview()
+    fun openPreview(port: Int) = repository.openPreview(port)
+    fun closePreview() = repository.closePreview()
+    fun acquirePreview() = repository.acquirePreview()
+    fun handoffPreview(ownerId: String) = repository.handoffPreview(ownerId)
+    fun newPreviewTab(url: String) = repository.newPreviewTab(url)
+    fun navigatePreview(url: String) = repository.navigatePreview(url)
+    fun selectPreviewTab(tabId: String) = repository.selectPreviewTab(tabId)
+    fun closePreviewTab(tabId: String) = repository.closePreviewTab(tabId)
+    fun resizePreview(width: Int, height: Int, deviceScale: Double, orientation: String) = repository.resizePreview(width, height, deviceScale, orientation)
+    fun sendPreviewInput(input: BrowserInput) = repository.sendPreviewInput(input)
+    fun refreshPreview() = repository.refreshPreview()
+    fun setPreviewVisible(visible: Boolean) = repository.setPreviewVisible(visible)
     fun canOpenBrowser() = repository.canOpenBrowser()
     fun openBrowser() = repository.openBrowser()
     fun closeBrowser() = repository.closeBrowser()

@@ -332,6 +332,45 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun previewMenuRequiresNegotiatedCapability() {
+        val selection = RemoteSelection("host", "project", "session")
+        val state = RemoteState(connected = true, selection = selection, session = session())
+        assertFalse(chatActionAvailable(ChatAction.PREVIEW, state))
+        assertTrue(chatActionAvailable(ChatAction.PREVIEW, state.copy(capabilities = setOf(SESSION_PREVIEW_CAPABILITY))))
+    }
+
+    @Test
+    fun previewOnlyCapabilityOpensExactPortAndReconnectsReadOnly() = runTest {
+        val transport = Transport().also(::configure)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_PREVIEW_CAPABILITY), JsonPrimitive(SESSION_BROWSER_RECOVERY_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "browser.open" -> Wire.objectOf("kind" to "browser.opened", "browserId" to "preview", "generation" to 1,
+                    "incarnation" to "i", "tabs" to JsonArray(emptyList()), "viewportRevision" to 0, "previewPort" to 3000)
+                "browser.participants" -> Wire.objectOf("kind" to "browser.participants", "browserId" to "preview", "generation" to 1, "participants" to JsonArray(emptyList()))
+                else -> original(request)
+            }
+        }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+        repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+        assertFalse(repo.canOpenBrowser())
+        assertTrue(repo.canOpenPreview())
+        assertFalse(repo.openPreview(0))
+        assertTrue(repo.openPreview(3000)); runCurrent()
+        assertEquals(3000, repo.state.value.previewBrowser?.previewPort)
+        assertNull(repo.state.value.browser)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_001); runCurrent()
+        val opens = transport.sent.filter { it.text("type") == "browser.open" }
+        assertEquals(2, opens.size)
+        assertTrue(opens.all { it["previewPort"]?.jsonPrimitive?.int == 3000 })
+        assertFalse(repo.state.value.previewBrowser!!.ownsControl)
+        assertTrue(transport.sent.none { it.text("type") == "browser.acquire" || it.text("type") == "browser.input" })
+    }
+
+    @Test
     fun automaticReconnectReopensExistingBrowserOnlyAfterCapabilityDiscovery() = runTest {
         val transport = Transport().also(::configure)
         advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_BROWSER_CAPABILITY))))

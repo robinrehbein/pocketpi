@@ -220,6 +220,7 @@ data class RemoteState(
     val providerAuth: ProviderAuthState = ProviderAuthState(),
     /** Plane tickets of the shown Mac (`tickets.v1`); empty without the capability. */
     val tickets: TicketsState = TicketsState(),
+    val previewBrowser: BrowserView? = null,
 )
 
 /** The app's connection counts as healthy for a notification's request while a frame arrived this recently. */
@@ -233,6 +234,20 @@ data class Picked(val uri: String, val photo: Boolean)
 
 interface RemoteRepository {
     val state: StateFlow<RemoteState>
+    fun canOpenPreview(): Boolean = false
+    fun openPreview(port: Int): Boolean = false
+    fun closePreview() {}
+    fun acquirePreview(): Boolean = false
+    fun handoffPreview(ownerId: String): Boolean = false
+    fun newPreviewTab(url: String): Boolean = false
+    fun navigatePreview(url: String): Boolean = false
+    fun selectPreviewTab(tabId: String) {}
+    fun closePreviewTab(tabId: String): Boolean = false
+    fun resizePreview(width: Int, height: Int, deviceScale: Double, orientation: String): Boolean = false
+    fun sendPreviewInput(input: BrowserInput): Boolean = false
+    fun refreshPreview(): Boolean = false
+    fun setPreviewVisible(visible: Boolean) {}
+
     fun canOpenBrowser(): Boolean = false
     fun openBrowser(): Boolean = false
     fun closeBrowser() {}

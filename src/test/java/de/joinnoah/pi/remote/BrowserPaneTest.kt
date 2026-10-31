@@ -27,6 +27,25 @@ class BrowserPaneTest {
         bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out); bitmap.recycle()
         return BrowserImage(out.toByteArray(), 400, 200, 400, 200, 1.0, 0.0, 0.0, 1, 1)
     }
+    @Test fun switchingBetweenBrowserAndPreviewKeepsDraftsSeparate() {
+        var preview by mutableStateOf(false)
+        compose.setContent {
+            val holder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+            MaterialTheme {
+                holder.SaveableStateProvider(if (preview) "preview" else "browser") {
+                    BrowserPane(BrowserView("s", opening = false, ownsControl = true, previewPort = if (preview) 3000 else null), BrowserPaneActions(), {})
+                }
+            }
+        }
+        compose.onNodeWithTag("browserText").performTextInput("browser draft")
+        compose.runOnIdle { preview = true }
+        compose.onNodeWithTag("browserText").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+        compose.onNodeWithTag("browserText").performTextInput("preview draft")
+        compose.runOnIdle { preview = false }
+        compose.onNodeWithTag("browserText").assertTextContains("browser draft")
+        compose.runOnIdle { preview = true }
+        compose.onNodeWithTag("browserText").assertTextContains("preview draft")
+    }
     @Test fun readOnlyPaneRequiresExplicitAcquire() {
         var acquired = 0
         val sent = mutableListOf<BrowserInput>()

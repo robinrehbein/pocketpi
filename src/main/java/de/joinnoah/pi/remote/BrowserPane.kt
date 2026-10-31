@@ -45,7 +45,7 @@ private data class BrowserFlight(val item: PendingBrowserInput, val baseline: Br
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClose: () -> Unit, onUnsentChanged: (Boolean) -> Unit = {}) {
+internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClose: () -> Unit, onUnsentChanged: (Boolean) -> Unit = {}, onHide: (() -> Unit)? = null) {
     val active = LocalTerminalKeyboardActive.current
     val focusOwner = LocalTerminalInputFocus.current
     val focusToken = remember { Any() }
@@ -61,9 +61,9 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         if (active) latestActions.visible(true)
         onDispose { latestActions.visible(false); focusOwner?.update(focusToken, false) }
     }
-    var url by rememberSaveable(view?.sessionId) { mutableStateOf("") }
-    var urlDirty by rememberSaveable(view?.sessionId) { mutableStateOf(false) }
-    var draft by rememberSaveable(view?.sessionId) { mutableStateOf("") }
+    var url by rememberSaveable(view?.sessionId, view?.previewPort) { mutableStateOf("") }
+    var urlDirty by rememberSaveable(view?.sessionId, view?.previewPort) { mutableStateOf(false) }
+    var draft by rememberSaveable(view?.sessionId, view?.previewPort) { mutableStateOf("") }
     var textSendRefused by remember(view?.sessionId) { mutableStateOf(false) }
     val queue = remember(view?.sessionId) { mutableStateListOf<PendingBrowserInput>() }
     var flight by remember(view?.sessionId) { mutableStateOf<BrowserFlight?>(null) }
@@ -164,8 +164,9 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     val latestEnqueue by rememberUpdatedState<(PendingBrowserInput) -> Boolean>({ enqueue(it) })
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(stringResource(R.string.browser_title), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+            Text(if (view?.previewPort != null) stringResource(R.string.preview_title_port, view.previewPort) else stringResource(R.string.browser_title), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
             TextButton(onClick = { latestActions.refresh() }) { Text(stringResource(R.string.browser_refresh)) }
+            if (onHide != null) TextButton(onClick = onHide) { Text(stringResource(R.string.preview_hide)) }
             TextButton(onClick = onClose) { Text(stringResource(R.string.browser_close)) }
         }
         if (view == null || view.opening) {

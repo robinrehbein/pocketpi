@@ -26,6 +26,50 @@ class BrowserClientTest {
         put("width", 100); put("height", 100); put("cssWidth", 100); put("cssHeight", 100); put("deviceScale", 1); put("scrollX", 0); put("scrollY", 0)
         put("data", Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3)))
     }
+    @Test fun previewOpenRequiresMatchingPortEchoAndPreservesPortOnRefresh() = runTest {
+        data class Call(val type: String, val fields: Array<out Pair<String, Any?>>, val result: CompletableDeferred<JsonObject>)
+        val calls = mutableListOf<Call>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, fields -> CompletableDeferred<JsonObject>().also { calls.add(Call(type, fields, it)) }.await() }, {})
+        assertTrue(client.open("session", 1, 3000)); runCurrent()
+        val first = calls.removeAt(0)
+        assertEquals("3000", first.fields.first { it.first == "previewPort" }.second.toString())
+        first.result.complete(JsonObject(opened() + ("previewPort" to JsonPrimitive(3000)))); runCurrent()
+        assertEquals(3000, client.view!!.previewPort)
+        assertTrue(client.refresh()); runCurrent()
+        val refresh = calls.first { it.type == "browser.open" }; calls.remove(refresh)
+        assertEquals("3000", refresh.fields.first { it.first == "previewPort" }.second.toString())
+        refresh.result.complete(JsonObject(opened() + ("previewPort" to JsonPrimitive(3001)))); runCurrent()
+        calls.firstOrNull { it.type == "browser.participants" }?.result?.complete(Wire.objectOf("kind" to "browser.participants", "browserId" to "b", "generation" to 1, "participants" to JsonArray(emptyList())))
+        runCurrent()
+        assertFalse(client.view!!.ownsControl)
+        assertTrue(client.view!!.notice == BrowserNotice.FAILED || client.view!!.notice == BrowserNotice.FRAME_FAILED)
+    }
+    @Test fun previewRefreshFailureDropsControlAndRefusesFurtherInput() = runTest {
+        data class Call(val type: String, val result: CompletableDeferred<JsonObject>)
+        val calls = mutableListOf<Call>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ ->
+            CompletableDeferred<JsonObject>().also { calls.add(Call(type, it)) }.await()
+        }, {})
+        client.open("session", 1, 3000); runCurrent()
+        calls.removeAt(0).result.complete(JsonObject(opened() + ("previewPort" to JsonPrimitive(3000)))); runCurrent()
+        calls.first { it.type == "browser.watch" }.also { calls.remove(it); it.result.complete(watching()) }; runCurrent()
+        assertTrue(client.acquire()); runCurrent()
+        calls.first { it.type == "browser.acquire" }.also { calls.remove(it); it.result.complete(lease()) }; runCurrent()
+        assertTrue(client.view!!.ownsControl)
+        assertTrue(client.refresh()); runCurrent()
+        calls.first { it.type == "browser.open" }.also { calls.remove(it); it.result.completeExceptionally(IllegalStateException("forbidden")) }; runCurrent()
+        assertFalse(client.view!!.ownsControl)
+        assertFalse(client.input(BrowserInput.Text("must not send")))
+        assertTrue(calls.any { it.type == "browser.detach" })
+        assertTrue(calls.none { it.type == "browser.input" })
+    }
+    @Test fun previewOpenRejectsMissingEcho() = runTest {
+        val result = CompletableDeferred<JsonObject>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, _, _ -> result.await() }, {})
+        client.open("session", 1, 3000); runCurrent(); result.complete(opened()); runCurrent()
+        assertEquals(BrowserNotice.FAILED, client.view!!.notice)
+        assertNull(client.view!!.browserId)
+    }
     @Test fun openingUnconfiguredTabDoesNotWatchOrDetachAndAcquireWaitsForViewport() = runTest {
         val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
         val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ -> CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await() }, {}, { "device" })

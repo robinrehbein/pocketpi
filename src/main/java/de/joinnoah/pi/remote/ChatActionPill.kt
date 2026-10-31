@@ -50,7 +50,7 @@ private fun ChatAction.icon(): ImageVector =
     when (this) {
         ChatAction.CHANGES -> Icons.Default.Difference
         ChatAction.FILES -> Icons.Default.FolderOpen
-        ChatAction.BROWSER -> Icons.Default.Language
+        ChatAction.BROWSER, ChatAction.PREVIEW -> Icons.Default.Language
         ChatAction.JOBS -> Icons.Outlined.Terminal
         ChatAction.TREE -> Icons.Default.AccountTree
         ChatAction.ARTIFACTS -> Icons.Default.Collections
@@ -78,7 +78,7 @@ private fun ChatAction.shortcut(): Shortcut? =
         ChatAction.NEW_SESSION -> Shortcut.NEW_SESSION
         ChatAction.HISTORY -> Shortcut.HISTORY
         ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.EXPORT, ChatAction.RELOAD,
-        ChatAction.SESSION_SETTINGS, ChatAction.STATUS, ChatAction.CLOSE, ChatAction.BROWSER -> null
+        ChatAction.SESSION_SETTINGS, ChatAction.STATUS, ChatAction.CLOSE, ChatAction.BROWSER, ChatAction.PREVIEW -> null
     }
 
 internal fun ChatAction.label(): Int =
@@ -86,6 +86,7 @@ internal fun ChatAction.label(): Int =
         ChatAction.CHANGES -> R.string.remote_changes_open
         ChatAction.FILES -> R.string.remote_files_open
         ChatAction.BROWSER -> R.string.browser_title
+        ChatAction.PREVIEW -> R.string.preview_title
         ChatAction.JOBS -> R.string.remote_jobs_title
         ChatAction.TREE -> R.string.remote_tree_title
         ChatAction.ARTIFACTS -> R.string.remote_artifacts_title

@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -392,6 +393,33 @@ class TwoPaneNavigationTest {
         compose.onNode(isSelected() and hasAnyAncestor(hasTestTag("sessionListPane"))).assertExists()
         compose.onNodeWithText("Second session").assertIsDisplayed()
         compose.onNodeWithTag("sessionSearch").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w900dp-h1200dp")
+    fun hiddenPreviewDraftUsesBrowserDiscardPromptAndCancelKeepsDraft() {
+        repository.state.value = repository.state.value.copy(
+            previewBrowser = BrowserView("s1", opening = false, browserId = "preview", ownsControl = true, previewPort = 3000),
+        )
+        render()
+        fun showPreview() {
+            if (compose.onAllNodesWithTag("chatAction_preview").fetchSemanticsNodes().isNotEmpty()) {
+                compose.onNodeWithTag("chatAction_preview").performClick()
+            } else {
+                compose.onNodeWithTag("chatActionsMore").performClick()
+                compose.onNodeWithTag("chatActionMenu_preview").performClick()
+            }
+            compose.waitForIdle()
+        }
+        showPreview()
+        compose.onNodeWithTag("browserText").performTextInput("keep preview draft")
+        compose.onNodeWithText(label(R.string.preview_hide)).performClick()
+        compose.onNodeWithText("Second session").performClick()
+        compose.onNodeWithText(label(R.string.browser_discard_title)).assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.browser_discard_body)).assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.remote_terminal_cancel)).performClick()
+        showPreview()
+        compose.onNodeWithTag("browserText").assertTextContains("keep preview draft")
     }
 
     @Test

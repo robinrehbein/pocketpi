@@ -42,6 +42,18 @@ class BrowserProtocolTest {
         }
     }
 
+    @Test fun previewPortIsOptionalStrictAndRoundTrips() {
+        fun command(port: String) = json("""{"type":"browser.open","requestId":"r","sessionId":"s","previewPort":$port}""")
+        for (port in listOf("1", "65535")) {
+            val payload = command(port)
+            assertEquals(payload, encodeBrowserCommand(parseBrowserCommand(payload)))
+        }
+        for (port in listOf("0", "65536", "1.5", "null", "\"3000\"")) rejected { parseBrowserCommand(command(port)) }
+        fun result(port: String) = json("""{"kind":"browser.opened","browserId":"b","generation":0,"incarnation":"i","tabs":[],"viewportRevision":0,"previewPort":$port}""")
+        assertTrue(parseBrowserResult(result("3000")) is BrowserResult.Opened)
+        for (port in listOf("0", "65536", "1.5", "null", "\"3000\"")) rejected { parseBrowserResult(result(port)) }
+    }
+
     @Test fun inputBoundsAndUnicodeAreEnforcedBeforeSending() {
         val base = """{"type":"browser.input","requestId":"r","sessionId":"s","browserId":"b","leaseId":"l","generation":1,"tabId":"t","viewportRevision":0,"sequence":0,"input":INPUT}"""
         fun check(input: JsonObject) = parseBrowserCommand(json(base.replace("INPUT", input.toString())))

@@ -280,6 +280,7 @@ class DefaultRemoteRepository(
             TICKETS_CAPABILITY,
             SESSION_TASKS_CAPABILITY,
             // Browser commands additionally require a successfully negotiated v3 route.
+            SESSION_PREVIEW_CAPABILITY,
             SESSION_BROWSER_CAPABILITY,
             SESSION_BROWSER_RECOVERY_CAPABILITY,
         )
@@ -380,6 +381,33 @@ class DefaultRemoteRepository(
     override fun sendBrowserInput(input: BrowserInput) = browserClient.input(input)
     override fun refreshBrowser() = browserClient.refresh()
     override fun setBrowserVisible(visible: Boolean) = browserClient.setVisible(visible)
+    private val previewClient by lazy {
+        BrowserClient(scope,
+            { session, connection -> state.value.connected && generation == connection && state.value.selection.sessionId == session },
+            { connection, type, fields ->
+                check(generation == connection && connectionRequestsOpen())
+                connectionRequest(type, *fields)
+            },
+            { browser -> update { it.copy(previewBrowser = browser) } },
+            { state.value.host?.deviceId },
+            { connection -> state.value.connected && generation == connection },
+            { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
+            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
+        )
+    }
+    override fun canOpenPreview(): Boolean = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_PREVIEW_CAPABILITY in state.value.capabilities
+    override fun openPreview(port: Int): Boolean = canOpenPreview() && port in 1..65535 && previewClient.open(requireNotNull(state.value.selection.sessionId), generation, port)
+    override fun closePreview() = previewClient.close()
+    override fun acquirePreview() = previewClient.acquire()
+    override fun handoffPreview(ownerId: String) = previewClient.handoff(ownerId)
+    override fun newPreviewTab(url: String) = previewClient.newTab(url)
+    override fun navigatePreview(url: String) = previewClient.navigate(url)
+    override fun selectPreviewTab(tabId: String) = previewClient.selectTab(tabId)
+    override fun closePreviewTab(tabId: String) = previewClient.closeTab(tabId)
+    override fun resizePreview(width: Int, height: Int, deviceScale: Double, orientation: String) = previewClient.resize(width, height, deviceScale, orientation)
+    override fun sendPreviewInput(input: BrowserInput) = previewClient.input(input)
+    override fun refreshPreview() = previewClient.refresh()
+    override fun setPreviewVisible(visible: Boolean) = previewClient.setVisible(visible)
     private var selectionEpoch = 0L
     private var generation = 0L
     // Connection-scoped attempts and UI owners start at the send tap.
@@ -1626,10 +1654,11 @@ class DefaultRemoteRepository(
 
     private var preparedSource: DraftKey? = null
 
-    override fun cancelSelection() = cancelSelection(preserveBrowser = false)
+    override fun cancelSelection() = cancelSelection(preserveBrowser = false, preservePreview = false)
 
-    private fun cancelSelection(preserveBrowser: Boolean) {
+    private fun cancelSelection(preserveBrowser: Boolean, preservePreview: Boolean = false) {
         if (!preserveBrowser) browserClient.close()
+        if (!preservePreview) previewClient.close()
         preparedSource = null
         update { it.copy(preparedText = null) }
         cacheCurrentScreen(immediate = true)
@@ -1777,6 +1806,7 @@ class DefaultRemoteRepository(
         // A connection replaced on purpose is no failure.
         connectionEnded()
         browserClient.disconnected()
+        previewClient.disconnected()
         generation++
         clearLateAcknowledgements()
         failConnectionRequests()
@@ -1921,7 +1951,7 @@ class DefaultRemoteRepository(
                 }
                 if (revision >= 2 && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY) || revision >= 2)
+                    it in advertised && (it != SESSION_PREVIEW_CAPABILITY || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY) || revision >= 2)
                 }
                 val hadTasks = canReadTasks()
                 if (revision >= 2 && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
@@ -2029,7 +2059,9 @@ class DefaultRemoteRepository(
                 "host.event" ->
                     try {
                         if (payload.optionalText("kind") in setOf("browser.frame", "browser.document", "browser.frame.waiting")) {
-                            browserClient.frame(payload)
+                            val browserId = payload.optionalText("browserId")
+                            if (browserId != null && browserId == browserClient.view?.browserId) browserClient.frame(payload)
+                            if (browserId != null && browserId == previewClient.view?.browserId) previewClient.frame(payload)
                         } else if (payload.optionalText("kind")?.startsWith("session.terminal.") == true) {
                             receiveTerminalEvent(payload)
                         } else if (payload.optionalText("kind")?.startsWith("provider.auth.") == true) {
@@ -2697,6 +2729,7 @@ class DefaultRemoteRepository(
     ) {
         val previous = state.value.selection
         if (selection != previous && browserClient.view != null) browserClient.close()
+        if (selection != previous && previewClient.view != null) previewClient.close()
         if (selection.routeId != previous.routeId || selection.sessionId != previous.sessionId) endTerminal("left", sendDetach = true)
         // The same chat of the same Mac selected again (a reconnect, a resume, a restore): what it
         // shows stays until the snapshot and the reads after it replace it.
@@ -2884,6 +2917,8 @@ class DefaultRemoteRepository(
         if (!force) cancelSelection(
             preserveBrowser = mode == ActivationMode.RESTORE && selection == previousSelection &&
                 browserClient.isDisconnectedFor(selection.sessionId),
+            preservePreview = mode == ActivationMode.RESTORE && selection == previousSelection &&
+                previewClient.isDisconnectedFor(selection.sessionId),
         )
         if (!useCache) clearNavigationCache()
         val epoch = selectionEpoch
@@ -3153,6 +3188,10 @@ class DefaultRemoteRepository(
             if (mode == ActivationMode.RESTORE && previousSelection == canonical &&
                 state.value.selection == canonical && canOpenBrowser()) {
                 browserClient.resumeIfDisconnected(requireNotNull(canonical.sessionId), generation)
+            }
+            if (mode == ActivationMode.RESTORE && previousSelection == canonical &&
+                state.value.selection == canonical && canOpenPreview()) {
+                previewClient.resumeIfDisconnected(requireNotNull(canonical.sessionId), generation)
             }
             refreshPanes()
             outcome = "ok"
@@ -3759,6 +3798,7 @@ class DefaultRemoteRepository(
         cancelHostWaitHint()
         deferredRecovery = null
         browserClient.disconnected()
+        previewClient.disconnected()
         generation++
         clearLateAcknowledgements()
         folderVersion++

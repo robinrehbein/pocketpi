@@ -10,7 +10,7 @@ import kotlinx.serialization.json.jsonPrimitive
 public data class BrowserInputReceipt(val sequence: Long, val status: String)
 public enum class BrowserNotice { BUSY, UNCERTAIN, DISCONNECTED, FAILED, FRAME_FAILED }
 public data class BrowserImage(val jpeg: ByteArray, val width: Int, val height: Int, val cssWidth: Int, val cssHeight: Int, val deviceScale: Double, val scrollX: Double, val scrollY: Double, val frameId: Long, val viewportRevision: Long)
-public data class BrowserView(val sessionId: String, val opening: Boolean = true, val browserId: String? = null, val incarnation: String? = null, val generation: Long = 0, val viewportRevision: Long = 0, val owner: BrowserOwner? = null, val participants: List<BrowserOwner> = emptyList(), val tabs: List<BrowserTab> = emptyList(), val selectedTabId: String? = null, val ownsControl: Boolean = false, val inputPending: Boolean = false, val receipt: BrowserInputReceipt? = null, val notice: BrowserNotice? = null, val image: BrowserImage? = null, val moving: Boolean = false, val documentEpoch: Long = 0)
+public data class BrowserView(val sessionId: String, val opening: Boolean = true, val browserId: String? = null, val incarnation: String? = null, val generation: Long = 0, val viewportRevision: Long = 0, val owner: BrowserOwner? = null, val participants: List<BrowserOwner> = emptyList(), val tabs: List<BrowserTab> = emptyList(), val selectedTabId: String? = null, val ownsControl: Boolean = false, val inputPending: Boolean = false, val receipt: BrowserInputReceipt? = null, val notice: BrowserNotice? = null, val image: BrowserImage? = null, val moving: Boolean = false, val documentEpoch: Long = 0, val previewPort: Int? = null)
 
 /** Selection and connection identity travel with every asynchronous operation. */
 internal class BrowserClient(
@@ -59,20 +59,22 @@ internal class BrowserClient(
         return request(c, payload.getValue("type").jsonPrimitive.content, payload.filterKeys { it != "type" && it != "requestId" }.map { it.key to it.value }.toTypedArray())
     }
     private suspend fun streamRequest(c: Long, type: String, vararg fields: Pair<String, Any?>): JsonObject = request(c, type, fields)
-    fun open(session: String, c: Long): Boolean {
+    fun open(session: String, c: Long, previewPort: Int? = null): Boolean {
+        if (previewPort != null && previewPort !in 1..65535) return false
         if (!current(session, c)) return false
-        if (isDisconnectedFor(session)) return resumeIfDisconnected(session, c)
+        if (isDisconnectedFor(session) && view?.previewPort == previewPort) return resumeIfDisconnected(session, c)
         close(); connection = c; val t = ++token; visible = true; recovery = recoveryEnabled()
-        set(BrowserView(session))
+        set(BrowserView(session, previewPort = previewPort))
         requestOpen(session, c, t)
         return true
     }
     private fun requestOpen(session: String, c: Long, t: Long) {
         scope.launch {
             try {
-                val result = parseBrowserResult(send(c, BrowserCommand.Open(Wire.random(), session, recovery))) as BrowserResult.Opened
+                val result = parseBrowserResult(send(c, BrowserCommand.Open(Wire.random(), session, recovery, view?.previewPort))) as BrowserResult.Opened
                 if (!valid(t, session, c)) return@launch
-                set(BrowserView(session, false, result.browserId, result.incarnation, result.generation, result.viewportRevision, result.owner, tabs = result.tabs, selectedTabId = result.tabs.firstOrNull()?.id))
+                check(result.previewPort == view?.previewPort)
+                set(BrowserView(session, false, result.browserId, result.incarnation, result.generation, result.viewportRevision, result.owner, tabs = result.tabs, selectedTabId = result.tabs.firstOrNull()?.id, previewPort = result.previewPort))
                 watch()
             } catch (_: Exception) { if (valid(t, session, c)) set(view?.copy(opening = false, notice = BrowserNotice.FAILED)) }
         }
@@ -241,11 +243,11 @@ internal class BrowserClient(
         refreshPending = true
         val t = token; val c = connection; val metadata = metadataEpoch
         scope.launch { try {
-            val opened = parseBrowserResult(send(c, BrowserCommand.Open(Wire.random(),v.sessionId,recovery))) as BrowserResult.Opened
+            val opened = parseBrowserResult(send(c, BrowserCommand.Open(Wire.random(),v.sessionId,recovery,v.previewPort))) as BrowserResult.Opened
             val participants = parseBrowserResult(send(c, BrowserCommand.Participants(Wire.random(),v.sessionId,b))) as BrowserResult.Participants
             if (!valid(t,v.sessionId,c) || metadata != metadataEpoch) return@launch
             val current = view ?: return@launch
-            if (opened.browserId != b || opened.incarnation != current.incarnation || participants.browserId != b) { frameFailed(); return@launch }
+            if (opened.previewPort != current.previewPort || opened.browserId != b || opened.incarnation != current.incarnation || participants.browserId != b) { frameFailed(); return@launch }
             if (opened.generation != participants.generation || opened.generation < current.generation || opened.viewportRevision < current.viewportRevision) return@launch
             if (lease != null && opened.generation == current.generation && opened.viewportRevision > current.viewportRevision) return@launch
             val selected = current.selectedTabId?.takeIf { id -> opened.tabs.any { it.id == id } } ?: opened.tabs.firstOrNull()?.id
@@ -253,7 +255,7 @@ internal class BrowserClient(
             if (opened.generation != current.generation) lease = null
             if (changed) { resizeApplied = null; dropStream() }
             set(current.copy(generation = opened.generation, viewportRevision = opened.viewportRevision, owner = opened.owner, tabs = opened.tabs, participants = participants.participants, selectedTabId = selected, ownsControl = lease != null, image = if (changed) null else current.image)); watch()
-        } catch (_: Exception) { if (valid(t,v.sessionId,c)) set(view?.copy(notice = BrowserNotice.FAILED)) }
+        } catch (_: Exception) { if (valid(t,v.sessionId,c)) frameFailed() }
           finally { if (t == token) { refreshPending = false; val again = refreshAgain; refreshAgain = false; if (again) refresh() } } }; return true
     }
     private fun watch() {

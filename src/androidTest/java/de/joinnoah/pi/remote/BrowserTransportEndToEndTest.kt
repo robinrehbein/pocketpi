@@ -56,10 +56,12 @@ class BrowserTransportEndToEndTest {
         override fun before() {
             val path = InstrumentationRegistry.getArguments().getString("browserFixturePath")
             if (InstrumentationRegistry.getArguments().getString("browserReconnectExpected") == "true" ||
-                InstrumentationRegistry.getArguments().getString("browserDeviceOnlyExpected") == "true")
+                InstrumentationRegistry.getArguments().getString("browserDeviceOnlyExpected") == "true" ||
+                InstrumentationRegistry.getArguments().getString("browserPreviewExpected") == "true")
                 require(!path.isNullOrBlank()) { "The reconnect test requires browserFixturePath" }
             assumeTrue("Pass browserFixturePath to run the isolated browser integration test", !path.isNullOrBlank())
             fixture = JSONObject(readFixtureFile(requireNotNull(path)).toString(Charsets.UTF_8))
+            if (InstrumentationRegistry.getArguments().getString("browserPreviewExpected") == "true") require(fixture.optBoolean("preview")) { "The preview test requires a preview fixture" }
             val cert = CertificateFactory.getInstance("X.509")
                 .generateCertificate(readFixtureFile(fixture.getString("caCertPath")).inputStream())
             val keys = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
@@ -90,7 +92,13 @@ class BrowserTransportEndToEndTest {
                 val content: @Composable () -> Unit = {
                     val state by repository.state.collectAsState()
                     val actions = remember {
-                        BrowserPaneActions(open = repository::openBrowser, acquire = repository::acquireBrowser,
+                        if (fixture.optBoolean("preview")) BrowserPaneActions(
+                            acquire = repository::acquirePreview, refresh = repository::refreshPreview,
+                            newTab = repository::newPreviewTab, navigate = repository::navigatePreview,
+                            selectTab = repository::selectPreviewTab, closeTab = repository::closePreviewTab,
+                            handoff = repository::handoffPreview, resize = repository::resizePreview,
+                            input = repository::sendPreviewInput, visible = repository::setPreviewVisible)
+                        else BrowserPaneActions(open = repository::openBrowser, acquire = repository::acquireBrowser,
                             refresh = repository::refreshBrowser, newTab = repository::newBrowserTab,
                             navigate = repository::navigateBrowser, selectTab = repository::selectBrowserTab,
                             closeTab = repository::closeBrowserTab, handoff = repository::handoffBrowser,
@@ -99,7 +107,8 @@ class BrowserTransportEndToEndTest {
                     }
                     MaterialTheme {
                         Surface(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-                            BrowserPane(state.browser, actions, repository::closeBrowser)
+                            if (fixture.optBoolean("preview")) BrowserPane(state.previewBrowser, actions, repository::closePreview)
+                            else BrowserPane(state.browser, actions, repository::closeBrowser)
                         }
                     }
                 }
@@ -111,7 +120,7 @@ class BrowserTransportEndToEndTest {
             NavigationTestActivity.contentFactory = { {} }
             if (::repository.isInitialized) {
                 InstrumentationRegistry.getInstrumentation().runOnMainSync {
-                    if (fixture.optBoolean("reconnect")) repository.setForeground(false)
+                    if (fixture.optBoolean("reconnect") || fixture.optBoolean("preview")) repository.setForeground(false)
                     repository.disconnect()
                 }
             }
@@ -123,6 +132,89 @@ class BrowserTransportEndToEndTest {
             }
         }
     }).around(compose)
+
+    @Test
+    fun previewOnlyGrantRendersUpdatesReconnectsAndRevokes() {
+        val expected = InstrumentationRegistry.getArguments().getString("browserPreviewExpected") == "true"
+        if (expected) assertTrue("The fixture must explicitly enable preview", fixture.optBoolean("preview"))
+        assumeTrue("Use --preview for this integration flow", fixture.optBoolean("preview"))
+        assertTrue("Preview mode must be explicitly requested", expected)
+        val port = fixture.getInt("previewPort")
+        val selection = RemoteSelection(fixture.getString("routeId"), fixture.getString("projectId"), fixture.getString("sessionId"))
+        compose.runOnIdle {
+            repository.setForeground(true)
+            repository.setValidatedNetwork("preview-fixture-loopback")
+            scope.launch { repository.activate(selection, ActivationMode.USER_OPEN) }
+        }
+        compose.waitUntil(60_000) { repository.canOpenPreview() }
+        assertFalse("The preview grant must not enable the general browser", repository.canOpenBrowser())
+        compose.runOnIdle { assertTrue(repository.openPreview(port)) }
+        compose.waitUntil(60_000) { repository.state.value.previewBrowser?.let { !it.opening && it.browserId != null && it.previewPort == port } == true }
+        compose.onNodeWithTag("browserAcquire").performClick()
+        compose.waitUntil(30_000) { repository.state.value.previewBrowser?.let { it.ownsControl && it.image != null && it.image.viewportRevision == it.viewportRevision } == true }
+        val initial = requireNotNull(repository.state.value.previewBrowser)
+        val browserId = requireNotNull(initial.browserId)
+        val tabId = requireNotNull(initial.selectedTabId)
+        assertEquals("http://127.0.0.1:$port/", initial.tabs.single().url)
+        assertNull(repository.state.value.browser)
+        val submitted = "Preview transport ${java.util.UUID.randomUUID()}"
+        compose.onNodeWithTag("browserText").performTextInput(submitted)
+        compose.runOnIdle {
+            val keyboard = compose.activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            keyboard.hideSoftInputFromWindow(compose.activity.window.decorView.windowToken, 0)
+        }
+        compose.waitUntil(30_000) {
+            val insets = ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+            insets != null && !insets.isVisible(WindowInsetsCompat.Type.ime()) &&
+                runCatching { compose.onNodeWithTag("browserSendText").assertIsEnabled(); true }.getOrDefault(false)
+        }
+        compose.onNodeWithTag("browserSendText").performClick()
+        compose.waitUntil(30_000) { status()?.optString("input") == submitted && repository.state.value.previewBrowser?.inputPending == false }
+        compose.waitUntil(30_000) { runCatching { compose.onNodeWithText("Enter").assertIsEnabled(); true }.getOrDefault(false) }
+        compose.onNodeWithText("Enter").performClick()
+        compose.waitUntil(30_000) { status()?.optString("submitted") == submitted }
+        fixtureAction("preview-update")
+        compose.waitUntil(30_000) {
+            val image = repository.state.value.previewBrowser?.image
+            val bitmap = image?.let { BitmapFactory.decodeByteArray(it.jpeg, 0, it.jpeg.size) }
+            val pixel = bitmap?.getPixel(0, 0)
+            bitmap?.recycle()
+            status()?.optJSONObject("preview")?.optInt("updateAck") == 1 && pixel != null &&
+                Color.red(pixel) > 230 && Color.green(pixel) < 30 && Color.blue(pixel) > 230
+        }
+        val unsent = "Unsent preview ${java.util.UUID.randomUUID()}"
+        compose.onNodeWithTag("browserText").performTextReplacement(unsent)
+        val baseline = requireNotNull(status()).getJSONObject("preview")
+        val inputs = baseline.getInt("inputRequests")
+        val acquires = baseline.getInt("acquireRequests")
+        fixtureAction("preview-cut")
+        compose.waitUntil(30_000) { !repository.state.value.connected && repository.state.value.previewBrowser?.notice == BrowserNotice.DISCONNECTED }
+        compose.onNodeWithTag("browserText").assertTextContains(unsent)
+        fixtureAction("preview-allow")
+        compose.waitUntil(60_000) {
+            repository.state.value.connected && repository.state.value.previewBrowser?.let {
+                it.browserId == browserId && it.selectedTabId == tabId && it.previewPort == port && !it.ownsControl && it.image != null
+            } == true
+        }
+        compose.onNodeWithTag("browserText").assertTextContains(unsent)
+        compose.onNodeWithTag("browserSendText").assertIsNotEnabled()
+        val restored = requireNotNull(status()).getJSONObject("preview")
+        assertEquals(inputs, restored.getInt("inputRequests"))
+        assertEquals(acquires, restored.getInt("acquireRequests"))
+        assertEquals(1, restored.getInt("cuts"))
+        val screenshot = File(compose.activity.getExternalFilesDir(null), "preview-transport-restored.png")
+        assertTrue(UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).takeScreenshot(screenshot))
+        compose.onNodeWithTag("browserAcquire").performClick()
+        compose.waitUntil(30_000) { repository.state.value.previewBrowser?.ownsControl == true }
+        assertEquals(inputs, requireNotNull(status()).getJSONObject("preview").getInt("inputRequests"))
+        fixtureAction("preview-revoke")
+        compose.runOnIdle { repository.refreshPreview() }
+        compose.waitUntil(30_000) { repository.state.value.previewBrowser?.ownsControl == false }
+        assertTrue(requireNotNull(status()).getJSONObject("preview").getBoolean("revoked"))
+        compose.runOnIdle { assertFalse(repository.sendPreviewInput(BrowserInput.Text("denied"))) }
+        assertEquals(inputs, requireNotNull(status()).getJSONObject("preview").getInt("inputRequests"))
+        assertNull(repository.state.value.browser)
+    }
 
     @Test
     fun realTransportControlsChromiumAndSubmitsForm() {

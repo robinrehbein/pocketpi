@@ -726,13 +726,29 @@ internal fun RemoteScreen(
     val jobsOpen =
         state.jobs?.let { (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId } == true
     val browserOpen = state.browser?.sessionId == state.selection.sessionId && state.browser != null
+    var previewShown by rememberSaveable(key) { mutableStateOf(false) }
+    var previewInstance by rememberSaveable(key) { mutableStateOf(0) }
+    val previewSavedState = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+    var retainedPreviewKey by rememberSaveable { mutableStateOf<String?>(null) }
+    val currentPreviewKey = state.previewBrowser?.let {
+        "${state.selection.routeId}:${state.selection.projectId}:${state.selection.sessionId}:${it.previewPort}:$previewInstance"
+    }
+    var previewPortDialog by remember(key) { mutableStateOf(false) }
+    var previewPortText by rememberSaveable(key) { mutableStateOf("") }
+    var previewHasUnsent by rememberSaveable(key) { mutableStateOf(false) }
+    LaunchedEffect(currentPreviewKey) {
+        retainedPreviewKey?.takeIf { it != currentPreviewKey }?.let(previewSavedState::removeState)
+        retainedPreviewKey = currentPreviewKey
+        if (currentPreviewKey == null) previewHasUnsent = false
+    }
+    var previewCloseConfirm by remember(key) { mutableStateOf(false) }
     var browserHasUnsent by remember(key) { mutableStateOf(false) }
     var browserCloseConfirm by remember(key) { mutableStateOf(false) }
     var terminalOpen by remember(key) { mutableStateOf(false) }
     var terminalHasUnsent by remember(key) { mutableStateOf(false) }
     var terminalCloseConfirm by remember(key) { mutableStateOf(false) }
     var terminalLeave by remember(key) { mutableStateOf<Pair<() -> Unit, () -> Unit>?>(null) }
-    val unsentNow by rememberUpdatedState(terminalHasUnsent || browserHasUnsent)
+    val unsentNow by rememberUpdatedState(terminalHasUnsent || browserHasUnsent || previewHasUnsent)
     val terminalSelectionNow by rememberUpdatedState(state.selection)
     DisposableEffect(navigator, key) {
         val guard: (() -> Unit, () -> Unit) -> Boolean = { action, cancel ->
@@ -1316,6 +1332,7 @@ internal fun RemoteScreen(
             ChatAction.CHANGES -> openInspector(InspectorTab.CHANGES)
             ChatAction.FILES -> openInspector(InspectorTab.FILES)
             ChatAction.BROWSER -> openInspector(InspectorTab.BROWSER)
+            ChatAction.PREVIEW -> { if (state.previewBrowser == null) previewPortDialog = true else previewShown = true }
             ChatAction.JOBS -> openInspector(InspectorTab.JOBS)
             ChatAction.RENAME ->
                 state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
@@ -1476,6 +1493,7 @@ internal fun RemoteScreen(
                         if (canViewChanges(state) && state.connected) add(ChatAction.CHANGES)
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
                         if (browserOpen || chatModel?.canOpenBrowser() == true) add(ChatAction.BROWSER)
+                        if (state.previewBrowser != null || chatModel?.canOpenPreview() == true) add(ChatAction.PREVIEW)
                         if (statusJobs != null) add(ChatAction.JOBS)
                         if (canRename) add(ChatAction.RENAME)
                         if (state.connected && !state.loading && !navigator.mutating) add(ChatAction.NEW_SESSION)
@@ -3798,10 +3816,42 @@ internal fun RemoteScreen(
     }
     }
     }
+    if (previewPortDialog) AlertDialog(
+        onDismissRequest = { previewPortDialog = false },
+        title = { Text(stringResource(R.string.preview_title)) },
+        text = { OutlinedTextField(previewPortText, { previewPortText = it }, label = { Text(stringResource(R.string.preview_port)) }, singleLine = true) },
+        confirmButton = { TextButton(onClick = {
+            val port = previewPortText.toIntOrNull()
+            if (port != null && previewPortText.all { it in '0'..'9' } && port in 1..65535 && chatModel?.openPreview(port) == true) { previewPortDialog = false; previewInstance++; previewShown = true }
+        }, enabled = previewPortText.isNotEmpty() && previewPortText.all { it in '0'..'9' } && (previewPortText.toIntOrNull() ?: 0) in 1..65535) { Text(stringResource(R.string.preview_open)) } },
+        dismissButton = { TextButton(onClick = { previewPortDialog = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+    )
+    if (previewShown && state.previewBrowser != null && chatModel != null) androidx.compose.ui.window.Dialog(onDismissRequest = {
+        if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview()
+    }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+            val actions = remember(chatModel) { BrowserPaneActions(
+                acquire = chatModel::acquirePreview, refresh = chatModel::refreshPreview,
+                newTab = chatModel::newPreviewTab, navigate = chatModel::navigatePreview, selectTab = chatModel::selectPreviewTab,
+                closeTab = chatModel::closePreviewTab, handoff = chatModel::handoffPreview, resize = chatModel::resizePreview,
+                input = chatModel::sendPreviewInput, visible = chatModel::setPreviewVisible,
+            ) }
+            previewSavedState.SaveableStateProvider(requireNotNull(currentPreviewKey)) {
+                BrowserPane(state.previewBrowser, actions, { if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview() }, { if (previewShown || it) previewHasUnsent = it }, { previewShown = false })
+            }
+        }
+    }
+    if (previewCloseConfirm) AlertDialog(
+        onDismissRequest = { previewCloseConfirm = false },
+        title = { Text(stringResource(R.string.browser_discard_title)) },
+        text = { Text(stringResource(R.string.browser_discard_body)) },
+        confirmButton = { TextButton(onClick = { previewCloseConfirm = false; previewHasUnsent = false; chatModel?.closePreview() }) { Text(stringResource(R.string.browser_close)) } },
+        dismissButton = { TextButton(onClick = { previewCloseConfirm = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+    )
     if (terminalLeave != null) AlertDialog(
         onDismissRequest = { terminalLeave?.second?.invoke(); terminalLeave = null },
-        title = { Text(stringResource(if (browserHasUnsent) R.string.browser_discard_title else R.string.remote_terminal_discard_title)) },
-        text = { Text(stringResource(if (browserHasUnsent) R.string.browser_discard_body else R.string.remote_terminal_discard_body)) },
+        title = { Text(stringResource(if (browserHasUnsent || previewHasUnsent) R.string.browser_discard_title else R.string.remote_terminal_discard_title)) },
+        text = { Text(stringResource(if (browserHasUnsent || previewHasUnsent) R.string.browser_discard_body else R.string.remote_terminal_discard_body)) },
         confirmButton = { TextButton(onClick = {
             val action = terminalLeave
             terminalLeave = null

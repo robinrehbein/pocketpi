@@ -702,4 +702,9 @@
     <string name="remote_terminal_draft_busy">Warte auf die ausstehende Terminaleingabe, bevor du den Entwurf sendest.</string>
     <string name="remote_prepared_text_explanation">Beim Öffnen wurde eine andere Sitzung erstellt. Dein vorbereiteter Text bleibt in der ursprünglichen Sitzung verfügbar. Du kannst ihn bei Bedarf kopieren und hier einfügen.</string>
     <string name="remote_prepared_text_copy">Vorbereiteten Text kopieren</string>
+    <string name="preview_title">Vorschau</string>
+    <string name="preview_port">Port</string>
+    <string name="preview_open">Öffnen</string>
+    <string name="preview_title_port">Vorschau · %1$d</string>
+    <string name="preview_hide">Ausblenden</string>
 </resources>
