@@ -151,3 +151,24 @@ were cleaned, with ports 5191/5584/5585 closed.
 The final test APK compiled successfully after the default-path scroll preparation was added.
 That final default branch was not separately rerun in the emulator; the successful diagnostic
 run exercised the same public scroll interaction before its retained visibility/state assertions.
+
+
+## Refreshed merge and standard-path follow-up
+
+App `823d12d` passed 3,339 Android and 34 Wear unit tests, test APK assembly and application
+APK assembly. Host `2e02e724a` passed the 28 upstream subagent trust regressions and extension
+type checking. These are scoped current results, not a repeated whole-Host qualification.
+
+The first refreshed German tablet run failed waiting for the native input trace (68.561 s);
+the trace file was absent while the native worker remained verified. The test now explicitly
+requires the advertised command capability, a loaded catalog and the registered fixture command
+before its single composer send, with boolean-only timeout diagnostics. A fresh run with layout
+diagnostics disabled passed in 11.134 s, including the default scroll preparation, native command
+trace and full status/reconnect sequence. Its final proof had owner/native/input verification,
+TUI mode, one cut and two upgrades. The recovered IME-open screenshot was inspected and legible.
+
+In the successful run the catalog was already ready before the wait, so this does not prove
+that catalog loading caused the earlier failure. That unexplained failure remains a confidence
+limit. The final subsequent change only removes the post-input timeout screenshot; its text
+state diagnostics and assertions remain. Owned fixture/PTY, emulator, ADB and temporary credential
+cleanup was verified, with ports 5191/5584/5585 closed and no remaining fixture metadata/tree.

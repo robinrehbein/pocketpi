@@ -142,10 +142,30 @@ class PrStatusTransportEndToEndTest {
             val command = fixture.getString("probeCommand")
             val nonce = fixture.getString("probeNonce")
             require(command.isNotBlank() && nonce.isNotBlank() && !command.contains('\n') && !command.contains('\r') && nonce.none { it.isWhitespace() })
+            val probeName = requireNotNull(commandName(command))
+            logInputState("before-catalog", probeName)
+            try {
+                compose.waitUntil(60_000) {
+                    val state = repository.state.value
+                    state.selection == selection && state.connected && !state.loading &&
+                        COMMANDS_CAPABILITY in state.capabilities && COMMANDS_CAPABILITY !in state.unavailableCapabilities &&
+                        !state.commandsLoading && state.commands.any { it.name == probeName }
+                }
+            } catch (failure: Throwable) {
+                logInputState("catalog-timeout", probeName)
+                runCatching { screenshot("input-timeout") }
+                throw failure
+            }
             awaitTag("composerField")
             compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput("$command $nonce")
+            logInputState("before-click", probeName)
             compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
-            compose.waitUntil(60_000) { statusOrNull()?.optBoolean("inputVerified") == true }
+            try {
+                compose.waitUntil(60_000) { statusOrNull()?.optBoolean("inputVerified") == true }
+            } catch (failure: Throwable) {
+                logInputState("input-timeout", probeName)
+                throw failure
+            }
         }
         awaitTag("pullRequestChip")
         compose.onNodeWithTag("pullRequestChip").assertIsDisplayed().assertTextContains(compose.activity.getString(R.string.remote_pr_chip_number, 42L), substring = true)
@@ -229,6 +249,11 @@ class PrStatusTransportEndToEndTest {
             val insets = ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
             println("PR_STATUS_LAYOUT stage=$stage header=$header card=$card cardDisplayed=$cardDisplayed scrollValue=${range?.value?.invoke()} scrollMax=${range?.maxValue?.invoke()} imeVisible=${insets?.isVisible(WindowInsetsCompat.Type.ime())}")
         }
+    }
+    private fun logInputState(stage: String, probeName: String) {
+        val state = repository.state.value
+        val fixtureStatus = statusOrNull()
+        println("PR_STATUS_INPUT stage=$stage selectionMatch=${state.selection == selection} connected=${state.connected} loading=${state.loading} idle=${state.status == "idle"} running=${state.status == "running"} sending=${state.sending} commandsLoading=${state.commandsLoading} commandsCapability=${COMMANDS_CAPABILITY in state.capabilities} commandsUnavailable=${COMMANDS_CAPABILITY in state.unavailableCapabilities} probeKnown=${state.commands.any { it.name == probeName }} draftPresent=${state.draft.isNotBlank()} commandNoticePresent=${state.commandNotice != null} errorPresent=${state.error != null} fixtureStatusPresent=${fixtureStatus != null} inputVerified=${fixtureStatus?.optBoolean("inputVerified")} nativeWorkerVerified=${fixtureStatus?.optBoolean("nativeWorkerVerified")}")
     }
     private fun activate(target: RemoteSelection) {
         compose.runOnIdle { scope.launch { repository.activate(target, ActivationMode.USER_OPEN) } }

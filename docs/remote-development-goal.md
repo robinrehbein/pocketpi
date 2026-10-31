@@ -414,7 +414,8 @@ and scoped qualification. The full acceptance run and its device/host gates rema
    shows "Phone approval unavailable"; the remote README names the missing piece as "a future
    details contract and UI change". An oversized standard question also stays on the Mac, and
    multiline editor dialogs need a protocol change.
-4. **Custom dialogs.** `ui.custom` dialogs still need the Mac. The feasibility gate in
+4. **Custom dialogs.** A relayed terminal is implemented locally, but the combined custom-dialog
+   workflow remains unqualified. The earlier feasibility gate in
    noah-monorepo's `docs/superpowers/plans/2026-10-23-pocketpi-mobile-dialogs.md` failed on pi
    1.4.0: in RPC sessions the component is never created, and in terminal sessions direct input
    bypasses focus and input hooks. The plan names a separately designed terminal-control route as
@@ -423,19 +424,19 @@ and scoped qualification. The full acceptance run and its device/host gates rema
    purpose; the goal keeps that boundary.
 5. **Code search.** The phone can browse and open files but has no search over contents or
    symbols outside the agent.
-6. **Worker parity.** `session.bash.v1` works only in RPC sessions, so the phone-started session
-   of the qualifying run cannot run tests through `!` commands. Follow-up and steer while pi runs,
-   clearing the queue on stop, closing the session, export, tree, reload and keeping the Mac awake
-   are RPC-only as well, and reopened conversations and forks still start RPC sessions.
-7. **Relayed terminal.** `view.native.*` drives host worker terminals over the local `host.sock`
-   view protocol only, not through the relay. Relaying it lets the phone operate a worker's full
-   terminal, including custom dialogs. It covers sessions the host runs as workers, not a pi Robin
-   starts himself in his own Mac terminal.
+6. **Worker parity.** Worker shell commands, follow-up, steer, stop and queue clearing, close,
+   tree and reload are implemented locally. Reopen and fork request workers when available, with
+   RPC fallback. Export remains RPC-only. Combined workflow and physical-device qualification
+   remain open; these implementations are not a universal parity claim.
+7. **Relayed terminal.** The host worker terminal relay and app controls are implemented locally,
+   including terminal input and output. The combined custom-dialog workflow and physical-device
+   qualification remain open. This route covers host workers, not a pi Robin starts himself in
+   his own Mac terminal.
 
 ### App only
 
-8. **Host workers.** The host advertises `session.host_worker.v1`; the app does not opt in, so
-   workers appear as `tui` sessions. In review as PocketPi #168.
+8. **Host workers.** Host worker support and app opt-in are implemented locally, including the
+   v2 capability. Combined workflow and physical-device qualification remain open.
 
 ### Later
 
@@ -481,15 +482,16 @@ Robin decided these on 2026-10-29. Each spec goes to Plane (TOOLING) as its own 
 ## Acceptance criteria
 
 Each criterion is checked in the qualifying run, on a real phone, with the Mac unattended.
-"Implemented" means the code exists on `main`; no qualifying run has verified it yet.
+"Implemented" means the code exists on `main`; "implemented locally" identifies changes not yet
+established on `main`. Neither label by itself means the qualifying run has verified the criterion.
 
 | # | Criterion | Where it lands | State |
 |---|-----------|----------------|-------|
 | 1 | Open a ticket and start a session from it | App, host switch and key | Implemented (`tickets.v1`, needs `config ticket-writes on` and `tickets set-key`) |
 | 2 | Edit and save a file, with a clear conflict when the Mac changed it | App | Implemented (`session.files.write.v1`) |
-| 3 | Run a shell command with live output and stop in the ticket's session | noah-monorepo, then app | Open (gap 6); works today only in RPC sessions |
+| 3 | Run a shell command with live output and stop in the ticket's session | noah-monorepo, then app | Implemented locally for workers; combined ticket workflow and physical-device qualification open (gap 6) |
 | 4a | Answer every forwarded question and approval from the phone, including oversized ones and editors | noah-monorepo, then app | Open (gap 3) |
-| 4b | Answer custom dialogs from the phone through the relayed terminal | noah-monorepo, then app | Open (gaps 4 and 7) |
+| 4b | Answer custom dialogs from the phone through the relayed terminal | noah-monorepo, then app | Terminal relay implemented locally; combined custom-dialog workflow and physical-device qualification open (gaps 4 and 7) |
 | 5 | Commit, push and open a pull request, confirmed on the phone and logged on the Mac | noah-monorepo, then app | Commit, Push and PR implemented locally; full unattended workflow and physical-device qualification remain open |
 | 6 | See the pull request and its CI status per session | noah-monorepo, then app | Display is wired; actual Pi through a Host-managed native worker to Android navigation passed on four emulator profiles. Live GitHub CI and physical-device qualification remain open. |
 
@@ -550,3 +552,15 @@ process/session by a nonce trace. This does not establish raw PTY input or a mod
 A tablet IME-open overlap was traced in a bounded comparison to retained scroll; scrolling to
 the top restores readable layout with and without IME. No production layout change was made; see the
 [scoped record](testing/pr-status-parity-qualification.md).
+
+### Native worker parity code audit, 2026-10-31
+
+The current local code includes worker shell commands with output and stop, queued follow-up and
+steer, queue clearing on stop, close, tree and reload, worker-first reopen and fork with RPC
+fallback, and the relayed worker terminal. These are implementation findings; combined end-to-end
+and physical-device qualification remain open. Native worker export is still unavailable: the host
+accepts export only for RPC sessions and the app gates it accordingly. Pi exposes a public
+`AgentSession.exportToHtml` method, but this audit did not establish public extension access to the
+already running worker's `AgentSession`. The public standalone CLI export is a possible separate
+approach, not an implemented native export; session-file authority, races and its differences from
+live-session export need resolution before adoption.
