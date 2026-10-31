@@ -1,5 +1,23 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Last-participant browser retention checkpoint on 2026-10-31
+
+The browser now survives the last recovery-enabled device disconnect for its authorized lifetime,
+with immediate ownership revocation, pending input cleanup and read-only reconnect. Actual Pi joins
+only after the zero-participant gap and verifies the original browser and non-first login tab.
+Phone/tablet emulator flows pass (23.315 s / 10.325 s), including uncertain input, a newer unsent draft,
+no automatic input/control replay, explicit handoff and same-tab login-cookie verification.
+Independent review found two lifecycle races; regression tests and corrections pass, and the final
+review found no further blocker. The host suite passed 3,023 tests with 23 skipped. A sporadic
+pre-dispatch input loss observed in an earlier Android run remains an open qualification item.
+See [retention qualification](testing/browser-context-retention.md) for exact scope and evidence.
+
+A local Linux image now runs 26 actual browser/worker tests with native Linux dependencies.
+Short private Chromium temporary paths, hidden headless scrollbars and stable managed-tab order
+fix concrete Linux/runtime defects. Docker's outer seccomp profile was diagnostically relaxed;
+secure reproducible packaging, an independent remote Linux host, physical Samsung devices,
+protected previews and emulator streaming remain open. The complete goal is not achieved yet.
+
 ## Reconnect and native Linux worker checkpoint on 2026-10-31
 
 A real interrupted-input flow now passes on phone and tablet emulators (14.175 s / 11.215 s).

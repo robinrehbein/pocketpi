@@ -4,6 +4,7 @@ import android.os.ParcelFileDescriptor
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.content.Context
+import android.util.Log
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
@@ -54,7 +55,8 @@ class BrowserTransportEndToEndTest {
     val rules: RuleChain = RuleChain.outerRule(object : ExternalResource() {
         override fun before() {
             val path = InstrumentationRegistry.getArguments().getString("browserFixturePath")
-            if (InstrumentationRegistry.getArguments().getString("browserReconnectExpected") == "true")
+            if (InstrumentationRegistry.getArguments().getString("browserReconnectExpected") == "true" ||
+                InstrumentationRegistry.getArguments().getString("browserDeviceOnlyExpected") == "true")
                 require(!path.isNullOrBlank()) { "The reconnect test requires browserFixturePath" }
             assumeTrue("Pass browserFixturePath to run the isolated browser integration test", !path.isNullOrBlank())
             fixture = JSONObject(readFixtureFile(requireNotNull(path)).toString(Charsets.UTF_8))
@@ -352,19 +354,29 @@ class BrowserTransportEndToEndTest {
 
     @Test
     fun actualPiAndAndroidShareLoginAcrossExplicitHandoffs() {
-        val reconnectExpected = InstrumentationRegistry.getArguments().getString("browserReconnectExpected") == "true"
+        val deviceOnlyExpected = InstrumentationRegistry.getArguments().getString("browserDeviceOnlyExpected") == "true"
+        val reconnectExpected = InstrumentationRegistry.getArguments().getString("browserReconnectExpected") == "true" || deviceOnlyExpected
+        if (deviceOnlyExpected) {
+            assertEquals("The device-only test requires actual Pi", "actual-pi", fixture.optString("sessionKind"))
+            assertTrue("The fixture must enable device-only mode", fixture.optBoolean("deviceOnly"))
+            assertTrue("The device-only test requires reconnect", fixture.optBoolean("reconnect"))
+        }
+        val deviceOnly = fixture.optBoolean("deviceOnly")
+        if (deviceOnly) {
+            assertTrue("Device-only mode must be explicitly requested", deviceOnlyExpected)
+        }
         if (reconnectExpected) {
             assertEquals("The reconnect test requires actual Pi", "actual-pi", fixture.getString("sessionKind"))
             assertTrue("The fixture must enable the reconnect scenario", fixture.getBoolean("reconnect"))
         }
         assumeTrue("Pass an actual Pi shared-browser fixture", fixture.optString("sessionKind") == "actual-pi")
         val initial = requireNotNull(status()).getJSONObject("combined")
-        assertEquals("agent-ready", initial.getString("stage"))
+        assertEquals(if (deviceOnly) "session-ready" else "agent-ready", initial.getString("stage"))
         assertEquals("1.4.0", initial.getString("piVersion"))
         assertTrue("The session must belong to the actual Pi child", initial.getBoolean("ownerPidVerified"))
         assertEquals(0, initial.getInt("toolErrors"))
-        val browserId = initial.getString("browserId")
-        val tabId = initial.getString("tabId")
+        val initialBrowserId = if (deviceOnly) null else initial.getString("browserId")
+        val initialTabId = if (deviceOnly) null else initial.getString("tabId")
         val selection = RemoteSelection(fixture.getString("routeId"), fixture.getString("projectId"), fixture.getString("sessionId"))
         compose.runOnIdle { scope.launch { repository.activate(selection, ActivationMode.USER_OPEN) } }
         compose.waitUntil(60_000) { repository.canOpenBrowser() }
@@ -377,24 +389,54 @@ class BrowserTransportEndToEndTest {
             }
         }
         compose.runOnIdle { assertTrue(repository.openBrowser()) }
-        if (fixture.optBoolean("reconnect")) {
-            compose.waitUntil(30_000) {
-                repository.state.value.browser?.let { !it.opening && it.browserId == browserId && it.tabs.any { tab -> tab.id == tabId } } == true
-            }
-            assertNotEquals("The login tab must not be first", tabId, repository.state.value.browser!!.tabs.first().id)
-            compose.runOnIdle { repository.selectBrowserTab(tabId) }
-        }
         compose.waitUntil(30_000) {
-            repository.state.value.browser?.let { !it.opening && it.browserId == browserId && it.selectedTabId == tabId } == true
+            repository.state.value.browser?.let { !it.opening && it.browserId != null } == true
         }
-        assertFalse("Pi initially owns the shared browser", repository.state.value.browser?.ownsControl == true)
-        val agentGeneration = requireNotNull(repository.state.value.browser).generation
-        fixtureAction("handoff-to-device")
-        compose.waitUntil(30_000) { status()?.optJSONObject("combined")?.optString("stage") == "handed-to-device" }
-        val agentId = requireNotNull(status()).getJSONObject("combined").getString("agentParticipantId")
-        compose.onNodeWithText(compose.activity.getString(R.string.browser_refresh)).performClick()
-        compose.waitUntil(30_000) { (repository.state.value.browser?.generation ?: 0) > agentGeneration }
-        compose.onNodeWithTag("browserAcquire").performClick()
+        val browserId: String
+        val tabId: String
+        if (deviceOnly) {
+            val opened = requireNotNull(repository.state.value.browser)
+            browserId = requireNotNull(opened.browserId)
+            assertNull("A new device-only browser must be free", opened.owner)
+            assertFalse("Opening must not implicitly acquire control", opened.ownsControl)
+            compose.onNodeWithTag("browserAcquire").performClick()
+            compose.waitUntil(30_000) { repository.state.value.browser?.ownsControl == true }
+            if (repository.state.value.browser!!.tabs.isEmpty()) {
+                compose.runOnIdle { assertTrue(repository.newBrowserTab("about:blank")) }
+                compose.waitUntil(30_000) { repository.state.value.browser?.tabs?.size == 1 }
+            }
+            val beforeTabs = repository.state.value.browser!!.tabs.map { it.id }.toSet()
+            compose.runOnIdle { assertTrue(repository.newBrowserTab(fixture.getString("pageUrl").toHttpUrl().toString())) }
+            compose.waitUntil(30_000) {
+                repository.state.value.browser?.let { view ->
+                    view.tabs.size > beforeTabs.size && view.selectedTabId != null && view.selectedTabId !in beforeTabs
+                } == true
+            }
+            val openedLogin = requireNotNull(repository.state.value.browser)
+            tabId = requireNotNull(openedLogin.selectedTabId)
+            assertTrue("A decoy tab must precede the login tab", openedLogin.tabs.size >= 2)
+            assertNotEquals("The login tab must not be first", tabId, openedLogin.tabs.first().id)
+        } else {
+            browserId = requireNotNull(initialBrowserId)
+            tabId = requireNotNull(initialTabId)
+            if (fixture.optBoolean("reconnect")) {
+                compose.waitUntil(30_000) {
+                    repository.state.value.browser?.let { it.browserId == browserId && it.tabs.any { tab -> tab.id == tabId } } == true
+                }
+                assertNotEquals("The login tab must not be first", tabId, repository.state.value.browser!!.tabs.first().id)
+                compose.runOnIdle { repository.selectBrowserTab(tabId) }
+            }
+            compose.waitUntil(30_000) {
+                repository.state.value.browser?.let { it.browserId == browserId && it.selectedTabId == tabId } == true
+            }
+            assertFalse("Pi initially owns the shared browser", repository.state.value.browser?.ownsControl == true)
+            val agentGeneration = requireNotNull(repository.state.value.browser).generation
+            fixtureAction("handoff-to-device")
+            compose.waitUntil(30_000) { status()?.optJSONObject("combined")?.optString("stage") == "handed-to-device" }
+            compose.onNodeWithText(compose.activity.getString(R.string.browser_refresh)).performClick()
+            compose.waitUntil(30_000) { (repository.state.value.browser?.generation ?: 0) > agentGeneration }
+            compose.onNodeWithTag("browserAcquire").performClick()
+        }
         compose.waitUntil(30_000) {
             repository.state.value.browser?.let { it.ownsControl && it.browserId == browserId && it.selectedTabId == tabId && it.image?.viewportRevision == it.viewportRevision } == true
         }
@@ -433,6 +475,18 @@ class BrowserTransportEndToEndTest {
         if (fixture.optBoolean("reconnect")) {
             val pending = fixture.getString("pendingValue")
             val unsent = "Unsent after reconnect ${java.util.UUID.randomUUID()}"
+            if (deviceOnly) {
+                compose.onNodeWithText(compose.activity.getString(R.string.browser_refresh)).performClick()
+                compose.waitUntil(30_000) {
+                    status()?.optJSONObject("reconnect")?.optBoolean("deviceOnlyParticipantsVerified") == true &&
+                        repository.state.value.browser?.participants?.let { participants ->
+                            participants.size == 1 && participants.single().kind == "device"
+                        } == true
+                }
+                val participants = requireNotNull(repository.state.value.browser).participants
+                assertEquals("Only the device may participate before the cut", 1, participants.size)
+                assertEquals("device", participants.single().kind)
+            }
             fixtureAction("arm-input-cut")
             compose.onNodeWithTag("browserText").performTextInput(pending)
             compose.runOnIdle {
@@ -446,10 +500,35 @@ class BrowserTransportEndToEndTest {
                     !browser.inputPending && browser.image?.viewportRevision == browser.viewportRevision &&
                     runCatching { compose.onNodeWithTag("browserSendText").assertIsEnabled(); true }.getOrDefault(false)
             }
+            fun pendingDiagnostics(): String {
+                val browser = repository.state.value.browser
+                val snapshot = status()
+                val reconnect = snapshot?.optJSONObject("reconnect")
+                val combined = snapshot?.optJSONObject("combined")
+                val refused = runCatching {
+                    compose.onAllNodesWithTag("browserSendRefused").fetchSemanticsNodes().isNotEmpty()
+                }.getOrNull()
+                return "ownsControl=${browser?.ownsControl}, inputPending=${browser?.inputPending}, " +
+                    "notice=${browser?.notice}, moving=${browser?.moving}, receiptSequence=${browser?.receipt?.sequence}, " +
+                    "receiptStatus=${browser?.receipt?.status}, imageMatchesViewport=${browser?.image?.let { it.viewportRevision == browser.viewportRevision }}, " +
+                    "generation=${browser?.generation}, documentEpoch=${browser?.documentEpoch}, sendRefused=$refused, " +
+                    "stage=${reconnect?.optString("stage")}, inputResultHeld=${reconnect?.optBoolean("inputResultHeld")}, " +
+                    "inputApplied=${reconnect?.optBoolean("inputApplied")}, appliedCount=${reconnect?.optInt("appliedCount")}, " +
+                    "deviceInputRequests=${reconnect?.optInt("deviceInputRequests")}, acquireRequests=${reconnect?.optInt("acquireRequests")}, " +
+                    "loginAccepted=${combined?.optBoolean("loginAccepted")}"
+            }
+            Log.i("BrowserE2E", "Before pending send: ${pendingDiagnostics()}")
             compose.onNodeWithTag("browserSendText").performClick()
-            compose.waitUntil(30_000) {
-                status()?.optJSONObject("reconnect")?.let { it.optBoolean("inputResultHeld") && it.optBoolean("inputApplied") } == true &&
-                    repository.state.value.browser?.inputPending == true
+            Log.i("BrowserE2E", "After pending send: ${pendingDiagnostics()}")
+            try {
+                compose.waitUntil(30_000) {
+                    status()?.optJSONObject("reconnect")?.let { it.optBoolean("inputResultHeld") && it.optBoolean("inputApplied") } == true &&
+                        repository.state.value.browser?.inputPending == true
+                }
+            } catch (failure: androidx.compose.ui.test.ComposeTimeoutException) {
+                val diagnostic = pendingDiagnostics()
+                Log.e("BrowserE2E", "Pending send timeout: $diagnostic")
+                throw AssertionError("Pending send was not held and applied: $diagnostic", failure)
             }
             compose.onNodeWithTag("browserText").performTextReplacement(unsent)
             fixtureAction("cut-device")
@@ -481,7 +560,8 @@ class BrowserTransportEndToEndTest {
             compose.onNodeWithTag("browserText").assertTextContains(unsent)
             compose.onNodeWithText(compose.activity.getString(R.string.browser_uncertain)).assertExists()
             compose.onNodeWithTag("browserSendText").assertIsNotEnabled()
-            val reconnectScreenshot = File(compose.activity.getExternalFilesDir(null), "browser-reconnect-restored.png")
+            if (deviceOnly) assertTrue(baseline.getBoolean("noPiParticipantBeforeCut"))
+            val reconnectScreenshot = File(compose.activity.getExternalFilesDir(null), if (deviceOnly) "browser-device-only-reconnect.png" else "browser-reconnect-restored.png")
             assertTrue(UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).takeScreenshot(reconnectScreenshot))
             assertTrue(reconnectScreenshot.length() > 0)
             compose.onNodeWithTag("browserAcquire").performClick()
@@ -491,6 +571,8 @@ class BrowserTransportEndToEndTest {
             assertEquals(inputCount, requireNotNull(status()).getJSONObject("reconnect").getInt("deviceInputRequests"))
             compose.onNodeWithTag("browserText").assertTextContains(unsent)
         }
+        // The device-only fixture first joins Pi after observing the offline gap.
+        val agentId = requireNotNull(status()).getJSONObject("combined").getString("agentParticipantId")
         // Return ownership through the actual pane, then let Pi prove that its same tab has the cookie.
         compose.onNodeWithText(compose.activity.getString(R.string.browser_refresh)).performClick()
         compose.waitUntil(30_000) { repository.state.value.browser?.participants?.any { it.kind == "agent" && it.id == agentId } == true }
@@ -508,6 +590,7 @@ class BrowserTransportEndToEndTest {
         if (reconnectExpected) {
             val reconnect = requireNotNull(status()).getJSONObject("reconnect")
             assertEquals(1, reconnect.getInt("cuts"))
+            if (deviceOnly) assertTrue(reconnect.getBoolean("noPiParticipantBeforeCut"))
             assertTrue(reconnect.getBoolean("oldOwnerGone"))
             assertTrue(reconnect.getBoolean("oldPeerGone"))
             assertTrue(reconnect.getBoolean("newPeerDifferent"))

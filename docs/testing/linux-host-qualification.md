@@ -59,12 +59,31 @@ directory; `repro-notes.txt` records the offline build. These are local qualific
 not a shipped devcontainer or a new CI gate. The existing Vitest attempt failed before running
 tests because its Linux Rolldown binding is absent; no dependency was downloaded to bypass it.
 
+## Browser and worker qualification, 2026-10-31
+
+A local Linux arm64 diagnostic image, `pocketpi-linux-host:qualification-20261031` (939 MB),
+was prepared from the Node image with repository digest
+`14078204b6bb268c107ceff6d3c43f45a888105e5c2b18b14c32b3409d93a1b0`. It uses Node 24.22.0,
+Debian Chromium 156.0.8078.73, Pi 1.4.0 and a frozen pnpm 12.11.2 install with Linux-native
+PTY and Rolldown dependencies. The Mac checks use Node 24.18.0. APT inputs were mutable, so the
+image is not bit-reproducible and no Linux configuration has yet been packaged in the repository.
+
+The root qualification run passed 26 tests: 24 browser tests, including three using real Chromium,
+and two worker tests. Its log is
+`/private/tmp/pocketpi-linux-environment/root-tab-order-qualification.log`. The product changes
+use a short private `/tmp/pp-` location for Linux Chromium's `SingletonSocket` path limit, hide
+scrollbars to avoid a classic 15-pixel viewport discrepancy while retaining strict viewport guards,
+and preserve stable managed-tab order. These are local results for the browser-runtime changes;
+see [browser context retention](browser-context-retention.md) for the integrated Android evidence.
+
+The diagnostic Docker run used `seccomp=unconfined`. Chromium's own sandbox was active in the
+observed processes (`NoNewPrivs: 1`, `Seccomp: 2`), but that observation does not qualify Docker's
+production sandbox, a devcontainer, or an independent remote host.
+
 ## Remaining gates
 
-Package the Linux-compatible dependencies in a reproducible environment and run the full
-terminal/browser Android transport flow. The native worker and loopback shell subset above
-is established; browser capture, Android access and long-running lifecycle recovery are not. Repeat on an independent remote
-Linux host and inside a devcontainer, including session reconnect, input ownership and process
-failure. Local Docker execution, CLI version output and Mac qualification do not establish these
-requirements. The repository's full development Compose stack is not needed for this isolated
-runtime qualification and was not started.
+Local host review and device-only phone/tablet reconnect qualification passed. Package and qualify a reproducible Linux environment
+with an appropriate production sandbox. Repeat terminal and browser transport, reconnect, input
+ownership and process-failure checks on an independent remote Linux host and in a devcontainer.
+Physical Galaxy device acceptance remains open. Local Docker and emulator results do not establish
+those environments or the full remote-development goal.
