@@ -529,3 +529,43 @@ old image ID in a test fixture. This remains the same qualified local ARM64
 Engine/kernel boundary. It does not qualify a physical phone, protected preview
 against this image, active-browser reconnect/handoff, independent Linux hosts or
 browser service deployment through a general guarded Devcontainer launcher.
+
+## Encrypted protected preview against the packaged image — 2026-10-31
+
+The maintained fixture now supports `--preview`, including combined
+`--browser --preview --reconnect`. No production code or image changed:
+`sha256:ddc38e6e3003d9bf14b4167fde442ac0b30ab4dd9c5e89ecd81923e848df8864`
+remains the exact qualified browser image from `bc839d54a`.
+
+The actual packaged CLI/Host, private TLS relay, authenticated encrypted synthetic
+device and Chromium pass the combined flow. Owner CLI configures the executable
+before host start and explicitly enables/grants preview for one project/port.
+Browser-only permission refuses preview; after browser revocation, preview-only
+permission refuses normal browser access and a different preview port. Capabilities
+advertise preview without browser. The protected page loads HTTP, exchanges a real
+WebSocket update, delivers ACK-paced 390x600 JPEG chunks and processes text input
+that causes a successful POST. Owner preview revoke refuses subsequent tab access.
+
+A separate foreign HTTP server has a successful direct status/body positive control.
+Its hit count is reset, then remains zero for the page's foreign-port fetch and a
+refused navigation. Review caught a possible asynchronous false-positive: WebSocket
+readiness did not originally wait for the foreign fetch. The page now reports ready
+only after both WebSocket success and fetch completion/rejection; the entire combined
+container flow was rerun successfully after this correction.
+
+The existing native Pi/provider/shell relay-reconnect phase occurs before browser
+and preview open. This does not prove active preview/browser reconnect, lost replies,
+WebRTC/UDP or arbitrary Internet isolation. The container has no external network;
+only the reachable loopback foreign-port control is tested. It is a synthetic device,
+not a physical phone or the Android UI. Root verifies the successful container ID,
+image and nonce and removes only its container after exit zero.
+
+Evidence: `/private/tmp/pocketpi-preview-image-encrypted-flow.log`,
+`/private/tmp/pocketpi-preview-image-proof.json`,
+`/private/tmp/pocketpi-preview-image-run.py`, and
+`/private/tmp/pocketpi-preview-image-extensions-check.log` (`check:extensions` passes).
+Only public fixture/relay/policy files remain staged; generated credentials and
+private state were inside the removed container. The final explicit Biome check
+passes with existing fixture warnings. No broad test suite was repeated for this
+fixture-only increment; prior helper and production-source qualification retain
+their recorded scope.

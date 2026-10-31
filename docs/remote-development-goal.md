@@ -1,5 +1,15 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Packaged protected-preview checkpoint
+
+The same locked Linux image now passes a combined encrypted synthetic-device browser
+and protected-preview flow: separate grants, real HTTP/WebSocket, ACK-paced JPEG,
+text-triggered POST, foreign-port denial with a reachable control, and owner revocation.
+No production runtime changed. Active-stream reconnect, Android UI against the packaged
+host, independent Linux and physical Samsung qualification remain open. See
+[Linux qualification](testing/linux-host-qualification.md).
+
+
 ## Owner browser configuration and encrypted Linux-image checkpoint
 
 The owner CLI now configures the Chromium path explicitly and manages browser switches
