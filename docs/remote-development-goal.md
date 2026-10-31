@@ -237,8 +237,12 @@ Galaxy S25. From either device, Robin controls pi and can intervene directly in 
 Git, pull requests, CI, browsers and emulators without anyone operating the development computer.
 Mac and independent remote Linux hosts, including Linux devcontainers, are equal priority.
 
-The qualifying workflow includes an interactive Android emulator, Wear OS emulator and an iOS
-simulator on a Mac. Agent and human share the same browser tabs and login state, with explicit
+The qualifying workflow includes an interactive Android emulator and an iOS simulator on a Mac.
+The Wear companion is intentionally reduced to messages and questions that can be handled
+meaningfully on a watch, following the owner clarification on 2026-10-31. Full IDE features such
+as editor, terminal, browser and emulator control are required on the Galaxy phone and tablet,
+not on Wear. Existing useful companion features may remain. Agent and human share the same
+browser tabs and login state, with explicit
 handoff of input ownership. A separate forwarded web preview does not satisfy that requirement.
 
 Tablet acceptance includes keyboard, mouse, DeX, adaptive simultaneous work views and long work
