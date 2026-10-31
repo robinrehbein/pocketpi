@@ -1,5 +1,15 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Standalone Linux package checkpoint on 2026-10-31
+
+The current Atlas distribution now passes a separate Linux installation and offline/read-only
+verification of public Pi CLI, installed Host CLI and the actual production PTY wrapper, without
+checkout dependency symlinks or Mac-native modules. Version/integrity locks and safe context
+preparation are maintained in the repository. This closes the clean-package-installation gap;
+it does not qualify the OCI runtime, Chromium sandbox, Dev Containers adapter or an independent
+remote Linux host. See [Linux qualification](testing/linux-host-qualification.md).
+
+
 ## Integrated Android emulator checkpoint on 2026-10-31
 
 PocketPi and the public Pi `remote_emulator` tool now share an explicitly configured host-owned

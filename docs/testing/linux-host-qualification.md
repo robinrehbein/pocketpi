@@ -1,5 +1,33 @@
 # Linux host qualification
 
+## Current standalone package installation, 2026-10-31
+
+The current Atlas archive was built from Host commit `1db5fcb4`, then installed into a separate
+Linux consumer with its own npm lockfile. No checkout, Mac dependencies, user home or credentials
+were mounted into that consumer. Pi packages are pinned to 1.4.0; Atlas resolves Typebox 1.1.38,
+while the declaring Pi packages resolve their own pinned Typebox 1.3.27. Linux-native node-pty
+1.1.0 was built against the pinned Node image (24.22.0 / ABI 137); the artifact is ELF aarch64.
+
+The independent root verifier passed both normally and with no network, read-only root and
+consumer, all capabilities dropped, no-new-privileges and temporary `/tmp`. It proves package
+realpaths stay inside the consumer, public Pi `--version`, exact output/exit through the installed
+production PTY wrapper, and the installed Host CLI's stopped-status path. It does not configure a
+relay or prove a worker turn, Chromium sandbox, shipped OCI image, devcontainer or independent
+remote host. The prior overlay-based runs below retain their narrower historical scope.
+
+The new packaging helpers, consumer dependency lock, artifact integrity record and detailed
+reproduction/limits live in the Host repository under
+`packages/pi-atlas/deploy/linux-host/README.md`. Four context-helper tests and Biome pass. The
+bounded independent review found no additional concrete code issue and correctly distinguished
+matching a supplied hash from independently proving package provenance.
+
+Evidence: `/private/tmp/pocketpi-linux-clean-install2.log`,
+`/private/tmp/pocketpi-linux-clean-verify3.log`, `/private/tmp/pocketpi-linux-clean-readonly.log`,
+`/private/tmp/pocketpi-linux-context-root-tests.log`. Scratch consumer and archive are retained
+under `/private/tmp/pocketpi-linux-clean-consumer` and `/private/tmp/pocketpi-linux-package-artifacts`.
+All qualification containers were automatically removed; unrelated containers were untouched.
+
+
 ## Local execution probe, 2026-10-31
 
 The existing Docker Engine 29.7.2 can run isolated Linux aarch64 containers on this Mac.
