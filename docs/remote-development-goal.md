@@ -1,5 +1,14 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Android emulator feasibility checkpoint on 2026-10-31
+
+An authenticated local gRPC capture plus a fixed ADB HOME command produced 30 frames with 28
+different images, visually moving from Settings to Launcher. Unary scaled capture is fast in a
+small static Node 24 probe; the gRPC key input path failed a controlled semantic test and is not
+qualified. There is no emulator product capability yet. Exact limits, authentication checks and
+the next implementation gates are in [emulator feasibility](testing/android-emulator-feasibility.md).
+
+
 ## Transactional local controls checkpoint on 2026-10-31
 
 All eight local control groups now persist independently from concurrent unrelated saves. Failed
