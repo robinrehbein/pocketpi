@@ -16,6 +16,10 @@ class GitChangesTest {
     private val fixture: JsonObject by lazy {
         Wire.json.parseToJsonElement(javaClass.getResource("/git-v1.json")!!.readText()).jsonObject
     }
+    private val pushFixture: JsonObject by lazy {
+        Wire.json.parseToJsonElement(javaClass.getResource("/git-push-v1.json")!!.readText()).jsonObject
+    }
+    private fun pushData(name: String): JsonObject = pushFixture.array("valid").single { it.text("name") == name }.obj("payload").obj("data")
 
     private fun entries(group: String) =
         fixture.getValue(group).jsonArray.map { it.jsonObject }
@@ -48,8 +52,9 @@ class GitChangesTest {
         val sent = mutableListOf<JsonObject>()
         var response: (JsonObject) -> JsonObject? = { null }
         var failure: (JsonObject) -> String? = { null }
+        var authCapabilities: Set<String> = emptySet()
 
-        override fun connect(host: PairedHost) = listener.ready(emptySet())
+        override fun connect(host: PairedHost) = listener.ready(authCapabilities)
 
         override fun pair(value: JsonObject) {}
 
@@ -204,6 +209,132 @@ class GitChangesTest {
     }
 
     // ---- Repository ---------------------------------------------------------------------
+
+    @Test
+    fun pushStatusWorksWhenWritesAreDisabledAndNeverSendsPush() = runTest {
+        val transport = Transport()
+        transport.configure(gitCapabilities + GIT_PUSH_STATUS_CAPABILITY) { request ->
+            assertEquals("session.git.push.status", request.text("type"))
+            pushData("push-status-matches")
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        val token = "d3JpdGUtaWQtdG9rZW4tMQ"
+        assertEquals(GitPushStatus.MATCHES, repository.gitPushStatus(sessionId, token).state)
+        assertTrue(runCatching { repository.gitPush(sessionId, token, "push-id") }.isFailure)
+        assertTrue(runCatching { repository.gitPushPrepare(sessionId) }.isFailure)
+        assertEquals(listOf("session.git.push.status"), transport.git().map { it.text("type") })
+    }
+
+    @Test
+    fun pushPreparationRequiresHeadAndPushKeepsTheRequestId() = runTest {
+        val transport = Transport()
+        val branchFixture = pushData("branch-head-sha1")
+        var includeHead = false
+        transport.configure(gitCapabilities + GIT_PUSH_CAPABILITY) { request ->
+            when (request.text("type")) {
+                "session.git.branch" -> if (includeHead) branchFixture else JsonObject(branchFixture - "head")
+                "session.git.push" -> Wire.objectOf("kind" to "git.push", "sessionId" to sessionId, "pushed" to true, "branch" to "feature", "remoteBranch" to "feature", "commit" to "a".repeat(40), "created" to false, "upstreamSet" to true)
+                else -> error("unexpected")
+            }
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        assertTrue(runCatching { repository.gitPushPrepare(sessionId) }.isFailure)
+        includeHead = true
+        val branch = repository.gitPushPrepare(sessionId) as GitWriteResult.Branch.Available
+        assertEquals("a".repeat(40), branch.head)
+        val pushed = repository.gitPush(sessionId, branch.writeId, "push-fixed-id") as GitWriteResult.Push.Pushed
+        assertEquals("a".repeat(40), pushed.commit)
+        val requests = transport.git()
+        assertEquals(JsonPrimitive(true), requests[0]["forPush"])
+        assertEquals("push-fixed-id", requests.last().text("requestId"))
+    }
+
+    @Test
+    fun pushCapabilitiesFromAuthOrV2NeverAuthorizeCommands() = runTest {
+        val transport = Transport()
+        transport.authCapabilities = setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY)
+        transport.configure(gitCapabilities + GIT_PUSH_CAPABILITY + GIT_PUSH_STATUS_CAPABILITY) { error("must not send") }
+        val response = transport.response
+        transport.response = { request ->
+            val result = response(request)
+            if (request.text("type") == "projects.list" && request.text("requestId").startsWith("capabilities.v3:")) JsonObject(checkNotNull(result) - "capabilities") else result
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        assertFalse(GIT_PUSH_CAPABILITY in repository.state.value.capabilities)
+        assertFalse(GIT_PUSH_STATUS_CAPABILITY in repository.state.value.capabilities)
+        assertTrue(runCatching { repository.gitPushPrepare(sessionId) }.isFailure)
+        assertTrue(runCatching { repository.gitPushStatus(sessionId, "d3JpdGUtaWQtdG9rZW4tMQ") }.isFailure)
+        assertTrue(transport.git().isEmpty())
+
+        val v1 = Transport().also { it.configure(gitCapabilities + GIT_PUSH_CAPABILITY + GIT_PUSH_STATUS_CAPABILITY) { error("must not send") } }
+        val original = v1.response
+        v1.response = { request ->
+            val result = original(request)
+            if (request.text("type") == "projects.list" &&
+                (request.text("requestId").startsWith("capabilities.v3:") || request.text("requestId").startsWith("capabilities.v2:")))
+                JsonObject(checkNotNull(result) - "capabilities") else result
+        }
+        val legacy = repository(v1)
+        legacy.activate(RemoteSelection("host", "project", sessionId))
+        assertFalse(GIT_PUSH_CAPABILITY in legacy.state.value.capabilities)
+        assertFalse(GIT_PUSH_STATUS_CAPABILITY in legacy.state.value.capabilities)
+        assertTrue(runCatching { legacy.gitPushPrepare(sessionId) }.isFailure)
+        assertTrue(v1.git().isEmpty())
+    }
+
+    @Test
+    fun lostPushReplyIsUnknownAndDoesNotRetry() = runTest {
+        val transport = Transport()
+        transport.configure(gitCapabilities + GIT_PUSH_CAPABILITY) { null }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        var dispatched = false
+        val pending = async { repository.gitPush(sessionId, "d3JpdGUtaWQtdG9rZW4tMQ", "push-unknown") { dispatched = true } }
+        runCurrent()
+        assertTrue(dispatched)
+        advanceTimeBy(GIT_PUSH_REQUEST_TIMEOUT_MILLIS + 1)
+        runCurrent()
+        assertEquals(GitWriteResult.Push.Unknown, pending.await())
+        assertEquals(listOf("push-unknown"), transport.git().map { it.text("requestId") })
+    }
+
+    @Test
+    fun pushReplyAfterDefaultTimeoutIsStillAccepted() = runTest {
+        val transport = Transport()
+        transport.configure(gitCapabilities + GIT_PUSH_CAPABILITY) { null }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        val pending = async { repository.gitPush(sessionId, "d3JpdGUtaWQtdG9rZW4tMQ", "late-push") }
+        runCurrent()
+        val sent = transport.git().single()
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS + 1); runCurrent()
+        assertFalse(pending.isCompleted)
+        transport.result(sent, Wire.objectOf("kind" to "git.push", "sessionId" to sessionId, "pushed" to true,
+            "branch" to "feature", "remoteBranch" to "feature", "commit" to "a".repeat(40), "created" to false, "upstreamSet" to true))
+        runCurrent()
+        assertTrue(pending.await() is GitWriteResult.Push.Pushed)
+        assertEquals(1, transport.git().size)
+    }
+
+    @Test
+    fun pushStatusReplyAfterDefaultTimeoutIsStillAccepted() = runTest {
+        val transport = Transport()
+        transport.configure(gitCapabilities + GIT_PUSH_STATUS_CAPABILITY) { null }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", sessionId))
+        val pending = async { repository.gitPushStatus(sessionId, "d3JpdGUtaWQtdG9rZW4tMQ") }
+        runCurrent()
+        val sent = transport.git().single()
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS + 1); runCurrent()
+        assertFalse(pending.isCompleted)
+        transport.result(sent, pushData("push-status-matches"))
+        runCurrent()
+        assertEquals(GitPushStatus.MATCHES, pending.await().state)
+        assertEquals(1, transport.git().size)
+    }
 
     @Test
     fun queuedOlderDraftSnapshotCannotEraseNewCommitIntent() = runTest {

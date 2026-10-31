@@ -9,6 +9,8 @@ internal const val PROJECT_UNSHARE_CAPABILITY = "project.unshare.v1"
 internal const val TOOL_OUTPUT_CAPABILITY = "session.tool_output.v1"
 internal const val SESSION_FORK_CAPABILITY = "session.fork.v1"
 internal const val GIT_WRITE_CAPABILITY = "session.git.write.v1"
+internal const val GIT_PUSH_CAPABILITY = "session.git.push.v1"
+internal const val GIT_PUSH_STATUS_CAPABILITY = "session.git.push.status.v1"
 
 /** How `session.fork` continues: resend the message, or put it back into the composer. */
 enum class ForkMode(val wire: String) {
@@ -507,10 +509,21 @@ interface RemoteRepository {
     suspend fun gitCommit(sessionId: String, snapshotId: String, message: String, paths: List<String>, requestId: String, onDispatch: () -> Unit = {}): GitWriteResult.Commit =
         throw UnsupportedOperationException("Git writes are unavailable")
 
+    /** Fresh token-bound push preparation, including the exact HEAD to confirm. */
+    suspend fun gitPushPrepare(sessionId: String): GitWriteResult.Branch = throw UnsupportedOperationException("Git push is unavailable")
+    /** No automatic retry; cancellation after onDispatch leaves the outcome unknown. */
+    suspend fun gitPush(sessionId: String, writeId: String, requestId: String, onDispatch: () -> Unit = {}): GitWriteResult.Push = throw UnsupportedOperationException("Git push is unavailable")
+    /** Explicit remote observation; this reports current state, not which attempt caused it. */
+    suspend fun gitPushStatus(sessionId: String, writeId: String): GitWriteResult.PushStatus = throw UnsupportedOperationException("Git push status is unavailable")
+
     /** Reads an own-checkout HEAD snapshot specifically authorized for commit review. */
     suspend fun gitCommitStatus(sessionId: String): GitStatus = throw UnsupportedOperationException("Git writes are unavailable")
 
     /** Private per-session commit draft and outstanding intent, stored before dispatch. */
+    /** Durable push intent in the same private per-route/session draft journal. */
+    suspend fun gitPushIntent(selection: RemoteSelection): GitPushIntent? = throw UnsupportedOperationException("Git drafts are unavailable")
+    suspend fun saveGitPushIntent(selection: RemoteSelection, intent: GitPushIntent?) { throw UnsupportedOperationException("Git drafts are unavailable") }
+
     suspend fun gitCommitDraft(selection: RemoteSelection): GitCommitDraft = throw UnsupportedOperationException("Git drafts are unavailable")
     suspend fun saveGitCommitDraft(selection: RemoteSelection, draft: GitCommitDraft) { throw UnsupportedOperationException("Git drafts are unavailable") }
 

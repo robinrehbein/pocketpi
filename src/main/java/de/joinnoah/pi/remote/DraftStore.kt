@@ -31,6 +31,7 @@ data class StoredDraft(
      */
     val submittedDelivery: String? = null,
     val gitCommit: GitCommitDraft? = null,
+    val gitPush: GitPushIntent? = null,
 )
 
 interface DraftStorage {
@@ -79,6 +80,7 @@ class DraftStore(
                                     ?.let { comments -> JsonArray(comments.map { it.json() }) },
                             "submittedDelivery" to value.submittedDelivery,
                             "gitCommit" to value.gitCommit?.json(),
+                            "gitPush" to value.gitPush?.json(),
                         )
                     }
                 )
@@ -137,5 +139,6 @@ internal fun parseStoredDrafts(bytes: ByteArray): Map<DraftKey, StoredDraft> =
                         require(it in setOf("prompt", "command", "follow_up", "steer"))
                     },
                 gitCommit = (value["gitCommit"] as? JsonObject)?.let(::parseGitCommitDraft),
+                gitPush = (value["gitPush"] as? JsonObject)?.let(::parseGitPushIntent),
             )
     }

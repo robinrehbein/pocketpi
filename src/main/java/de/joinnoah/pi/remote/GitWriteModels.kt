@@ -8,6 +8,7 @@ enum class GitPushReason { GIT_UNAVAILABLE, NOT_A_REPOSITORY, SESSION_UNSUPPORTE
 enum class GitPullRequestReason { GIT_UNAVAILABLE, NOT_A_REPOSITORY, SESSION_UNSUPPORTED, DETACHED_HEAD, UNBORN_BRANCH, OPERATION_IN_PROGRESS, PROTECTED_BRANCH, NO_ORIGIN, UNSUPPORTED_REMOTE, NOT_PUSHED, GH_UNAVAILABLE, GH_AUTH, NOT_GITHUB, REJECTED }
 enum class GitWriteHook { PRE_COMMIT, COMMIT_MSG, PRE_PUSH }
 enum class GitRemoteTip { ABSENT, EQUAL, AHEAD, BEHIND, DIVERGED }
+enum class GitPushStatus { MATCHES, ABSENT, DIFFERENT, UNAVAILABLE }
 enum class GitSkippedReason { OMITTED, DENIED, SUBMODULE }
 data class GitWriteUpstream(val remote: String, val branch: String)
 data class GitWriteTarget(val remote: String, val branch: String, val host: String, val repo: String)
@@ -15,7 +16,7 @@ data class GitSkippedPath(val path: String, val reason: GitSkippedReason)
 
 sealed interface GitWriteResult {
     sealed interface Branch : GitWriteResult {
-        data class Available(val writeId: String, val branch: String, val upstream: GitWriteUpstream?, val remoteTip: GitRemoteTip, val ahead: Long, val pushTarget: GitWriteTarget, val pullRequestBases: List<String>, val suggestedTitle: String?, val hooksSkipped: List<GitWriteHook>) : Branch
+        data class Available(val writeId: String, val branch: String, val upstream: GitWriteUpstream?, val remoteTip: GitRemoteTip, val ahead: Long, val pushTarget: GitWriteTarget, val pullRequestBases: List<String>, val suggestedTitle: String?, val hooksSkipped: List<GitWriteHook>, val head: String? = null) : Branch
         data class Unavailable(val reason: GitBranchReason) : Branch
     }
     sealed interface Commit : GitWriteResult {
@@ -25,9 +26,12 @@ sealed interface GitWriteResult {
         data class Refused(val reason: GitCommitReason) : Commit
     }
     sealed interface Push : GitWriteResult {
+        data object Unknown : Push
         data class Pushed(val branch: String, val remoteBranch: String, val commit: String, val created: Boolean, val upstreamSet: Boolean) : Push
         data class Refused(val reason: GitPushReason) : Push
     }
+    /** Current observed remote state; never proves which attempt produced it. */
+    data class PushStatus(val state: GitPushStatus) : GitWriteResult
     sealed interface PullRequest : GitWriteResult {
         data class Available(val created: Boolean, val number: Long, val url: String, val base: String) : PullRequest
         data class Unavailable(val reason: GitPullRequestReason) : PullRequest
@@ -92,7 +96,7 @@ internal fun parseGitWriteResult(o: JsonObject, sessionId: String): GitWriteResu
         "git.branch" -> if (!o.flag("available")) {
             Wire.keys(o, base + setOf("available", "reason")); GitWriteResult.Branch.Unavailable(wireEnum(o.text("reason")))
         } else {
-            Wire.keys(o, base + setOf("available", "writeId", "branch", "remoteTip", "ahead", "pushTarget", "pullRequestBases", "hooksSkipped"), setOf("upstream", "suggestedTitle"))
+            Wire.keys(o, base + setOf("available", "writeId", "branch", "remoteTip", "ahead", "pushTarget", "pullRequestBases", "hooksSkipped"), setOf("upstream", "suggestedTitle", "head"))
             val id = o.text("writeId"); Wire.decode(id, 16)
             val upstream = o["upstream"]?.let { value -> val u = value.jsonObject; Wire.keys(u, setOf("remote", "branch")); GitWriteUpstream(name(u, "remote"), name(u, "branch")) }
             val bases = strings(o, "pullRequestBases", 16).map(::branch)
@@ -100,7 +104,8 @@ internal fun parseGitWriteResult(o: JsonObject, sessionId: String): GitWriteResu
                 require(it in setOf("pre-commit", "commit-msg", "pre-push"))
                 wireEnum<GitWriteHook>(it.replace('-', '_'))
             }
-            GitWriteResult.Branch.Available(id, name(o, "branch"), upstream, wireEnum(o.text("remoteTip")), count(o, "ahead"), target(o.obj("pushTarget")), bases, o["suggestedTitle"]?.let { title(o.text("suggestedTitle")) }, hooks)
+            val head = o["head"]?.let { o.text("head").also { value -> require(Regex("[0-9a-f]{40}|[0-9a-f]{64}").matches(value)) } }
+            GitWriteResult.Branch.Available(id, name(o, "branch"), upstream, wireEnum(o.text("remoteTip")), count(o, "ahead"), target(o.obj("pushTarget")), bases, o["suggestedTitle"]?.let { title(o.text("suggestedTitle")) }, hooks, head)
         }
         "git.commit" -> if (!o.flag("committed")) {
             Wire.keys(o, base + setOf("committed", "reason")); GitWriteResult.Commit.Refused(wireEnum(o.text("reason")))
@@ -114,6 +119,7 @@ internal fun parseGitWriteResult(o: JsonObject, sessionId: String): GitWriteResu
         } else {
             Wire.keys(o, base + setOf("pushed", "branch", "remoteBranch", "commit", "created", "upstreamSet")); GitWriteResult.Push.Pushed(name(o, "branch"), name(o, "remoteBranch"), sha(o), o.flag("created"), o.flag("upstreamSet"))
         }
+        "git.push.status" -> { Wire.keys(o, base + setOf("state")); GitWriteResult.PushStatus(wireEnum(o.text("state"))) }
         "git.pull_request" -> if (!o.flag("available")) {
             Wire.keys(o, base + setOf("available", "reason")); GitWriteResult.PullRequest.Unavailable(wireEnum(o.text("reason")))
         } else {

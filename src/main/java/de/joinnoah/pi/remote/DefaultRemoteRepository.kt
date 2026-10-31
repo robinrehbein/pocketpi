@@ -125,6 +125,9 @@ internal const val QUIET_RECONNECT_MILLIS = 5_000L
 
 /** The default wait for a request's reply. */
 internal const val REQUEST_TIMEOUT_MILLIS = 30_000L
+/** Host push and remote-status operations have longer bounded network budgets. */
+internal const val GIT_PUSH_REQUEST_TIMEOUT_MILLIS = 150_000L
+internal const val GIT_PUSH_STATUS_REQUEST_TIMEOUT_MILLIS = 90_000L
 
 /** Connection-bound requests (folder, fan-out, background) that may be outstanding at once. */
 private const val MAX_CONNECTION_REQUESTS = 32
@@ -258,6 +261,8 @@ class DefaultRemoteRepository(
             SESSION_FORK_CAPABILITY,
             GIT_CAPABILITY,
             GIT_WRITE_CAPABILITY,
+            GIT_PUSH_CAPABILITY,
+            GIT_PUSH_STATUS_CAPABILITY,
             FILES_CAPABILITY,
             FILES_SEARCH_CAPABILITY,
             // Only on capability routes v2 and later, and only when the host enables writes.
@@ -682,6 +687,7 @@ class DefaultRemoteRepository(
     private var pushTokenKnown = false
     private val drafts = mutableMapOf<DraftKey, StoredDraft>()
     private val committedGitDrafts = mutableMapOf<DraftKey, GitCommitDraft>()
+    private val committedPushIntents = mutableMapOf<DraftKey, GitPushIntent?>()
     private val gitDraftWrites = Mutex()
     private data class ComposerVersions(val text: Long = 0, val quote: Long = 0, val attachments: Long = 0)
     private val composerVersions = mutableMapOf<DraftKey, ComposerVersions>()
@@ -706,6 +712,7 @@ class DefaultRemoteRepository(
         val values: Map<DraftKey, StoredDraft>?,
         val done: CompletableDeferred<Unit>,
         val gitUpdate: Pair<DraftKey, GitCommitDraft>? = null,
+        val pushUpdate: Pair<DraftKey, GitPushIntent?>? = null,
     )
 
     /**
@@ -764,6 +771,7 @@ class DefaultRemoteRepository(
                     })
                 })
                 committedGitDrafts.putAll(drafts.mapNotNull { (key, value) -> value.gitCommit?.let { key to it } })
+                committedPushIntents.putAll(drafts.mapNotNull { (key, value) -> value.gitPush?.let { key to it } })
                 persistedAttachmentIds = journalAttachmentIds(drafts)
                 journalQueued = drafts.journals()
                 draftsAvailable = true
@@ -810,10 +818,18 @@ class DefaultRemoteRepository(
                 try {
                     if (write.values != null) {
                         val values = write.values.filterKeys { it.routeId !in removedRoutes }
-                            .mapValues { (key, value) -> value.copy(gitCommit = committedGitDrafts[key]) }.toMutableMap()
+                            .mapValues { (key, value) -> value.copy(gitCommit = committedGitDrafts[key], gitPush = committedPushIntents[key]) }.toMutableMap()
                         for ((key, draft) in committedGitDrafts) {
                             if (key.routeId !in removedRoutes)
                                 values[key] = (values[key] ?: drafts[key] ?: StoredDraft()).copy(gitCommit = draft)
+                        }
+                        for ((key, intent) in committedPushIntents) {
+                            if (key.routeId !in removedRoutes && intent != null)
+                                values[key] = (values[key] ?: drafts[key] ?: StoredDraft()).copy(gitPush = intent)
+                        }
+                        write.pushUpdate?.let { (key, intent) ->
+                            check(key.routeId !in removedRoutes) { "Host was removed" }
+                            values[key] = (values[key] ?: StoredDraft()).copy(gitPush = intent)
                         }
                         write.gitUpdate?.let { (key, draft) ->
                             check(key.routeId !in removedRoutes) { "Host was removed" }
@@ -821,6 +837,7 @@ class DefaultRemoteRepository(
                         }
                         withContext(io) { draftStorage.save(values) }
                         write.gitUpdate?.let { (key, draft) -> if (key.routeId !in removedRoutes) committedGitDrafts[key] = draft }
+                        write.pushUpdate?.let { (key, intent) -> if (key.routeId !in removedRoutes) committedPushIntents[key] = intent }
                         persistedAttachmentIds = journalAttachmentIds(values)
                         storageFailure = null
                     } else storageFailure?.let { throw it }
@@ -889,7 +906,7 @@ class DefaultRemoteRepository(
                     update {
                         it.copy(
                             connected = true,
-                            capabilities = capabilities - setOf(FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY),
+                            capabilities = capabilities - setOf(FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY),
                             capabilitiesKnown = false,
                             connection = R.string.remote_connected,
                             error = null,
@@ -967,7 +984,9 @@ class DefaultRemoteRepository(
         val next = block(previous)
         fun reviewAuthority(value: RemoteState) = listOf(value.selection, value.connected,
             GIT_CAPABILITY in value.capabilities, GIT_CAPABILITY in value.unavailableCapabilities,
-            GIT_WRITE_CAPABILITY in value.capabilities, GIT_WRITE_CAPABILITY in value.unavailableCapabilities)
+            GIT_WRITE_CAPABILITY in value.capabilities, GIT_WRITE_CAPABILITY in value.unavailableCapabilities,
+            GIT_PUSH_CAPABILITY in value.capabilities, GIT_PUSH_CAPABILITY in value.unavailableCapabilities,
+            GIT_PUSH_STATUS_CAPABILITY in value.capabilities, GIT_PUSH_STATUS_CAPABILITY in value.unavailableCapabilities)
         mutable.value = next.copy(gitReviewGeneration = previous.gitReviewGeneration + if (reviewAuthority(previous) != reviewAuthority(next)) 1 else 0)
     }
 
@@ -2002,7 +2021,7 @@ class DefaultRemoteRepository(
                 }
                 if (revision >= 2 && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY) || revision >= 2)
+                    it in advertised && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY) || revision >= 2)
                 }
                 val hadTasks = canReadTasks()
                 if (revision >= 2 && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
@@ -2012,9 +2031,10 @@ class DefaultRemoteRepository(
                     // lease that only now becomes possible starts leasing at once, not at the next
                     // session change or reconnect.
                     val hadLease = canLeaseJobsList(state.value)
-                    update { it.copy(capabilities = it.capabilities + merged) }
+                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY) else it.capabilities) + merged) }
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
+                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY)) }
                 update { it.copy(capabilitiesKnown = true) }
                 if (!hadTasks && canReadTasks()) {
                     taskRefreshPending = true
@@ -3778,6 +3798,7 @@ class DefaultRemoteRepository(
         followUpsToRecheck.keys.removeAll { it.routeId == routeId }
         removedRoutes += routeId
         committedGitDrafts.keys.removeAll { it.routeId == routeId }
+        committedPushIntents.keys.removeAll { it.routeId == routeId }
         parkedFiles.keys.removeAll { it.routeId == routeId }
         savedNavigation.remove(routeId)
         queueNavigationWrite(immediate = true)
@@ -5637,6 +5658,7 @@ class DefaultRemoteRepository(
                     earlyFollowUpReceipts[receiptKey] ?: "accepted", delivery) else latest.followUps,
                 reviewComments = latest.reviewComments,
                 gitCommit = latest.gitCommit,
+                gitPush = latest.gitPush,
             )
         }
         val before = drafts[key] ?: return false
@@ -7222,6 +7244,54 @@ class DefaultRemoteRepository(
 
     // ---- Git changes (session.git.v1) ----------------------------------------------------
 
+    private fun requireGitPushCapability(sessionId: String, capability: String) {
+        val current = state.value
+        if (!current.connected) throw RemoteRequestException("offline")
+        if (!current.capabilitiesKnown || capabilityRevision(capabilityRoute) != 3 ||
+            capability !in current.capabilities || capability in current.unavailableCapabilities)
+            throw RemoteRequestException.unsupported()
+        require(current.selection.sessionId == sessionId && current.selection.routeId == activeHost?.routeId)
+    }
+
+    override suspend fun gitPushPrepare(sessionId: String): GitWriteResult.Branch {
+        requireGitPushCapability(sessionId, GIT_PUSH_CAPABILITY)
+        val id = Wire.random()
+        encodeGitWriteCommand(GitWriteCommand.Branch(id, sessionId, forPush = true))
+        val data = request("session.git.branch", selectionEpoch, "sessionId" to sessionId, "forPush" to true, requestId = id)
+        val result = parseGitWriteResult(data, sessionId) as? GitWriteResult.Branch ?: error("Invalid branch result")
+        if (result is GitWriteResult.Branch.Available) require(result.head != null) { "Push preparation omitted HEAD" }
+        return result
+    }
+
+    override suspend fun gitPushStatus(sessionId: String, writeId: String): GitWriteResult.PushStatus {
+        requireGitPushCapability(sessionId, GIT_PUSH_STATUS_CAPABILITY)
+        val id = Wire.random()
+        encodeGitWriteCommand(GitWriteCommand.PushStatus(id, sessionId, writeId))
+        val data = request("session.git.push.status", selectionEpoch, "sessionId" to sessionId, "writeId" to writeId, requestId = id,
+            timeoutMillis = GIT_PUSH_STATUS_REQUEST_TIMEOUT_MILLIS)
+        return parseGitWriteResult(data, sessionId) as? GitWriteResult.PushStatus ?: error("Invalid push status")
+    }
+
+    override suspend fun gitPush(sessionId: String, writeId: String, requestId: String, onDispatch: () -> Unit): GitWriteResult.Push {
+        encodeGitWriteCommand(GitWriteCommand.Push(requestId, sessionId, writeId))
+        requireGitPushCapability(sessionId, GIT_PUSH_CAPABILITY)
+        require(requestId !in completions) { "Request is already in flight" }
+        var dispatched = false
+        try {
+            val result = request("session.git.push", selectionEpoch, "sessionId" to sessionId, "writeId" to writeId,
+                requestId = requestId, onSent = { dispatched = true; onDispatch() }, timeoutMillis = GIT_PUSH_REQUEST_TIMEOUT_MILLIS)
+            return parseGitWriteResult(result, sessionId) as? GitWriteResult.Push ?: GitWriteResult.Push.Unknown
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: RemoteRequestException) {
+            if (dispatched && (!error.answered || error.reason == "outcome_unknown" || error.code == "outcome_unknown")) return GitWriteResult.Push.Unknown
+            throw error
+        } catch (error: Exception) {
+            if (dispatched) return GitWriteResult.Push.Unknown
+            throw error
+        }
+    }
+
     override suspend fun gitCommitStatus(sessionId: String): GitStatus {
         requireGit(sessionId)
         val current = state.value
@@ -7230,6 +7300,28 @@ class DefaultRemoteRepository(
         require(current.selection.sessionId == sessionId && current.selection.routeId == activeHost?.routeId)
         val data = request("session.git.status", selectionEpoch, "sessionId" to sessionId, "base" to "head", "forCommit" to true)
         return parseGitStatus(data, sessionId, GitBase.HEAD)
+    }
+
+    override suspend fun gitPushIntent(selection: RemoteSelection): GitPushIntent? {
+        initialized.await()
+        check(draftsAvailable)
+        val key = DraftKey(requireNotNull(selection.routeId), requireNotNull(selection.sessionId))
+        return drafts[key]?.gitPush
+    }
+
+    override suspend fun saveGitPushIntent(selection: RemoteSelection, intent: GitPushIntent?) {
+        initialized.await()
+        check(draftsAvailable)
+        val key = DraftKey(requireNotNull(selection.routeId), requireNotNull(selection.sessionId))
+        gitDraftWrites.withLock {
+            withContext(NonCancellable) {
+                val done = CompletableDeferred<Unit>()
+                check(writes.trySend(Write(drafts.toMap(), done, pushUpdate = key to intent)).isSuccess)
+                done.await()
+                check(key.routeId !in removedRoutes) { "Host was removed" }
+                drafts[key] = (drafts[key] ?: StoredDraft()).copy(gitPush = intent)
+            }
+        }
     }
 
     override suspend fun gitCommitDraft(selection: RemoteSelection): GitCommitDraft {

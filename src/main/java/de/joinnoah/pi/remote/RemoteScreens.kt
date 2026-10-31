@@ -361,6 +361,7 @@ internal fun RemoteScreen(
     val chatKey = key as? RemoteNavKey.Chat
     val chatModel = model as? ChatViewModel
     val commitReview = chatModel?.commitReview?.state?.collectAsStateWithLifecycle()?.value
+    val pushReview = chatModel?.pushReview?.state?.collectAsStateWithLifecycle()?.value
     // The composer's text lives here rather than in the state, so typing recomposes only the
     // composer; this screen's own draft changes go through it or flush it first. It belongs to
     // this destination's chat from the start, so text typed before a load or a navigation lands
@@ -1677,7 +1678,24 @@ internal fun RemoteScreen(
         changesOpen?.let { changes ->
             {
                 val controller = checkNotNull(chatModel).commitReview
-                if (commitReview?.open == true) {
+                val pushController = chatModel.pushReview
+                if (pushReview?.open == true) {
+                    GitPushReviewPane(
+                        pushReview,
+                        remember(pushController) {
+                            GitPushReviewActions(
+                                prepare = pushController::prepare,
+                                close = pushController::close,
+                                review = pushController::review,
+                                backToEdit = pushController::backToEdit,
+                                confirm = pushController::confirm,
+                                checkRemote = pushController::checkRemote,
+                                acknowledgeUnknown = pushController::acknowledgeUnknown,
+                            )
+                        },
+                        Modifier.fillMaxSize(),
+                    )
+                } else if (commitReview?.open == true) {
                     GitCommitReviewPane(
                         commitReview,
                         remember(controller) {
@@ -1706,7 +1724,12 @@ internal fun RemoteScreen(
                         canCommitEntry = state.connected &&
                             GIT_WRITE_CAPABILITY in state.capabilities &&
                             GIT_WRITE_CAPABILITY !in state.unavailableCapabilities,
-                        onPrepareCommit = controller::prepare,
+                        onPrepareCommit = chatModel::openCommitReview,
+                        canPushEntry = (state.connected && state.capabilitiesKnown &&
+                            GIT_PUSH_CAPABILITY in state.capabilities &&
+                            GIT_PUSH_CAPABILITY !in state.unavailableCapabilities) || pushReview?.pending != null,
+                        pushPending = pushReview?.pending != null,
+                        onPreparePush = chatModel::openPushReview,
                     )
                 }
             }

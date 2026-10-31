@@ -1,7 +1,12 @@
 # Direct Git actions implementation
 
-Host protocol and owner switch exist, but GitWrites.execute is a stub; Android has no write
-parser or callers. Agent/shell support does not implement the agreed direct confirmed actions.
+Current state: branch preparation and selective Commit are wired and locally qualified. Push
+now has host dispatch, separate capability negotiation, durable Android intent/review, and an
+explicit current-remote-status recovery read. A corrected encrypted Android Push passed against
+an actual disposable local HTTPS remote; further qualification is tracked in
+[push qualification](../testing/push-qualification.md). Pull-request creation is still
+unsupported by the Host dispatcher and has no dedicated Android creation flow. The existing
+Pi `pr-status` read path does not establish PR creation or full actual-worker CI qualification.
 Use the binding Git-writes section of the Host protocol/README.md and protocol/git-write.ts.
 Preserve opt-in, protected branches, same-branch origin, hooks/LFS/signing/config restrictions,
 guarded HEAD snapshots, worktree serialization and the request ledger. No live pushes or PRs.
@@ -27,7 +32,7 @@ Each increment receives focused tests, independent review and a local commit. Ro
 SDK and broad checks. Leaf models and policy helpers can proceed in parallel; avoid shared-file
 edits until their integrations are coordinated. Full environment goal remains active.
 
-## Verified foundation increments
+## Historical foundation evidence
 
 Android result parsers and command encoders pass seven focused unit tests against the synchronized
 Host fixture. They are not wired to Repository/UI or capability discovery yet.

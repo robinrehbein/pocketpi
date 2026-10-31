@@ -7,6 +7,7 @@ import org.junit.Test
 class GitWriteModelsTest {
     private val session = "019a2f3c-7d41-7b1e-9c55-3e8f1a2b4c6d"
     private val fixture by lazy { Wire.json.parseToJsonElement(javaClass.getResource("/git-write-v1.json")!!.readText()).jsonObject }
+    private val pushFixture by lazy { Wire.json.parseToJsonElement(javaClass.getResource("/git-push-v1.json")!!.readText()).jsonObject }
     private fun results(group: String) = fixture.getValue(group).jsonArray.map { it.jsonObject }.mapNotNull { entry ->
         val payload = entry.obj("payload")
         val data = payload["data"] as? JsonObject
@@ -38,5 +39,15 @@ class GitWriteModelsTest {
         assertTrue(runCatching { parseGitWriteResult(JsonObject(data + ("writeId" to JsonPrimitive("d3JpdGUtaWQtdG9rZW4tMR"))), session) }.isFailure)
         assertTrue(runCatching { parseGitWriteResult(JsonObject(data + ("suggestedTitle" to JsonPrimitive("é".repeat(129)))), session) }.isFailure)
         assertTrue(runCatching { parseGitWriteResult(JsonObject(data + ("suggestedTitle" to JsonPrimitive("\uD800"))), session) }.isFailure)
+    }
+
+    @Test fun pushPreparationHeadAndCurrentRemoteStatusAreStrict() {
+        val data = results("valid").single { it.first == "branch-available" }.second
+        fun pushResults(group: String) = pushFixture.array(group).map { it.obj("payload") }.filter { it.optionalText("type") == "result" }.map { it.obj("data") }
+        val parsed = pushResults("valid").map { parseGitWriteResult(it, session) }
+        assertEquals(listOf("a".repeat(40), "b".repeat(64)), parsed.filterIsInstance<GitWriteResult.Branch.Available>().map { it.head })
+        assertNull((parseGitWriteResult(data, session) as GitWriteResult.Branch.Available).head)
+        assertEquals(setOf(GitPushStatus.MATCHES, GitPushStatus.ABSENT, GitPushStatus.DIFFERENT, GitPushStatus.UNAVAILABLE), parsed.filterIsInstance<GitWriteResult.PushStatus>().map { it.state }.toSet())
+        pushResults("invalid").forEach { assertTrue(runCatching { parseGitWriteResult(it, session) }.isFailure) }
     }
 }

@@ -9,9 +9,10 @@ internal sealed interface GitWriteCommand {
     val requestId: String
     val sessionId: String
 
-    data class Branch(override val requestId: String, override val sessionId: String) : GitWriteCommand
+    data class Branch(override val requestId: String, override val sessionId: String, val forPush: Boolean = false) : GitWriteCommand
     data class Commit(override val requestId: String, override val sessionId: String, val snapshotId: String, val message: String, val paths: List<String>? = null) : GitWriteCommand
     data class Push(override val requestId: String, override val sessionId: String, val writeId: String) : GitWriteCommand
+    data class PushStatus(override val requestId: String, override val sessionId: String, val writeId: String) : GitWriteCommand
     data class PullRequest(override val requestId: String, override val sessionId: String, val writeId: String, val base: String, val title: String, val body: String, val draft: Boolean) : GitWriteCommand
 }
 
@@ -80,7 +81,7 @@ internal fun encodeGitWriteCommand(command: GitWriteCommand): JsonObject {
     validateGitWriteOpaqueId(command.sessionId)
     val common = mutableListOf<Pair<String, Any?>>("requestId" to command.requestId, "sessionId" to command.sessionId)
     when (command) {
-        is GitWriteCommand.Branch -> common.add("type" to "session.git.branch")
+        is GitWriteCommand.Branch -> { common.add("type" to "session.git.branch"); if (command.forPush) common.add("forPush" to true) }
         is GitWriteCommand.Commit -> {
             token(command.snapshotId)
             commitMessage(command.message)
@@ -96,6 +97,11 @@ internal fun encodeGitWriteCommand(command: GitWriteCommand): JsonObject {
         is GitWriteCommand.Push -> {
             token(command.writeId)
             common.add("type" to "session.git.push")
+            common.add("writeId" to command.writeId)
+        }
+        is GitWriteCommand.PushStatus -> {
+            token(command.writeId)
+            common.add("type" to "session.git.push.status")
             common.add("writeId" to command.writeId)
         }
         is GitWriteCommand.PullRequest -> {
