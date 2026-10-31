@@ -83,7 +83,7 @@
     <string name="remote_local_command_export">Export the session as an HTML file</string>
     <string name="remote_export_running">Exporting the session…</string>
     <string name="remote_local_command_reload">Reload extensions, skills, prompts and context files</string>
-    <string name="remote_reload_terminal_hint">Not possible in terminal sessions yet, only for sessions started from the app.</string>
+    <string name="remote_reload_terminal_hint">Update pi Remote on the Mac, or reload pi there first.</string>
     <string name="remote_reload_running">Reloading…</string>
     <string name="remote_reload_done">Extensions, skills, prompts, themes and context files reloaded</string>
     <string name="remote_reload_busy">The session is busy. Try again when it is idle.</string>
@@ -145,7 +145,8 @@
     <string name="remote_draft_uncertain">Delivery not confirmed. Check the session before sending your draft again.</string>
     <string name="remote_steer_accepted">Sending now, into the running step: %1$s</string>
     <string name="remote_tui_info_title">Mac terminal session</string>
-    <string name="remote_tui_info_body">While this session is busy, Send now and Send when done work only on the Mac itself. Send a message when it is ready, or stop pi to interrupt it.</string>
+    <string name="remote_tui_info_body">While this session is busy, Send now and Send when done need a current pi Remote on the Mac and a reloaded pi. Until then, send a message when the session is ready, or stop pi to interrupt it.</string>
+    <string name="remote_session_control_reload_pi">Reload pi on the Mac to use this here.</string>
     <string name="remote_tui_info_close">Got it</string>
     <string name="remote_follow_up_pending">Sends when pi is done: %1$s</string>
     <string name="remote_follow_up_uncertain">Delivery unclear — check before resending: %1$s</string>

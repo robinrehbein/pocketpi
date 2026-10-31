@@ -257,23 +257,25 @@ internal fun canExportSession(state: RemoteState): Boolean =
 internal enum class ReloadAvailability {
     /** The host has no reload, or the session cannot be reached. */
     NONE,
-    /** A host-owned session: reload runs from the phone. */
+    /** A host-owned session, or an extension session on a capable host: reload runs from the phone. */
     RUNS,
-    /** A terminal session: shown, but only with the hint that the phone cannot reload it yet. */
+    /** A terminal session not capable yet: shown, but only with the hint that says what it needs. */
     TERMINAL_ONLY,
 }
 
 /**
- * The host advertises [RELOAD_CAPABILITY]; only a session the app started (`rpc`) reloads from the
- * phone, a terminal session (`tui`) is listed with an explanation instead.
+ * The host advertises [RELOAD_CAPABILITY]; a session the app started (`rpc`) and one [extensionControls]
+ * allows reload from the phone, any other terminal session (`tui`) is listed with an explanation.
  */
 internal fun reloadAvailability(state: RemoteState): ReloadAvailability =
     when {
         !state.connected || state.loading || state.selection.sessionId == null ||
             RELOAD_CAPABILITY !in state.capabilities || RELOAD_CAPABILITY in state.unavailableCapabilities ||
             state.status == "offline" -> ReloadAvailability.NONE
-        state.session?.optionalText("origin") == "rpc" -> ReloadAvailability.RUNS
-        state.session?.optionalText("origin") == "tui" -> ReloadAvailability.TERMINAL_ONLY
+        state.session?.optionalText("origin") == "rpc" || extensionControls(state, ExtensionControl.RELOAD) ->
+            ReloadAvailability.RUNS
+        // A subagent child never reloads from the phone, so the hint to update pi on the Mac would change nothing.
+        state.session?.optionalText("origin") == "tui" && !isChildSession(state) -> ReloadAvailability.TERMINAL_ONLY
         else -> ReloadAvailability.NONE
     }
 

@@ -41,11 +41,13 @@ data class ToolOutputDownload(
 
 internal fun canFollowUp(state: RemoteState): Boolean =
     (FOLLOW_UP_CAPABILITY in state.capabilities && state.session != null &&
-        state.session.optionalText("origin") == "rpc") || childControlsAvailable(state)
+        (state.session.optionalText("origin") == "rpc" || extensionControls(state, ExtensionControl.FOLLOW_UP))) ||
+        childControlsAvailable(state)
 
 internal fun canSteer(state: RemoteState): Boolean =
     (STEER_CAPABILITY in state.capabilities && state.session != null &&
-        state.session.optionalText("origin") == "rpc") || childControlsAvailable(state)
+        (state.session.optionalText("origin") == "rpc" || extensionControls(state, ExtensionControl.STEER))) ||
+        childControlsAvailable(state)
 
 data class RemoteSelection(
     val routeId: String? = null,
@@ -177,6 +179,11 @@ data class RemoteState(
      * changes.
      */
     val childControlUnsupported: Set<String> = emptySet(),
+    /**
+     * Controls the host refused for a session whose pi must reload its Remote extension first, by
+     * session ID. Learned again after the selection or connection changes: pi may have reloaded.
+     */
+    val sessionControlUnsupported: Map<String, Set<ExtensionControl>> = emptyMap(),
     val answering: Set<String> = emptySet(),
     /** Questions the user cannot answer from here right now, by question ID. */
     val questionBlocks: Map<String, QuestionBlock> = emptyMap(),
