@@ -26,3 +26,15 @@ guarded HEAD snapshots, worktree serialization and the request ledger. No live p
 Each increment receives focused tests, independent review and a local commit. Root owns Docker,
 SDK and broad checks. Leaf models and policy helpers can proceed in parallel; avoid shared-file
 edits until their integrations are coordinated. Full environment goal remains active.
+
+## Verified foundation increments
+
+Android result parsers and command encoders pass seven focused unit tests against the synchronized
+Host fixture. They are not wired to Repository/UI or capability discovery yet.
+
+Host policy and own-checkout capture are implemented. The owner can show, replace or reset branch
+patterns through CLI/local IPC, with separate persistence groups, rollback, no-op handling and
+pattern-free audit. Twenty focused tests and extension type checking pass. The write-source guard
+refuses finished-worktree comparison fallbacks and checks authorization and folder identity again.
+Snapshot access, atomic worktree mutation reservations and all actual Git-write executors remain
+open; neither these foundations nor the switch makes commit/push/PR available.

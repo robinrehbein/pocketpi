@@ -1,5 +1,29 @@
 # Linux host qualification
 
+## Tablet preview rendering and input increment, 2026-10-31
+
+The final API-36 arm64 tablet preview run passes one real instrumentation test in 31.212s.
+After reconnection, the test now waits for the actual rendered image before taking its screenshot.
+The inspected screenshot shows the page, magenta update marker and preserved unsent draft,
+read-only controls and no System UI ANR modal. Actual host effects are one input POST, one
+Enter submission, one acknowledged WebSocket update and one device cut, with owner revocation
+true and the host still connected. Log: `/private/tmp/pocketpi-linux-preview-tablet-instrumentation.log`;
+image: `/private/tmp/pocketpi-linux-android-proof/preview-tablet-restored.png`.
+
+This qualification exposed a misleading image-error placeholder during asynchronous decoding.
+The pane now shows waiting until decode completes, retains a valid frame during the next decode
+within the same context, and never reuses that frame across session/browser/generation/tab/
+document/viewport changes. Text and keys remain available while a successor is decoding in the
+same context; pointer and wheel retain their existing stricter current-frame gate. Twenty-three
+focused pane tests and seven Git wire tests pass, and both APKs build. The independent review
+found no remaining concrete regression in this increment. This is not a physical keyboard, mouse,
+DeX, sustained slow-decoder or general arbitrary-device qualification.
+
+Earlier tablet attempts included system-wide first-boot ANRs, an Enter timeout, and a later
+zero-input-POST timeout. The exact causes of those intermittent input failures remain unproven;
+the passing final run does not establish general startup or long-session reliability. The older
+browser screenshot still contains a System UI ANR; it remains transport-only evidence.
+
 ## Actual Android phone against the packaged Linux host, 2026-10-31
 
 The API-36 arm64 phone emulator now passes the actual SecureRemoteTransport and BrowserPane

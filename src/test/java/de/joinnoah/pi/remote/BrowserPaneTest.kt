@@ -8,6 +8,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
 import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -26,6 +27,155 @@ class BrowserPaneTest {
         val out = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out); bitmap.recycle()
         return BrowserImage(out.toByteArray(), 400, 200, 400, 200, 1.0, 0.0, 0.0, 1, 1)
+    }
+    @Test fun pendingDecodeWaitsAndSuccessfulDecodeDisplaysImage() {
+        val pending = CompletableDeferred<Bitmap?>()
+        val view = BrowserView("s", opening = false, browserId = "b", generation = 1, viewportRevision = 1, image = image())
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(), {}, decodeImage = { pending.await() }) } }
+        compose.onNodeWithText("Waiting for browser image…").assertIsDisplayed()
+        compose.onNodeWithText("Could not display the browser image. Refresh to try again.").assertDoesNotExist()
+        compose.runOnIdle { pending.complete(Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888)) }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    @Test fun failedDecodeReportsFailureOnlyAfterCompletion() {
+        val pending = CompletableDeferred<Bitmap?>()
+        val view = BrowserView("s", opening = false, browserId = "b", generation = 1, viewportRevision = 1, image = image())
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(), {}, decodeImage = { pending.await() }) } }
+        compose.onNodeWithText("Waiting for browser image…").assertIsDisplayed()
+        compose.runOnIdle { pending.complete(null) }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Could not display the browser image. Refresh to try again.").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Remote browser image").assertDoesNotExist()
+    }
+
+    @Test fun changingSessionDoesNotShowOldDecodedImageOrOldCompletion() {
+        val first = CompletableDeferred<Bitmap?>()
+        val second = CompletableDeferred<Bitmap?>()
+        val firstImage = image()
+        val secondImage = image()
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", generation = 1, viewportRevision = 1, image = firstImage))
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(), {}, decodeImage = { if (it === firstImage) first.await() else second.await() }) } }
+        compose.runOnIdle { view = view.copy(sessionId = "other", browserId = "new", generation = 2, image = secondImage) }
+        val unused = Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888)
+        compose.runOnIdle { first.complete(unused) }
+        compose.onNodeWithText("Waiting for browser image…").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Remote browser image").assertDoesNotExist()
+        unused.recycle()
+        compose.runOnIdle { second.complete(null) }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Could not display the browser image. Refresh to try again.").fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    @Test fun newGenerationHidesPreviouslyDecodedImageWhileNextFrameWaits() {
+        val next = CompletableDeferred<Bitmap?>()
+        val firstImage = image()
+        val nextImage = image()
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", generation = 1, viewportRevision = 1, image = firstImage))
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(), {}, decodeImage = { if (it === firstImage) Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888) else next.await() }) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.runOnIdle { view = view.copy(generation = 2, image = nextImage) }
+        compose.onNodeWithContentDescription("Remote browser image").assertDoesNotExist()
+        compose.onNodeWithText("Waiting for browser image…").assertIsDisplayed()
+        compose.runOnIdle { next.complete(null) }
+    }
+
+    @Test fun structurallyEqualNewFrameIsDecodedByIdentity() {
+        val next = CompletableDeferred<Bitmap?>()
+        val firstImage = image()
+        val nextImage = firstImage.copy()
+        assertTrue(firstImage == nextImage && firstImage !== nextImage)
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = firstImage), referentialEqualityPolicy())
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(), {}, decodeImage = { if (it === firstImage) Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888) else next.await() }) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.runOnIdle { view = view.copy(image = nextImage) }
+        compose.onNodeWithContentDescription("Remote browser image").assertExists()
+        compose.onNodeWithTag("browserSendText").assertIsNotEnabled()
+        compose.runOnIdle { next.complete(Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888)) }
+        compose.onNodeWithTag("browserText").performTextInput("ready")
+        compose.waitUntil(10_000) { runCatching { compose.onNodeWithTag("browserSendText").assertIsEnabled(); true }.getOrDefault(false) }
+    }
+
+    @Test fun nextFrameKeepsPriorImageUntilDecodeFails() {
+        val next = CompletableDeferred<Bitmap?>()
+        val firstImage = image()
+        val nextImage = firstImage.copy(frameId = 2)
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = firstImage))
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(), {}, decodeImage = { if (it === firstImage) Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888) else next.await() }) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("browserText").performTextInput("draft")
+        compose.runOnIdle { view = view.copy(image = nextImage) }
+        compose.onNodeWithContentDescription("Remote browser image").assertIsDisplayed()
+        compose.onNodeWithText("Waiting for browser image…").assertDoesNotExist()
+        compose.onNodeWithTag("browserSendText").assertIsEnabled()
+        compose.runOnIdle { next.complete(null) }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Could not display the browser image. Refresh to try again.").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Remote browser image").assertDoesNotExist()
+        compose.onNodeWithTag("browserSendText").assertIsNotEnabled()
+    }
+
+    @Test fun pendingSuccessorFramesPermitOneTextSendWithoutReplayingIt() {
+        val pending = CompletableDeferred<Bitmap?>()
+        val first = image()
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = first))
+        val sent = mutableListOf<BrowserInput>()
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(input = {
+            sent.add(it); view = view.copy(inputPending = true); true
+        }), {}, decodeImage = { if (it === first) Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888) else pending.await() }) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("browserText").performTextInput("draft")
+        compose.runOnIdle { view = view.copy(image = first.copy(frameId = 2)) }
+        compose.runOnIdle { view = view.copy(image = first.copy(frameId = 3)) }
+        compose.onNodeWithContentDescription("Remote browser image").assertIsDisplayed()
+        compose.onNodeWithTag("browserViewport").performTouchInput { click(center) }
+        compose.runOnIdle { assertTrue(sent.isEmpty()) }
+        compose.onNodeWithTag("browserSendText").assertIsEnabled().performClick()
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.size == 1 } }
+        compose.runOnIdle { view = view.copy(inputPending = false, receipt = BrowserInputReceipt(1, "accepted")) }
+        compose.onNodeWithTag("browserText").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+        compose.runOnIdle { assertEquals(listOf(BrowserInput.Text("draft")), sent) }
+    }
+
+    @Test fun pendingSuccessorDoesNotRelaxMovingMissingFrameOrContextGates() {
+        val pending = CompletableDeferred<Bitmap?>()
+        val first = image()
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = first))
+        val sent = mutableListOf<BrowserInput>()
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(input = { sent.add(it); true }), {}, decodeImage = { if (it === first) Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888) else pending.await() }) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("browserText").performTextInput("draft")
+        compose.runOnIdle { view = view.copy(image = first.copy(frameId = 2), moving = true) }
+        compose.onNodeWithTag("browserSendText").assertIsNotEnabled()
+        compose.runOnIdle { view = view.copy(moving = false, image = null) }
+        compose.onNodeWithTag("browserSendText").assertIsNotEnabled()
+        compose.runOnIdle { view = view.copy(generation = 2, image = first.copy(frameId = 3)) }
+        compose.onNodeWithTag("browserSendText").assertIsNotEnabled()
+        compose.runOnIdle { assertTrue(sent.isEmpty()) }
+    }
+
+    @Test fun pendingSuccessorPermitsKeyDownAndRelease() {
+        val pending = CompletableDeferred<Bitmap?>()
+        val first = image()
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = first))
+        val sent = mutableListOf<BrowserInput>()
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(input = {
+            sent.add(it); view = view.copy(receipt = BrowserInputReceipt(sent.size.toLong(), "accepted")); true
+        }), {}, decodeImage = { if (it === first) Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888) else pending.await() }) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.runOnIdle { view = view.copy(image = first.copy(frameId = 2)) }
+        compose.onNodeWithText("Enter").assertIsEnabled().performClick()
+        compose.waitUntil(5_000) { compose.runOnIdle { sent.size == 2 } }
+        compose.runOnIdle { assertEquals(listOf(BrowserInput.Key("down", "Enter", "Enter"), BrowserInput.Key("up", "Enter", "Enter")), sent) }
+    }
+
+    @Test fun resizePendingBlocksTextAndKeysEvenWithDecodedImage() {
+        var requested = false
+        val first = image()
+        val view = BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = first)
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(resize = { _, _, _, _ -> requested = true; true }), {}) } }
+        compose.waitUntil(10_000) { compose.runOnIdle { requested } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("browserText").performTextInput("draft")
+        compose.onNodeWithTag("browserSendText").assertIsNotEnabled()
+        compose.onNodeWithText("Enter").assertIsNotEnabled()
     }
     @Test fun switchingBetweenBrowserAndPreviewKeepsDraftsSeparate() {
         var preview by mutableStateOf(false)

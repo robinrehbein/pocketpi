@@ -42,10 +42,14 @@ internal data class BrowserPaneActions(
 
 private data class PendingBrowserInput(val input: BrowserInput, val submittedText: String? = null)
 private data class BrowserFlight(val item: PendingBrowserInput, val baseline: BrowserInputReceipt?)
+private class BrowserFrameKey(private val image: BrowserImage?) {
+    override fun equals(other: Any?): Boolean = other is BrowserFrameKey && image === other.image
+    override fun hashCode(): Int = System.identityHashCode(image)
+}
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClose: () -> Unit, onUnsentChanged: (Boolean) -> Unit = {}, onHide: (() -> Unit)? = null) {
+internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClose: () -> Unit, onUnsentChanged: (Boolean) -> Unit = {}, onHide: (() -> Unit)? = null, decodeImage: suspend (BrowserImage) -> android.graphics.Bitmap? = { decodeBrowserImage(it) }) {
     val active = LocalTerminalKeyboardActive.current
     val focusOwner = LocalTerminalInputFocus.current
     val focusToken = remember { Any() }
@@ -120,20 +124,30 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         }
     }
     val image = view?.image?.takeIf { it.viewportRevision == view.viewportRevision }
-    var decoded by remember(view?.sessionId, view?.browserId, view?.generation, view?.selectedTabId, view?.viewportRevision) { mutableStateOf<Pair<BrowserImage, android.graphics.Bitmap>?>(null) }
-    LaunchedEffect(image, view?.sessionId, view?.browserId, view?.generation, view?.selectedTabId, view?.viewportRevision) {
+    var decoded by remember(view?.sessionId, view?.browserId, view?.generation, view?.selectedTabId, view?.viewportRevision, view?.documentEpoch, view?.previewPort) { mutableStateOf<Pair<BrowserImage, android.graphics.Bitmap>?>(null) }
+    var failedImage by remember(view?.sessionId, view?.browserId, view?.generation, view?.selectedTabId, view?.viewportRevision, view?.documentEpoch, view?.previewPort) { mutableStateOf<BrowserImage?>(null, referentialEqualityPolicy()) }
+    LaunchedEffect(BrowserFrameKey(image), view?.sessionId, view?.browserId, view?.generation, view?.selectedTabId, view?.viewportRevision, view?.documentEpoch, view?.previewPort) {
         if (image != null) {
-            val result = withContext(Dispatchers.Default) { decodeBrowserImage(image) }
-            if (result != null) decoded = image to result
+            var candidate: android.graphics.Bitmap? = null
+            var transferred = false
+            try {
+                val result = withContext(Dispatchers.Default) { decodeImage(image).also { candidate = it } }
+                if (result == null) { decoded = null; failedImage = image }
+                else { decoded = image to result; failedImage = null; transferred = true }
+            } finally {
+                if (!transferred) candidate?.recycle()
+            }
         }
     }
     val bitmap = decoded?.second?.takeIf { image != null || view?.ownsControl == true }
     val canWheel = active && view?.ownsControl == true && image != null && decoded?.first === image && resizeRevision == null
     val canInput = canWheel && view?.moving != true
+    val canTextKeys = active && view?.ownsControl == true && image != null && bitmap != null && resizeRevision == null && view.moving != true
     val canRelease = active && view?.ownsControl == true && (heldRevision == null || heldRevision == view.viewportRevision)
     val latestCanRelease by rememberUpdatedState(canRelease)
     val latestCanInput by rememberUpdatedState(canInput)
     val latestCanWheel by rememberUpdatedState(canWheel)
+    val latestCanTextKeys by rememberUpdatedState(canTextKeys)
     val latestView by rememberUpdatedState(view)
     val latestImage by rememberUpdatedState(image)
     fun enqueue(item: PendingBrowserInput): Boolean {
@@ -145,7 +159,12 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         }
         val down = when (input) { is BrowserInput.Pointer -> input.action == "down"; is BrowserInput.Key -> input.action == "down"; else -> false }
         val up = when (input) { is BrowserInput.Pointer -> input.action == "up"; is BrowserInput.Key -> input.action == "up"; else -> false }
-        if ((!up && !latestCanInput && !(input is BrowserInput.Wheel && latestCanWheel)) || (up && !latestCanRelease)) return false
+        val allowed = when (input) {
+            is BrowserInput.Pointer -> latestCanInput
+            is BrowserInput.Wheel -> latestCanWheel
+            is BrowserInput.Key, is BrowserInput.Text -> latestCanTextKeys
+        }
+        if ((!up && !allowed) || (up && !latestCanRelease)) return false
         if (up && (id == null || id !in held || id in releasing)) return false
         if (down && id in held) return false
         if (input is BrowserInput.Pointer && input.action == "move") {
@@ -208,7 +227,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             .onFocusChanged { focusOwner?.update(focusToken, active && it.hasFocus) }
             .onPreviewKeyEvent { event ->
                 val pressedCodes = held.filter { it.startsWith("key:") }.map { it.removePrefix("key:") }.toSet()
-                val input = browserHardwareInput(event.nativeKeyEvent, latestCanInput || latestCanRelease && event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_UP, pressedCodes)
+                val input = browserHardwareInput(event.nativeKeyEvent, latestCanTextKeys || latestCanRelease && event.nativeKeyEvent.action == android.view.KeyEvent.ACTION_UP, pressedCodes)
                 input != null && latestEnqueue(PendingBrowserInput(input))
             }.focusRequester(focusRequester).focusable(enabled = canRelease)
             .pointerInteropFilter { event ->
@@ -228,12 +247,12 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
                 }
             }, contentAlignment = Alignment.Center) {
             if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = stringResource(R.string.browser_image), modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-            else Text(stringResource(if (image == null) R.string.browser_waiting else R.string.browser_frame_failed), color = Color.White)
+            else Text(stringResource(if (image != null && failedImage === image) R.string.browser_frame_failed else R.string.browser_waiting), color = Color.White)
         }
         Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(draft, { draft = it }, Modifier.weight(1f).testTag("browserText"), enabled = view.ownsControl, label = { Text(stringResource(R.string.browser_text)) })
-            TextButton(onClick = { textSendRefused = !enqueue(PendingBrowserInput(BrowserInput.Text(draft), draft)) }, enabled = canInput && draft.isNotBlank() && flight == null && queue.isEmpty(), modifier = Modifier.testTag("browserSendText")) { Text(stringResource(R.string.browser_send)) }
+            TextButton(onClick = { textSendRefused = !enqueue(PendingBrowserInput(BrowserInput.Text(draft), draft)) }, enabled = canTextKeys && draft.isNotBlank() && flight == null && queue.isEmpty(), modifier = Modifier.testTag("browserSendText")) { Text(stringResource(R.string.browser_send)) }
         }
-        Row(Modifier.padding(horizontal = 12.dp)) { listOf("Enter", "Tab", "Escape").forEach { key -> TextButton(onClick = { enqueue(PendingBrowserInput(BrowserInput.Key("down", key, key))); enqueue(PendingBrowserInput(BrowserInput.Key("up", key, key))) }, enabled = canInput) { Text(key) } } }
+        Row(Modifier.padding(horizontal = 12.dp)) { listOf("Enter", "Tab", "Escape").forEach { key -> TextButton(onClick = { enqueue(PendingBrowserInput(BrowserInput.Key("down", key, key))); enqueue(PendingBrowserInput(BrowserInput.Key("up", key, key))) }, enabled = canTextKeys) { Text(key) } } }
     }
 }

@@ -205,7 +205,11 @@ class BrowserTransportEndToEndTest {
                 runCatching { compose.onNodeWithTag("browserSendText").assertIsEnabled(); true }.getOrDefault(false)
         }
         compose.onNodeWithTag("browserSendText").performClick()
-        compose.waitUntil(30_000) { status()?.let { it.optString("lastinput") == value && it.optInt("inputPosts") > initialPosts } == true && view()?.inputPending == false }
+        try {
+            compose.waitUntil(30_000) { status()?.let { it.optString("lastinput") == value && it.optInt("inputPosts") > initialPosts } == true && view()?.inputPending == false }
+        } catch (failure: Exception) {
+            throw AssertionError("Linux text not observed: attempts=${observedTransport.inputAttempts.get()}, receipt=${view()?.receipt}, pending=${view()?.inputPending}, moving=${view()?.moving}, viewport=${view()?.viewportRevision}, posts=${status()?.optInt("inputPosts")}", failure)
+        }
         compose.waitUntil(30_000) { runCatching { compose.onNodeWithText("Enter").assertIsEnabled(); true }.getOrDefault(false) }
         compose.onNodeWithText("Enter").performClick()
         try {
@@ -238,6 +242,9 @@ class BrowserTransportEndToEndTest {
         assertEquals(posts, requireNotNull(status()).getInt("inputPosts"))
         assertEquals(1, requireNotNull(status()).getInt("cuts"))
         assertTrue(requireNotNull(status()).getBoolean("hostConnected"))
+        compose.waitUntil(30_000) {
+            runCatching { compose.onNodeWithContentDescription("Remote browser image").assertIsDisplayed(); true }.getOrDefault(false)
+        }
         val screenshot = File(compose.activity.getExternalFilesDir(null), if (preview) "linux-preview-restored.png" else "linux-browser-restored.png")
         assertTrue(UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).takeScreenshot(screenshot))
         assertTrue(screenshot.length() > 0)
