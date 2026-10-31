@@ -301,3 +301,23 @@ sources, `/private/tmp/pocketpi-packaged-cli-{final,shutdown}.log`, and
 This remains a local Docker Desktop Linux-arm64 proof with an offline provider;
 Devcontainer connected entrypoint, remote network interruption, independent Linux
 host, real provider credentials and physical Samsung devices are not qualified by it.
+
+## Maintained CLI reconnect fixture — 2026-10-31
+
+The connected smoke is now maintained under Host
+`extensions/remote/runtime-test/linux-packaged-cli/`, with runner
+`deploy/linux-host/verify-connected-cli.mjs`. The final runner passes against image
+`sha256:4a46342c19b693c67eda4670c9004a6ff1c13c0296ccc9c90574a588ede14a69`
+with `--reconnect`: cut every upgraded TLS tunnel, observe owner status offline then
+online, authenticate the same paired device, snapshot the same session, confirm the
+original worker PID/start time and one start record, then execute a new shell marker.
+No mutating request is automatically retried; lost ACK/replay safety is not tested here.
+
+The runner verifies its successful Docker-create ID, immutable image and nonce before
+start and cleanup. Public fixture code is staged read-only and readable independently
+of the host UID; no secrets enter staging. Review caught a premature PASS output before
+outer cleanup, now covered by a failing-cleanup regression. Success is printed only after
+container and staging removal. All 49 deployment helper tests pass; Biome reports zero
+errors and eight fixture typing warnings. No application runtime changed in this increment.
+Evidence: `/private/tmp/pocketpi-connected-maintained-{final,unit,biome}.log`.
+Independent remote Linux and connected Devcontainer-supervisor qualification remain open.

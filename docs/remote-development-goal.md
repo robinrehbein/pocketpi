@@ -1,5 +1,17 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Packaged CLI and Dev Containers checkpoint on 2026-10-31
+
+The repository now contains a guarded Dev Containers adapter with explicit owner setup,
+private persistent state, nonroot/read-only operation and verified restart/container replacement.
+The corrected standalone image also passes the regular Host CLI connected flow: private TLS
+relay, authenticated encrypted pairing, native Pi worker/PTY, public snapshot, deterministic
+provider turn, remote shell and clean shutdown. These are separate local Docker Desktop proofs;
+the connected flow has not yet run through the Dev Containers supervisor. Independent remote
+Linux, Chromium packaging, network interruption/recovery and physical Samsung qualification
+remain open. See [Linux qualification](testing/linux-host-qualification.md) for exact boundaries.
+
+
 ## Persistent Linux core checkpoint on 2026-10-31
 
 The standalone package now builds into a nonroot core host image with explicit persistent private
