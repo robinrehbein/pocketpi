@@ -1,5 +1,17 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Owned Android emulator backend checkpoint on 2026-10-31
+
+A host-owned emulator/private-ADB runtime now implements authenticated capture and finite
+key/tap/swipe input with identity, geometry, queue and cleanup guards. Two real Mac SDK tests
+prove stable rendered Settings/Launcher/search images, HOME and a search-field tap, revocation
+cleanup and refusal of a foreign ADB listener. Independent review corrections and 55 focused
+tests pass; the integrated full extension suite passes 6,357 tests with 27 skipped. This is an
+implemented backend, not yet an emulator capability in PocketPi. Owner grants, Pi/device service,
+wire protocol and app pane remain the next package. Exact scope and evidence are in
+[owned emulator runtime qualification](testing/owned-emulator-runtime.md).
+
+
 ## Android emulator feasibility checkpoint on 2026-10-31
 
 An authenticated local gRPC capture plus a fixed ADB HOME command produced 30 frames with 28
