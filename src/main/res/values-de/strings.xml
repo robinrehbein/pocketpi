@@ -700,4 +700,6 @@
     <string name="remote_terminal_ctrl_alt_shortcuts">Strg+Alt-Kürzel senden</string>
     <string name="remote_terminal_key_unsupported">Diese Tastenkombination wird im aktuellen Terminalmodus nicht unterstützt. Wartende Eingaben wurden verworfen.</string>
     <string name="remote_terminal_draft_busy">Warte auf die ausstehende Terminaleingabe, bevor du den Entwurf sendest.</string>
+    <string name="remote_prepared_text_explanation">Beim Öffnen wurde eine andere Sitzung erstellt. Dein vorbereiteter Text bleibt in der ursprünglichen Sitzung verfügbar. Du kannst ihn bei Bedarf kopieren und hier einfügen.</string>
+    <string name="remote_prepared_text_copy">Vorbereiteten Text kopieren</string>
 </resources>
