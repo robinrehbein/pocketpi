@@ -40,3 +40,30 @@ Guarded HEAD-snapshot access now passes the 73-test Git/owner regression group a
 type checking. It checks device/session/expiry, own checkout, source guards and repository identity,
 returns independent copies and exposes revalidation. Atomic mutation reservations and actual
 Git-write executors remain open; neither these foundations nor the switch makes commit/push/PR available.
+
+## Branch preparation and host admissions
+
+The branch command now reaches the real read-only executor over the encrypted device route.
+It returns a device/session/worktree/branch/HEAD-bound ten-minute token, sanitized single origin
+target, local upstream/remote-tip state, current protected-branch decisions, hooks skipped and
+offered bases. Multiple effective push URLs and incomplete required objects are refused.
+Trusted project additions are read from the project layer; configured base references are
+resolved against actual remote names without confusing slash-containing branch names.
+
+Host admissions cover session work starts and create, plus NativeLocal actual launches and
+restored workers. Setup is ordered per session without holding up completion of independent
+running tasks. Reservation guards recheck member identities/idle state and pending discoveries.
+This is a host admission boundary, not an index lock or atomic Git commit. Raw terminal-input
+coverage and unregistered native-runtime gaps must be audited before enabling a writer.
+
+The final Remote run passed 3,383 tests with 35 skips across 235 passing and seven skipped files.
+Type checking passed. Shared Atlas configuration tests passed 13 tests. A previous full run had
+one unclassified five-second frame timeout; phase-only diagnostics and two focused passes were
+added before the final broad pass. The intermittent timeout has no established cause.
+
+Atomic HEAD verification was probed with the public update-ref transaction interface:
+the local Apple Git 2.54.0 supports symref-verify when invoked with no-deref, but Git 2.39.5 in the
+existing Linux image refuses that command. Holding HEAD.lock blocks ordinary update-ref too,
+so dropping the lock is not an acceptable substitute. The future commit must gate the required
+capability and qualify a suitable packaged Git runtime; no exact minimum release is assumed.
+Commit, push, PR executors and their confirmation UI remain open.

@@ -1,5 +1,25 @@
 # Linux host qualification
 
+## Read-only Git transport guard on the existing Linux runtime, 2026-10-31
+
+The current source read runner is also checked with the existing immutable browser image's
+Git 2.39.5. A first capability probe showed that this Git rejects the newer no-lazy-fetch CLI
+option, so the source now avoids that option and pins an empty Git transport-protocol whitelist
+in its cleared read environment, together with the no-lazy-fetch environment variable.
+
+The actual container probe passes: a missing promisor attributes object invokes the local test
+remote-helper without the guard, but never with the empty whitelist, even though repository
+configuration explicitly allows that helper protocol. The current source Git runner also refuses
+the missing object without invoking the helper, while ordinary repository discovery still works.
+The container has no network, capabilities or host-write mounts; its only mounts are a small
+read-only public source fixture. The private container tmpfs is executable specifically so the
+positive-control helper can run; the initial noexec control was invalid and was corrected.
+
+Evidence is /private/tmp/pocketpi-git239-read-runner-proof3.log. This is a source-overlay read-runner
+probe on the existing runtime, not a rebuilt package, actual Git push, independent Linux machine
+or proof of external credential/network handling. The future confirmed network writer needs its
+own authorized environment and cannot reuse the read runner's empty protocol whitelist.
+
 ## Tablet preview rendering and input increment, 2026-10-31
 
 The final API-36 arm64 tablet preview run passes one real instrumentation test in 31.212s.
