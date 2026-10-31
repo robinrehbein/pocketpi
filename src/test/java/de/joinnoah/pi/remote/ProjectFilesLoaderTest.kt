@@ -127,7 +127,7 @@ class ProjectFilesLoaderTest {
         private fun response(request: JsonObject): JsonObject? {
             return when (request.text("type")) {
                 "projects.list" ->
-                    if (useV1 && request.text("requestId").startsWith("capabilities.v2:"))
+                    if (useV1 && !request.text("requestId").startsWith("capabilities.v1:"))
                         Wire.objectOf("kind" to "projects", "items" to JsonArray(emptyList()))
                     else Wire.objectOf(
                         "kind" to "projects",

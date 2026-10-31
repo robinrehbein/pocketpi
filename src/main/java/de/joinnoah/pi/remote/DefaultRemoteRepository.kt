@@ -61,8 +61,14 @@ private const val ATTACHMENT_READ_SPACING_MILLIS = 200L
 private const val DRAFT_WRITE_DELAY_MILLIS = 300L
 private const val CAPABILITIES_V1_ROUTE = "capabilities.v1:"
 private const val CAPABILITIES_V2_ROUTE = "capabilities.v2:"
-/** The v2 list holds the v1 entries plus newer ones; installed apps accept 16, this one 32. */
-private const val MAX_ROUTE_CAPABILITIES = 32
+private const val CAPABILITIES_V3_ROUTE = "capabilities.v3:"
+
+private fun capabilityRevision(route: String): Int = when {
+    route.startsWith(CAPABILITIES_V3_ROUTE) -> 3
+    route.startsWith(CAPABILITIES_V2_ROUTE) -> 2
+    route.startsWith(CAPABILITIES_V1_ROUTE) -> 1
+    else -> 0
+}
 
 /** Sessions whose unsaved editor is kept while another session is open; the oldest goes first. */
 private const val MAX_PARKED_EDITORS = 4
@@ -253,30 +259,30 @@ class DefaultRemoteRepository(
             GIT_CAPABILITY,
             FILES_CAPABILITY,
             FILES_SEARCH_CAPABILITY,
-            // Only on the capabilities.v2 route, and only when the host enables writes.
+            // Only on capability routes v2 and later, and only when the host enables writes.
             FILES_WRITE_CAPABILITY,
             PROVIDER_AUTH_CAPABILITY,
             ATTACHMENT_READ_CAPABILITY,
             EXPORT_CAPABILITY,
             SESSION_TREE_CAPABILITY,
-            // Advertised only on the capabilities.v2 route, which the first projects.list uses.
+            // Advertised on capability routes v2 and later.
             FILES_MEDIA_CAPABILITY,
             FILES_ARTIFACT_CAPABILITY,
             RELOAD_CAPABILITY,
             ARTIFACTS_CAPABILITY,
-            // Only on the capabilities.v2 route, and only while the Mac's switch is on.
+            // Only on capability routes v2 and later, and only while the Mac's switch is on.
             SESSION_BASH_CAPABILITY,
             SESSION_TERMINAL_CAPABILITY,
             SESSION_TERMINAL_KEYS_CAPABILITY,
-            // Also v2 only: it lets terminal sessions and host workers run them as well.
+            // Also v2 and later: lets terminal sessions and host workers run them as well.
             SESSION_BASH_WORKER_CAPABILITY,
-            // Only on the capabilities.v2 route; writes need the project's `writable` flag as well.
+            // Only on capability routes v2 and later; writes need the project's `writable` flag as well.
             TICKETS_CAPABILITY,
             SESSION_TASKS_CAPABILITY,
         )
-    /** The request ID prefix of `projects.list`; falls back to v1 once for a host without v2. */
+    /** The projects.list route falls back through v2 to v1 only when a list is absent. */
     private var terminalRouteOffered = false
-    private var capabilityRoute = CAPABILITIES_V2_ROUTE
+    private var capabilityRoute = CAPABILITIES_V3_ROUTE
     private var tasksCapabilityKnown = false
     private val mutable = MutableStateFlow(RemoteState())
     override val state = mutable.asStateFlow()
@@ -776,7 +782,7 @@ class DefaultRemoteRepository(
                     // The backoff resets only once this connection proves itself, so a host that
                     // accepts and then drops connections at once does not cause a tight loop.
                     connectionReady()
-                    capabilityRoute = CAPABILITIES_V2_ROUTE
+                    capabilityRoute = CAPABILITIES_V3_ROUTE
                     terminalRouteOffered = false
                     tasksCapabilityKnown = false
                     taskRefreshPending = false
@@ -1846,24 +1852,34 @@ class DefaultRemoteRepository(
             connectionProven()
             checkEpoch(epoch)
             if (type == "projects.list" && result.text("kind") == "projects") {
-                if (id.startsWith(CAPABILITIES_V2_ROUTE) && result["capabilities"] !is JsonArray) {
-                    // A host that predates the v2 route treats the ID as opaque and sends no list.
-                    capabilityRoute = CAPABILITIES_V1_ROUTE
-                    // The retry records its own round trip; this one ends here.
-                    outcome = "retry.v1"
+                val revision = capabilityRevision(id)
+                if (!result.containsKey("capabilities") && revision > 1) {
+                    // Old hosts treat unknown route IDs as opaque and omit the list.
+                    capabilityRoute = if (revision == 3) CAPABILITIES_V2_ROUTE else CAPABILITIES_V1_ROUTE
+                    outcome = "retry.v${revision - 1}"
                     ended = Diagnostics.now()
                     return request(type, epoch, *fields, draft = draft, timeoutMillis = timeoutMillis)
                 }
-                val advertised = (result["capabilities"] as? JsonArray)
-                    ?.takeIf { it.size <= MAX_ROUTE_CAPABILITIES }
-                    ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
-                    .orEmpty()
-                if (id.startsWith(CAPABILITIES_V2_ROUTE) && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
+                val maxCapabilities = when (revision) { 3 -> 64; 2 -> 32; else -> 16 }
+                val rawCapabilities = result["capabilities"]
+                val advertised = if (rawCapabilities == null) {
+                    // A v1 host may predate capability advertisement altogether.
+                    emptyList()
+                } else {
+                    val list = rawCapabilities as? JsonArray
+                        ?: throw IllegalArgumentException("Invalid capability list")
+                    require(list.size <= maxCapabilities && list.all {
+                        it is JsonPrimitive && it.isString && it.content.isNotEmpty() &&
+                            it.content.toByteArray(Charsets.UTF_8).size <= 64
+                    }) { "Invalid capability list" }
+                    list.map { (it as JsonPrimitive).content }
+                }
+                if (revision >= 2 && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY) || id.startsWith(CAPABILITIES_V2_ROUTE))
+                    it in advertised && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY) || revision >= 2)
                 }
                 val hadTasks = canReadTasks()
-                if (id.startsWith(CAPABILITIES_V2_ROUTE) && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
+                if (revision >= 2 && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
                 val hadTickets = TICKETS_CAPABILITY in state.value.capabilities
                 if (merged.isNotEmpty()) {
                     // Capabilities merge in additively as later projects.list replies arrive; a list
@@ -7909,7 +7925,7 @@ class DefaultRemoteRepository(
         terminalNextSendAt = terminalNow() + 125
     }
 
-    private fun terminalKeysEnabled() = capabilityRoute == CAPABILITIES_V2_ROUTE &&
+    private fun terminalKeysEnabled() = capabilityRevision(capabilityRoute) >= 2 &&
         terminalRouteOffered && SESSION_TERMINAL_KEYS_CAPABILITY in state.value.capabilities &&
         SESSION_TERMINAL_KEYS_CAPABILITY !in state.value.unavailableCapabilities
     private val terminalOutputLimit = 256 * 1024
@@ -7917,7 +7933,7 @@ class DefaultRemoteRepository(
     override fun canAttachTerminal(): Boolean {
         val current = state.value
         return current.connected && !current.stale && activeHost?.routeId == current.selection.routeId &&
-            terminalRouteOffered && SESSION_TERMINAL_CAPABILITY in current.capabilities && capabilityRoute == CAPABILITIES_V2_ROUTE &&
+            terminalRouteOffered && SESSION_TERMINAL_CAPABILITY in current.capabilities && capabilityRevision(capabilityRoute) >= 2 &&
             current.session?.let(::isHostWorker) == true && current.selection.sessionId == current.session?.optionalText("id")
     }
 
@@ -7925,7 +7941,7 @@ class DefaultRemoteRepository(
         val current = state.value
         val session = current.selection.sessionId ?: return false
         if (!current.connected || current.stale || activeHost?.routeId != current.selection.routeId ||
-            !terminalRouteOffered || SESSION_TERMINAL_CAPABILITY !in current.capabilities || capabilityRoute != CAPABILITIES_V2_ROUTE ||
+            !terminalRouteOffered || SESSION_TERMINAL_CAPABILITY !in current.capabilities || capabilityRevision(capabilityRoute) < 2 ||
             current.session?.let(::isHostWorker) != true || cols !in 20..500 || rows !in 5..300 ||
             (takeoverGeneration != null && takeoverGeneration !in 0..9_007_199_254_740_991L) ||
             pendingTerminal != null || terminalAttachment != null) return false

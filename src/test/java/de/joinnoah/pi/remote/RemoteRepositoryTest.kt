@@ -305,11 +305,98 @@ class RemoteRepositoryTest {
             val repository = repository(transport)
             repository.activate(RemoteSelection("host", "project", "session"))
             val discovery = transport.sent.first { it.text("type") == "projects.list" }
-            assertTrue(discovery.text("requestId").startsWith("capabilities.v2:"))
+            assertTrue(discovery.text("requestId").startsWith("capabilities.v3:"))
             assertEquals(supportsSteer, canSteer(repository.state.value))
             assertTrue(canFollowUp(repository.state.value))
             assertTrue(repository.state.value.connected)
         }
+    }
+
+    @Test
+    fun capabilityDiscoveryFallsBackOnlyWhenListIsAbsent() = runTest {
+        for (supported in listOf(1, 2, 3)) {
+            val transport = Transport().also(::configure)
+            val original = transport.response
+            transport.response = { request ->
+                val result = original(request)
+                val id = request.text("requestId")
+                if (request.text("type") == "projects.list" && result != null &&
+                    id.startsWith("capabilities.v$supported:"))
+                    JsonObject(result + ("capabilities" to JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY)))))
+                else result
+            }
+            val repo = repository(transport)
+            repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+            val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
+            assertEquals((3 downTo supported).map { "capabilities.v$it:" }, ids.map { it.substringBeforeLast(':') + ":" })
+            assertEquals(supported >= 2, FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
+        }
+    }
+
+    @Test
+    fun malformedOrOversizedCapabilityListDoesNotFallbackOrGrant() = runTest {
+        val badLists = listOf<JsonElement>(JsonNull, JsonPrimitive("invalid"),
+            JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY), JsonPrimitive(1))),
+            JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY), JsonPrimitive(""))),
+            JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY), JsonPrimitive("é".repeat(33)))),
+            JsonArray(List(65) { JsonPrimitive(FILES_SEARCH_CAPABILITY) }))
+        for (bad in badLists) {
+            val transport = Transport().also(::configure)
+            advertising(transport, bad)
+            val repo = repository(transport)
+            repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+            assertTrue(transport.sent.filter { it.text("type") == "projects.list" }.all { it.text("requestId").startsWith("capabilities.v3:") })
+            assertFalse(FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
+            assertFalse(repo.state.value.capabilitiesKnown)
+            assertEquals(R.string.remote_request_error, repo.state.value.error)
+        }
+    }
+
+    @Test
+    fun invalidDiscoveryKeepsPreviouslyValidatedCapabilities() = runTest {
+        val transport = Transport().also(::configure)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(STEER_CAPABILITY))))
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host")); runCurrent()
+        assertTrue(repo.state.value.capabilitiesKnown)
+        val capabilities = repo.state.value.capabilities
+        assertTrue(STEER_CAPABILITY in capabilities)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY), JsonPrimitive(""))))
+        repo.refresh(); runCurrent()
+        assertEquals(capabilities, repo.state.value.capabilities)
+        assertTrue(repo.state.value.capabilitiesKnown)
+        assertEquals(R.string.remote_request_error, repo.state.value.error)
+    }
+
+    @Test
+    fun olderRoutesRetainTheirCapabilityLimits() = runTest {
+        for ((revision, limit) in listOf(1 to 16, 2 to 32)) {
+            for (size in listOf(limit, limit + 1)) {
+                val transport = Transport().also(::configure)
+                val original = transport.response
+                transport.response = { request ->
+                    val result = original(request)
+                    if (request.text("type") == "projects.list" && result != null &&
+                        request.text("requestId").startsWith("capabilities.v$revision:"))
+                        JsonObject(result + ("capabilities" to JsonArray(
+                            listOf(JsonPrimitive(STEER_CAPABILITY)) + List(size - 1) { JsonPrimitive("unknown.$it") },
+                        )))
+                    else result
+                }
+                val repo = repository(transport)
+                repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+                assertEquals("v$revision size $size", size == limit, STEER_CAPABILITY in repo.state.value.capabilities)
+            }
+        }
+    }
+
+    @Test
+    fun v3AcceptsSixtyFourCapabilities() = runTest {
+        val transport = Transport().also(::configure)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(FILES_SEARCH_CAPABILITY)) + List(63) { JsonPrimitive("unknown.$it") }))
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
+        assertTrue(FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
     }
 
     @Test
@@ -2210,6 +2297,7 @@ class RemoteRepositoryTest {
         val repository = repository(transport)
         val target = RemoteSelection("host", "project", "session")
         repository.activate(target)
+        val initialProjects = transport.sent.count { it.text("type") == "projects.list" }
         val original = transport.response
         transport.response = { request ->
             if (request.text("type") == "projects.list") JsonObject(data("projects", emptyList()) + ("capabilities" to JsonArray(emptyList())))
@@ -2221,8 +2309,7 @@ class RemoteRepositoryTest {
         runCurrent()
 
         assertEquals(RemoteSelection("host"), repository.state.value.selection)
-        // The first discovery went v2 and, without a list, once more v1; the refresh added one.
-        assertEquals(3, transport.sent.count { it.text("type") == "projects.list" })
+        assertEquals(initialProjects + 1, transport.sent.count { it.text("type") == "projects.list" })
         assertFalse(transport.sent.any { it.text("type") == "sessions.open" })
     }
 
@@ -6921,13 +7008,13 @@ class RemoteRepositoryTest {
         transport.response = { request ->
             val result = original(request)
             if (request.text("type") == "projects.list" && result != null &&
-                !request.text("requestId").startsWith("capabilities.v2:"))
+                request.text("requestId").startsWith("capabilities.v1:"))
                 JsonObject(result + ("capabilities" to JsonArray(listOf(JsonPrimitive(SESSION_TERMINAL_KEYS_CAPABILITY)))))
             else result
         }
         val repo = repository(transport)
         repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
-        assertTrue(transport.sent.any { it.text("type") == "projects.list" && !it.text("requestId").startsWith("capabilities.v2:") })
+        assertTrue(transport.sent.any { it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v1:") })
         assertFalse(SESSION_TERMINAL_KEYS_CAPABILITY in repo.state.value.capabilities)
         assertFalse(repo.sendTerminalInput(TerminalInput.Chord("c", ctrl = true)))
     }

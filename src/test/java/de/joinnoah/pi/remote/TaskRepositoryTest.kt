@@ -47,7 +47,7 @@ class TaskRepositoryTest {
             val responseData = when (payload.text("type")) {
                 "projects.list" -> {
                     val base = Wire.objectOf("kind" to "projects", "items" to JsonArray(listOf(project)))
-                    if (v1Only && payload.text("requestId").startsWith("capabilities.v2:")) base
+                    if (v1Only && !payload.text("requestId").startsWith("capabilities.v1:")) base
                     else JsonObject(base + ("capabilities" to JsonArray(
                         if (advertised) routeCapabilities.map(::JsonPrimitive) else emptyList(),
                     )))
