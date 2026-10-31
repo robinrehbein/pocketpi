@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node24, Pi1.4.0, package archive, npm lockfile, Docker/Dev Containers, Debian Chromium, existing HostDaemon and public Pi API.
 
-**Spec:** ../../remote-development-goal.md; ../../testing/linux-host-qualification.md. Wear is a reduced messages/questions companion, not a full IDE. Full phone/tablet functionality remains required.
+**Spec:** ../../remote-development-goal.md; ../../testing/linux-host-qualification.md. Wear includes features meaningful on a watch, without a messages/questions ceiling or a Wear emulator requirement. Full phone/tablet functionality remains required.
 
 ## Constraints and evidence
 

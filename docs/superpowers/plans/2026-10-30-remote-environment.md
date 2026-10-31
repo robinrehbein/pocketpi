@@ -10,7 +10,7 @@
 
 - Mac and independent Linux hosts with devcontainers have equal priority.
 - Galaxy Tab S11 and Galaxy S25 require real-device acceptance; an emulator or passing build is insufficient.
-- Android and Wear OS emulators and the Mac iOS simulator are in scope.
+- An Android emulator and the Mac iOS simulator are in scope. Wear features follow watch-specific usefulness as defined in `docs/remote-development-goal.md`; a Wear emulator is not required.
 - Human and agent share browser tabs and login state with explicit input handoff.
 - Use public Pi APIs and the existing protocol. Keep unimplemented capabilities disabled.
 - Preserve existing local trust, device revocation and Git-write restrictions.
@@ -22,7 +22,7 @@
 3. Android terminal. Implement strict v1 parsing and attachment state first, then the interactive renderer, input controls, resize and keyboard/mouse support. Expose it only after host negotiation. Verify malformed and stale events, sequence gaps, early events, reconnect and uncertain input.
 4. Worker parity and development tools. Qualify existing shell/PR paths, add missing native lifecycle controls and project search, and preserve editor drafts with explicit file conflicts. Each protocol addition precedes its Android integration.
 5. Browser and preview. Prove a protected project-bound HTTP/WebSocket preview independently of the isolated artifact viewer. Then integrate a shared agent/human browser with explicit ownership. Qualify cookies, redirects, HMR, authentication and network boundaries.
-6. Emulators. Prove supported host/container configurations before choosing a streaming implementation. Integrate live video and touch/keyboard input with bounded latency, exclusive ownership and reconnect. Qualify Android/Wear OS on suitable Mac/Linux hosts and iOS on Mac.
+6. Emulators. Prove supported host/container configurations before choosing a streaming implementation. Integrate live video and touch/keyboard input with bounded latency, exclusive ownership and reconnect. Qualify Android on suitable Mac/Linux hosts and iOS on Mac; no Wear emulator is required.
 7. Device acceptance. Complete ticket to PR/CI workflows on both real Samsung devices, unattended Mac and independent Linux/devcontainer targets. Exercise DeX, orientation, hardware input, Wi-Fi/mobile transitions, app process death and host/container restart. Record interruption and recovery rather than claiming processes survive their owner.
 
 ## Verification
