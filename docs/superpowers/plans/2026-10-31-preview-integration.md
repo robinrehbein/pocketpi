@@ -26,9 +26,11 @@
 
 ## Tasks
 
-- [ ] Write failing protocol, authorization-manager and app-port isolation tests; independently observe failures before implementation.
-- [ ] Implement strict compatible wire extension, owner CLI/configuration and bounded session/device-aware preview manager.
-- [ ] Wire daemon preview authority, frame/document delivery, lifecycle and v3-only capabilities; test preview-only grants, cross-authority denial, revoke/pause/project/session changes and save failure.
-- [ ] Implement separate Android preview entry, port input, client/state and frame/input/recovery behavior with capability gating and independent drafts.
-- [ ] Build, run real encrypted phone/tablet flows including HMR-like server, cookie isolation and revoke/reconnect, and inspect rendered output. Actual framework HMR remains a separate explicit gate until exercised.
-- [ ] Independently review combined stable patches, run required checks, commit locally and preserve exact evidence and remaining full-goal gates.
+- [x] Write failing protocol, authorization-manager and app-port isolation tests; independently observe failures before implementation.
+- [x] Implement strict compatible wire extension, owner CLI/configuration and bounded session/device-aware preview manager.
+- [x] Wire daemon preview authority, frame/document delivery, lifecycle and v3-only capabilities; test preview-only grants, cross-authority denial, revoke/pause/project/session changes and save failure.
+- [x] Implement separate Android preview entry, port input, client/state and frame/input/recovery behavior with capability gating and independent drafts.
+- [x] Build, run real encrypted phone/tablet flows including HMR-like server, cookie isolation and revoke/reconnect, and inspect rendered output. Actual framework HMR remains a separate explicit gate until exercised.
+- [x] Independently review combined stable patches, run required checks, commit locally and preserve exact evidence and remaining full-goal gates.
+
+Qualification and limitations: [protected preview integration](../../testing/protected-preview-integration.md). Actual framework HMR was exercised separately on Mac/Linux; combined Android/Vite remains open.

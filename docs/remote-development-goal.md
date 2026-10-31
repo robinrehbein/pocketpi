@@ -1,5 +1,20 @@
 # Goal: PocketPi as a complete remote development environment
 
+## User-facing protected preview checkpoint on 2026-10-31
+
+The host policy/runtime is now connected to session authorization, owner CLI commands and a
+separate Android Preview pane. Final phone/tablet emulator flows pass with actual encrypted
+transport, form input, WebSocket updates, read-only reconnect and active grant revocation.
+Real Vite self-accepted HMR passes separately on Mac and Linux. The complete extension suite
+passes 6,275 tests (25 skipped); the required app check passes 3,066 app and 34 Wear tests.
+Three host and two app review rounds corrected lifecycle/persistence races and found no further
+actionable finding in the final patch. Exact scope, commands, evidence and remaining gates are in
+[preview integration qualification](testing/protected-preview-integration.md). Earlier checkpoints
+below describe their historical component state; daemon/app wiring is now implemented. Physical
+Galaxy devices, independent remote Linux/devcontainer, simulator streaming and whole-workflow
+qualification remain open, along with equivalent transactional protection for older control fields.
+
+
 ## Functional host preview runtime checkpoint on 2026-10-31
 
 An endpoint-scoped host renderer now runs ordinary HTTP, POST and WebSocket preview traffic with
