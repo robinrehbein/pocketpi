@@ -1,5 +1,20 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Integrated Android emulator checkpoint on 2026-10-31
+
+PocketPi and the public Pi `remote_emulator` tool now share an explicitly configured host-owned
+AVD through encrypted transport, owner grants, control leases and bounded PNG frame delivery.
+Real phone/tablet emulator smoke flows pass native Home, image delivery, Pi snapshot, bidirectional
+control handoff, device-grant revocation and owned-process cleanup. The final App/Wear suites pass
+3,081/34 tests. Host checks pass; its full suite has one screenshot/resize failure that passes in
+isolation (6,399 passed, 27 skipped). Full-host green is not established. Details and qualification
+boundaries are in [emulator integration](testing/emulator-integration.md). The preceding backend
+checkpoint below describes the earlier component-only state. A controlled lost-input-response
+reconnect also passes on phone/tablet emulators: old ownership is revoked, input is not repeated,
+and the new connection resumes as a reader. See [reconnect qualification](testing/emulator-reconnect.md).
+The broader lifecycle/long-session, physical Samsung and independent Linux/devcontainer gates remain open.
+
+
 ## Owned Android emulator backend checkpoint on 2026-10-31
 
 A host-owned emulator/private-ADB runtime now implements authenticated capture and finite

@@ -70,7 +70,8 @@ issue.
 
 ## Remaining gate
 
-Complete the integrated reconnect/uncertainty/lifecycle matrix and improve the tablet workspace
+A controlled lost-input-acknowledgement reconnect now passes on emulated phone and tablet; see
+[reconnect qualification](emulator-reconnect.md). Complete the remaining lifecycle/long-session matrix and improve the tablet workspace
 layout. The phone/tablet smoke flows above establish acquisition and handoff, not all reconnect
 and long-session behavior. The backend SDK evidence
 in `owned-emulator-runtime.md` does not establish this integrated path. Physical Galaxy S25/Tab S11,

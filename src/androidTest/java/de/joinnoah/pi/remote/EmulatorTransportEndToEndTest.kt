@@ -137,6 +137,65 @@ class EmulatorTransportEndToEndTest {
             compose.runOnIdle { assertFalse(repository.sendEmulatorInput(EmulatorInput.Key("Home"))) }
             fixtureAction("agent-handoff-to-device")
             compose.waitUntil(60_000) { repository.state.value.emulator?.let { it.emulatorId == emulatorId && it.generation > deviceGeneration && it.ownsControl && it.image?.revision == it.geometry?.revision } == true }
+            if (fixture.optBoolean("reconnect")) {
+                val controlled = requireNotNull(repository.state.value.emulator)
+                val incarnation = requireNotNull(controlled.incarnation)
+                val generation = controlled.generation
+                fixtureAction("prepare-home")
+                compose.waitUntil(30_000) { status()?.optBoolean("homeObserved") == false }
+                fixtureAction("arm-input-cut")
+                val armed = requireNotNull(status())
+                val cut = armed.getJSONObject("reconnect")
+                assertEquals("armed", cut.getString("stage"))
+                val inputBaseline = cut.getInt("inputBaseline")
+                val acquireBaseline = cut.getInt("acquireBaseline")
+                assertEquals(armed.getInt("deviceInputRequests") + 1, inputBaseline)
+                assertEquals(armed.getInt("deviceAcquireRequests"), acquireBaseline)
+                compose.onNodeWithText("Home").performClick()
+                compose.waitUntil(60_000) {
+                    val snapshot = status()
+                    val reconnect = snapshot?.optJSONObject("reconnect")
+                    snapshot?.optBoolean("homeObserved") == true && reconnect?.optString("stage") == "offline" &&
+                        reconnect.optInt("appliedInputs") == 1 && !repository.state.value.connected &&
+                        repository.state.value.emulator?.ownsControl == false
+                }
+                compose.runOnIdle { assertFalse(repository.sendEmulatorInput(EmulatorInput.Key("Home"))) }
+                val offline = requireNotNull(status())
+                assertEquals(inputBaseline, offline.getInt("deviceInputRequests"))
+                assertEquals(acquireBaseline, offline.getInt("deviceAcquireRequests"))
+                fixtureAction("allow-reconnect")
+                compose.waitUntil(120_000) {
+                    val state = repository.state.value
+                    state.connected && state.selection == selection && state.emulator?.let {
+                        it.profileId == profileId && it.emulatorId == emulatorId && it.incarnation == incarnation &&
+                            it.generation >= generation && !it.ownsControl && !it.inputPending &&
+                            it.image != null && it.image.revision == it.geometry?.revision
+                    } == true
+                }
+                compose.runOnIdle { assertFalse(repository.sendEmulatorInput(EmulatorInput.Key("Home"))) }
+                fixtureAction("observe-reconnect")
+                compose.waitUntil(30_000) { status()?.optJSONObject("reconnect")?.optString("stage") == "reader" }
+                val restored = requireNotNull(status())
+                val evidence = restored.getJSONObject("reconnect")
+                assertEquals(1, evidence.getInt("cuts"))
+                assertEquals(1, evidence.getInt("appliedInputs"))
+                assertTrue(evidence.getBoolean("oldOwnerGone"))
+                assertTrue(evidence.getBoolean("newPeerDifferent"))
+                assertTrue(evidence.getBoolean("sameEmulator"))
+                assertTrue(evidence.getBoolean("noReplay"))
+                assertEquals(inputBaseline, restored.getInt("deviceInputRequests"))
+                assertEquals(acquireBaseline, restored.getInt("deviceAcquireRequests"))
+                val restoredGeneration = requireNotNull(repository.state.value.emulator).generation
+                compose.runOnIdle { assertTrue(repository.acquireEmulator()) }
+                compose.waitUntil(60_000) {
+                    repository.state.value.emulator?.let {
+                        it.ownsControl && it.generation > restoredGeneration && it.image != null && it.image.revision == it.geometry?.revision
+                    } == true
+                }
+                val reacquired = requireNotNull(status())
+                assertEquals(inputBaseline, reacquired.getInt("deviceInputRequests"))
+                assertEquals(acquireBaseline + 1, reacquired.getInt("deviceAcquireRequests"))
+            }
             val beforeRevoke = requireNotNull(status()).getInt("deviceInputRequests")
             fixtureAction("revoke")
             compose.runOnIdle { repository.refreshEmulator() }
