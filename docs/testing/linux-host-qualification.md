@@ -441,3 +441,37 @@ The final builder with the same-lock-bytes regression fix produced
 the exact image also passes the maintained read-only browser proof
 (`/private/tmp/pocketpi-browser-final-readonly-proof.log`). Its build record is
 `/private/tmp/pocketpi-browser-bound-build-final.log`.
+
+## Fail-closed browser qualification runner and current source checks — 2026-10-31
+
+Host integrated origin/dev's larger session-navigation work into `d2f6e09cf`.
+Two merge conflicts were resolved by retaining both the local emulator/preview/browser
+adapters and the upstream navigation tracing, plus both keyboard-replay and attachment
+owner tests. All 54 focused runtime/navigation tests pass.
+
+`verify-browser-runtime.mjs` now owns the component container launch and refuses a
+nonmatching image, Engine version/Git revision, Linux ARM64 architecture, kernel,
+profile/provenance or smoke-script hash before Docker create. It stages the verified
+policy and script bytes, uses the exact restricted container settings, validates the
+returned page/input/JPEG/process/sandbox proof, and publishes success only after
+verified container and staging cleanup. Tests reproduce and reject a changed smoke
+script and a trivial PASS response. The historical `imageSourceCommit` is explicit:
+this runner qualifies image `df328119...` from `16382bc498`, not the newer merged source.
+The actual final guarded container run passes
+(`/private/tmp/pocketpi-browser-runtime-gate-real-final.log`). This is a component
+qualification runner; the service/Devcontainer launch path still needs integration.
+
+The required repository check exposed types in the image-only CLI fixture that could
+not resolve on macOS. Runtime imports now remain explicitly bound to image/staged
+paths while their types are checked against repository/SDK declarations. The actual
+CLI/supervisor/reconnect flow still passes against the explicitly frozen qualified
+Core artifact; no source-checkout fallback was introduced.
+
+Current merged-source `check:extensions` passes. The complete extension suite finishes
+with 6,604 passed, 37 skipped and zero failures (422 passed files, seven skipped).
+This supersedes the earlier full-suite screenshot failure for this tested source/run;
+it does not qualify skipped manual/device gates. All 76 deployment/profile helper
+tests pass. Exact evidence:
+`/private/tmp/pocketpi-runtime-gate-{extensions-check-final2,full-extensions,unit-final,cli-fixture-regression,biome-final}.log`.
+The broader package `check` also passes for this merged source
+(`/private/tmp/pocketpi-runtime-gate-package-check.log`).

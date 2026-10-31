@@ -1,5 +1,15 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Current source and frozen browser qualification checkpoint
+
+The merged Host navigation work passes 6,604 extension tests with 37 explicit skips,
+plus extension format/type checks and 76 deployment/profile helper tests. The maintained
+browser qualification runner rejects mismatched engine/kernel/image/profile/fixture
+before launch and passes against its explicitly frozen qualified image. This does not
+promote that historical image to the newer source version or complete service-level
+browser/preview deployment. See [Linux qualification](testing/linux-host-qualification.md).
+
+
 ## Packaged CLI and Dev Containers checkpoint on 2026-10-31
 
 The repository now contains a guarded Dev Containers adapter with explicit owner setup,
