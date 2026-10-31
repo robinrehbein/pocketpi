@@ -180,6 +180,74 @@ class BrowserClientTest {
         assertEquals(BrowserNotice.DISCONNECTED, client.view!!.notice)
     }
 
+    @Test fun interruptedInitialOpenResumesWithoutLosingPaneOrAcceptingOldReply() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val views = mutableListOf<BrowserView?>()
+        var connection = 1L
+        val client = BrowserClient(backgroundScope, { _, c -> c == connection }, { _, type, _ ->
+            CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await()
+        }, { views.add(it) })
+        assertTrue(client.open("session", 1)); runCurrent()
+        val oldOpen = calls.removeAt(0)
+        connection = 2; client.disconnected()
+        val afterDisconnect = views.size
+        assertTrue(client.open("session", 2)); runCurrent()
+        val newOpen = calls.first { it.first == "browser.open" }; calls.remove(newOpen)
+        newOpen.second.complete(opened()); runCurrent()
+        oldOpen.second.complete(JsonObject(opened() + ("browserId" to JsonPrimitive("old")))); runCurrent()
+        assertTrue(views.drop(afterDisconnect).none { it == null || it.sessionId != "session" })
+        assertEquals("b", client.view?.browserId)
+        assertFalse(client.view!!.ownsControl)
+        assertTrue(calls.none { it.first == "browser.acquire" || it.first == "browser.input" })
+    }
+
+    @Test fun resumeDoesNotReopenAHealthyOrClosedPane() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ ->
+            CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await()
+        }, {}, { "device" })
+        client.open("session", 1); runCurrent(); calls.removeAt(0).second.complete(opened()); runCurrent()
+        assertFalse(client.resumeIfDisconnected("session", 1))
+        assertEquals("b", client.view?.browserId)
+        assertTrue(calls.none { it.first == "browser.open" })
+        client.close(); runCurrent()
+        assertFalse(client.resumeIfDisconnected("session", 2))
+        assertNull(client.view)
+        assertTrue(calls.none { it.first == "browser.open" })
+    }
+
+    @Test fun reconnectPreservesSelectedTabAndUncertainInputWithoutReplaying() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val views = mutableListOf<BrowserView?>()
+        var connection = 1L
+        val client = BrowserClient(backgroundScope, { _, c -> c == connection }, { _, type, _ ->
+            CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await()
+        }, { views.add(it) }, { "device" }, { it == connection })
+        val tabs = JsonArray(listOf(
+            Wire.objectOf("id" to "tab", "title" to "First", "url" to "https://example.com"),
+            Wire.objectOf("id" to "second", "title" to "Second", "url" to "https://example.com/two"),
+        ))
+        val openedTwo = JsonObject(opened() + ("tabs" to tabs))
+        client.open("session", 1); runCurrent(); calls.removeAt(0).second.complete(openedTwo); runCurrent()
+        client.selectTab("second"); runCurrent()
+        client.acquire(); runCurrent()
+        calls.first { it.first == "browser.acquire" }.also { calls.remove(it); it.second.complete(lease()) }; runCurrent()
+        assertTrue(client.input(BrowserInput.Text("possibly applied"))); runCurrent()
+        val oldInput = calls.first { it.first == "browser.input" }; calls.remove(oldInput)
+        connection = 2; client.disconnected()
+        val afterDisconnect = views.size
+        assertTrue(client.open("session", 2)); runCurrent()
+        calls.last { it.first == "browser.open" }.also { calls.remove(it); it.second.complete(openedTwo) }; runCurrent()
+        calls.firstOrNull { it.first == "browser.participants" }?.also { calls.remove(it); it.second.complete(Wire.objectOf("kind" to "browser.participants", "browserId" to "b", "generation" to 1, "participants" to JsonArray(emptyList()))) }; runCurrent()
+        oldInput.second.complete(Wire.objectOf("kind" to "browser.input.ack", "browserId" to "b", "generation" to 1, "sequence" to 0, "status" to "accepted")); runCurrent()
+        assertTrue(views.drop(afterDisconnect).none { it == null })
+        assertEquals("second", client.view!!.selectedTabId)
+        assertFalse(client.view!!.ownsControl)
+        assertEquals(BrowserNotice.UNCERTAIN, client.view!!.notice)
+        assertFalse(client.input(BrowserInput.Text("replay")))
+        assertTrue(calls.none { it.first == "browser.acquire" || it.first == "browser.input" })
+    }
+
     @Test fun duplicateAcquireIsNotQueuedWhileFirstReplyIsPending() = runTest {
         val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
         val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ -> CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await() }, {}, { "device" })

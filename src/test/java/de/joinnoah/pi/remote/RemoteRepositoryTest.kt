@@ -332,6 +332,63 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun automaticReconnectReopensExistingBrowserOnlyAfterCapabilityDiscovery() = runTest {
+        val transport = Transport().also(::configure)
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_BROWSER_CAPABILITY))))
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "browser.open" -> Wire.objectOf("kind" to "browser.opened", "browserId" to "b", "generation" to 1,
+                    "incarnation" to "i", "tabs" to JsonArray(listOf(Wire.objectOf("id" to "tab", "title" to "T", "url" to "https://example.com"))), "viewportRevision" to 0)
+                "browser.participants" -> Wire.objectOf("kind" to "browser.participants", "browserId" to "b", "generation" to 1, "participants" to JsonArray(emptyList()))
+                else -> original(request)
+            }
+        }
+        val repo = repository(transport)
+        val selection = RemoteSelection("host", "project", "session")
+        repo.activate(selection, ActivationMode.USER_OPEN)
+        repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+        assertTrue(repo.openBrowser()); runCurrent()
+        assertEquals("b", repo.state.value.browser?.browserId)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        advanceTimeBy(1_001); runCurrent()
+        assertTrue(repo.state.value.connected)
+        assertEquals(selection, repo.state.value.selection)
+        assertEquals(2, transport.sent.count { it.text("type") == "browser.open" })
+        assertFalse(repo.state.value.browser!!.ownsControl)
+        assertTrue(transport.sent.none { it.text("type") == "browser.acquire" || it.text("type") == "browser.input" })
+    }
+
+    @Test
+    fun reconnectDoesNotReopenClosedPaneOrPaneWithoutBrowserCapability() = runTest {
+        for (closePane in listOf(true, false)) {
+            val transport = Transport().also(::configure)
+            var supportsBrowser = true
+            val original = transport.response
+            transport.response = { request ->
+                when (request.text("type")) {
+                    "projects.list" -> JsonObject(requireNotNull(original(request)) + ("capabilities" to
+                        JsonArray(if (supportsBrowser) listOf(JsonPrimitive(SESSION_BROWSER_CAPABILITY)) else emptyList())))
+                    "browser.open" -> Wire.objectOf("kind" to "browser.opened", "browserId" to "b", "generation" to 1,
+                        "incarnation" to "i", "tabs" to JsonArray(listOf(Wire.objectOf("id" to "tab", "title" to "T", "url" to "https://example.com"))), "viewportRevision" to 0)
+                    else -> original(request)
+                }
+            }
+            val repo = repository(transport)
+            repo.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+            repo.setForeground(true); repo.setValidatedNetwork("wifi"); runCurrent()
+            assertTrue(repo.openBrowser()); runCurrent()
+            transport.listener.failed(true, R.string.remote_connection_error)
+            if (closePane) repo.closeBrowser() else supportsBrowser = false
+            advanceTimeBy(1_001); runCurrent()
+            assertTrue(repo.state.value.connected)
+            assertEquals(1, transport.sent.count { it.text("type") == "browser.open" })
+            if (closePane) assertNull(repo.state.value.browser)
+            else assertFalse(repo.canOpenBrowser())
+        }
+    }
+
+    @Test
     fun capabilityDiscoveryFallsBackOnlyWhenListIsAbsent() = runTest {
         for (supported in listOf(1, 2, 3)) {
             val transport = Transport().also(::configure)

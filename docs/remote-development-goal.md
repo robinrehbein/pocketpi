@@ -1,5 +1,23 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Reconnect and native Linux worker checkpoint on 2026-10-31
+
+A real interrupted-input flow now passes on phone and tablet emulators (14.175 s / 11.215 s).
+The fixture applies one input, withholds its reply, and cuts the actual Android TLS/WebSocket
+connection. Actual Pi proves old ownership removal before allowing reconnect. The app restores
+the same selected tab as a reader, preserves a newer unsent draft and shows the uncertain
+outcome; neither input nor acquisition is repeated automatically. Explicit control and the
+final same-tab login-cookie check pass. The required check passed 3,058 app and 34 Wear tests.
+The standalone activity supplies availability signals; physical network/lifecycle and
+last-participant/process-death recovery remain open. See [reconnect evidence](testing/browser-reconnect.md).
+
+An isolated Linux/arm64 native dependency build also succeeded without downloads. Agent and
+independent root runs started an actual HostDaemon-owned Pi 1.4.0 PTY worker, matched actual
+Pi/PTY/registered owner PIDs, completed an offline test turn and ran a shell command over the
+encrypted loopback device path. This used Node 24.22.0; Mac tests use 24.18.0. This is a native
+worker subset, not packaged Linux/devcontainer or Android/browser qualification. Exact scope
+and remaining gates are in [Linux qualification](testing/linux-host-qualification.md).
+
 ## Shared Pi and Android browser checkpoint on 2026-10-31
 
 The local combined fixture now connects the actual Pi 1.4.0 CLI and public remote extension to

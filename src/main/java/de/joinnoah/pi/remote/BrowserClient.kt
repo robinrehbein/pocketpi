@@ -46,6 +46,8 @@ internal class BrowserClient(
     private var controlPending = false
     private var controlOperation = 0L
     private var recovery = false
+    private var disconnectedView = false
+    private var interruptedInput = false
     private data class Size(val tab: String, val width: Int, val height: Int, val scale: Double, val orientation: String)
     private var resizeActive: Size? = null
     private var resizeNext: Size? = null
@@ -59,8 +61,13 @@ internal class BrowserClient(
     private suspend fun streamRequest(c: Long, type: String, vararg fields: Pair<String, Any?>): JsonObject = request(c, type, fields)
     fun open(session: String, c: Long): Boolean {
         if (!current(session, c)) return false
+        if (isDisconnectedFor(session)) return resumeIfDisconnected(session, c)
         close(); connection = c; val t = ++token; visible = true; recovery = recoveryEnabled()
         set(BrowserView(session))
+        requestOpen(session, c, t)
+        return true
+    }
+    private fun requestOpen(session: String, c: Long, t: Long) {
         scope.launch {
             try {
                 val result = parseBrowserResult(send(c, BrowserCommand.Open(Wire.random(), session, recovery))) as BrowserResult.Opened
@@ -69,7 +76,23 @@ internal class BrowserClient(
                 watch()
             } catch (_: Exception) { if (valid(t, session, c)) set(view?.copy(opening = false, notice = BrowserNotice.FAILED)) }
         }
-        return true
+    }
+    fun isDisconnectedFor(session: String?) = disconnectedView && session != null && view?.sessionId == session
+
+    fun resumeIfDisconnected(session: String, c: Long): Boolean {
+        if (!current(session, c) || !isDisconnectedFor(session)) return false
+        val existing = view ?: return false
+        disconnectedView = false
+        connection = c
+        recovery = recoveryEnabled()
+        if (existing.browserId == null) {
+            val t = ++token
+            set(existing.copy(opening = true, notice = if (interruptedInput) BrowserNotice.UNCERTAIN else null))
+            requestOpen(session, c, t)
+            return true
+        }
+        set(existing.copy(notice = if (interruptedInput) BrowserNotice.UNCERTAIN else null))
+        return refresh()
     }
     private fun dropStream() {
         watchToken++; watching = false; watchDeadline?.cancel(); watchDeadline = null; early.clear(); assembler?.close(); assembler = null
@@ -104,8 +127,13 @@ internal class BrowserClient(
         token++; resetPending(preserveControl = true); dropStream(); detach(refreshAfter = false)
         view?.let { set(it.copy(ownsControl = false, inputPending = false, image = null, notice = BrowserNotice.FRAME_FAILED)) }
     }
-    fun close() { dropStream(); detach(); token++; resetPending(); set(null) }
-    fun disconnected() { dropStream(); lease = null; token++; resetPending(); view?.let { set(it.copy(opening = false, ownsControl = false, inputPending = false, image = null, notice = BrowserNotice.DISCONNECTED)) } }
+    fun close() { dropStream(); detach(); token++; resetPending(); disconnectedView = false; interruptedInput = false; set(null) }
+    fun disconnected() {
+        interruptedInput = interruptedInput || view?.inputPending == true
+        disconnectedView = view != null
+        dropStream(); lease = null; token++; resetPending()
+        view?.let { set(it.copy(opening = false, ownsControl = false, inputPending = false, image = null, notice = BrowserNotice.DISCONNECTED)) }
+    }
     private fun resetPending(preserveControl: Boolean = false) { if (!preserveControl) { controlOperation++; controlPending = false }; refreshPending = false; refreshAgain = false; resizeActive = null; resizeNext = null; resizeApplied = null }
     fun setVisible(value: Boolean) {
         visible = value
@@ -123,6 +151,7 @@ internal class BrowserClient(
                     is BrowserResult.Lease -> {
                         val self = r.owner.kind == "device"
                         if (valid(t, v.sessionId, c) && r.browserId == b && self && visible && r.generation >= (view?.generation ?: 0)) {
+                            interruptedInput = false
                             lease = r.leaseId; sequence = -1L; confirmedNextSequence = 0L; resizeApplied = null; dropStream(); set(view?.copy(generation = r.generation, viewportRevision = r.viewportRevision, owner = r.owner, ownsControl = true, notice = null, image = null)); watch()
                         } else if (self && r.browserId == b && connectionAlive(c)) {
                             release(v.copy(generation = r.generation), r.leaseId, c, t)

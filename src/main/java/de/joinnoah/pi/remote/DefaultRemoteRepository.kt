@@ -1626,8 +1626,10 @@ class DefaultRemoteRepository(
 
     private var preparedSource: DraftKey? = null
 
-    override fun cancelSelection() {
-        browserClient.close()
+    override fun cancelSelection() = cancelSelection(preserveBrowser = false)
+
+    private fun cancelSelection(preserveBrowser: Boolean) {
+        if (!preserveBrowser) browserClient.close()
         preparedSource = null
         update { it.copy(preparedText = null) }
         cacheCurrentScreen(immediate = true)
@@ -2694,6 +2696,7 @@ class DefaultRemoteRepository(
         sessionsFresh: Boolean = false,
     ) {
         val previous = state.value.selection
+        if (selection != previous && browserClient.view != null) browserClient.close()
         if (selection.routeId != previous.routeId || selection.sessionId != previous.sessionId) endTerminal("left", sendDetach = true)
         // The same chat of the same Mac selected again (a reconnect, a resume, a restore): what it
         // shows stays until the snapshot and the reads after it replace it.
@@ -2878,7 +2881,10 @@ class DefaultRemoteRepository(
         )
             return selection
         cacheCurrentScreen()
-        if (!force) cancelSelection()
+        if (!force) cancelSelection(
+            preserveBrowser = mode == ActivationMode.RESTORE && selection == previousSelection &&
+                browserClient.isDisconnectedFor(selection.sessionId),
+        )
         if (!useCache) clearNavigationCache()
         val epoch = selectionEpoch
         stopReconnectTimer()
@@ -3140,6 +3146,13 @@ class DefaultRemoteRepository(
                 reportError(R.string.remote_request_error)
                 outcome = "snapshot_failed"
                 return parent
+            }
+            // A lost transport retains an open browser pane, but its old lease and connection
+            // cannot be reused. Rebind only after this same selection and its capabilities are
+            // confirmed; a user close or navigation during activation leaves nothing to reopen.
+            if (mode == ActivationMode.RESTORE && previousSelection == canonical &&
+                state.value.selection == canonical && canOpenBrowser()) {
+                browserClient.resumeIfDisconnected(requireNotNull(canonical.sessionId), generation)
             }
             refreshPanes()
             outcome = "ok"
