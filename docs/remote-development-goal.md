@@ -383,9 +383,13 @@ about doing these steps as first-class, confirmed and logged actions.
 
 ### Protocol and host (lands in noah-monorepo first)
 
-1. **Git writes.** There is no dedicated stage, commit, push or pull request action. Starting a
-   ticket creates a branch and worktree (`tickets.v1`); `session.git.v1` is read-only by design:
-   the phone never sends a ref, an object ID or a free path. See "Decisions" for the agreed rules.
+1. **Git writes.** Dedicated selective commits are implemented locally in the host and app;
+   push and pull request actions remain open. The app explicitly requests an own-checkout HEAD
+   snapshot, excludes omitted files and submodules, and confirms the exact paths, branch and
+   message. It persists an unresolved dispatch intent and never automatically retries it. This
+   increment still needs real-host phone/tablet workflow qualification. Starting a ticket creates
+   a branch and worktree (`tickets.v1`); read-only changes remain in `session.git.v1`, with mutations
+   behind the separate owner-controlled `session.git.write.v1` switch. See "Decisions" for the rules.
 2. **Pull request and CI status.** The app cannot see whether a session's branch has a pull
    request, what its checks say or what reviewers wrote. The ticket hint comes from the Plane state,
    not from GitHub.
@@ -469,7 +473,7 @@ Each criterion is checked in the qualifying run, on a real phone, with the Mac u
 | 3 | Run a shell command with live output and stop in the ticket's session | noah-monorepo, then app | Open (gap 6); works today only in RPC sessions |
 | 4a | Answer every forwarded question and approval from the phone, including oversized ones and editors | noah-monorepo, then app | Open (gap 3) |
 | 4b | Answer custom dialogs from the phone through the relayed terminal | noah-monorepo, then app | Open (gaps 4 and 7) |
-| 5 | Commit, push and open a pull request, confirmed on the phone and logged on the Mac | noah-monorepo, then app | Open (gap 1); possible today through the agent |
+| 5 | Commit, push and open a pull request, confirmed on the phone and logged on the Mac | noah-monorepo, then app | Selective commit implemented locally; push/PR and complete workflow qualification remain open |
 | 6 | See the pull request and its CI status per session | noah-monorepo, then app | Open (gap 2); possible today through the agent |
 
 ## Order
@@ -484,3 +488,14 @@ Each criterion is checked in the qualifying run, on a real phone, with the Mac u
 
 Each protocol step lands in noah-monorepo first, then in PocketPi with the upstream fixtures.
 Device checks for each step (real phones, Samsung quirks, push delivery) are Robin's.
+
+### Selective commit increment, 2026-10-31
+
+App commit `44e5fde` adds the shared phone/tablet commit-review entry. Host commit `480c0ec9f`
+adds the guarded executor, explicit review snapshot and isolated read-only remote transport;
+`e0683b3c1` integrates the current upstream worker-close fix. None has been pushed or released.
+The host Remote suite passed 3,422 tests with 35 skipped; later review/parser changes passed
+68 focused tests and the upstream merge passed 35 focused tests plus TypeScript. The Android
+full unit run passed 3,138 of 3,139 tests; its sole terminology failure was corrected, and both
+terminology tests plus four commit-pane tests then passed. This is local evidence, not physical
+Galaxy-device, independent Linux-host or complete ticket-to-PR/CI qualification.
