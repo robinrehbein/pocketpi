@@ -1,5 +1,18 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Protected preview and bounded Linux sandbox checkpoint on 2026-10-31
+
+A separately authorized exact-port preview policy now passes nine tests, including atomic saved
+state and concurrent mutations. It is not yet connected to a preview service or advertised as a
+capability. A real standalone Android probe loaded a static WebView in its normal service but
+failed construction in the isolated no-INTERNET service on the tested API 36 runtime. The renderer
+boundary must be resolved before enabling the preview. See [preview foundation](testing/protected-preview-foundation.md).
+
+An independent local Linux run passes all 26 browser/worker tests using a bounded experimental
+Moby-derived seccomp profile, all capabilities dropped and no-new-privileges, replacing the prior
+unconfined diagnostic profile. Its three added rules still require intended-host/security review;
+it is not a production devcontainer qualification. See [Linux qualification](testing/linux-host-qualification.md).
+
 ## Last-participant browser retention checkpoint on 2026-10-31
 
 The browser now survives the last recovery-enabled device disconnect for its authorized lifetime,

@@ -80,6 +80,33 @@ The diagnostic Docker run used `seccomp=unconfined`. Chromium's own sandbox was 
 observed processes (`NoNewPrivs: 1`, `Seccomp: 2`), but that observation does not qualify Docker's
 production sandbox, a devcontainer, or an independent remote host.
 
+## Bounded outer-seccomp experiment, 2026-10-31
+
+A second local run replaces `seccomp=unconfined` with a bounded experimental profile based on the
+[official Moby vendor profile at Engine Git revision 6a43e3d](https://raw.githubusercontent.com/moby/moby/6a43e3d/vendor/github.com/moby/profiles/seccomp/default.json).
+The saved baseline SHA-256 is `536529b665dd0972c37bfb569f5d4ac8a53592e7b00752bc39ff063ca9864c74`;
+the experimental profile is `cfae78bec8b973f940b33863c45d79296b63f539ed957fc43b16e303b71183e0`.
+A structural comparison verifies the baseline is unchanged apart from three appended syscall rules:
+restricted namespace flag combinations for `clone` and `unshare`, and `chroot` needed by Chromium's
+own user-namespace sandbox after outer capabilities are dropped. `setns` and `clone3` rules remain
+unchanged. The upstream JSON was parsed as data, not executed.
+
+Root independently reran the same 26 browser/worker tests successfully with all outer capabilities
+dropped, `no-new-privileges`, no network, no published ports and the bounded profile. Chromium's own
+sandbox remained enabled. Agent inspection observed two seccomp filters in the renderer and denied
+mount/IPC/UTS namespace probes while permitting the user namespace. Those observations do not
+establish a complete syscall audit or equivalence to Docker's built-in policy.
+
+The namespace and chroot allowances apply to the whole container and expose additional kernel attack
+surface. This is validated only on local ARM64 Docker Desktop, with a writable container root and
+read-only runtime/test source overlays; it is not a shipped production configuration. The profile's
+clone argument index must not be reused on architectures with a different argument order. Secure
+packaging, version update policy, intended-host qualification and threat review remain open.
+
+Exact scratch provenance, delta verifier and invocation are in
+`/private/tmp/pocketpi-linux-environment/SECCOMP-EXPERIMENT.md`, `verify-moby-profile-delta.py` and
+`verify-linux-moby-experiment.sh`; the independent output is `root-moby-profile-tests.log`.
+
 ## Remaining gates
 
 Local host review and device-only phone/tablet reconnect qualification passed. Package and qualify a reproducible Linux environment
