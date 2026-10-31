@@ -30,6 +30,9 @@ class LoadingPreviewSafetyUiTest {
                 drafts[selection].orEmpty(),
             ) else null
 
+        override fun peekDraftText(selection: RemoteSelection): String? =
+            if (selection.sessionId == "live") drafts[selection].orEmpty() else base.peekDraftText(selection)
+
         override fun draft(selection: RemoteSelection, text: String) {
             drafts[selection] = text
             if (selection == state.value.selection) base.draft(text)
@@ -55,7 +58,7 @@ class LoadingPreviewSafetyUiTest {
 
         override fun after() {
             NavigationTestActivity.contentFactory = { {} }
-            compose.activity.noBackupFilesDir.resolve("$storageId.enc").delete()
+            InstrumentationRegistry.getInstrumentation().targetContext.noBackupFilesDir.resolve("$storageId.enc").delete()
             KeyStore.getInstance("AndroidKeyStore").apply {
                 load(null)
                 deleteEntry(storageId)
@@ -81,9 +84,9 @@ class LoadingPreviewSafetyUiTest {
         }
         // Establish that this fixture really offers the destructive actions when ready.
         compose.onNodeWithText("Live session").performTouchInput { longClick() }
-        compose.onNodeWithTag("session_rename").assertExists()
-        compose.onNodeWithTag("session_close").assertExists()
-        compose.onNodeWithTag("session_fork_latest").assertExists()
+        compose.onNodeWithTag("menu_session_rename").assertExists()
+        compose.onNodeWithTag("menu_session_close").assertExists()
+        compose.onNodeWithTag("menu_session_fork_latest").assertExists()
         UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).pressBack()
         compose.waitForIdle()
 
@@ -91,10 +94,10 @@ class LoadingPreviewSafetyUiTest {
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.remote_new_session))
             .assertIsNotEnabled()
         compose.onNodeWithText("Live session").performTouchInput { longClick() }
-        compose.onNodeWithTag("session_rename").assertDoesNotExist()
-        compose.onNodeWithTag("session_close").assertDoesNotExist()
-        compose.onNodeWithTag("session_fork_latest").assertDoesNotExist()
-        compose.onNodeWithTag("session_open").assertIsEnabled().performClick()
+        compose.onNodeWithTag("menu_session_rename").assertDoesNotExist()
+        compose.onNodeWithTag("menu_session_close").assertDoesNotExist()
+        compose.onNodeWithTag("menu_session_fork_latest").assertDoesNotExist()
+        compose.onNodeWithTag("menu_session_open").assertIsEnabled().performClick()
         compose.runOnIdle { assertEquals("live", base.activations.last().first.sessionId) }
     }
 

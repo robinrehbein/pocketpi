@@ -3,6 +3,7 @@ package de.joinnoah.pi.remote
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -34,7 +35,7 @@ class LoadingInteractionUiTest {
 
         override fun after() {
             NavigationTestActivity.contentFactory = { {} }
-            compose.activity.noBackupFilesDir.resolve("$storageId.enc").delete()
+            InstrumentationRegistry.getInstrumentation().targetContext.noBackupFilesDir.resolve("$storageId.enc").delete()
             java.security.KeyStore.getInstance("AndroidKeyStore").apply {
                 load(null)
                 deleteEntry(storageId)
