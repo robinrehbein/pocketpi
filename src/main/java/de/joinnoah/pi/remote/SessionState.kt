@@ -333,7 +333,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
      * Keeps [messages] (with the cursor before them) that an earlier Timeline of this session
      * showed, so the first snapshot keeps the older pages it overlaps. [cursorRevision] is the
      * revision of the page whose token the cursor names, or -1 when unknown; the snapshot that
-     * keeps the cursor then takes its own revision for it.
+     * keeps the messages then takes its own cursor and revision instead.
      */
     fun retain(messages: List<JsonObject>, nextCursor: String?, cursorRevision: Long = -1L) {
         if (hasSnapshot) return
@@ -392,8 +392,16 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         val overlap = if (oldest == null) -1 else shown.indexOfFirst { it.optionalText("id") == oldest }
         if (overlap > 0) {
             showMessages((shown.subList(0, overlap) + page).associateBy { it.text("id") }.values.toList())
-            nextCursor = shownCursor
-            cursorRevision = if (shownCursorRevision >= 0) shownCursorRevision else incomingRevision
+            // A kept cursor whose revision is unknown cannot load older pages: the host answers it at
+            // a revision `older` would refuse. The page's own cursor reloads part of the kept prefix,
+            // which the prepend dedupes by id.
+            if (shownCursorRevision >= 0) {
+                nextCursor = shownCursor
+                cursorRevision = shownCursorRevision
+            } else {
+                nextCursor = data.optionalText("nextCursor")
+                cursorRevision = incomingRevision
+            }
         } else {
             showMessages(page)
             nextCursor = data.optionalText("nextCursor")

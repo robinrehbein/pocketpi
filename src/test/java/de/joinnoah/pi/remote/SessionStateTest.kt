@@ -424,12 +424,45 @@ class SnapshotFencingTest {
         )
         timeline.snapshot(withCursor(snapshot(3, "b", "c", "d"), "before-b"))
         assertEquals(listOf("a", "b", "c", "d"), timeline.messages.map { it.text("id") })
-        assertEquals("before-a", timeline.nextCursor)
+        // The kept cursor's revision is unknown, so the page's own cursor stands in for it.
+        assertEquals("before-b", timeline.nextCursor)
 
         timeline.beginSnapshotEpoch("idle")
         timeline.snapshot(withCursor(snapshot(0, "c", "d"), "before-c"))
         assertEquals(listOf("a", "b", "c", "d"), timeline.messages.map { it.text("id") })
+        assertEquals("before-b", timeline.nextCursor)
+    }
+
+    @Test
+    fun aKeptCursorOfUnknownRevisionGivesWayToThePagesOwnSoOlderPagesStillLoad() {
+        val timeline = Timeline("session")
+        timeline.retain(
+            listOf(Wire.objectOf("id" to "a"), Wire.objectOf("id" to "b"), Wire.objectOf("id" to "c")),
+            "old-token-cursor",
+        )
+        timeline.snapshot(withCursor(snapshot(12, "b", "c", "d"), "before-b"))
+        assertEquals(listOf("a", "b", "c", "d"), timeline.messages.map { it.text("id") })
+        assertEquals("before-b", timeline.nextCursor)
+
+        // The host answers the cursor at the page's revision; the reloaded a dedupes.
+        assertTrue(timeline.snapshot(withCursor(snapshot(12, "z", "a"), "before-z"), older = true))
+        assertEquals(listOf("z", "a", "b", "c", "d"), timeline.messages.map { it.text("id") })
+        assertEquals("before-z", timeline.nextCursor)
+    }
+
+    @Test
+    fun aKeptCursorOfKnownRevisionStays() {
+        val timeline = Timeline("session")
+        timeline.retain(
+            listOf(Wire.objectOf("id" to "a"), Wire.objectOf("id" to "b"), Wire.objectOf("id" to "c")),
+            "before-a",
+            cursorRevision = 7,
+        )
+        timeline.snapshot(withCursor(snapshot(12, "b", "c", "d"), "before-b"))
         assertEquals("before-a", timeline.nextCursor)
+        assertFalse(timeline.snapshot(withCursor(snapshot(12, "y", "z"), "before-y"), older = true))
+        assertTrue(timeline.snapshot(withCursor(snapshot(7, "y", "z"), "before-y"), older = true))
+        assertEquals(listOf("y", "z", "a", "b", "c", "d"), timeline.messages.map { it.text("id") })
     }
 
     @Test

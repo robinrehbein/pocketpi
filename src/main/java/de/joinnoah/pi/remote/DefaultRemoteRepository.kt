@@ -2799,10 +2799,11 @@ class DefaultRemoteRepository(
     ) {
         val current = timeline ?: return
         val cursor = if (older) current.nextCursor ?: return else null
+        // Cleared before anything else: activation relies on it once the snapshot started.
+        if (snapshotPending === current) snapshotPending = null
         resynchronizing = true
         if (!older) update { it.copy(tasks = staleTasks(it.tasks)) }
         var includedTasks = if (held != null && cursor == null) heldIncludesTasks else !older && canReadTasks()
-        if (snapshotPending === current) snapshotPending = null
         // A Timeline whose focus lapsed takes a fresh first page read with its session in focus
         // again, its events held, in place of what it applied meanwhile; see [syncFocus].
         val reread = !older && held == null && current.focusLapsed && inSentFocus(current.sessionId)
