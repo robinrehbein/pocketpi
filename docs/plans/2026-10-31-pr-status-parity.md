@@ -59,6 +59,10 @@ The next increment closes two remaining runtime seams without changing the produ
 
 Root owns all emulator, ADB, server and process execution. Fixtures use new private paths and separate ports; the default ADB server and personal Host remain untouched. No GitHub calls, owner credentials, external mutations or neural-model turns are needed. The Android activity supplies explicit foreground/network signals and a private CA; MainActivity lifecycle, production network monitoring and physical devices remain separate gates.
 
+6. Combined Android and Host-managed native worker.
+   - [x] Pass the actual Pi TUI through the native PTY and encrypted Android navigation on English/German phone/tablet emulator profiles, verifying the same owner and native worker across status and reconnect.
+   - [x] Complete the external RPC default-mode regression and final cleanup verification.
+
 ### Results and remaining limits
 
 The combined fixture passed on the English phone profile (8.663 s) and the German and English
@@ -72,6 +76,12 @@ legible. Owned fixture and emulator cleanup was verified as described in the qua
 The separate native-worker harness passed twice with the same Pi PID/session/runtime and no RPC
 fallback across four snapshots; PTY exit and temporary-directory cleanup were verified. Its
 injected spawn adds flags and a wrapper. It does not prove a production spawn configuration, a
-process-group audit, native input or a model turn. Android combined with that native worker, live
-GitHub CI, physical Samsung/DeX, independent Linux and production internet remain open. Earlier
-full-suite counts remain historical baselines and were not rerun for these fixtures.
+process-group audit, native input or a model turn. The combined native Android matrix passed: phone English 28.523 s, tablet German 26.226 s,
+tablet English 33.664 s and phone German 30.394 s. Each verified `piMode=tui`, the same owner
+and native worker, one cut and two upgrades. The external RPC default-mode regression passed (German phone, 16.043 s); owned fixture,
+emulator, temporary-credential and ADB cleanup was verified. Live GitHub CI, unmodified native spawn, native input and
+a model turn, MainActivity, physical Samsung/DeX, independent Linux and production internet
+remain open. App merge `66df8f7` passed 3,333 Android and 34 Wear tests and Wear assembly; Host
+merge `2588516bd` passed 72 scoped outbox tests, 310 regression tests with five skipped, and
+final type checking. The Git PR composite hit its 240-second global limit under emulator load;
+the Git-write composite is still running. Earlier full-suite counts remain historical baselines.

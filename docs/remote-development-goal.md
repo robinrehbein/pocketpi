@@ -491,7 +491,7 @@ Each criterion is checked in the qualifying run, on a real phone, with the Mac u
 | 4a | Answer every forwarded question and approval from the phone, including oversized ones and editors | noah-monorepo, then app | Open (gap 3) |
 | 4b | Answer custom dialogs from the phone through the relayed terminal | noah-monorepo, then app | Open (gaps 4 and 7) |
 | 5 | Commit, push and open a pull request, confirmed on the phone and logged on the Mac | noah-monorepo, then app | Commit, Push and PR implemented locally; full unattended workflow and physical-device qualification remain open |
-| 6 | See the pull request and its CI status per session | noah-monorepo, then app | Display is wired; scoped actual-Pi to Android navigation and separate Host-managed native-worker proofs passed. Live GitHub CI and Android combined with that native worker remain open. |
+| 6 | See the pull request and its CI status per session | noah-monorepo, then app | Display is wired; actual Pi through a Host-managed native worker to Android navigation passed on four emulator profiles. Live GitHub CI and physical-device qualification remain open. |
 
 ## Order
 
@@ -536,7 +536,9 @@ observed pending, named failed, passing and cleared status. This uses controlled
 external RPC Pi whose stdout is not consumed by the Host: it proves the bus/IPC path, not actual
 GitHub CI. Subsequent separate fixtures passed the actual-Pi-to-Android navigation path on phone
 and tablet emulator profiles and Host-managed native startup with a real PTY. All four English/German phone/tablet profile runs passed, and owned fixture cleanup was verified.
-The native harness uses an
-injected spawn wrapper and flags; the two fixtures do not prove Android combined with that native
-worker. See [the scoped qualification](testing/pr-status-parity-qualification.md). Physical
-devices and an independent Linux testhost remain unavailable.
+A subsequent combined Android-to-Host-managed native PTY/Pi TUI run passed all four English/German
+phone/tablet emulator profiles, verifying the same owner and native worker, one cut and two upgrades.
+It uses an injected spawn wrapper and flags; the external RPC default-mode regression also passed
+and owned fixture/emulator/ADB cleanup was verified. See [the scoped qualification](testing/pr-status-parity-qualification.md).
+Live GitHub CI, native input and model turns, MainActivity and production networking, physical devices
+and an independent Linux testhost remain open.

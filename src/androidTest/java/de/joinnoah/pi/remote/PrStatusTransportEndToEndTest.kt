@@ -34,6 +34,7 @@ import org.junit.rules.RuleChain
 class PrStatusTransportEndToEndTest {
     private val compose = createAndroidComposeRule<NavigationTestActivity>()
     private lateinit var fixture: JSONObject
+    private var nativeExpected = false
     private lateinit var client: OkHttpClient
     private lateinit var scope: CoroutineScope
     private lateinit var repository: DefaultRemoteRepository
@@ -45,12 +46,17 @@ class PrStatusTransportEndToEndTest {
         override fun before() {
             val args = InstrumentationRegistry.getArguments()
             val expected = args.getString("prStatusFixtureExpected") == "true"
+            val nativeArg = args.getString("prStatusNativeExpected")
+            require(nativeArg == null || nativeArg == "true" || nativeArg == "false") { "prStatusNativeExpected must be true or false" }
+            nativeExpected = nativeArg == "true"
             val path = args.getString("prStatusFixturePath")
             if (expected) require(!path.isNullOrBlank()) { "prStatusFixturePath is required" }
             assumeTrue("Pass prStatusFixturePath to run the actual Pi PR status integration", !path.isNullOrBlank())
             require(expected) { "Explicit PR status fixture mode is required" }
             fixture = JSONObject(readFixtureFile(requireNotNull(path)).toString(Charsets.UTF_8))
             require(fixture.optBoolean("prStatusFixture") && fixture.optString("sessionKind") == "actual-pi") { "Wrong PR status fixture" }
+            require(fixture.has("nativeWorker") && fixture.getBoolean("nativeWorker") == nativeExpected) { "Wrong native worker fixture mode" }
+            println("PR_STATUS_NATIVE_EXPECTED=$nativeExpected")
             val cert = CertificateFactory.getInstance("X.509").generateCertificate(readFixtureFile(fixture.getString("caCertPath")).inputStream())
             val keys = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null); setCertificateEntry("fixture", cert) }
             val manager = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(keys) }.trustManagers.filterIsInstance<X509TrustManager>().single()
@@ -92,6 +98,7 @@ class PrStatusTransportEndToEndTest {
         awaitPhase("pending")
         val initial = status()
         assertTrue("Session must belong to actual Pi child", initial.getBoolean("ownerPidVerified"))
+        assertTrue("Native worker must be verified", nativeWorkerVerified(initial))
         assertTrue("Pi version must be reported", initial.getString("piVersion").isNotBlank())
         // This test activity does not install the app lifecycle/network monitor. These signals
         // enable repository reconnection; the actual WebSocket and host remain real.
@@ -147,17 +154,19 @@ class PrStatusTransportEndToEndTest {
         assertNull(repository.state.value.pullRequest)
         val upgrades = status().getInt("upgrades")
         action("cut-device")
-        compose.waitUntil(60_000) { statusOrNull()?.let { it.optString("phase") == "cut" && it.optBoolean("phaseReady") && !it.optBoolean("deviceOnline") && it.optBoolean("upgradesBlocked") } == true && !repository.state.value.connected }
+        compose.waitUntil(60_000) { statusOrNull()?.let { it.optString("phase") == "cut" && it.optBoolean("phaseReady") && !it.optBoolean("deviceOnline") && it.optBoolean("upgradesBlocked") && nativeWorkerVerified(it) } == true && !repository.state.value.connected }
         action("allow-reconnect")
         compose.waitUntil(90_000) {
             val current = statusOrNull()
-            current?.let { it.optString("phase") == "reconnect-allowed" && it.optBoolean("deviceOnline") && it.optInt("upgrades") > upgrades } == true &&
+            current?.let { it.optString("phase") == "reconnect-allowed" && it.optBoolean("deviceOnline") && it.optInt("upgrades") > upgrades && nativeWorkerVerified(it) } == true &&
                 repository.state.value.connected && repository.state.value.selection == selection &&
                 repository.state.value.pullRequest?.checks == PullRequestChecksState.RUNNING
         }
         awaitTag("changesPullRequest")
         compose.onNodeWithTag("changesPullRequest").assertIsDisplayed()
-        assertTrue(status().getBoolean("ownerPidVerified"))
+        val recovered = status()
+        assertTrue(recovered.getBoolean("ownerPidVerified"))
+        assertTrue("Native worker must be verified after reconnect", nativeWorkerVerified(recovered))
         screenshot("recovered")
     }
 
@@ -167,15 +176,21 @@ class PrStatusTransportEndToEndTest {
     }
     private fun awaitTag(tag: String) = compose.waitUntil(60_000) { compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
     private fun awaitNoTag(tag: String) = compose.waitUntil(60_000) { compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().isEmpty() }
-    private fun awaitPhase(phase: String) = compose.waitUntil(60_000) { statusOrNull()?.let { it.optString("phase") == phase && it.optBoolean("phaseReady") } == true }
+    private fun awaitPhase(phase: String) = compose.waitUntil(60_000) { statusOrNull()?.let { it.optString("phase") == phase && it.optBoolean("phaseReady") && nativeWorkerVerified(it) } == true }
     private fun action(value: String) {
         val body = JSONObject().put("action", value).toString().toRequestBody("application/json".toMediaType())
         client.newCall(Request.Builder().url(fixture.getString("actionUrl")).post(body).build()).execute().use { assertEquals("Fixture action $value", 200, it.code) }
     }
-    private fun status(): JSONObject = client.newCall(Request.Builder().url(fixture.getString("statusUrl")).build()).execute().use {
+    private fun readStatus(): JSONObject = client.newCall(Request.Builder().url(fixture.getString("statusUrl")).build()).execute().use {
         assertTrue(it.isSuccessful); JSONObject(requireNotNull(it.body).string())
     }
-    private fun statusOrNull(): JSONObject? = runCatching { status() }.getOrNull()
+    private fun checkNativeMode(status: JSONObject): JSONObject = status.apply {
+        assertTrue("Status must report native worker mode", has("nativeWorker"))
+        assertEquals("Wrong native worker status mode", nativeExpected, getBoolean("nativeWorker"))
+    }
+    private fun nativeWorkerVerified(status: JSONObject) = !nativeExpected || status.optBoolean("nativeWorkerVerified")
+    private fun status(): JSONObject = checkNativeMode(readStatus())
+    private fun statusOrNull(): JSONObject? = runCatching { readStatus() }.getOrNull()?.let { checkNativeMode(it) }
     private fun screenshot(phase: String) {
         compose.waitForIdle()
         val committed = CountDownLatch(1)

@@ -81,14 +81,31 @@ snapshots, then verified PTY exit and temporary-directory cleanup. The injected 
 and a wrapper, so this is not an unmodified production spawn configuration. It does not prove
 process-group cleanup, native input or a model decision.
 
+### Android with Host-managed native worker
+
+The combined Android test also passed with a Host-managed native PTY and actual Pi 1.4.0 TUI:
+phone English 28.523 s, tablet German 26.226 s, tablet English 33.664 s and phone German
+30.394 s. Each run verified the same owner and native worker, `piMode=tui`, one cut and two
+upgrades. Phone English failed, tablet German failed and tablet English recovered screenshots
+and phone German recovered screenshots were inspected. This uses controlled producer input and the injected native spawn wrapper and
+flags, private CA, test activity and explicit foreground/network signals described above. It does
+not exercise real GitHub CI, native input, a model turn, MainActivity or production networking.
+The external RPC default-mode regression passed on the German phone profile in 16.043 s,
+with `piMode=rpc`, owner verification, one cut and two upgrades. All five owned fixtures
+exited cleanly; their metadata and private fixture directories were removed. Device JSON/CA
+and host-side copies were deleted, the owned emulator and ADB server stopped, and ports
+5191/5584/5585 were verified closed. No default ADB server or personal Host was used.
+
+On App merge `66df8f7`, 3,333 Android and 34 Wear unit tests and Wear debug assembly passed.
+On Host merge `2588516bd`, 72 scoped outbox tests and a regression run with 310 passed and
+five skipped passed; final type checking passed. A Git PR composite hit its 240-second global
+limit under emulator load; the Git-write composite is still running.
+
 ## Remaining gates
 
-The product source under test was App `deadfee` and Host `ca38943a5`; these qualification
-fixtures do not change production source. Host qualification fixtures are saved locally as
-`18edf5384`. The earlier 3,320 Android plus 34 Wear and 3,799 Host
-plus 38 skipped results above are historical baselines, not reruns for the new fixtures. The
-combined Android and native-worker proofs are separate: they do not yet prove Android against
-the Host-managed native worker. Live GitHub CI, that combined path, unmodified native spawn,
-native input and a model turn, physical Samsung/DeX hardware, an independent Linux host,
-`MainActivity` and production internet/network behavior remain open. No push or release is
-claimed by this qualification.
+The prior fixture product baseline was App `deadfee` and Host `ca38943a5`, with Host fixtures
+saved as `18edf5384`. The new combined native matrix used the merges and regression scope
+recorded above. Earlier whole-suite counts remain historical baselines. Live GitHub CI,
+unmodified native spawn, native input and a model turn, physical Samsung/DeX hardware,
+an independent Linux host, `MainActivity` and production internet/network behavior remain
+open. No push or release is claimed by this qualification.
