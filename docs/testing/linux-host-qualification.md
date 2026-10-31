@@ -475,3 +475,57 @@ tests pass. Exact evidence:
 `/private/tmp/pocketpi-runtime-gate-{extensions-check-final2,full-extensions,unit-final,cli-fixture-regression,biome-final}.log`.
 The broader package `check` also passes for this merged source
 (`/private/tmp/pocketpi-runtime-gate-package-check.log`).
+
+## Explicit owner browser CLI and encrypted Linux-image flow — 2026-10-31
+
+Host product commit `bc839d54a` adds `config browser-executable [ABS_PATH|clear]`,
+`config browser-control [on|off]` and `browser grants|grant|revoke`. Executable
+changes hold the existing host/serve/socket exclusion until the write completes
+and require a stopped host because browser/preview runtimes cache the selected
+binary. Validation resolves a canonical absolute regular executable without
+launching it. Clearing changes only that field; switches, grants, identity and
+unrelated configuration remain independent. Live browser controls use the existing
+serialized owner IPC policy/revalidation. Offline mutations hold the existing locks;
+new grants require a live host to validate device and project. Unexpected connection
+errors and an old unsupported host never cause an offline write fallback.
+
+All 38 focused owner/policy/transaction tests pass, including real sockets/locks,
+failed persistence, corrupt grants and independent preview state. Required
+`check:extensions` and package `check` pass. An independent bounded review found no
+additional concrete issue. An actual CLI-process flow with synthetic file-store
+setup confirms routing, set/clear, explicit switch, refused offline grant, invalid-path
+no-write and unchanged credentials. Evidence:
+`/private/tmp/pocketpi-browser-owner-{focused,extensions-check,package-check}.log` and
+`/private/tmp/pocketpi-browser-owner-cli-process-proof.json`.
+
+The current archive SHA-256 is
+`e5d8fee0d10339bb5a1d8c4e333ca4b96d76832bf913c039f5bc691fa75327ad`,
+Core image `sha256:8be262377bdce1bb2d902debea8df7f840722c7d04d90c30f038eec16393f4cd`,
+and locked browser image
+`sha256:ddc38e6e3003d9bf14b4167fde442ac0b30ab4dd9c5e89ecd81923e848df8864`.
+The guarded builder verifies the same frozen signed Release/111-deb/installed OS
+manifests. Runtime qualification now explicitly binds this image and source commit;
+its renderer sandbox proof and the fail-closed runtime guard both pass.
+
+The maintained CLI fixture's `--browser` mode uses the real configured Host CLI,
+local TLS relay and authenticated encrypted synthetic device channel, without
+runtime injection. Before grant, browser open is refused. After owner CLI grant,
+capabilities v3 advertises session.browser.v1; browser open, lease, local page,
+viewport, ACK-paced chunked JPEG (390x600), text input/title change and tab close
+succeed. Owner CLI revoke makes subsequent browser tab access fail. The same run
+also proves native Pi/PTY, deterministic provider completion, shell and a relay
+reconnect **before** the browser workflow. It does not test an active browser cut.
+The owner runner verifies container identity/image/nonce and removes only that
+container after exit zero. No checkout, host credentials or Docker socket is mounted;
+only public fixtures/relay sources are mounted into a nonroot read-only container
+with the bounded profile and no external network.
+
+Actual evidence: `/private/tmp/pocketpi-browser-owner-encrypted-flow.log`,
+`/private/tmp/pocketpi-browser-owner-run.py`,
+`/private/tmp/pocketpi-browser-owner-images.json`,
+`/private/tmp/pocketpi-browser-owner-{core-build,bound-build,sandbox-proof,runtime-gate}.log`.
+All 76 deployment/profile helper tests pass after updating the formerly hardcoded
+old image ID in a test fixture. This remains the same qualified local ARM64
+Engine/kernel boundary. It does not qualify a physical phone, protected preview
+against this image, active-browser reconnect/handoff, independent Linux hosts or
+browser service deployment through a general guarded Devcontainer launcher.

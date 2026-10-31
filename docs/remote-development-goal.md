@@ -1,5 +1,15 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Owner browser configuration and encrypted Linux-image checkpoint
+
+The owner CLI now configures the Chromium path explicitly and manages browser switches
+and grants. The refreshed locked Linux image passes real CLI setup, encrypted synthetic
+device browser access, ACK-paced JPEG, input and owner grant revocation, plus its separate
+renderer sandbox proof. This qualifies the bounded local image flow; protected preview,
+active browser reconnect/handoff, physical devices and independent Linux remain open.
+See [Linux qualification](testing/linux-host-qualification.md).
+
+
 ## Current source and frozen browser qualification checkpoint
 
 The merged Host navigation work passes 6,604 extension tests with 37 explicit skips,
