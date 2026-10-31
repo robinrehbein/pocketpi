@@ -137,7 +137,7 @@ them. The session shows attachment metadata, not embedded file contents.
 Unsubmitted uploads expire after one hour. Submitted files remain on the Mac for seven days. A
 saved session retains the reference after expiry, but the temporary file may no longer exist.
 The phone keeps local copies while an encrypted draft or an uncertain send still references them.
-Disconnecting does not automatically resubmit a prompt.
+Disconnecting does not automatically resubmit a prompt that was already sent.
 
 ## Editing project files
 
@@ -191,7 +191,15 @@ again when the app returns to the foreground on a validated network, and after t
 changes. It keeps the socket while the app is in the background and stops automatic retries there.
 A Mac that keeps a journal of the session's recent events sends only the events the chat missed;
 any other Mac sends a fresh snapshot.
-It never opens or forks a historical session, and never retries prompts or answers automatically.
+It never opens or forks a historical session, and never retries a sent prompt or an answer automatically.
+A plain prompt typed while the connection is down (no attachment, `/` command or `!` shell draft; the chat
+loaded from that Mac and last idle; one at a time) waits in the chat as "Queued, sends when connected" and is
+journaled like a send. After the reconnect it goes out once, under the same request ID, only if the chat did
+not move on: its newest message is still the one shown when the prompt was queued and pi is idle. Otherwise,
+and after 15 minutes, it is marked not confirmed and its text returns to the composer to send by hand, ahead of
+anything typed since. The same holds if the send after the reconnect fails. Cancel on the bubble takes it back, as
+does leaving the chat or sending new text while it still waits. A restart leaves the journal entry, which is shown as not
+confirmed.
 After an uncertain prompt result, check the session before sending the draft again. In a
 running host-owned RPC session, the busy row offers two send modes: Send now (interrupt step) sends
 the draft as a steer, and Send when done submits it to pi's follow-up queue. The journal
@@ -284,11 +292,8 @@ delivery acceptance; those require the configured host, relay and device.
 `stream-v1.json` (the `remote.stream.v1` capability: `session.focus`, `remote.ping` and `pong`,
 `remote.ack`, and the `after` field of session events) and `resume-v1.json` (the `resume.v1:`
 request IDs, the snapshot `epoch` and the `session.events` result) are byte-for-byte copies from
-`packages/pi-atlas/extensions/remote/protocol/fixtures/` on branch `ccr-a75648b3-mgjltw` of
-noah-monorepo. That branch has not been committed or pushed yet, so the files exist there only as
-staged changes and no commit can be cited. They are not on `dev` either. Before this change merges,
-replace this sentence with the noah-monorepo merge commit that adds them to `dev`; until then this
-change is blocked on that merge.
+`packages/pi-atlas/extensions/remote/protocol/fixtures/` from noah-monorepo commit
+`59a1232f8e101d4170891b00db47828405de2784`, the merge of pull request 1314 into `dev`.
 
 ## Appearance
 

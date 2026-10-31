@@ -213,6 +213,7 @@ class SecureRemoteTransport(
             ackedSequence = receivedSequence
             unackedChars = 0
             lastAckAt = now
+            Diagnostics.count(Diagnostics.Counter.ACKS_SENT)
             queue(remoteAckPayload(receivedSequence))
         }
 
@@ -631,6 +632,8 @@ class SecureRemoteTransport(
                         t: Throwable,
                         response: Response?,
                     ) {
+                        // OkHttp's ping task fails the socket from its writer thread; note it before the lane runs.
+                        if (Diagnostics.isPingFailure(t)) Diagnostics.count(Diagnostics.Counter.PING_FAILURES)
                         connection.post {
                             ended("failure." + t.javaClass.simpleName.ifEmpty { "Throwable" }, null)
                         }

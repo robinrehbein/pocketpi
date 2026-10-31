@@ -219,6 +219,10 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     /** See [takeOwedResume]. */
     private var resumeOwed = false
 
+    /** Whether the owed resume is still to be taken, so the view is known to be behind. */
+    val resumeIsOwed: Boolean
+        get() = resumeOwed
+
     /**
      * The owner's tasks for this session are current as of [revision]: the last accepted first page
      * carried them, and nothing since asked for a snapshot. Task changes emit `snapshot.required`,

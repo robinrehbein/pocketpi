@@ -163,6 +163,7 @@ class RemoteRepositoryTest {
         pairings: Pairings = Pairings(hosts),
         navigationStorage: NavigationSnapshotStorage? = null,
         projectHint: suspend (String, String) -> String? = { _, _ -> null },
+        liveRunKept: () -> Boolean = { false },
         attachmentImporter: (suspend (String, Boolean) -> LocalAttachment)? = null,
     ) =
         DefaultRemoteRepository(
@@ -177,6 +178,7 @@ class RemoteRepositoryTest {
             navigationStorage = navigationStorage,
             projectHint = projectHint,
             jitter = { 0.5 },
+            liveRunKept = liveRunKept,
         )
 
     private fun modelData(id: String = "model") =
@@ -8210,8 +8212,11 @@ class RemoteRepositoryTest {
 
     // ---- Forward compatibility, typed errors, proven-connection backoff, pairing timeout ----
 
-    private suspend fun TestScope.chatRepository(transport: Transport): DefaultRemoteRepository {
-        val repository = repository(transport)
+    private suspend fun TestScope.chatRepository(
+        transport: Transport,
+        liveRunKept: () -> Boolean = { false },
+    ): DefaultRemoteRepository {
+        val repository = repository(transport, liveRunKept = liveRunKept)
         repository.activate(RemoteSelection("host", "project", "session"))
         repository.setForeground(true)
         repository.setValidatedNetwork("wifi")
@@ -11071,6 +11076,397 @@ class RemoteRepositoryTest {
         assertNull(drafts.values.getValue(DraftKey("host", "session")).mutationId)
     }
 
+    /**
+     * A chat of two messages (`a`, `b`) whose connection was lost: stale, idle, with the composer
+     * free. [reconnect] false leaves the repository without a reason to reconnect on its own.
+     */
+    private suspend fun TestScope.offlineChat(
+        transport: Transport,
+        drafts: Drafts,
+        reconnect: Boolean = true,
+    ): RemoteRepository {
+        configure(transport)
+        quoteMessages(transport)
+        val repository = repository(transport, drafts)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        if (reconnect) {
+            repository.setForeground(true)
+            repository.setValidatedNetwork("wifi")
+        }
+        runCurrent()
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertFalse(repository.state.value.connected)
+        assertTrue(repository.state.value.stale)
+        assertEquals("idle", repository.state.value.status)
+        return repository
+    }
+
+    /** The reconnect's snapshot lists one more message after `a` and `b`. */
+    private fun answerWithNewMessage(transport: Transport) {
+        val normal = transport.response
+        transport.response = { request ->
+            val reply = normal(request)
+            if (request.text("type") == "session.snapshot" && reply != null)
+                JsonObject(
+                    reply + ("messages" to JsonArray(
+                        (reply["messages"] as JsonArray) +
+                            Wire.objectOf("id" to "c", "role" to "user", "text" to "From the terminal", "state" to "complete")
+                    ))
+                )
+            else reply
+        }
+    }
+
+    @Test
+    fun promptTypedOfflineIsQueuedAndSentUnderTheSameRequestIdAfterTheReconnect() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        val repository = offlineChat(transport, drafts)
+        val key = DraftKey("host", "session")
+
+        repository.draft("Queued while offline")
+        repository.prompt()
+        runCurrent()
+
+        val queued = repository.state.value.pendingSend
+        assertEquals(PendingSendState.QUEUED, queued?.state)
+        assertEquals("Queued while offline", queued?.text)
+        assertEquals("b", queued?.afterMessageId)
+        assertEquals("", repository.state.value.draft)
+        // It is journaled but not a failed send: no warning, nothing on the wire.
+        assertFalse(repository.state.value.uncertain)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        repository.flush()
+        assertEquals(queued?.mutationId, drafts.values.getValue(key).mutationId)
+        assertEquals("Queued while offline", drafts.values.getValue(key).submittedText)
+
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        val request = transport.sent.single { it.text("type") == "session.prompt" }
+        assertEquals(queued?.mutationId, request.text("requestId"))
+        assertEquals("Queued while offline", request.text("text"))
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("", repository.state.value.draft)
+    }
+
+    @Test
+    fun queuedPromptStaysQueuedAcrossTheReconnectUntilTheSnapshotIsIn() = runTest {
+        val transport = Transport()
+        val repository = offlineChat(transport, Drafts())
+        repository.draft("Wait for the snapshot")
+        repository.prompt()
+        runCurrent()
+        val normal = transport.response
+        // The reconnect's chat snapshot is answered late.
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") {
+                held += request
+                null
+            } else normal(request)
+        }
+
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        assertFalse(repository.state.value.uncertain)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        transport.result(held.last(), normal(held.last())!!)
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun queuedPromptIsNotSentWhenTheChatMovedOnAndItsTextComesBack() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        val repository = offlineChat(transport, drafts)
+        repository.draft("Written against an old view")
+        repository.prompt()
+        runCurrent()
+        answerWithNewMessage(transport)
+
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertTrue(repository.state.value.connected)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Written against an old view", repository.state.value.draft)
+        assertTrue(repository.state.value.uncertain)
+        // An explicit resend reuses the request ID, as every unconfirmed prompt does.
+        val id = repository.state.value.pendingSend?.mutationId
+        repository.prompt()
+        runCurrent()
+        assertEquals(id, transport.sent.single { it.text("type") == "session.prompt" }.text("requestId"))
+    }
+
+    @Test
+    fun queuedPromptIsNotSentWhilePiIsNotIdleAfterTheReconnect() = runTest {
+        val transport = Transport()
+        val repository = offlineChat(transport, Drafts())
+        repository.draft("Pi started meanwhile")
+        repository.prompt()
+        runCurrent()
+        val normal = transport.response
+        transport.response = { request ->
+            val reply = normal(request)
+            if (request.text("type") == "session.snapshot" && reply != null) JsonObject(reply + ("status" to JsonPrimitive("running")))
+            else reply
+        }
+
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun queuedPromptWaitsForTheOwedResumeWhenAnEventWasHeldDuringTheReconnectSnapshot() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Before"))
+        host.record("session.status", "status" to "running")
+        host.record("session.status", "status" to "idle")
+        val repository = chatRepository(transport)
+        dropConnection(transport)
+        repository.draft("Written against an old view")
+        repository.prompt()
+        runCurrent()
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        // The host restarted, and the reconnect's snapshot is answered late.
+        host.restart()
+        val normal = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && "cursor" !in request && held.isEmpty()) {
+                held += request
+                null
+            } else normal(request)
+        }
+        advanceTimeBy(1_000)
+        runCurrent()
+        val reply = host.answer(held.single())
+        // A message from the terminal arrives in the new epoch while the snapshot is in flight.
+        host.live("message.upsert", "message" to Wire.objectOf("id" to "u1", "role" to "user", "text" to "From the terminal", "state" to "complete"))
+        runCurrent()
+        transport.result(held.single(), reply)
+        runCurrent()
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+
+        // The owed resume brought the message in, and the chat moved on: the prompt is not sent.
+        assertEquals(listOf("m1", "u1"), shownIds(repository))
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Written against an old view", repository.state.value.draft)
+    }
+
+    @Test
+    fun cancellingTheQueuedPromptReturnsItsTextAndClearsTheJournal() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        val repository = offlineChat(transport, drafts)
+        repository.draft("Changed my mind")
+        repository.prompt()
+        runCurrent()
+        repository.draft("typed since")
+
+        repository.cancelQueuedPrompt()
+        runCurrent()
+
+        assertNull(repository.state.value.pendingSend)
+        assertEquals("Changed my mind\n\ntyped since", repository.state.value.draft)
+        assertFalse(repository.state.value.uncertain)
+        repository.flush()
+        val stored = drafts.values.getValue(DraftKey("host", "session"))
+        assertNull(stored.mutationId)
+        assertNull(stored.submittedText)
+        assertEquals("Changed my mind\n\ntyped since", stored.text)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun queuedPromptExpiresAfterFifteenMinutesAsNotConfirmed() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        // No foreground, no network: nothing reconnects on its own.
+        val repository = offlineChat(transport, drafts, reconnect = false)
+        repository.draft("Too late")
+        repository.prompt()
+        runCurrent()
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+
+        advanceTimeBy(QUEUED_PROMPT_MILLIS - 1)
+        runCurrent()
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        advanceTimeBy(2)
+        runCurrent()
+
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Too late", repository.state.value.draft)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        // Never dropped: the journal keeps it for a restart.
+        repository.flush()
+        assertEquals("Too late", drafts.values.getValue(DraftKey("host", "session")).submittedText)
+    }
+
+    @Test
+    fun queuedPromptOlderThanFifteenMinutesIsNotSentWhenTheReconnectComesLate() = runTest {
+        val transport = Transport()
+        val repository = offlineChat(transport, Drafts(), reconnect = false)
+        repository.draft("Stale")
+        repository.prompt()
+        runCurrent()
+        advanceTimeBy(QUEUED_PROMPT_MILLIS + 1)
+        runCurrent()
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun queuedPromptWhoseAutoSendFailsComesBackToTheComposerUnderTheSameRequestId() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        val repository = offlineChat(transport, drafts)
+        val key = DraftKey("host", "session")
+        repository.draft("Link drops again")
+        repository.prompt()
+        runCurrent()
+        val id = repository.state.value.pendingSend?.mutationId
+        transport.failure = { if (it.text("type") == "session.prompt") "internal" else null }
+
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Link drops again", repository.state.value.draft)
+        assertTrue(repository.state.value.uncertain)
+        repository.flush()
+        assertEquals(id, drafts.values.getValue(key).mutationId)
+        assertEquals("Link drops again", drafts.values.getValue(key).text)
+        // Sending the restored text again reuses the request ID.
+        transport.failure = { null }
+        repository.prompt()
+        runCurrent()
+        assertEquals(id, transport.sent.last { it.text("type") == "session.prompt" }.text("requestId"))
+    }
+
+    @Test
+    fun queuedPromptThatExpiresKeepsItsTextAheadOfWhatWasTypedSince() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        val repository = offlineChat(transport, drafts, reconnect = false)
+        repository.draft("Queued first")
+        repository.prompt()
+        runCurrent()
+        repository.draft("typed after")
+        val id = repository.state.value.pendingSend?.mutationId
+
+        advanceTimeBy(QUEUED_PROMPT_MILLIS + 1)
+        runCurrent()
+
+        assertEquals(PendingSendState.NOT_CONFIRMED, repository.state.value.pendingSend?.state)
+        assertEquals("Queued first\n\ntyped after", repository.state.value.draft)
+        repository.flush()
+        val stored = drafts.values.getValue(DraftKey("host", "session"))
+        assertEquals(id, stored.mutationId)
+        assertEquals("Queued first", stored.submittedText)
+        assertEquals("Queued first\n\ntyped after", stored.text)
+    }
+
+    @Test
+    fun sendingNewTextWhileAPromptStillWaitsTakesTheQueuedPromptBackFirst() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        val repository = offlineChat(transport, drafts)
+        repository.draft("Waiting in the queue")
+        repository.prompt()
+        runCurrent()
+        val normal = transport.response
+        val held = mutableListOf<JsonObject>()
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") {
+                held += request
+                null
+            } else normal(request)
+        }
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+
+        repository.draft("typed meanwhile")
+        repository.prompt()
+        runCurrent()
+
+        // Nothing went out; the journal was not overwritten and the user sees both texts.
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertNull(repository.state.value.pendingSend)
+        assertFalse(repository.state.value.uncertain)
+        assertEquals("Waiting in the queue\n\ntyped meanwhile", repository.state.value.draft)
+        transport.result(held.last(), normal(held.last())!!)
+        runCurrent()
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        assertFalse(repository.state.value.uncertain)
+    }
+
+    @Test
+    fun leavingTheChatGivesTheQueuedPromptBack() = runTest {
+        val drafts = Drafts()
+        val transport = Transport()
+        val repository = offlineChat(transport, drafts)
+        repository.draft("Stay in this chat")
+        repository.prompt()
+        runCurrent()
+
+        repository.cancelSelection()
+        repository.activate(RemoteSelection("host", "project"), ActivationMode.USER_OPEN)
+        runCurrent()
+        repository.flush()
+
+        assertNull(repository.state.value.pendingSend)
+        val stored = drafts.values.getValue(DraftKey("host", "session"))
+        assertEquals("Stay in this chat", stored.text)
+        assertNull(stored.mutationId)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun onlyPlainPromptsOfAChatLoadedFromTheMacAreQueued() = runTest {
+        val transport = Transport()
+        val repository = offlineChat(transport, Drafts())
+        for (draft in listOf("/review", "!ls", "   ")) {
+            repository.draft(draft)
+            repository.prompt()
+            runCurrent()
+            assertNull(draft, repository.state.value.pendingSend)
+        }
+        // One at a time.
+        repository.draft("first")
+        repository.prompt()
+        runCurrent()
+        repository.draft("second")
+        repository.prompt()
+        runCurrent()
+        assertEquals("first", repository.state.value.pendingSend?.text)
+        assertEquals("second", repository.state.value.draft)
+    }
+
     @Test
     fun timelineMessageBeforeTheAcknowledgementClearsThePendingSendOnceAcknowledged() = runTest {
         val transport = Transport().also(::configure)
@@ -11461,8 +11857,12 @@ class RemoteRepositoryTest {
      * [chatRepository], with what its opening read (the first load, and the probe that its
      * foreground signal starts) forgotten: [JournalHost.answers] then holds only later answers.
      */
-    private suspend fun TestScope.openedChat(transport: Transport, host: JournalHost): DefaultRemoteRepository {
-        val repository = chatRepository(transport)
+    private suspend fun TestScope.openedChat(
+        transport: Transport,
+        host: JournalHost,
+        liveRunKept: () -> Boolean = { false },
+    ): DefaultRemoteRepository {
+        val repository = chatRepository(transport, liveRunKept)
         val first = transport.firstPages().first()
         assertTrue(first.text("requestId").startsWith("resume.v1:-:0:"))
         assertEquals(ResumeBase(null, 0), first.resumeBase())
@@ -12166,6 +12566,34 @@ class RemoteRepositoryTest {
         assertNull(repository.state.value.error)
     }
 
+    @Test
+    fun pingsFeedTheRoundTripSummaryAndATimeoutIsCountedNotFatal() = runTest {
+        Diagnostics.clear()
+        Diagnostics.clock = { testScheduler.currentTime }
+        try {
+            val (transport, host) = streamTransport()
+            val repository = openedChat(transport, host)
+
+            val rtt = checkNotNull(Diagnostics.link().rtt)
+            assertEquals(1, rtt.count)
+            assertEquals(40L, rtt.relayMs)
+            assertEquals(0L, Diagnostics.link().count(Diagnostics.Counter.PING_TIMEOUTS))
+
+            val answer = transport.response
+            transport.response = { request -> if (request.text("type") == "remote.ping") null else answer(request) }
+            advanceTimeBy(PING_INTERVAL_MILLIS)
+            runCurrent()
+            advanceTimeBy(PING_TIMEOUT_MILLIS + 1)
+            runCurrent()
+
+            assertEquals(1L, Diagnostics.link().count(Diagnostics.Counter.PING_TIMEOUTS))
+            assertEquals(1, Diagnostics.link().rtt?.count)
+            assertTrue(repository.state.value.connected)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
     /**
      * [streamTransport]'s chat at m1 (revision 1) with a resume that stays unanswered, asked for by
      * a gap (revision 3), and the reply the host made when the request came in. Then the app goes
@@ -12407,5 +12835,328 @@ class RemoteRepositoryTest {
         advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
         runCurrent()
         assertEquals(emptyList<String>(), transport.focuses().last())
+    }
+
+    // ---- A push wakes the main connection ----
+
+    @Test
+    fun aPushWakesABackgroundedConnectionThatDroppedAndClosesItWhenTheWindowEnds() = runTest {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        dropConnection(transport)
+        // In the background nothing reconnects on its own.
+        advanceTimeBy(30_000)
+        runCurrent()
+        val connects = transport.connects
+        assertFalse(repository.state.value.connected)
+
+        repository.pushWake("host")
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        assertTrue(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        // The woken connection streams nothing.
+        assertEquals(emptyList<String>(), transport.focuses().last())
+
+        val closes = transport.closes
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS - 1)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals(closes, transport.closes)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(closes + 1, transport.closes)
+        assertFalse(repository.state.value.connected)
+        assertNull(repository.state.value.error)
+        assertNull(repository.state.value.reconnectAt)
+        // Closed for good: no retry follows in the background, and the next return reconnects.
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        repository.setForeground(true)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals(listOf("session"), transport.focuses().last())
+    }
+
+    @Test
+    fun aPushWakeKeepsRetryingInTheBackgroundOnlyWhileTheWindowIsOpen() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        val connects = transport.connects
+
+        repository.pushWake("host")
+        runCurrent()
+        assertEquals(connects + 1, transport.connects)
+        // The attempt failed: the usual backoff runs inside the window.
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS - 1_000)
+        runCurrent()
+        assertTrue(transport.connects > connects + 1)
+        advanceTimeBy(1_000)
+        runCurrent()
+        val after = transport.connects
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(after, transport.connects)
+        assertNull(repository.state.value.reconnectAt)
+    }
+
+    @Test
+    fun aPushWakeDoesNothingForAColdProcessAnotherMacTheForegroundOrAConnectedApp() = runTest {
+        val transport = Transport().also { configure(it) }
+        val cold = repository(transport)
+        cold.setForeground(false)
+        cold.setValidatedNetwork("wifi")
+        cold.pushWake("host")
+        runCurrent()
+        assertEquals(0, transport.connects)
+
+        val repository = chatRepository(transport)
+        val connects = transport.connects
+        // Connected: nothing to start.
+        repository.setForeground(false)
+        repository.pushWake("host")
+        runCurrent()
+        assertEquals(connects, transport.connects)
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS * 2)
+        runCurrent()
+        assertTrue("no window, so nothing closes it", repository.state.value.connected)
+
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        repository.pushWake("other")
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        // In front the ordinary reconnect applies; the push adds nothing.
+        repository.setForeground(true)
+        runCurrent()
+        val reconnected = transport.connects
+        transport.failureOnConnect = R.string.remote_connection_error
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        val failedAttempts = transport.connects
+        repository.pushWake("host")
+        runCurrent()
+        assertEquals(failedAttempts, transport.connects)
+        assertTrue(reconnected <= failedAttempts)
+    }
+
+    @Test
+    fun aPushWakeNeedsANetworkAndAllowedReconnects() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        dropConnection(transport)
+        repository.setNetwork(null, false)
+        val connects = transport.connects
+        repository.pushWake("host")
+        runCurrent()
+        assertEquals(connects, transport.connects)
+
+        repository.setNetwork("wifi", true)
+        repository.disconnect()
+        repository.pushWake("host")
+        runCurrent()
+        assertEquals(connects, transport.connects)
+    }
+
+    @Test
+    fun theReturnToTheForegroundKeepsTheWokenConnectionAndEndsTheWindow() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        dropConnection(transport)
+        repository.pushWake("host")
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+
+        repository.setForeground(true)
+        runCurrent()
+        val closes = transport.closes
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS * 2)
+        runCurrent()
+        assertEquals(closes, transport.closes)
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun aWindowEndClosesTheSocketOfAChatThatRunsOrWaitsWithoutALiveRunService() = runTest {
+        // The status alone is no live run: the service starts only when the app goes to the
+        // background, so a wake that finds a running or waiting chat must not leave the socket open.
+        for (status in listOf("running", "waiting")) {
+            val (transport, host) = streamTransport()
+            host.status = status
+            host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+            val repository = openedChat(transport, host)
+            repository.setForeground(false)
+            advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+            dropConnection(transport)
+            repository.pushWake("host")
+            runCurrent()
+            assertTrue(repository.state.value.connected)
+            assertEquals(status, repository.state.value.status)
+            // Not streamed to a phone nobody looks at.
+            assertEquals(emptyList<String>(), transport.focuses().last())
+
+            val closes = transport.closes
+            advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS)
+            runCurrent()
+            assertEquals(closes + 1, transport.closes)
+            assertFalse(repository.state.value.connected)
+        }
+    }
+
+    @Test
+    fun aWindowEndKeepsTheConnectionOfALiveRunTheServiceKeeps() = runTest {
+        val (transport, host) = streamTransport()
+        host.status = "running"
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        var kept = false
+        val repository = openedChat(transport, host) { kept }
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        dropConnection(transport)
+        kept = true
+        repository.pushWake("host")
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals("running", repository.state.value.status)
+        // The run keeps its chat in focus.
+        assertEquals(listOf("session"), transport.focuses().last())
+
+        val closes = transport.closes
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS * 2)
+        runCurrent()
+        assertEquals(closes, transport.closes)
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun aQueuedPromptWaitsForTheForegroundWhenAPushWakesTheConnectionInTheBackground() = runTest {
+        val transport = Transport()
+        val repository = offlineChat(transport, Drafts())
+        repository.draft("Queued while offline")
+        repository.prompt()
+        runCurrent()
+        repository.setForeground(false)
+        runCurrent()
+
+        repository.pushWake("host")
+        runCurrent()
+        // Read again in the background, but Robin does not see a prompt go out from there.
+        assertTrue(repository.state.value.connected)
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+
+        // The return in front, still inside the window, reads the chat again and sends it.
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
+    fun aQueuedPromptHeldByAWakeGoesOutOnTheReconnectAfterTheWindowEnded() = runTest {
+        val transport = Transport()
+        val repository = offlineChat(transport, Drafts())
+        repository.draft("Queued while offline")
+        repository.prompt()
+        runCurrent()
+        repository.setForeground(false)
+        runCurrent()
+        repository.pushWake("host")
+        runCurrent()
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS)
+        runCurrent()
+        assertFalse(repository.state.value.connected)
+        assertEquals(PendingSendState.QUEUED, repository.state.value.pendingSend?.state)
+        assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+
+        repository.setForeground(true)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+    }
+
+    @Test
+    fun aSecondPushExtendsTheWindow() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        dropConnection(transport)
+        repository.pushWake("host")
+        runCurrent()
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS - 10_000)
+        runCurrent()
+        repository.pushWake("host")
+        runCurrent()
+        val closes = transport.closes
+        advanceTimeBy(PUSH_WAKE_WINDOW_MILLIS - 1)
+        runCurrent()
+        assertEquals(closes, transport.closes)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(closes + 1, transport.closes)
+    }
+
+    @Test
+    fun aWorkerWaitsForTheWokenConnectionAndThenUsesIt() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        dropConnection(transport)
+        // Without a window nothing is waited for.
+        val before = testScheduler.currentTime
+        repository.awaitPushWake("host")
+        assertEquals(before, testScheduler.currentTime)
+        assertNull(repository.withHealthyConnection("host") { error("no connection") })
+
+        transport.readyOnConnect = false
+        repository.pushWake("host")
+        runCurrent()
+        assertFalse(repository.state.value.connected)
+        val read =
+            async {
+                repository.awaitPushWake("host")
+                repository.withHealthyConnection("host") { it.request("question.answer", "sessionId" to "session") }
+            }
+        runCurrent()
+        assertFalse(read.isCompleted)
+        advanceTimeBy(500)
+        transport.listener.ready(emptySet())
+        runCurrent()
+        assertEquals("accepted", read.await()?.text("kind"))
+        assertEquals(500, testScheduler.currentTime - before)
+    }
+
+    @Test
+    fun aWorkerStopsWaitingForAWakeThatDoesNotConnect() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        repository.setForeground(false)
+        dropConnection(transport)
+        transport.readyOnConnect = false
+        repository.pushWake("host")
+        runCurrent()
+        val before = testScheduler.currentTime
+        val read = async { repository.awaitPushWake("host") }
+        advanceTimeBy(PUSH_WAKE_WAIT_MILLIS - 1)
+        runCurrent()
+        assertFalse(read.isCompleted)
+        advanceTimeBy(1)
+        runCurrent()
+        assertTrue(read.isCompleted)
+        assertEquals(PUSH_WAKE_WAIT_MILLIS, testScheduler.currentTime - before)
+        assertNull(repository.withHealthyConnection("host") { error("not connected") })
     }
 }

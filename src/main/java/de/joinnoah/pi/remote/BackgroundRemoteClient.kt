@@ -144,6 +144,39 @@ internal class BackgroundRemoteClient(
     }
 }
 
+/**
+ * Runs the read [block] of a push's upgrade over the app's own connection when the push woke one
+ * (waiting at most [PUSH_WAKE_WAIT_MILLIS] for it) or it was healthy anyway, and over a connection
+ * of its own through [background] otherwise: a cold process, another Mac, or a connection that
+ * went. A host error passes through either way.
+ */
+internal suspend fun <T : Any> usingPushConnection(
+    repository: RemoteRepository?,
+    host: PairedHost,
+    /** False when the caller waited for the wake itself, outside its own time budget. */
+    wait: Boolean = true,
+    block: suspend (MutationCommands) -> T,
+): T =
+    usingPushConnection(
+        host,
+        awaitWake = { if (wait) repository?.awaitPushWake(it) },
+        live = { route, run -> repository?.withHealthyConnection(route, block = run) },
+        background = { pairedHost, run -> BackgroundRemoteClient().use(pairedHost, run) },
+        block = block,
+    )
+
+internal suspend fun <T : Any> usingPushConnection(
+    host: PairedHost,
+    awaitWake: suspend (String) -> Unit,
+    live: suspend (String, suspend (MutationCommands) -> T) -> T?,
+    background: suspend (PairedHost, suspend (MutationCommands) -> T) -> T,
+    block: suspend (MutationCommands) -> T,
+): T {
+    awaitWake(host.routeId)
+    live(host.routeId, block)?.let { return it }
+    return background(host, block)
+}
+
 /** Reads the pending questions of a live session. */
 internal suspend fun RemoteCommands.pendingQuestions(sessionId: String): List<JsonObject> =
     request("session.snapshot", "sessionId" to sessionId).let { data ->

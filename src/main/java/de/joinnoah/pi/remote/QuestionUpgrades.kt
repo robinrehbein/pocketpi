@@ -72,12 +72,20 @@ internal class QuestionUpgrader(
     private val state: UpgradeState,
     private val backgroundAnswers: Boolean,
     private val now: () -> Long,
+    /**
+     * Waits for the connection a push woke, at most the given millis, before the fetch's own
+     * budget starts: the wait must not take from the fallback's handshake.
+     */
+    private val awaitWake: suspend (routeId: String, maxMillis: Long) -> Unit = { _, _ -> },
     private val fetch: suspend (PairedHost, String) -> List<JsonObject>,
 ) {
     suspend fun run(host: PairedHost, payload: PushPayload, wanted: () -> Boolean): UpgradeResult {
         val tag = RemoteNotifications.tag(payload.routeId, payload.sessionId)
         if (state.latestEvent(tag) != payload.eventId) return UpgradeResult.Superseded
         val timeout = fetchTimeoutMillis(state.unreachableAt(payload.routeId), now())
+        // After an unreachable host the whole fetch is short, so is the wait.
+        awaitWake(payload.routeId, minOf(PUSH_WAKE_WAIT_MILLIS, timeout / 2))
+        if (state.latestEvent(tag) != payload.eventId) return UpgradeResult.Superseded
         var failed = false
         val pending =
             withTimeoutOrNull(timeout) {
@@ -261,8 +269,9 @@ class QuestionUpgradeWorker(context: Context, parameters: WorkerParameters) :
                 PreferenceUpgradeState(context),
                 backgroundAnswers = Build.VERSION.SDK_INT >= 31,
                 now = System::currentTimeMillis,
+                awaitWake = { routeId, maxMillis -> app.repository.awaitPushWake(routeId, maxMillis) },
             ) { pairedHost, sessionId ->
-                BackgroundRemoteClient().use(pairedHost) { it.pendingQuestions(sessionId) }
+                usingPushConnection(app.repository, pairedHost, wait = false) { it.pendingQuestions(sessionId) }
             }
         val wanted = {
             app.settings.state.value.pushEnabled &&

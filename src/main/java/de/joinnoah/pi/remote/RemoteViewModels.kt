@@ -160,7 +160,13 @@ internal open class DestinationViewModel(
 
     fun cancelAttachmentWork() = active(repository::cancelAttachmentWork)
 
-    fun prompt() = active(repository::prompt)
+    /**
+     * A host action waits for the load, except a plain prompt typed while a reconnect loads: the
+     * repository queues it (see [canQueuePrompt]).
+     */
+    fun prompt() = if (canQueuePrompt(repository.state.value)) editing(repository::prompt) else active(repository::prompt)
+
+    fun cancelQueuedPrompt() = editing(repository::cancelQueuedPrompt)
 
     fun followUp() = active(repository::followUp)
 

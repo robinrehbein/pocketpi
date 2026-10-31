@@ -22,13 +22,15 @@ private val noHistory = MutableStateFlow(PromptHistory())
  */
 /**
  * The Mac's suggestion while it applies: the session is idle with no question open and no plain
- * send of the phone's own is in flight or waiting for the timeline. Until the host's `running`
+ * send of the phone's own is queued, in flight or waiting for the timeline. Until the host's `running`
  * status or its new suggestion arrives, the old suggestion would otherwise come back as the
  * placeholder right after it was sent, ready to be sent twice.
  */
 internal fun hostSuggestion(state: RemoteState): String? {
     val inFlight = state.sending ||
-        state.pendingSend?.state.let { it == PendingSendState.SENDING || it == PendingSendState.CONFIRMED }
+        state.pendingSend?.state.let {
+            it == PendingSendState.QUEUED || it == PendingSendState.SENDING || it == PendingSendState.CONFIRMED
+        }
     return state.suggestion?.takeIf { !inFlight && state.status == "idle" && state.questions.isEmpty() }
 }
 

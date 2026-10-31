@@ -3148,6 +3148,7 @@ internal fun RemoteScreen(
                                         copyButton = item.id == copyButtonId,
                                         forkMenuRequested = item.id == forkMenuRequest,
                                         onForkMenuRequestHandled = { forkMenuRequest = null },
+                                        onCancelQueued = model::cancelQueuedPrompt,
                                     )
                                 }
                             }

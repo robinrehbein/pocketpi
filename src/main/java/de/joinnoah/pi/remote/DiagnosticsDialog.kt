@@ -21,7 +21,8 @@ import java.util.Date
 
 /**
  * What [Diagnostics] recorded since the app started: request latencies per type, the recent
- * connections with their handshake phases, and offline intervals. "Copy report" copies the same
+ * connections with their handshake phases, offline intervals, round-trip times and counters, and
+ * what the run before the last restart saved. "Copy report" copies the same
  * data as plain text, which holds no messages, IDs or keys.
  */
 @Composable
@@ -47,10 +48,15 @@ internal fun DiagnosticsDialog(onDismiss: () -> Unit) {
 @Composable
 private fun DiagnosticsReport(report: Diagnostics.Report, modifier: Modifier = Modifier) {
     val time = remember { DateFormat.getTimeInstance(DateFormat.MEDIUM) }
+    // The previous run may be days old, so its times carry the date.
+    val dateTime = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM) }
     val wallNow = remember(report) { System.currentTimeMillis() }
     fun clock(at: Long) = time.format(Date(wallNow - (report.now - at)))
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (report.requests.isEmpty() && report.connects.isEmpty() && report.offline.isEmpty()) {
+        if (
+            report.requests.isEmpty() && report.connects.isEmpty() && report.offline.isEmpty() &&
+                report.link == Diagnostics.Link() && report.previous == null
+        ) {
             Text(stringResource(R.string.remote_diagnostics_empty), style = MaterialTheme.typography.bodyMedium)
         }
         if (report.requests.isNotEmpty()) {
@@ -71,7 +77,8 @@ private fun DiagnosticsReport(report: Diagnostics.Report, modifier: Modifier = M
                     val outcome = connect.outcome ?: stringResource(R.string.remote_diagnostics_connect_pending)
                     val duration =
                         connect.durationMs?.let { " · " + stringResource(R.string.remote_diagnostics_milliseconds, it) }.orEmpty()
-                    Text("${clock(connect.at)} · ${connect.label} · $outcome$duration", style = MaterialTheme.typography.bodyMedium)
+                    val extensions = connect.extensions.joinToString("+").let { if (it.isEmpty()) "" else " · $it" }
+                    Text("${clock(connect.at)} · ${connect.label} · $outcome$duration$extensions", style = MaterialTheme.typography.bodyMedium)
                     val phases = connect.breakdown()
                     if (phases.isNotEmpty())
                         Detail(
@@ -91,10 +98,63 @@ private fun DiagnosticsReport(report: Diagnostics.Report, modifier: Modifier = M
                 )
             }
         }
+        if (report.link != Diagnostics.Link()) {
+            Heading(stringResource(R.string.remote_diagnostics_link))
+            LinkDetails(report.link)
+        }
         report.frames?.let {
             Detail(stringResource(R.string.remote_diagnostics_frames, it.count, it.p50Micros, it.p95Micros))
         }
+        report.previous?.let { previous ->
+            val saved = dateTime.format(Date(previous.savedAt))
+            Heading(stringResource(R.string.remote_diagnostics_previous, saved))
+            LinkDetails(previous.link)
+            previous.connects.forEach { connect ->
+                val outcome = connect.outcome ?: stringResource(R.string.remote_diagnostics_connect_pending)
+                val duration =
+                    connect.durationMs?.let { " · " + stringResource(R.string.remote_diagnostics_milliseconds, it) }.orEmpty()
+                Text(
+                    "${dateTime.format(Date(connect.at))} · ${connect.label} · $outcome$duration",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            previous.entries.forEach {
+                Detail("${dateTime.format(Date(it.at))} · ${it.kind.name.lowercase()} · ${it.label} ${it.outcome}".trim())
+            }
+        }
     }
+}
+
+@Composable
+private fun LinkDetails(link: Diagnostics.Link) {
+    link.rtt?.let {
+        Detail(stringResource(R.string.remote_diagnostics_rtt, it.p50, it.p95, it.last, it.count))
+        it.relayMs?.let { relay -> Detail(stringResource(R.string.remote_diagnostics_rtt_relay, relay)) }
+    }
+    Detail(
+        stringResource(
+            R.string.remote_diagnostics_link_counts,
+            link.count(Diagnostics.Counter.RECONNECTS),
+            link.count(Diagnostics.Counter.PING_FAILURES),
+            link.count(Diagnostics.Counter.PING_TIMEOUTS),
+        )
+    )
+    Detail(
+        stringResource(
+            R.string.remote_diagnostics_resumes,
+            link.count(Diagnostics.Counter.RESUMES_REPLAYED),
+            link.count(Diagnostics.Counter.RESUMES_SNAPSHOT),
+            link.count(Diagnostics.Counter.ACKS_SENT),
+        )
+    )
+    if (link.closeCodes.isNotEmpty())
+        Detail(
+            stringResource(
+                R.string.remote_diagnostics_close_codes,
+                link.closeCodes.entries.joinToString(", ") { "${it.key}×${it.value}" },
+                link.flowCloses,
+            )
+        )
 }
 
 @Composable

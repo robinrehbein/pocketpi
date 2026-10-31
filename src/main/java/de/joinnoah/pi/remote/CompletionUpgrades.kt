@@ -270,7 +270,7 @@ class LabelUpgradeWorker(context: Context, parameters: WorkerParameters) :
                         // A known name with no preview to read needs no connection at all.
                         if (known != null && !withPreview) SessionLabel(known.title, known.project, null, known.projectId)
                         else
-                            BackgroundRemoteClient().use(pairedHost) {
+                            usingPushConnection(app.repository, pairedHost) {
                                 it.sessionLabel(sessionId, withPreview, known)
                             }
                     }

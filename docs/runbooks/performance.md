@@ -78,7 +78,19 @@
   follows the focus at once. Acks are sealed on the sender thread and never wait for main, so a
   busy UI does not hold back the Mac's delivery window. `remote.ping` goes once per such connection
   and then every `PING_INTERVAL_MILLIS` (30 s) in the foreground; its round trip lands in
-  Diagnostics as a request, and a timeout (10 s) ends nothing.
+  Diagnostics as a request and as a sample of the round-trip summary, and a timeout (10 s) is
+  counted and ends nothing.
+- Read the link from Diagnostics. Besides the request timings, it keeps a ring of the last 64
+  `remote.ping` round trips (p50, p95, last, plus the Mac's own round trip to the relay), counters
+  (reconnects, OkHttp ping failures, `remote.ping` timeouts, acks sent, resumes answered by a
+  `session.events` replay versus a snapshot), counts by relay close code (1012 is a relay restart,
+  1013 a phone that fell too far behind) and the extensions each connection negotiated. An OkHttp
+  ping failure is the `SocketTimeoutException` OkHttp raises when its 20 s ping gets no pong. A
+  `DiagnosticsStore` saves a summary to `diagnostics-v1.json` in `noBackupFilesDir` at most every
+  30 s while something changed and at once when the app goes to the background: the last 20
+  connects, the last 64 failures, recoveries and offline intervals, and the counters and round-trip
+  summary, with wall-clock times, at most 64 KiB, redacted again on load. The next start shows it as
+  "Before the restart" in the dialog and in the copied report. The wear app does not save it.
 - While an open runs, the chat destination shows a read-only preview from the chat cache
   (`peekCachedChat`) with its stored draft, never as the repository's selection: the composer
   takes no edits and every action waits for the selection. A history session's preview says it
@@ -212,6 +224,10 @@ speedup has been established by the unit tests.
 - Request coalescing and selective prefetch after identifying duplicated calls in traces.
 - Optimistic send status: preserve mutation IDs, uncertain-delivery handling and retries; never
   introduce a second send path that can duplicate prompts after reconnect.
+  The offline prompt queue (`PendingSendState.QUEUED`) is the one allowed exception: it journals
+  the prompt like a send, waits for the reconnect's snapshot or resume, and then goes through the
+  normal send under the same request ID, only while the chat's newest message is the one shown at
+  queueing (R16).
 - Any new host/protocol endpoint must land in `noah-monorepo` first.
 
 Do not enable R8, throttle transport events or add speculative network fan-out merely to claim a

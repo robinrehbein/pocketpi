@@ -1,7 +1,7 @@
 <resources>
     <string name="remote_waiting_for_mac">Warte auf deinen Mac…</string>
     <string name="remote_diagnostics_title">Diagnose</string>
-    <string name="remote_diagnostics_help">Verbindungs- und Anfragezeiten auf diesem Handy, nur im Speicher, bis die App beendet wird. Sie enthalten keine Nachrichten, IDs oder Schlüssel.</string>
+    <string name="remote_diagnostics_help">Verbindungs- und Anfragezeiten auf diesem Handy, im Speicher, mit einer auf diesem Handy gespeicherten Zusammenfassung für den nächsten Start. Sie enthalten keine Nachrichten, IDs oder Schlüssel.</string>
     <string name="remote_diagnostics_open">Diagnose anzeigen</string>
     <string name="remote_diagnostics_empty">Noch nichts aufgezeichnet.</string>
     <string name="remote_diagnostics_requests">Anfragen</string>
@@ -19,6 +19,13 @@
     <string name="remote_diagnostics_offline">Offline-Zeiten</string>
     <string name="remote_diagnostics_offline_row">%1$.1f s offline</string>
     <string name="remote_diagnostics_frames">Empfangene Frames: %1$d · Entschlüsseln p50 %2$d µs · p95 %3$d µs</string>
+    <string name="remote_diagnostics_link">Verbindungsqualität</string>
+    <string name="remote_diagnostics_rtt">Laufzeit: p50 %1$d ms · p95 %2$d ms · zuletzt %3$d ms (%4$d Pings)</string>
+    <string name="remote_diagnostics_rtt_relay">Mac zum Relay: %1$d ms</string>
+    <string name="remote_diagnostics_link_counts">Neuverbindungen: %1$d · Ping-Ausfälle des Handys: %2$d · App-Ping-Zeitüberschreitungen: %3$d</string>
+    <string name="remote_diagnostics_resumes">Fortsetzungen per Wiedergabe: %1$d · als Snapshot: %2$d · gesendete Bestätigungen: %3$d</string>
+    <string name="remote_diagnostics_close_codes">Relay-Schließcodes: %1$s · zu langsam (1013): %2$d</string>
+    <string name="remote_diagnostics_previous">Vor dem Neustart (gespeichert %1$s)</string>
     <string name="remote_diagnostics_copy">Bericht kopieren</string>
     <string name="remote_diagnostics_close">Schließen</string>
     <string name="remote_diagnostics_clip_label">PocketPi-Diagnose</string>
