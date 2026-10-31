@@ -499,3 +499,13 @@ The host Remote suite passed 3,422 tests with 35 skipped; later review/parser ch
 full unit run passed 3,138 of 3,139 tests; its sole terminology failure was corrected, and both
 terminology tests plus four commit-pane tests then passed. This is local evidence, not physical
 Galaxy-device, independent Linux-host or complete ticket-to-PR/CI qualification.
+
+### Encrypted Android selective-commit fixture, 2026-10-31
+
+The selective commit pane now has a real encrypted Android-to-Mac fixture result in English and
+German at phone and tablet display sizes: only the explicitly selected file entered the actual
+commit and the second file stayed dirty. Screenshots were inspected; one stale English-tablet
+confirmation capture was replaced after frame synchronization and a fresh fixture run. This uses
+a synthetic idle session and targeted real-pane harness, not full navigation, a real Pi worker,
+independent Linux or physical Samsung qualification. See
+[the scoped qualification record](testing/selective-commit-qualification.md).
