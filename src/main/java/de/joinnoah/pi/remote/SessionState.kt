@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import java.util.IdentityHashMap
 
 /** A compaction the host reported as running for the selected session. */
 data class SessionCompaction(val reason: String?, val startedAtMillis: Long)
@@ -32,7 +33,7 @@ private val noticeKeys = setOf("type", "sessionId", "revision", "kind", "level",
 /** The notice [event] carries, or null when a field breaks the protocol's rules. */
 internal fun sessionNotice(event: JsonObject, id: Long): SessionNotice? {
     fun field(key: String): String? = (event[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
-    if (event.keys != noticeKeys) return null
+    if (!hasEventShape(event, noticeKeys)) return null
     val sessionId = field("sessionId") ?: return null
     val level = field("level")?.takeIf { it in noticeLevels } ?: return null
     val message = field("message") ?: return null
@@ -57,7 +58,7 @@ internal fun suggestionText(value: JsonElement?): String? =
 
 /** The suggestion [event] sets or clears, or null when a field breaks the protocol's rules. */
 internal fun sessionSuggestion(event: JsonObject): SessionSuggestion? {
-    if (event.keys != suggestionKeys) return null
+    if (!hasEventShape(event, suggestionKeys)) return null
     val value = event["suggestion"]
     if (value is JsonNull) return SessionSuggestion(null)
     return suggestionText(value)?.let(::SessionSuggestion)
@@ -87,6 +88,31 @@ class RequestLedger {
         values.clear()
     }
 }
+
+/** Why [Timeline.eventNeed] asks for a snapshot, so the owner picks the request form. */
+enum class SnapshotNeed {
+    NONE,
+
+    /** A revision gap that the event's `after` does not cover: a resume from the journal can fill it. */
+    GAP,
+
+    /** The host's `snapshot.required`: only a fresh snapshot carries what changed. */
+    REQUIRED,
+}
+
+/** The event as a [Timeline] applies it: follow-up and steer receipts count as command receipts. */
+internal fun timelineForm(event: JsonObject): JsonObject =
+    if ((event["kind"] as? JsonPrimitive)?.takeIf { it.isString }?.content in setOf("follow_up.status", "steer.status"))
+        JsonObject(event + ("kind" to JsonPrimitive("command.status")))
+    else event
+
+/**
+ * What [Timeline.replay] did with a `session.events` reply: the reply's events it applied, in
+ * order and in their wire form, for the owner's side effects; and whether the reply [fits], that
+ * is, the Timeline ended at or past the reply's revision with nothing left waiting. A reply that
+ * does not fit needs one fresh snapshot.
+ */
+class Replay(val applied: List<JsonObject>, val fits: Boolean)
 
 class Timeline(val sessionId: String, private val now: () -> Long = System::currentTimeMillis) {
     var revision = -1L
@@ -139,8 +165,9 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     private var retainedCursor: String? = null
     private val pendingEvents = sortedMapOf<Long, JsonObject>()
     private var snapshotRevision = -1L
+    /** Buffered events wait for a snapshot; not while a resume reply is awaited, which they wait for. */
     val needsSnapshot: Boolean
-        get() = pendingEvents.isNotEmpty()
+        get() = pendingEvents.isNotEmpty() && !awaitingReply
 
     /**
      * An event of a kind this app does not know, or a malformed buffered event, advanced the
@@ -149,15 +176,130 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
      */
     var unknownKindSeen = false
 
+    /**
+     * The host's journal epoch for this session, from the last first-page snapshot (`epoch`);
+     * null when the host sent none (an older host, a session without a live process). A resume
+     * names it, and a first page with another epoch starts the Timeline over.
+     */
+    var journalEpoch: String? = null
+        private set
+
+    /**
+     * The chat left the screen: the owner keeps this Timeline to resume from later, and it
+     * applies nothing meanwhile, so the events it misses never ask for a snapshot.
+     */
+    var detached = false
+
+    /**
+     * A resume request for this Timeline (or the first page of a `stale_cursor` recovery) is in
+     * flight: events of its session wait in the buffer until the reply is applied, or the request
+     * failed, and then apply each exactly once.
+     */
+    var awaitingReply = false
+        private set
+
+    /**
+     * The highest revision of an event of this session that arrived while [awaitingReply] since
+     * the buffer last drained, or -1; also of one at or below [revision], which is not buffered.
+     */
+    private var heldThrough = -1L
+
+    /** Whether an event of this session arrived during the current wait for a reply. */
+    val heldArrivals: Boolean
+        get() = awaitingReply && heldThrough >= 0
+
+    /** See [takeOwedResume]. */
+    private var resumeOwed = false
+
+    /**
+     * The owner's tasks for this session are current as of [revision]: the last accepted first page
+     * carried them, and nothing since asked for a snapshot. Task changes emit `snapshot.required`,
+     * which no replay spans, so a replay keeps such tasks.
+     */
+    var tasksKnown = false
+
+    /** The events [replay] applies while it runs, in order; null otherwise. */
+    private var applying: MutableList<JsonObject>? = null
+
+    /**
+     * Where a resume continues: the journal epoch and the last applied revision, or null when this
+     * Timeline has no snapshot or no epoch to name (the request then takes the fresh form).
+     */
+    internal fun resumeBase(): ResumeBase? {
+        val epoch = journalEpoch ?: return null
+        return if (hasSnapshot && revision >= 0) ResumeBase(epoch, revision) else null
+    }
+
+    /**
+     * Takes over the state of [previous], an earlier Timeline of this session, as a resume starts
+     * from it: the chat, its pages, revisions, epoch and task knowledge. Events it still buffered
+     * are dropped; the reply covers them.
+     */
+    fun continueFrom(previous: Timeline) {
+        require(previous.sessionId == sessionId)
+        revision = previous.revision
+        snapshotRevision = previous.snapshotRevision
+        hasSnapshot = previous.hasSnapshot
+        showMessages(previous.messages)
+        questions = previous.questions
+        nextCursor = previous.nextCursor
+        status = previous.status
+        compaction = previous.compaction
+        suggestion = previous.suggestion
+        pullRequest = previous.pullRequest
+        journalEpoch = previous.journalEpoch
+        tasksKnown = previous.tasksKnown
+        // A resync the previous Timeline still owed is owed by this one.
+        unknownKindSeen = previous.unknownKindSeen
+        retained = emptyList()
+        retainedCursor = null
+        pendingEvents.clear()
+        heldThrough = -1L
+        resumeOwed = false
+        awaitingReply = false
+        detached = false
+    }
+
+    /** A request this Timeline's events wait for goes out now; see [awaitingReply]. */
+    fun awaitReply() {
+        awaitingReply = true
+    }
+
+    /**
+     * Ends a wait whose reply will not come (the request failed or was dropped): the events held
+     * meanwhile apply as they would have, and may leave a gap. Returns whether it was waiting.
+     */
+    fun endAwaiting(): Boolean {
+        if (!awaitingReply) return false
+        awaitingReply = false
+        drainPending()
+        return true
+    }
+
+    /**
+     * Whether a first page of another journal epoch came while events that arrived for the resume
+     * lie past its revision, clearing the answer. Those events were dropped (on arrival when at
+     * or below the old revision, with the buffer otherwise). They arrived after the request went
+     * out, so they most likely count in the new epoch, but one may still be the old epoch's:
+     * instead of applying them, the owner fetches what follows the snapshot with one resume.
+     */
+    fun takeOwedResume(): Boolean = resumeOwed.also { resumeOwed = false }
+
     fun beginSnapshotEpoch(status: String) {
         revision = -1L
         snapshotRevision = -1L
         hasSnapshot = false
+        journalEpoch = null
+        tasksKnown = false
+        awaitingReply = false
+        detached = false
         if (messages.isNotEmpty()) retain(messages, nextCursor)
         showMessages(emptyList())
         questions = emptyList()
         nextCursor = null
         pendingEvents.clear()
+        heldThrough = -1L
+        resumeOwed = false
         compaction = null
         suggestion = null
         pullRequest = null
@@ -174,25 +316,51 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         retainedCursor = nextCursor
     }
 
-    fun snapshot(data: JsonObject, older: Boolean = false) {
-        if (data.text("sessionId") != sessionId) return
+    /**
+     * Applies a snapshot page and returns whether it did. A first page from another journal epoch
+     * than [journalEpoch] (also none while one is held: a host downgrade) starts the Timeline
+     * over first, so a restarted host or a session reopened in place at a lower revision is not
+     * mistaken for an outdated reply. With [keepOlder] false, older pages on screen are dropped
+     * and the page's own cursor is taken, as after a `stale_cursor`.
+     */
+    fun snapshot(data: JsonObject, older: Boolean = false, keepOlder: Boolean = true): Boolean {
+        if (data.text("sessionId") != sessionId) return false
         val incomingRevision = data.long("revision")
         if (older) {
-            if (incomingRevision != snapshotRevision || snapshotRevision < 0) return
+            if (incomingRevision != snapshotRevision || snapshotRevision < 0) return false
             showMessages((data.array("messages") + messages).associateBy { it.text("id") }.values.toList())
             nextCursor = data.optionalText("nextCursor")
-            return
+            return true
         }
-        if (incomingRevision < revision) return
+        // A malformed epoch or status breaks the snapshot like any other malformed field, before
+        // anything changes.
+        val epoch = snapshotEpoch(data)
+        val restart = hasSnapshot && epoch != journalEpoch
+        if (restart) require(data.text("status") in SESSION_STATUSES)
+        val held = awaitingReply
+        awaitingReply = false
+        if (restart) {
+            // Events that arrived for the resume past the new page are fetched with a resume; see
+            // [takeOwedResume].
+            resumeOwed = heldThrough > incomingRevision
+            restartEpoch()
+        }
+        if (incomingRevision < revision) {
+            // An outdated reply to a resume: the events held for it apply on what is already here.
+            if (held) drainPending()
+            return false
+        }
         val incomingStatus = data.text("status")
         require(incomingStatus in SESSION_STATUSES)
         snapshotRevision = incomingRevision
         revision = incomingRevision
         status = incomingStatus
+        journalEpoch = epoch
+        tasksKnown = false
         val page = data.array("messages")
         // A resync of the same session keeps the older pages loaded before it: they end where the
         // new page begins, so the prefix before its oldest message and the cursor before them stay.
-        val shown = if (hasSnapshot) messages else retained
+        val shown = if (!keepOlder) emptyList() else if (hasSnapshot) messages else retained
         val shownCursor = if (hasSnapshot) nextCursor else retainedCursor
         val oldest = page.firstOrNull()?.optionalText("id")
         val overlap = if (oldest == null) -1 else shown.indexOfFirst { it.optionalText("id") == oldest }
@@ -215,16 +383,76 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
             if ((data["compacting"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull == true)
                 compaction ?: SessionCompaction(null, now())
             else null
+        drainPending()
+        return true
+    }
+
+    /**
+     * The first page of another journal epoch arrived: what this Timeline holds counts in another
+     * incarnation's revisions. It starts over as [beginSnapshotEpoch] does, keeping the shown
+     * messages as the prefix the new page may overlap. Buffered events may count in the old
+     * epoch's numbering and go.
+     */
+    private fun restartEpoch() {
+        if (messages.isNotEmpty()) {
+            retained = messages
+            retainedCursor = nextCursor
+        }
+        revision = -1L
+        snapshotRevision = -1L
+        hasSnapshot = false
+        tasksKnown = false
+        pendingEvents.clear()
+        heldThrough = -1L
+    }
+
+    /** Applies the buffered events in revision order; those after a gap wait again. */
+    private fun drainPending() {
         val waiting = pendingEvents.values.toList()
         pendingEvents.clear()
+        heldThrough = -1L
         for (event in waiting) {
             try {
-                event(event)
+                eventNeed(event)
             } catch (malformed: Exception) {
-                // The snapshot itself is applied; a bad buffered event only asks for another one.
+                // What came before is applied; a bad buffered event only asks for a snapshot.
                 unknownKindSeen = true
             }
         }
+    }
+
+    /**
+     * Applies a `session.events` reply to the resume this Timeline asked for: each event goes
+     * through [eventNeed] (revisions already here are ignored, `after` decides, gaps wait), then
+     * the events held while the reply was awaited. Receipts of follow-ups and steers count as
+     * command receipts here, as live. A reply for another session or epoch, or from a revision
+     * past this Timeline's, applies nothing and does not fit.
+     */
+    internal fun replay(reply: SessionEventsReply): Replay {
+        val usable =
+            reply.sessionId == sessionId && hasSnapshot && journalEpoch != null && reply.epoch == journalEpoch &&
+                reply.from <= revision
+        awaitingReply = false
+        val applied = mutableListOf<JsonObject>()
+        val wire = IdentityHashMap<JsonObject, JsonObject>()
+        applying = applied
+        try {
+            if (usable)
+                for (event in reply.events) {
+                    val forTimeline = timelineForm(event)
+                    wire[forTimeline] = event
+                    try {
+                        eventNeed(forTimeline)
+                    } catch (malformed: Exception) {
+                        unknownKindSeen = true
+                    }
+                }
+            drainPending()
+        } finally {
+            applying = null
+        }
+        // Held live events also apply above; their side effects ran when they arrived.
+        return Replay(applied.mapNotNull { wire[it] }, usable && revision >= reply.revision && pendingEvents.isEmpty())
     }
 
     /** The index of the message with [id] in [messages], or -1. */
@@ -241,16 +469,36 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     }
 
     /**
-     * Applies [event] and returns whether a snapshot is needed now: a revision gap or the host's
-     * `snapshot.required`. An unknown kind only advances the revision and sets [unknownKindSeen]. A
+     * Applies [event] and returns whether a snapshot is needed now: a revision gap (one that the
+     * event's `after` does not cover) or the host's `snapshot.required`. An unknown kind only advances the revision and sets [unknownKindSeen]. A
      * malformed event of this session throws.
      */
-    fun event(event: JsonObject): Boolean {
-        if (event.optionalText("sessionId") != sessionId || event.long("revision") <= revision) return false
-        if (event.long("revision") != revision + 1 || event.text("kind") == "snapshot.required") {
-            pendingEvents[event.long("revision")] = event
-            while (pendingEvents.size > 128) pendingEvents.remove(pendingEvents.firstKey())
-            return true
+    fun event(event: JsonObject): Boolean = eventNeed(event) != SnapshotNeed.NONE
+
+    /**
+     * [event], telling why a snapshot is needed: [SnapshotNeed.GAP] or [SnapshotNeed.REQUIRED].
+     * While [awaitingReply], every event of the session waits for the reply and nothing is needed;
+     * a [detached] Timeline applies nothing.
+     */
+    fun eventNeed(event: JsonObject): SnapshotNeed {
+        if (detached || event.optionalText("sessionId") != sessionId) return SnapshotNeed.NONE
+        // Counted before the revision check: a reply of another epoch may restart the numbering
+        // below an event that is already behind this Timeline.
+        if (awaitingReply) heldThrough = maxOf(heldThrough, event.long("revision"))
+        if (event.long("revision") <= revision) return SnapshotNeed.NONE
+        if (awaitingReply) {
+            buffer(event)
+            return SnapshotNeed.NONE
+        }
+        // The host leaves events out on purpose for a focused phone or a coalesced stream and says
+        // so with `after`: the event applies once everything up to there is in, a gap otherwise.
+        val applicableFrom = eventAfter(event) ?: (event.long("revision") - 1)
+        val required = event.text("kind") == "snapshot.required"
+        if (revision < applicableFrom || required) {
+            // What changed is unknown until the snapshot, tasks included.
+            if (required) tasksKnown = false
+            buffer(event)
+            return if (required) SnapshotNeed.REQUIRED else SnapshotNeed.GAP
         }
         revision = event.long("revision")
         when (event.text("kind")) {
@@ -296,7 +544,13 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
             "advisor.status" -> Unit
             else -> unknownKindSeen = true
         }
-        return false
+        applying?.add(event)
+        return SnapshotNeed.NONE
+    }
+
+    private fun buffer(event: JsonObject) {
+        pendingEvents[event.long("revision")] = event
+        while (pendingEvents.size > 128) pendingEvents.remove(pendingEvents.firstKey())
     }
 
     /** Forgets a question the host reported as answered or closed elsewhere. */

@@ -42,13 +42,17 @@ internal object Diagnostics {
         val outcome: String = "",
     )
 
-    /** One connection attempt with the time each handshake phase began, in ms after the start. */
+    /**
+     * One connection attempt with the time each handshake phase began, in ms after the start, and
+     * the WebSocket extensions the relay accepted (such as `permessage-deflate`).
+     */
     data class Connect(
         val at: Long,
         val label: String,
         val phases: List<Pair<HandshakePhase, Long>>,
         val durationMs: Long?,
         val outcome: String?,
+        val extensions: List<String> = emptyList(),
     ) {
         /**
          * How long each waiting phase lasted. The end states take no time, and the last phase of
@@ -171,6 +175,7 @@ internal object Diagnostics {
         private val phases = mutableListOf<Pair<HandshakePhase, Long>>()
         private var durationMs: Long? = null
         private var outcome: String? = null
+        private var extensions: List<String> = emptyList()
 
         val finished: Boolean
             get() = synchronized(Diagnostics) { outcome != null }
@@ -179,6 +184,19 @@ internal object Diagnostics {
             synchronized(Diagnostics) {
                 if (outcome == null && phases.lastOrNull()?.first != phase) phases += phase to (now() - at)
             }
+        }
+
+        /**
+         * Records the upgrade response's `Sec-WebSocket-Extensions` [header]. Only the extension
+         * names are kept, never their parameters, and a name that is not a plain token is
+         * redacted.
+         */
+        fun extensions(header: String?) {
+            val names =
+                header.orEmpty().split(',').map { it.substringBefore(';').trim() }.filter { it.isNotEmpty() }
+                    .take(4)
+                    .map { if (it.length <= 32 && EXTENSION_NAME.matches(it)) it else REDACTED }
+            synchronized(Diagnostics) { extensions = names }
         }
 
         /** Ends the attempt once and returns true; later calls are ignored and return false. */
@@ -203,7 +221,7 @@ internal object Diagnostics {
         }
 
         internal fun snapshot() =
-            synchronized(Diagnostics) { Connect(at, label, phases.toList(), durationMs, outcome) }
+            synchronized(Diagnostics) { Connect(at, label, phases.toList(), durationMs, outcome, extensions) }
     }
 
     /** A synchronous trace section on this thread; a no-op where the framework is missing. */
@@ -309,6 +327,7 @@ internal object Diagnostics {
                 appendLine(
                     "  ${ago(report.now, connect.at)} ${connect.label} ${connect.outcome ?: "pending"}" +
                         (connect.durationMs?.let { " ${it}ms" } ?: "") +
+                        (if (connect.extensions.isEmpty()) "" else " ext=" + connect.extensions.joinToString("+")) +
                         (if (phases.isEmpty()) "" else ": $phases")
                 )
             }
@@ -359,6 +378,9 @@ internal object Diagnostics {
         val rank = Math.ceil(percent / 100.0 * sorted.size).toInt().coerceIn(1, sorted.size)
         return sorted[rank - 1]
     }
+
+    /** A WebSocket extension name as RFC 6455 registers them, such as `permessage-deflate`. */
+    private val EXTENSION_NAME = Regex("[a-z0-9]+(?:[-_][a-z0-9]+)*")
 
     private val TOKEN = Regex("[A-Za-z0-9]+(?:[._:][A-Za-z0-9]+)*")
 

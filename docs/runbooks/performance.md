@@ -31,6 +31,30 @@
   session list's statuses; otherwise it is dropped. Events of that chat that arrive before its
   Timeline exists wait for it, so none is lost; a revision gap still asks for one resync.
   Diagnostics marks such an activation `snapshot.held`.
+- Resume a chat instead of reading it again. Every first-page `session.snapshot` request ID takes
+  one of two forms. The reconnect of the chat on screen, the reselect of a chat kept since it was
+  left, a revision gap and the foreground probe send `resume.v1:<epoch>:<revision>:`, with the
+  journal epoch of the Timeline's last first page and its last applied revision. A first load, a
+  resync after unknown or malformed events, a task refresh, `snapshot.required`, the `stale_cursor`
+  recovery, a reply that did not fit and Refresh send the fresh form `resume.v1:-:0:`. A host with a
+  phone journal answers a resume with `session.events`, only the events the chat missed: the
+  Timeline continues from the previous one (`continueFrom`) with the chat, its older pages and
+  cursor, and applies each event with the `after` rule. The repository then runs what live events
+  run (list status, titles, receipts, job and Changes hints, but never a notice) and what an
+  accepted snapshot runs, and publishes once. While a resume is in flight, the Timeline holds every
+  event of its session (`awaitingReply`) and applies it after the reply, exactly once. After a
+  failed resume the held events apply at once; when one that arrived meanwhile still waits behind a
+  gap, one resume follows, so a host that keeps failing is asked again only as live events come. A
+  first page from another epoch (a restarted host, a session reopened in place), or one without an
+  epoch while the Timeline holds one, starts the Timeline over even at a lower revision; events that
+  arrived for the resume past that page may still count in the old epoch, so they are dropped and
+  fetched with one resume from the new page. Tasks the Timeline knew stay current after a replay,
+  since task changes emit `snapshot.required`; unknown ones are read with one fresh request. The
+  last `DETACHED_TIMELINES` (4) chats left per Mac keep their Timeline and tasks for a reselect. An
+  older page that fails with `stale_cursor` takes one fresh first page, which drops the older pages
+  on screen, and is asked for once more. That first page holds the session's events as a resume
+  does, so a streaming chat cannot make it outdated and its new cursor is always taken. Older hosts
+  answer both forms with a snapshot without `epoch`, so no Timeline is continued with them.
 - While an open runs, the chat destination shows a read-only preview from the chat cache
   (`peekCachedChat`) with its stored draft, never as the repository's selection: the composer
   takes no edits and every action waits for the selection. A history session's preview says it
@@ -52,18 +76,34 @@
   shown yet. Code that reads or changes the draft outside the composer flushes it first or goes
   through it, and `ChatComposerFlushTest` covers each such path. Values handed to message bubbles (such as `MessageFork`)
   stay the same instance while unchanged, so the bubbles skip; `ChatRecompositionTest` checks it.
-- Decode frames off the main thread. The handshake still runs on the transport's scope (main in
-  the app); once a connection is active, `SecureRemoteTransport` decrypts and parses each frame on
-  `Dispatchers.Default.limitedParallelism(1)`, one at a time so frames keep their order, and hands
-  the payload back to the scope. `Listener.inbound()` fires at receipt, before decoding, and stamps
-  the repository's `lastInboundAt`; a socket close waits for the frames still being decoded.
-  `SecureChannel` locks sending and receiving separately, so a send on main never waits for a
-  frame being decrypted; frames queued behind a local close or an unreadable frame are dropped
-  without parsing and without a `CAUGHT` entry.
+- Decode frames off the main thread. OkHttp calls `onMessage` on the socket's reader thread, one
+  frame at a time; `SecureRemoteTransport` validates the challenge, creates the `SecureChannel`, and
+  decrypts and parses every encrypted frame right there. Each decoded result goes to the
+  connection's ordering lane, one consumer on the transport's scope (main in the app) that runs the
+  handshake and every listener call in arrival order. `Listener.inbound()` is handed over at
+  receipt, before decoding, and stamps the repository's `lastInboundAt`. `onClosed` and
+  `onFailure` go through the same lane, so a close or a failure is handled after every frame
+  already decoded, even when OkHttp calls them from its writer thread; a frame still being decoded
+  then is dropped. `send` only queues the payload: one sender thread seals and sends payloads in
+  call order. A seal error ends the connection as broken; a frame OkHttp refuses (the socket is
+  closing or failed) is a lost connection that keeps the relay's close code. Handshake frames are
+  sealed on the lane, so the pairing acknowledgement leaves before the close that follows it.
+  `SecureChannel` locks sending and receiving separately and keeps one `Cipher` and AAD prefix per
+  direction, re-initialised with the next sequence's IV per frame. Frames behind a local close or
+  an unreadable frame, and payloads queued behind a local close, are dropped without parsing or
+  sealing and without a `CAUGHT` entry. The Mac's challenge must arrive within 10 s of the socket
+  opening (`CHALLENGE_TIMEOUT_MILLIS`); the whole handshake keeps its 20 s.
   `Wire.decode` compiles its alphabet once and checks the canonical encoding by its padding bits
   instead of re-encoding; `Wire.parse` bounds the size by the text's length and counts UTF-8 bytes
   only between `length` and `length * 3`, and the decrypted payload is not measured again.
-  `message.delta` events and upsert coalescing would need the host (noah-monorepo).
+  `message.delta` events would need the host (noah-monorepo).
+- Publish the chat at most once per `TIMELINE_PUBLISH_MILLIS` (16 ms) while a message streams. The
+  Timeline applies every event as it arrives; a `message.upsert` that comes less than 16 ms after
+  the last publish does not publish but schedules one trailing publish 16 ms after that publish,
+  and further upserts meanwhile ride on it, so a fast stream costs one `RemoteState` update and
+  one recomposition per frame. Any other event, a snapshot and a selection change publish at once
+  and cancel the trailing publish, and a trailing publish for a Timeline that was replaced is
+  dropped. `RemoteRepositoryTest` covers it with a fake clock.
 - Write the navigation snapshot on structure changes, not per event. A streamed event keeps the
   in-memory caches current and marks the snapshot dirty; a dirty snapshot is written within
   `NAVIGATION_DIRTY_WRITE_MILLIS` (15 s). A selection change, a list read, a chat snapshot, a run
@@ -99,7 +139,8 @@
   and threads, each with its own ping interval, timeouts and cache.
 
 Caches bound entry count, not total transcript bytes. Check memory with unusually large tool outputs
-before increasing capacity. The active timeline and network event delivery are not throttled.
+before increasing capacity. Network event delivery is not throttled in the app; only the chat's
+publish is (above).
 
 ## Local checks
 

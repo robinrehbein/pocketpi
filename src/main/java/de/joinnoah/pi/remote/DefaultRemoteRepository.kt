@@ -99,6 +99,9 @@ internal const val MAX_BROKEN_CONNECTIONS = 5
 /** At most one snapshot per this interval for events of unknown kinds or malformed ones. */
 internal const val RESYNC_INTERVAL_MILLIS = 10_000L
 private const val SERVICE_RESTART_CLOSE_CODE = 1012
+/** The relay announced a restart: the retry waits 250 to 750 ms, so the Mac can reconnect first. */
+internal const val RESTART_RETRY_MIN_MILLIS = 250L
+internal const val RESTART_RETRY_SPREAD_MILLIS = 500L
 /** connect() outlasts the transport's own handshake timeout, so only one of them fires. */
 internal const val CONNECT_READY_WAIT_MILLIS = HANDSHAKE_TIMEOUT_MILLIS + 2_000L
 /** The relay answered but the Mac has not, after this long: say so instead of "Connecting…". */
@@ -110,6 +113,19 @@ internal const val HOST_WAIT_HINT_MILLIS = 5_000L
  * write at once.
  */
 internal const val NAVIGATION_DIRTY_WRITE_MILLIS = 15_000L
+
+/**
+ * While a message streams, the chat on screen is published at most once per this long: a
+ * `message.upsert` that arrives sooner after a publish waits for one trailing publish. Every other
+ * event, a snapshot and a selection change publish at once.
+ */
+internal const val TIMELINE_PUBLISH_MILLIS = 16L
+
+/**
+ * Chats left for another chat or a list whose Timelines are kept per Mac, newest first: selecting
+ * one again resumes from where it stopped instead of loading it anew.
+ */
+internal const val DETACHED_TIMELINES = 4
 
 /**
  * The first failure of a streak reconnects quietly; the error card follows only if the Mac is
@@ -269,6 +285,8 @@ class DefaultRemoteRepository(
             // Only on the capabilities.v2 route; writes need the project's `writable` flag as well.
             TICKETS_CAPABILITY,
             SESSION_TASKS_CAPABILITY,
+            // Only on the capabilities.v2 route: focus, `after`, ping and acks.
+            STREAM_CAPABILITY,
         )
     /** The request ID prefix of `projects.list`; falls back to v1 once for a host without v2. */
     private var capabilityRoute = CAPABILITIES_V2_ROUTE
@@ -546,6 +564,10 @@ class DefaultRemoteRepository(
      */
     private var navDirty = false
     private var navDirtyJob: Job? = null
+
+    /** When [publishTimeline] last ran, and the publish a streaming upsert waits for ([TIMELINE_PUBLISH_MILLIS]). */
+    private var lastTimelinePublishAt = Long.MIN_VALUE
+    private var trailingPublish: Job? = null
     private var navigationLoaded = navigationStorage == null
     private var pairingsLoaded = false
     private val removedRoutes = mutableSetOf<String>()
@@ -576,12 +598,30 @@ class DefaultRemoteRepository(
      * lists, an open of a live chat alongside `sessions.open`. The chat's events that arrive
      * meanwhile wait here for that Timeline, so none is lost before it exists.
      */
-    private class HeldSnapshot(val sessionId: String, val includeTasks: Boolean) {
+    private class HeldSnapshot(val sessionId: String, val includeTasks: Boolean, val base: ResumeBase?) {
         lateinit var reply: Deferred<Result<JsonObject>>
         val events = ArrayDeque<JsonObject>()
     }
 
     private var heldSnapshot: HeldSnapshot? = null
+
+    /** A chat's Timeline kept after the chat was left, with the tasks it showed then. */
+    private class DetachedTimeline(val timeline: Timeline, val tasks: SessionTasks)
+
+    /** At most [DETACHED_TIMELINES] per Mac, least recently left first. */
+    private val detachedTimelines = LinkedHashMap<DraftKey, DetachedTimeline>()
+
+    /** Which first-page request a snapshot sends; see [firstPageRequestId]. */
+    private enum class SnapshotIntent {
+        /**
+         * Continues from the Timeline's journal base when it has one: the reconnect of the same
+         * chat, the reselect of a kept chat, a revision gap, the foreground probe.
+         */
+        RESUME,
+
+        /** Needs state a replay cannot carry, so the host always answers with a snapshot. */
+        FRESH,
+    }
     private var pushToken: String? = null
     private var pushTokenKnown = false
     private val drafts = mutableMapOf<DraftKey, StoredDraft>()
@@ -1919,13 +1959,56 @@ class DefaultRemoteRepository(
         if (includeTasks) arrayOf("sessionId" to sessionId, "includeTasks" to true)
         else arrayOf("sessionId" to sessionId)
 
-    /** Asks for the snapshot of [sessionId] before select() makes its Timeline; see [HeldSnapshot]. */
-    private fun CoroutineScope.holdSnapshot(sessionId: String, epoch: Long): HeldSnapshot {
-        val held = HeldSnapshot(sessionId, canReadTasks())
+    /**
+     * Asks for the snapshot of [sessionId] on [routeId] before select() makes its Timeline; see
+     * [HeldSnapshot]. It resumes from the Timeline that select() will continue, when there is one.
+     */
+    private fun CoroutineScope.holdSnapshot(routeId: String, sessionId: String, epoch: Long): HeldSnapshot {
+        val held = HeldSnapshot(sessionId, canReadTasks(), resumeSource(routeId, sessionId)?.resumeBase())
         // Set first: an event that follows the request is kept for the Timeline.
         heldSnapshot = held
-        held.reply = alongside { request("session.snapshot", epoch, *snapshotFields(sessionId, held.includeTasks)) }
+        held.reply =
+            alongside {
+                request(
+                    "session.snapshot",
+                    epoch,
+                    *snapshotFields(sessionId, held.includeTasks),
+                    requestId = firstPageRequestId(held.base),
+                )
+            }
         return held
+    }
+
+    /**
+     * The Timeline select() continues for [sessionId] on [routeId]: the one on screen for a
+     * reconnect of the same chat, or one kept since the chat was left. Null when none can resume.
+     */
+    private fun resumeSource(routeId: String, sessionId: String): Timeline? {
+        val selected = state.value.selection
+        val shown = timeline?.takeIf { selected.routeId == routeId && selected.sessionId == sessionId && it.sessionId == sessionId }
+        val source = shown ?: detachedTimelines[DraftKey(routeId, sessionId)]?.timeline
+        return source?.takeIf { it.sessionId == sessionId && it.resumeBase() != null }
+    }
+
+    /** The request ID of a first-page `session.snapshot`: the resume form with [base], else the fresh form. */
+    private fun firstPageRequestId(base: ResumeBase?): String =
+        if (base == null) freshRequestId() else resumeRequestId(base.epoch, base.revision)
+
+    /**
+     * Keeps [leaving], the Timeline of the chat [previous] that the selection leaves, to resume
+     * from when the chat is selected again, with the tasks on screen. Only a Timeline that can
+     * resume is kept; past [DETACHED_TIMELINES] for its Mac, the one left longest ago goes.
+     */
+    private fun detachTimeline(previous: RemoteSelection, leaving: Timeline?) {
+        val routeId = previous.routeId ?: return
+        val sessionId = previous.sessionId ?: return
+        if (leaving == null || leaving.sessionId != sessionId || leaving.resumeBase() == null) return
+        leaving.detached = true
+        val key = DraftKey(routeId, sessionId)
+        detachedTimelines.remove(key)
+        detachedTimelines[key] = DetachedTimeline(leaving, state.value.tasks)
+        val ofRoute = detachedTimelines.keys.filter { it.routeId == routeId }
+        ofRoute.take(maxOf(0, ofRoute.size - DETACHED_TIMELINES)).forEach { detachedTimelines.remove(it) }
     }
 
     /** A request's outcome for Diagnostics: the host's error code, or what ended the wait. */
@@ -2028,10 +2111,7 @@ class DefaultRemoteRepository(
             // event, so its revision stays in step.
             Diagnostics.caught("repo.receive.event", dropped)
         }
-        val forTimeline =
-            if (payload.optionalText("kind") in setOf("follow_up.status", "steer.status"))
-                JsonObject(payload + ("kind" to JsonPrimitive("command.status")))
-            else payload
+        val forTimeline = timelineForm(payload)
         val held = heldSnapshot
         if (held != null && (payload["sessionId"] as? JsonPrimitive)?.content == held.sessionId) {
             // Kept for the Timeline the held snapshot is for, which select() has not made yet.
@@ -2053,10 +2133,13 @@ class DefaultRemoteRepository(
     private fun timelineEvent(current: Timeline, event: JsonObject) {
         try {
             // The snapshot select() set up takes in what this buffered; asking for another
-            // one would only be discarded.
-            if (current.event(event)) {
+            // one would only be discarded. A gap can be filled from the host's journal;
+            // snapshot.required needs the fresh state.
+            val need = current.eventNeed(event)
+            if (need != SnapshotNeed.NONE) {
                 update { it.copy(tasks = staleTasks(it.tasks)) }
-                if (!resynchronizing && snapshotPending !== current) snapshotAsync()
+                if (!resynchronizing && snapshotPending !== current)
+                    snapshotAsync(intent = if (need == SnapshotNeed.GAP) SnapshotIntent.RESUME else SnapshotIntent.FRESH)
             }
         } catch (malformed: Exception) {
             Diagnostics.caught("repo.receive.timeline", malformed)
@@ -2064,7 +2147,31 @@ class DefaultRemoteRepository(
         }
         resyncAfterUnknownEvents(current)
         // Another session's event cannot change this chat.
-        if ((event["sessionId"] as? JsonPrimitive)?.content == current.sessionId) publishTimeline()
+        if ((event["sessionId"] as? JsonPrimitive)?.content != current.sessionId) return
+        if ((event["kind"] as? JsonPrimitive)?.content == "message.upsert") publishStreamingTimeline(current)
+        else publishTimeline()
+    }
+
+    /**
+     * Publishes the Timeline for a streaming upsert: at once when the last publish is at least
+     * [TIMELINE_PUBLISH_MILLIS] ago, otherwise one trailing publish [TIMELINE_PUBLISH_MILLIS] after
+     * it. Further upserts meanwhile ride on that one; [publishTimeline] cancels it.
+     */
+    private fun publishStreamingTimeline(current: Timeline) {
+        val since = now() - lastTimelinePublishAt
+        // A clock set back counts as long ago.
+        if (lastTimelinePublishAt == Long.MIN_VALUE || since !in 0 until TIMELINE_PUBLISH_MILLIS) {
+            publishTimeline()
+            return
+        }
+        if (trailingPublish?.isActive == true) return
+        trailingPublish =
+            scope.launch {
+                delay(TIMELINE_PUBLISH_MILLIS - since)
+                trailingPublish = null
+                // A selection change or a disconnect since made this Timeline obsolete.
+                if (timeline === current) publishTimeline()
+            }
     }
 
     /**
@@ -2381,6 +2488,9 @@ class DefaultRemoteRepository(
      * as for a selection change. An event only marks it dirty, unless it starts or ends a run.
      */
     private fun publishTimeline(persist: Boolean = false): Unit = Diagnostics.trace("PocketPi.publishTimeline") {
+        trailingPublish?.cancel()
+        trailingPublish = null
+        lastTimelinePublishAt = now()
         val t = timeline ?: return@trace
         val previous = state.value.status
         if (t.status != previous) state.value.selection.sessionId?.let(::dropStaleChildControl)
@@ -2417,7 +2527,11 @@ class DefaultRemoteRepository(
     /**
      * [timeoutMillis] lets a probe give up sooner; a timeout with no frame meanwhile reconnects.
      * [held] is the reply of a request already sent for this Timeline's session, taken instead of
-     * a new one.
+     * a new one; [heldBase] is the resume base that request named. [intent] picks the request
+     * form of a first page. With [dropOlderPages], the first page replaces the older pages on
+     * screen (the `stale_cursor` recovery); [retryStaleCursor] lets an older page recover once.
+     * A first page that names a resume base, or replaces the older pages, makes the Timeline hold
+     * its session's events until the reply; see [Timeline.awaitingReply].
      */
     private suspend fun snapshot(
         epoch: Long,
@@ -2425,6 +2539,10 @@ class DefaultRemoteRepository(
         timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
         held: Deferred<Result<JsonObject>>? = null,
         heldIncludesTasks: Boolean = false,
+        heldBase: ResumeBase? = null,
+        intent: SnapshotIntent = SnapshotIntent.FRESH,
+        dropOlderPages: Boolean = false,
+        retryStaleCursor: Boolean = true,
     ) {
         val current = timeline ?: return
         val cursor = if (older) current.nextCursor ?: return else null
@@ -2432,7 +2550,31 @@ class DefaultRemoteRepository(
         if (!older) update { it.copy(tasks = staleTasks(it.tasks)) }
         var includedTasks = if (held != null && cursor == null) heldIncludesTasks else !older && canReadTasks()
         if (snapshotPending === current) snapshotPending = null
+        // The resume base the request names; only a request with one may be answered by a replay.
+        var base =
+            when {
+                cursor != null -> null
+                held != null -> heldBase
+                intent == SnapshotIntent.RESUME -> current.resumeBase()
+                else -> null
+            }
+        // The reply did not fit the Timeline, or an older page's cursor expired.
+        var refetch = false
+        var staleCursor = false
+        // This call made the Timeline wait, so only it ends the wait; another read ending meanwhile
+        // without a first page for it (an older page, a failed fresh one) leaves the events held.
+        var awaited = false
+        // The request was answered and its reply handled; otherwise the exception propagates.
+        var answered = false
         try {
+            // Live events of the session wait for the reply from here on (a held request's
+            // Timeline already waits since select() made it). The `stale_cursor` recovery holds
+            // them too: a live event applied before its reply would make the page outdated, so its
+            // cursor, which the retry needs, would not be taken.
+            if (base != null || dropOlderPages) {
+                current.awaitReply()
+                awaited = true
+            }
             val data =
                 if (held != null && cursor == null)
                     held.await().getOrElse { failed ->
@@ -2441,10 +2583,16 @@ class DefaultRemoteRepository(
                         // came fails as any other would.
                         if (failed.requestKind != RemoteRequestException.Kind.HOST_ERROR) throw failed
                         includedTasks = canReadTasks()
+                        base = if (heldBase != null) current.resumeBase() else null
+                        if (base != null) {
+                            current.awaitReply()
+                            awaited = true
+                        }
                         request(
                             "session.snapshot",
                             epoch,
                             *snapshotFields(current.sessionId, includedTasks),
+                            requestId = firstPageRequestId(base),
                             timeoutMillis = timeoutMillis,
                         )
                     }
@@ -2453,6 +2601,7 @@ class DefaultRemoteRepository(
                         "session.snapshot",
                         epoch,
                         *snapshotFields(current.sessionId, includedTasks),
+                        requestId = firstPageRequestId(base),
                         timeoutMillis = timeoutMillis,
                     )
                 else
@@ -2465,48 +2614,132 @@ class DefaultRemoteRepository(
                     )
             checkEpoch(epoch)
             if (current !== timeline) return
-            val sameSession = data.optionalText("sessionId") == current.sessionId
-            val outdated = !older && sameSession && data.long("revision") < current.revision
-            val accepted = !older && sameSession && !outdated
-            current.snapshot(data, older)
-            if (accepted && includedTasks && !current.needsSnapshot) {
-                taskRefreshPending = false
-                update { it.copy(tasks = parseSessionTasks(data["tasks"])) }
-            } else if ((includedTasks && outdated) || (!older && !includedTasks && canReadTasks())) {
-                taskRefreshPending = true
-            }
-            current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
-            if (!older) recheckFollowUps(current.sessionId)
-            publishTimeline(persist = !older)
-            // A fresh snapshot is the host's word on what is still open, so an uncertain answer is
-            // settled either way.
-            if (!older)
-                update {
-                    it.copy(
-                        questionBlocks =
-                            it.questionBlocks.filterValues { block -> block != QuestionBlock.UNCERTAIN }
-                    )
+            if (!older && data.optionalText("kind") == "session.events") {
+                // A host answers a replay only to a request that named a base.
+                checkNotNull(base)
+                refetch = !applyReplay(current, sessionEventsReply(data))
+            } else {
+                val accepted = current.snapshot(data, older, keepOlder = !dropOlderPages) && !older
+                val sameSession = data.optionalText("sessionId") == current.sessionId
+                // The same epoch's snapshot at a lower revision: one from another epoch starts over.
+                val outdated = !older && sameSession && !accepted
+                if (accepted && includedTasks && !current.needsSnapshot) {
+                    taskRefreshPending = false
+                    val tasks = parseSessionTasks(data["tasks"])
+                    current.tasksKnown = tasks.freshness == TaskFreshness.LIVE
+                    update { it.copy(tasks = tasks) }
+                } else if ((includedTasks && outdated) || (!older && !includedTasks && canReadTasks())) {
+                    taskRefreshPending = true
                 }
-            // The chat on screen is read again, also when the activation after a reconnect failed
-            // to read it and a later refresh did.
-            if (!older && state.value.connected) staleReplaced()
-            resyncAfterUnknownEvents(current)
+                current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
+                if (!older) recheckFollowUps(current.sessionId)
+                publishTimeline(persist = !older)
+                // A fresh snapshot is the host's word on what is still open, so an uncertain answer is
+                // settled either way.
+                if (!older) settleUncertainQuestions()
+                // The chat on screen is read again, also when the activation after a reconnect failed
+                // to read it and a later refresh did.
+                if (!older && state.value.connected) staleReplaced()
+                resyncAfterUnknownEvents(current)
+            }
+            answered = true
+        } catch (e: RemoteRequestException) {
+            // Another device's first pages retired this page's cursor: recovered below, once.
+            if (!older || !retryStaleCursor || e.kind != RemoteRequestException.Kind.HOST_ERROR || e.code != "stale_cursor") throw e
+            staleCursor = true
+            answered = true
         } finally {
+            // A reply that never came or was not taken: the events held for it apply now.
+            val heldArrivals = awaited && current.heldArrivals
+            val drained = awaited && current.endAwaiting()
+            if (drained && current === timeline) publishTimeline()
             if (epoch == selectionEpoch) resynchronizing = false
+            if (drained && !answered) afterFailedWait(current, epoch, heldArrivals)
         }
+        if (staleCursor) {
+            checkEpoch(epoch)
+            if (current !== timeline) return
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "snapshot.stale_cursor")
+            // A fresh first page with its own cursor, without the older pages it cannot continue.
+            snapshot(epoch, intent = SnapshotIntent.FRESH, dropOlderPages = true)
+            if (current === timeline) snapshot(epoch, older = true, retryStaleCursor = false)
+            return
+        }
+        // Taken in any case: a fresh snapshot that follows covers what the resume would fetch.
+        val owedResume = current.takeOwedResume()
         if (epoch == selectionEpoch) {
-            if (current.needsSnapshot) {
+            if (refetch || current.needsSnapshot) {
                 taskRefreshPending = false
                 snapshotAsync()
-            } else drainTaskRefresh()
+            } else if (owedResume) snapshotAsync(intent = SnapshotIntent.RESUME)
+            else drainTaskRefresh()
         }
     }
 
-    private fun snapshotAsync(older: Boolean = false) {
+    /**
+     * Runs after a request that made [current] hold its session's events failed and the held events
+     * applied: what they need is asked for as if they had arrived without the hold. An unknown or
+     * malformed one resyncs, and when [heldArrivals] (an event arrived while the Timeline waited)
+     * and the events still wait behind a gap, one resume follows. Without such an arrival the
+     * failed request's own gap is left for the next live event, so a host that keeps failing is
+     * not asked again in a loop. Launched, so the failure still reaches the caller.
+     */
+    private fun afterFailedWait(current: Timeline, epoch: Long, heldArrivals: Boolean) {
+        if (current !== timeline || epoch != selectionEpoch) return
+        resyncAfterUnknownEvents(current)
+        if (heldArrivals && current.needsSnapshot && state.value.connected && snapshotPending !== current) {
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "snapshot.after_failed_wait")
+            snapshotAsync(intent = SnapshotIntent.RESUME)
+        }
+    }
+
+    /** Settles the question blocks whose answer was uncertain: the host's reply says what is still open. */
+    private fun settleUncertainQuestions() =
+        update {
+            it.copy(questionBlocks = it.questionBlocks.filterValues { block -> block != QuestionBlock.UNCERTAIN })
+        }
+
+    /**
+     * Applies a `session.events` reply to [current] and runs for each event it applied what a live
+     * event runs at receipt ([eventEffects]: list status, titles, receipts, job and Changes hints),
+     * except a notice, which is transient. A reply that fit then counts like an accepted snapshot:
+     * follow-ups are rechecked, uncertain questions settled, the chat persisted and published once,
+     * and the lists read again. Tasks the Timeline knew stay current, since task changes emit
+     * `snapshot.required`, which no replay spans; unknown ones are read with a fresh snapshot.
+     * Returns whether the reply fit; otherwise one fresh snapshot follows.
+     */
+    private fun applyReplay(current: Timeline, reply: SessionEventsReply): Boolean {
+        val result = current.replay(reply)
+        for (event in result.applied) {
+            if (event.optionalText("kind") == "session.notice") continue
+            try {
+                eventEffects(event)
+            } catch (dropped: Exception) {
+                Diagnostics.caught("repo.replay.event", dropped)
+            }
+        }
+        if (result.fits) {
+            recheckFollowUps(current.sessionId)
+            val shown = state.value.tasks.freshness
+            if (current.tasksKnown && (shown == TaskFreshness.LIVE || shown == TaskFreshness.STALE)) {
+                taskRefreshPending = false
+                update { it.copy(tasks = liveTasks(it.tasks)) }
+            } else if (canReadTasks()) taskRefreshPending = true
+        }
+        publishTimeline(persist = true)
+        if (result.fits) {
+            settleUncertainQuestions()
+            if (state.value.connected) staleReplaced()
+        }
+        resyncAfterUnknownEvents(current)
+        return result.fits
+    }
+
+    private fun snapshotAsync(older: Boolean = false, intent: SnapshotIntent = SnapshotIntent.FRESH) {
         val epoch = selectionEpoch
         scope.launch {
             try {
-                snapshot(epoch, older)
+                snapshot(epoch, older, intent = intent)
             } catch (_: CancellationException) {} catch (swallowed: Exception) {
                 Diagnostics.caught("repo.snapshotAsync", swallowed)
                 if (epoch == selectionEpoch) reportReadError(swallowed)
@@ -2625,13 +2858,30 @@ class DefaultRemoteRepository(
         // shows stays until the snapshot and the reads after it replace it.
         val sameSession = selection.sessionId != null && selection.routeId == previous.routeId &&
             selection.sessionId == previous.sessionId
+        trailingPublish?.cancel()
+        trailingPublish = null
+        val leaving = timeline
+        // A chat left for another one or for a list is kept, to resume when it is selected again.
+        if (!sameSession) detachTimeline(previous, leaving)
+        val kept =
+            if (sameSession) null
+            else selection.routeId?.let { routeId -> session?.let { detachedTimelines.remove(DraftKey(routeId, it.text("id"))) } }
+        // The reconnect of the same chat continues the Timeline on screen; a kept chat its own.
+        val source = (if (sameSession) leaving else kept?.timeline)?.takeIf { source ->
+            source.sessionId == session?.text("id") && source.resumeBase() != null
+        }
         timeline = session?.let {
             Timeline(it.text("id")).apply {
-                beginSnapshotEpoch(it.text("status"))
-                // Older pages loaded on screen survive the snapshot where it overlaps them.
-                if (sameSession) retain(state.value.messages, state.value.nextCursor)
+                if (source != null) continueFrom(source)
+                else {
+                    beginSnapshotEpoch(it.text("status"))
+                    // Older pages loaded on screen survive the snapshot where it overlaps them.
+                    if (sameSession) retain(state.value.messages, state.value.nextCursor)
+                }
             }
         }
+        // What a kept chat showed comes back with it, its tasks stale until the reply.
+        val resumed = timeline?.takeIf { source != null && !sameSession }
         snapshotPending = timeline
         val stored =
             selection.sessionId?.let { drafts[DraftKey(checkNotNull(selection.routeId), it)] }
@@ -2652,7 +2902,10 @@ class DefaultRemoteRepository(
         update {
             it.copy(
                 selection = selection,
-                tasks = if (sameSession) staleTasks(it.tasks) else SessionTasks(),
+                tasks =
+                    if (sameSession) staleTasks(it.tasks)
+                    else if (resumed != null) staleTasks(checkNotNull(kept).tasks)
+                    else SessionTasks(),
                 compaction = null,
                 suggestion = null,
                 pullRequest = null,
@@ -2697,8 +2950,8 @@ class DefaultRemoteRepository(
                 sessions = sessions.map { withSessionTitle(withSessionStatus(it)) },
                 sessionsFresh = sessionsFresh,
                 session = session?.let(::withSessionTitle),
-                messages = cachedChat?.messages ?: if (sameSession) it.messages else emptyList(),
-                questions = if (sameSession) it.questions else emptyList(),
+                messages = resumed?.messages ?: cachedChat?.messages ?: if (sameSession) it.messages else emptyList(),
+                questions = resumed?.questions ?: if (sameSession) it.questions else emptyList(),
                 draft = stored.text,
                 quote = stored.quote,
                 attachments = stored.attachments,
@@ -2715,7 +2968,8 @@ class DefaultRemoteRepository(
                         cachedChat?.status ?: session?.text("status") ?: "offline"
                     else "offline",
                 nextCursor =
-                    if (cachedChat != null) cachedChat.nextCursor else if (sameSession) it.nextCursor else null,
+                    if (resumed != null) resumed.nextCursor
+                    else if (cachedChat != null) cachedChat.nextCursor else if (sameSession) it.nextCursor else null,
                 // Another chat shows what it showed when it was left, until its reads replace it.
                 configuration = if (sameSession) it.configuration else meta?.configuration,
                 contextUsage = if (sameSession) it.contextUsage else null,
@@ -2942,7 +3196,7 @@ class DefaultRemoteRepository(
                             }
                 }
             if (restoredSessionId != null && restoredProjectId != null) {
-                held = beside.holdSnapshot(restoredSessionId, epoch)
+                held = beside.holdSnapshot(host.routeId, restoredSessionId, epoch)
                 if (reusedSessions(restoredProjectId) == null)
                     earlySessions = beside.alongside { listSessions(restoredProjectId, epoch) }
             }
@@ -2990,7 +3244,7 @@ class DefaultRemoteRepository(
                         "sessions.open",
                         epoch,
                         "sessionId" to session.text("id"),
-                        thenSend = { if (live) held = beside.holdSnapshot(session.text("id"), epoch) },
+                        thenSend = { if (live) held = beside.holdSnapshot(host.routeId, session.text("id"), epoch) },
                     ).obj("session").let(::withHostWorker)
                 } else session
             val canonicalProject =
@@ -3015,7 +3269,11 @@ class DefaultRemoteRepository(
             )
             // Only a snapshot of the chat now selected is taken; another one is dropped below. The
             // events that waited for it go to the new Timeline, which buffers them until it is in.
-            val heldReply = held?.takeIf { it.sessionId == canonical.sessionId }?.reply
+            val taken = held?.takeIf { it.sessionId == canonical.sessionId }
+            val heldReply = taken?.reply
+            // A held resume's Timeline waits for its reply from the start: the events held so far
+            // and those that follow apply after it.
+            if (taken?.base != null) timeline?.awaitReply()
             held?.let(::releaseHeldSnapshot)
             snapshotHeld = heldReply != null
             // The controls need only the connection and its capabilities, so they are read while
@@ -3024,7 +3282,13 @@ class DefaultRemoteRepository(
             refreshAdvisor()
             refreshCommands()
             try {
-                snapshot(epoch, held = heldReply, heldIncludesTasks = held?.includeTasks == true)
+                snapshot(
+                    epoch,
+                    held = heldReply,
+                    heldIncludesTasks = held?.includeTasks == true,
+                    heldBase = taken?.base,
+                    intent = SnapshotIntent.RESUME,
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (swallowed: Exception) {
@@ -3098,7 +3362,9 @@ class DefaultRemoteRepository(
                 // asks for one itself when its events need it.
                 timeline?.takeIf { snapshotPending === it }?.let { pending ->
                     snapshotPending = null
-                    if (pending.needsSnapshot && state.value.connected) snapshotAsync()
+                    // A held resume whose reply is dropped: the events held for it apply now.
+                    pending.endAwaiting()
+                    if (pending.needsSnapshot && state.value.connected) snapshotAsync(intent = SnapshotIntent.RESUME)
                 }
                 if (outcome != "ok") refreshPanes(unreadOnly = true)
                 update { it.copy(loading = false) }
@@ -3560,6 +3826,8 @@ class DefaultRemoteRepository(
         if (markPendingFollowUpsUncertain(activeHost?.routeId)) persist()
         activeHost = null
         timedOutRoute = null
+        trailingPublish?.cancel()
+        trailingPublish = null
         timeline = null
         stopToolOutput()
         update { RemoteState(hosts = it.hosts, hostsLoaded = it.hostsLoaded, hostsUnreadable = it.hostsUnreadable) }
@@ -3588,6 +3856,7 @@ class DefaultRemoteRepository(
         followUpsToRecheck.keys.removeAll { it.routeId == routeId }
         removedRoutes += routeId
         parkedFiles.keys.removeAll { it.routeId == routeId }
+        detachedTimelines.keys.removeAll { it.routeId == routeId }
         savedNavigation.remove(routeId)
         queueNavigationWrite(immediate = true)
         update { it.copy(hosts = it.hosts.filterNot { host -> host.routeId == routeId }) }
@@ -3787,16 +4056,21 @@ class DefaultRemoteRepository(
             update { it.copy(reconnectAt = null) }
         } else if (retrying && !unowned) {
             val generationAtFailure = generation
-            // The relay announced a restart, so one retry per failure streak does not wait.
+            // The relay announced a restart, so one retry per failure streak waits only 250 to
+            // 750 ms: the Mac needs a moment to reconnect to the relay too.
             val restartRetry = restart && !restartRetryUsed && !broken
             if (restartRetry) {
                 restartRetryUsed = true
                 reconnectAttempts = 0
             }
             // A dead socket or a replaced network says nothing about the Mac: try again at once.
-            val immediate =
-                restartRetry || cause == FailureCause.STALE || cause == FailureCause.NETWORK_REPLACED
-            val wait = reconnectDelay(reconnectAttempts++, immediate)
+            val immediate = cause == FailureCause.STALE || cause == FailureCause.NETWORK_REPLACED
+            val wait =
+                if (restartRetry && !immediate) {
+                    reconnectAttempts++
+                    RESTART_RETRY_MIN_MILLIS +
+                        (RESTART_RETRY_SPREAD_MILLIS * jitter().coerceIn(0.0, 1.0)).toLong()
+                } else reconnectDelay(reconnectAttempts++, immediate)
             Diagnostics.record(Diagnostics.Kind.RECOVERY, "reconnect.backoff", wait, outcome = "attempt.$reconnectAttempts")
             retry?.cancel()
             update { it.copy(reconnectAt = now() + wait) }
@@ -4194,7 +4468,8 @@ class DefaultRemoteRepository(
 
     /**
      * Tier 1: probes the socket with a short read instead of reconnecting. In a chat the probe is
-     * a snapshot into the Timeline on screen, elsewhere the project list. The lists are then read
+     * a resume of the Timeline on screen (a replay of what it missed, or a snapshot), elsewhere the
+     * project list. The lists are then read
      * again and applied in place; only a selection they no longer hold is selected anew, on its
      * parent. Configuration, advisor and commands are read again only if the chat moved on.
      */
@@ -4212,7 +4487,7 @@ class DefaultRemoteRepository(
         val started = Diagnostics.now()
         var projects: List<JsonObject>? = null
         try {
-            if (chat != null) snapshot(epoch, timeoutMillis = RESUME_PROBE_TIMEOUT_MILLIS)
+            if (chat != null) snapshot(epoch, timeoutMillis = RESUME_PROBE_TIMEOUT_MILLIS, intent = SnapshotIntent.RESUME)
             else projects = request("projects.list", epoch, timeoutMillis = RESUME_PROBE_TIMEOUT_MILLIS).array("items")
             Diagnostics.record(Diagnostics.Kind.RECOVERY, "resume.probe", Diagnostics.now() - started, outcome = "ok")
         } catch (e: CancellationException) {
@@ -5254,9 +5529,11 @@ class DefaultRemoteRepository(
                                 current.quote,
                                 current.attachments,
                                 PendingSendState.SENDING,
-                                // The newest message the chat shows now: the host's copy of this
-                                // prompt comes after it, whatever earlier prompt reads the same.
-                                afterMessageId = it.messages.lastOrNull()?.optionalText("id")?.ifEmpty { null },
+                                // The newest message the chat holds now: the host's copy of this
+                                // prompt comes after it, whatever earlier prompt reads the same. The
+                                // Timeline is read, since a streaming upsert may not be published yet.
+                                afterMessageId =
+                                    chatMessages(key.sessionId, it.messages).lastOrNull()?.optionalText("id")?.ifEmpty { null },
                             )
                             else it.pendingSend,
                     )
@@ -5473,6 +5750,14 @@ class DefaultRemoteRepository(
     }
 
     /**
+     * The messages the chat holds for [sessionId]: the Timeline's, which may be ahead of the
+     * [published] list while a streaming upsert waits for its trailing publish ([TIMELINE_PUBLISH_MILLIS]).
+     * A send's baseline and its acknowledgement must read the same list.
+     */
+    private fun chatMessages(sessionId: String, published: List<JsonObject>): List<JsonObject> =
+        timeline?.takeIf { it.sessionId == sessionId && it.hasSnapshot }?.messages ?: published
+
+    /**
      * The host acknowledged the plain prompt [id]: the chat keeps it until its timeline has it. The
      * chat shown decides, not the selection epoch: a chat left and opened again keeps its send.
      */
@@ -5481,7 +5766,9 @@ class DefaultRemoteRepository(
         val pending = state.value.pendingSend?.takeIf { it.mutationId == id &&
             (it.state == PendingSendState.SENDING || (late && it.state == PendingSendState.NOT_CONFIRMED)) }
             ?: return
-        update { it.copy(pendingSend = settledSend(pending.copy(state = PendingSendState.CONFIRMED), it.messages)) }
+        update {
+            it.copy(pendingSend = settledSend(pending.copy(state = PendingSendState.CONFIRMED), chatMessages(key.sessionId, it.messages)))
+        }
         Diagnostics.record(Diagnostics.Kind.REQUEST, "send.confirmed", Diagnostics.now() - tapped)
     }
 

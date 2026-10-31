@@ -2089,6 +2089,8 @@ class RemoteRepositoryTest {
         val repository = repository(transport)
         repository.activate(RemoteSelection("host", "project", "session"))
         runCurrent()
+        // The chat was published a moment ago; an upsert 16 ms later shows at once.
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
         transport.deliver(
             Wire.objectOf(
                 "type" to "event",
@@ -2516,32 +2518,78 @@ class RemoteRepositoryTest {
     }
 
     @Test
-    fun serviceRestartCloseRetriesImmediately() = runTest {
-        val transport = Transport().also { configure(it) }
-        val repository = offlineRepository(transport)
-        transport.listener.failed(true, R.string.remote_connection_error)
-        advanceTimeBy(1_000 + 2_000)
-        runCurrent()
-        val connects = transport.connects
-        transport.listener.closed(1012)
-        transport.listener.failed(true, R.string.remote_connection_error)
-        runCurrent()
-        assertEquals(connects + 1, transport.connects)
-        assertNotNull(repository.state.value.reconnectAt)
-    }
-
-    @Test
-    fun repeatedServiceRestartClosesRetryImmediatelyOnlyOncePerStreak() = runTest {
-        val transport = Transport().also { configure(it) }
-        offlineRepository(transport)
-        val start = transport.connects
-        repeat(3) {
+    fun serviceRestartCloseRetriesAfterQuarterToThreeQuartersOfASecond() = runTest {
+        for ((unit, expected) in listOf(0.0 to 250L, 0.5 to 500L, 1.0 to 750L)) {
+            val transport = Transport().also { configure(it) }
+            val repository = DefaultRemoteRepository(
+                Pairings(listOf(host)), Drafts(), transport, backgroundScope,
+                StandardTestDispatcher(testScheduler), now = { testScheduler.currentTime },
+                jitter = { unit },
+            )
+            repository.activate(RemoteSelection("host", "project", "session"))
+            repository.setForeground(true)
+            repository.setValidatedNetwork("wifi")
+            runCurrent()
+            val connects = transport.connects
             transport.listener.closed(1012)
             transport.listener.failed(true, R.string.remote_connection_error)
             runCurrent()
+            // The retry waits; it neither runs at once nor takes the ordinary one-second backoff.
+            assertEquals(unit.toString(), connects, transport.connects)
+            assertEquals(unit.toString(), expected, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+            advanceTimeBy(expected - 1)
+            runCurrent()
+            assertEquals(unit.toString(), connects, transport.connects)
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(unit.toString(), connects + 1, transport.connects)
         }
-        // The first close retried at once (and its retry failed the same way, without the flag).
+    }
+
+    @Test
+    fun repeatedServiceRestartClosesRetryQuicklyOnlyOncePerStreak() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = offlineRepository(transport)
+        val start = transport.connects
+        transport.listener.closed(1012)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertEquals(500L, repository.state.value.reconnectAt!! - testScheduler.currentTime)
+        advanceTimeBy(500)
+        runCurrent()
         assertEquals(start + 1, transport.connects)
+        // The second close of the streak backs off like any other failure.
+        transport.listener.closed(1012)
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+        assertTrue(repository.state.value.reconnectAt!! - testScheduler.currentTime >= 1_000L)
+        assertEquals(start + 1, transport.connects)
+    }
+
+    @Test
+    fun serviceRestartAndFlowClosesCountTowardTheShortLivedStop() = runTest {
+        for (code in listOf(1012, 1013)) {
+            val transport = Transport().also { configure(it) }
+            val repository = chatRepository(transport)
+            // The Mac accepts each connection and the relay drops it again at once.
+            transport.response = { null }
+            transport.listener.closed(code)
+            transport.listener.failed(true, R.string.remote_connection_error)
+            repeat(MAX_SHORT_LIVED_CONNECTIONS) {
+                advanceTimeBy(repository.state.value.reconnectAt!! - testScheduler.currentTime)
+                runCurrent()
+                assertTrue(code.toString(), repository.state.value.connected)
+                advanceTimeBy(500)
+                transport.listener.closed(code)
+                transport.listener.failed(true, R.string.remote_connection_error)
+            }
+            assertNull(code.toString(), repository.state.value.reconnectAt)
+            assertEquals(code.toString(), R.string.remote_unreachable, repository.state.value.error)
+            val connects = transport.connects
+            advanceTimeBy(120_000)
+            runCurrent()
+            assertEquals(code.toString(), connects, transport.connects)
+        }
     }
 
     @Test
@@ -9960,6 +10008,99 @@ class RemoteRepositoryTest {
         return transport to waiting
     }
 
+    private fun streamed(revision: Int, text: String) =
+        Wire.objectOf(
+            "type" to "event", "kind" to "message.upsert", "sessionId" to "session", "revision" to revision,
+            "message" to Wire.objectOf("id" to "streaming", "role" to "assistant", "text" to text, "state" to "streaming"),
+        )
+
+    private fun shownText(repository: DefaultRemoteRepository) =
+        repository.state.value.messages.lastOrNull()?.optionalText("text")
+
+    @Test
+    fun streamingUpsertsPublishAtMostOncePerSixteenMillisecondsAndTheLastOneWins() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        advanceTimeBy(100)
+
+        // The first upsert after a quiet spell shows at once.
+        transport.deliver(streamed(1, "a"))
+        runCurrent()
+        assertEquals("a", shownText(repository))
+
+        // Ten more in the same millisecond wait for one trailing publish.
+        for (index in 2..11) transport.deliver(streamed(index, "a".repeat(index)))
+        runCurrent()
+        assertEquals("a", shownText(repository))
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS - 1)
+        runCurrent()
+        assertEquals("a", shownText(repository))
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals("a".repeat(11), shownText(repository))
+
+        // The trailing publish counts as a publish: the next upsert 5 ms later waits for 16 ms after it.
+        advanceTimeBy(5)
+        transport.deliver(streamed(12, "late"))
+        runCurrent()
+        assertEquals("a".repeat(11), shownText(repository))
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS - 5)
+        runCurrent()
+        assertEquals("late", shownText(repository))
+
+        // An upsert 16 ms or more after the last publish shows at once, with no trailing publish left.
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        transport.deliver(streamed(13, "again"))
+        runCurrent()
+        assertEquals("again", shownText(repository))
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals("again", shownText(repository))
+    }
+
+    @Test
+    fun anyOtherEventPublishesAtOnceWithTheWaitingUpsertAndCancelsTheTrailingPublish() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        advanceTimeBy(100)
+        transport.deliver(streamed(1, "a"))
+        transport.deliver(streamed(2, "ab"))
+        runCurrent()
+        assertEquals("a", shownText(repository))
+
+        transport.deliver(event(3, "session.status", "status" to "running"))
+        runCurrent()
+
+        assertEquals("running", repository.state.value.status)
+        assertEquals("ab", shownText(repository))
+        // The status publish is the new reference: an upsert right after it waits, and one
+        // publish follows, not two.
+        transport.deliver(streamed(4, "abc"))
+        runCurrent()
+        assertEquals("ab", shownText(repository))
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+        assertEquals("abc", shownText(repository))
+    }
+
+    @Test
+    fun aTrailingPublishIsDroppedWhenTheChatChanges() = runTest {
+        val transport = Transport().also { configure(it, sessions = listOf(session(), session("other"))) }
+        val repository = chatRepository(transport)
+        advanceTimeBy(100)
+        transport.deliver(streamed(1, "a"))
+        transport.deliver(streamed(2, "ab"))
+        runCurrent()
+
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS * 2)
+        runCurrent()
+
+        assertEquals("other", repository.state.value.selection.sessionId)
+        assertNotEquals("ab", shownText(repository))
+    }
+
     private fun upsert(revision: Int, id: String) =
         Wire.objectOf(
             "type" to "event", "kind" to "message.upsert", "sessionId" to "session", "revision" to revision,
@@ -10922,6 +11063,8 @@ class RemoteRepositoryTest {
         assertFalse(repository.state.value.uncertain)
         assertNull(repository.state.value.error)
         assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        // The chat was published a moment ago; an upsert 16 ms later shows at once.
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
         transport.deliver(userMessage(1, "user-1", "Hello pi"))
         runCurrent()
         assertNull(repository.state.value.pendingSend)
@@ -10932,6 +11075,8 @@ class RemoteRepositoryTest {
     fun timelineMessageBeforeTheAcknowledgementClearsThePendingSendOnceAcknowledged() = runTest {
         val transport = Transport().also(::configure)
         val repository = inFlightPrompt(transport, Drafts(), "Hello pi")
+        // The chat was published a moment ago; an upsert 16 ms later shows at once.
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
         transport.deliver(userMessage(1, "user-1", "Hello pi"))
         runCurrent()
         assertEquals(PendingSendState.SENDING, repository.state.value.pendingSend?.state)
@@ -11075,6 +11220,32 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun pendingSendStartsAfterAMessageThatIsNotPublishedYet() = runTest {
+        val transport = Transport().also(::configure)
+        val repository = repository(transport, Drafts())
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        advanceTimeBy(100)
+        transport.deliver(userMessage(1, "u1", "continue"))
+        runCurrent()
+        // A second identical prompt, from the terminal, waits for the trailing publish.
+        transport.deliver(userMessage(2, "u2", "continue"))
+        runCurrent()
+        assertEquals("u1", repository.state.value.messages.last().text("id"))
+        repository.draft("continue")
+        repository.prompt()
+        runCurrent()
+        acknowledge(transport)
+        runCurrent()
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+
+        assertEquals("u2", repository.state.value.messages.last().text("id"))
+        // The terminal's copy came before this send, so it does not settle it.
+        assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+    }
+
+    @Test
     fun repeatedPromptStaysPendingUntilItsOwnCopyArrives() = runTest {
         val transport = Transport().also(::configure)
         // The chat already ends with an identical prompt; that one is not the host's copy of this.
@@ -11083,6 +11254,8 @@ class RemoteRepositoryTest {
         acknowledge(transport)
         runCurrent()
         assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        // The chat was published a moment ago; an upsert 16 ms later shows at once.
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
         transport.deliver(userMessage(1, "user-2", "continue"))
         runCurrent()
         assertNull(repository.state.value.pendingSend)
@@ -11095,6 +11268,8 @@ class RemoteRepositoryTest {
         acknowledge(transport)
         runCurrent()
         assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        // The chat was published a moment ago; an upsert 16 ms later shows at once.
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
         transport.deliver(userMessage(1, "user-1", "Line one\r\nline two \n"))
         runCurrent()
         assertNull(repository.state.value.pendingSend)
@@ -11109,6 +11284,8 @@ class RemoteRepositoryTest {
         acknowledge(transport)
         runCurrent()
         assertEquals(PendingSendState.CONFIRMED, repository.state.value.pendingSend?.state)
+        // The chat was published a moment ago; an upsert 16 ms later shows at once.
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
         transport.deliver(userMessage(1, "user-1", "Acknowledged"))
         runCurrent()
         assertNull(repository.state.value.pendingSend)
@@ -11179,5 +11356,612 @@ class RemoteRepositoryTest {
         runCurrent()
         val request = transport.sent.last { it.text("type") == "session.prompt" }
         assertEquals("prompt-id", request.text("requestId"))
+    }
+
+    // ---- Resume from a revision (resume.v1:) ------------------------------------------------
+
+    /**
+     * A host that journals the events of "session" for phones, as noah-monorepo's phone journal
+     * does: a first page whose request ID names the journal's epoch and a revision it still holds
+     * is answered with `session.events`, any other first page with a snapshot carrying the epoch.
+     * Other sessions get a snapshot with an epoch of their own.
+     */
+    private class JournalHost(private val transport: Transport) {
+        var epoch = "A".repeat(22)
+        var revision = 0L
+        var status = "idle"
+        var tasks: JsonArray? = null
+        var cursor: String? = null
+        val messages = LinkedHashMap<String, JsonObject>()
+        val journal = mutableListOf<JsonObject>()
+        /** How each first page of "session" was answered, in order. */
+        val answers = mutableListOf<String>()
+
+        /** An event of "session" the journal keeps; [live] also delivers it. */
+        fun record(kind: String, vararg fields: Pair<String, Any?>): JsonObject {
+            revision++
+            val event = Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to revision, "kind" to kind, *fields)
+            journal += event
+            when (kind) {
+                "message.upsert" -> event.obj("message").let { messages[it.text("id")] = it }
+                "session.status" -> status = event.text("status")
+            }
+            return event
+        }
+
+        fun live(kind: String, vararg fields: Pair<String, Any?>) = transport.deliver(record(kind, *fields))
+
+        /** A new host process: a new epoch, revisions from 0, an empty journal; the history stays. */
+        fun restart() {
+            epoch = "B".repeat(22)
+            revision = 0
+            journal.clear()
+        }
+
+        fun answer(request: JsonObject): JsonObject {
+            val base = parseResumeRequest(request.text("requestId"))
+            val sessionId = request.text("sessionId")
+            fun snapshot(revision: Long, status: String, messages: List<JsonObject>, epoch: String?, tasks: JsonArray?, cursor: String?) =
+                JsonObject(
+                    buildMap {
+                        put("kind", JsonPrimitive("snapshot"))
+                        put("sessionId", JsonPrimitive(sessionId))
+                        put("revision", JsonPrimitive(revision))
+                        put("status", JsonPrimitive(status))
+                        put("messages", JsonArray(messages))
+                        put("pendingQuestions", JsonArray(emptyList()))
+                        if (epoch != null && base != null && "cursor" !in request) put("epoch", JsonPrimitive(epoch))
+                        if (tasks != null && request["includeTasks"] == JsonPrimitive(true)) put("tasks", tasks)
+                        if (cursor != null) put("nextCursor", JsonPrimitive(cursor))
+                    }
+                )
+            if (sessionId != "session") return snapshot(0, "idle", emptyList(), "C".repeat(22), null, null)
+            if ("cursor" !in request && base?.epoch == epoch && base.revision <= revision) {
+                answers += "session.events"
+                return Wire.objectOf(
+                    "kind" to "session.events", "sessionId" to "session", "epoch" to epoch, "from" to base.revision,
+                    "revision" to revision, "events" to JsonArray(journal.filter { it.long("revision") > base.revision }),
+                )
+            }
+            if ("cursor" !in request) answers += "snapshot"
+            return snapshot(revision, status, messages.values.toList(), epoch, tasks, cursor)
+        }
+    }
+
+    private fun journalTransport(
+        sessions: List<JsonObject> = listOf(session()),
+        capabilities: List<String> = emptyList(),
+    ): Pair<Transport, JournalHost> {
+        val transport = Transport().also { configure(it, sessions) }
+        val host = JournalHost(transport)
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.snapshot" -> host.answer(request)
+                "projects.list" ->
+                    if (capabilities.isEmpty()) original(request)
+                    else JsonObject(original(request)!! + ("capabilities" to JsonArray(capabilities.map(::JsonPrimitive))))
+                else -> original(request)
+            }
+        }
+        return transport to host
+    }
+
+    private fun journalMessage(id: String, text: String) =
+        Wire.objectOf("id" to id, "role" to "assistant", "text" to text, "state" to "complete")
+
+    private fun Transport.firstPages(sessionId: String = "session") =
+        sent.filter { it.text("type") == "session.snapshot" && it.text("sessionId") == sessionId && "cursor" !in it }
+
+    private fun JsonObject.resumeBase() = parseResumeRequest(text("requestId"))
+
+    private fun shownIds(repository: DefaultRemoteRepository) = repository.state.value.messages.map { it.text("id") }
+
+    /**
+     * [chatRepository], with what its opening read (the first load, and the probe that its
+     * foreground signal starts) forgotten: [JournalHost.answers] then holds only later answers.
+     */
+    private suspend fun TestScope.openedChat(transport: Transport, host: JournalHost): DefaultRemoteRepository {
+        val repository = chatRepository(transport)
+        val first = transport.firstPages().first()
+        assertTrue(first.text("requestId").startsWith("resume.v1:-:0:"))
+        assertEquals(ResumeBase(null, 0), first.resumeBase())
+        host.answers.clear()
+        return repository
+    }
+
+    private fun TestScope.dropConnection(transport: Transport) {
+        transport.listener.failed(true, R.string.remote_connection_error)
+        runCurrent()
+    }
+
+    private fun TestScope.reconnect(repository: DefaultRemoteRepository) {
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun theFirstLoadAsksWithTheFreshFormAndAReconnectReplaysWithoutClearingTheChat() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        val pages = transport.firstPages().size
+        host.live("session.status", "status" to "running")
+        runCurrent()
+
+        dropConnection(transport)
+        // What the phone missed while it was away.
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+        host.record("session.title", "title" to "Renamed")
+        host.record("session.status", "status" to "waiting")
+        reconnect(repository)
+
+        val resume = transport.firstPages().last()
+        assertEquals(pages + 1, transport.firstPages().size)
+        assertEquals(ResumeBase(host.epoch, 2), resume.resumeBase())
+        assertEquals(listOf("session.events"), host.answers)
+        // m1 was never replayed: the chat was continued, not cleared.
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals("waiting", repository.state.value.status)
+        val row = repository.state.value.sessions.single()
+        assertEquals("waiting", row.text("status"))
+        assertEquals("Renamed", row.text("title"))
+        assertFalse(repository.state.value.stale)
+        // The next live event follows on from the replay without another request.
+        host.live("session.status", "status" to "idle")
+        runCurrent()
+        assertEquals("idle", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun anOlderHostIsAlwaysAskedWithTheFreshForm() = runTest {
+        val transport = Transport().also { configure(it) }
+        val repository = chatRepository(transport)
+        val opened = transport.firstPages().size
+        dropConnection(transport)
+        reconnect(repository)
+        val pages = transport.firstPages()
+        assertEquals(opened + 1, pages.size)
+        assertTrue(pages.all { it.resumeBase() == ResumeBase(null, 0) })
+    }
+
+    @Test
+    fun aFollowUpLeftUncertainByADisconnectIsDeliveredByAReplayedReceipt() = runTest {
+        val (transport, host) = journalTransport()
+        transport.capabilities = setOf(FOLLOW_UP_CAPABILITY)
+        val journalAnswer = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.prompt") Wire.objectOf("kind" to "accepted", "sessionId" to "session")
+            else journalAnswer(request)
+        }
+        val repository = openedChat(transport, host)
+        host.live("session.status", "status" to "running")
+        repository.draft("next")
+        repository.followUp()
+        runCurrent()
+        assertEquals("accepted", repository.state.value.followUps.single().status)
+        val requestId = transport.sent.last { it.text("type") == "session.prompt" }.text("requestId")
+
+        dropConnection(transport)
+        assertEquals("uncertain", repository.state.value.followUps.single().status)
+        host.record("follow_up.status", "requestId" to requestId, "status" to "delivered")
+        reconnect(repository)
+
+        assertEquals("session.events", host.answers.last())
+        assertEquals("delivered", repository.state.value.followUps.single().status)
+    }
+
+    @Test
+    fun aReplayedNoticeShowsNothing() = runTest {
+        val (transport, host) = journalTransport()
+        val repository = openedChat(transport, host)
+        val pages = transport.firstPages().size
+        dropConnection(transport)
+        host.record("session.notice", "level" to "info", "message" to "Context is almost full.")
+        reconnect(repository)
+
+        assertEquals("session.events", host.answers.last())
+        assertNull(repository.state.value.notice)
+        // The notice's revision was applied: the next event needs no snapshot.
+        host.live("session.status", "status" to "running")
+        runCurrent()
+        assertEquals("running", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun aGapResumesWhileUnknownKindsAndSnapshotRequiredAskWithTheFreshForm() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+
+        // A lost event: the gap is filled from the journal.
+        host.record("session.status", "status" to "running")
+        host.live("message.upsert", "message" to journalMessage("m2", "World"))
+        runCurrent()
+        assertEquals(ResumeBase(host.epoch, 1), transport.firstPages().last().resumeBase())
+        assertEquals(listOf("session.events"), host.answers)
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals("running", repository.state.value.status)
+
+        // An event of a kind this app does not know: only a snapshot says what it changed.
+        host.live("future.kind")
+        runCurrent()
+        assertEquals(ResumeBase(null, 0), transport.firstPages().last().resumeBase())
+        assertEquals("snapshot", host.answers.last())
+
+        host.live("snapshot.required")
+        runCurrent()
+        assertEquals(ResumeBase(null, 0), transport.firstPages().last().resumeBase())
+        assertEquals(listOf("session.events", "snapshot", "snapshot"), host.answers)
+    }
+
+    @Test
+    fun liveEventsThatOvertakeTheReplyWaitForItAndApplyOnce() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        val pages = transport.firstPages().size
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+
+        host.record("session.status", "status" to "running")
+        host.live("message.upsert", "message" to journalMessage("m2", "Wor"))
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+        // The host made its reply before this event, which arrives first.
+        val reply = host.answer(resume)
+        host.live("message.upsert", "message" to journalMessage("m2", "World"))
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+        assertEquals(listOf("m1"), shownIds(repository))
+
+        transport.result(resume, reply)
+        runCurrent()
+
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals("World", repository.state.value.messages.last().text("text"))
+        assertEquals("running", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun theForegroundProbeOfTheOpenChatResumes() = runTest {
+        val (transport, host) = journalTransport()
+        val repository = openedChat(transport, host)
+        repository.setForeground(false)
+        advanceTimeBy(20_000)
+        // A frozen socket never delivered it.
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+
+        repository.setForeground(true)
+        runCurrent()
+
+        assertEquals(ResumeBase(host.epoch, 0), transport.firstPages().last().resumeBase())
+        assertEquals("session.events", host.answers.last())
+        assertEquals(listOf("m1"), shownIds(repository))
+    }
+
+    @Test
+    fun aHostRestartAnswersTheResumeWithASnapshotThatStartsTheChatOver() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Before"))
+        repeat(3) { host.record("session.status", "status" to if (it % 2 == 0) "running" else "idle") }
+        val repository = openedChat(transport, host)
+        val pages = transport.firstPages().size
+        val before = host.epoch
+
+        dropConnection(transport)
+        host.restart()
+        host.record("message.upsert", "message" to journalMessage("m1", "After the restart"))
+        reconnect(repository)
+
+        assertEquals(ResumeBase(before, 4), transport.firstPages().last().resumeBase())
+        assertEquals("snapshot", host.answers.last())
+        // Revision 1 of the new epoch is not mistaken for an outdated reply.
+        assertEquals("After the restart", repository.state.value.messages.single().text("text"))
+        host.live("session.status", "status" to "running")
+        runCurrent()
+        assertEquals("running", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    private val resumeTasks = JsonArray(listOf(Wire.objectOf("id" to 1, "text" to "Write tests", "status" to "pending")))
+
+    @Test
+    fun knownTasksStayAfterAReplayAndUnknownOnesAreReadWithOneFreshRequest() = runTest {
+        for (known in listOf(true, false)) {
+            val (transport, host) = journalTransport(capabilities = listOf(SESSION_TASKS_CAPABILITY))
+            // An unknown list: the host could not read the session's tasks.
+            host.tasks = if (known) resumeTasks else null
+            val repository = openedChat(transport, host)
+            val expected = if (known) TaskFreshness.LIVE else TaskFreshness.UNAVAILABLE
+            assertEquals(known.toString(), expected, repository.state.value.tasks.freshness)
+            dropConnection(transport)
+            assertEquals(known.toString(), if (known) TaskFreshness.STALE else expected, repository.state.value.tasks.freshness)
+            val pages = transport.firstPages().size
+            host.answers.clear()
+            host.record("session.status", "status" to "running")
+            reconnect(repository)
+
+            assertEquals(known.toString(), if (known) listOf("session.events") else listOf("session.events", "snapshot"), host.answers)
+            if (known) {
+                assertEquals(pages + 1, transport.firstPages().size)
+                assertEquals(SessionTasks(listOf(SessionTask(1, "Write tests", TaskStatus.PENDING)), TaskFreshness.LIVE), repository.state.value.tasks)
+            } else {
+                val refresh = transport.firstPages().last()
+                assertEquals(pages + 2, transport.firstPages().size)
+                assertEquals(ResumeBase(null, 0), refresh.resumeBase())
+                assertEquals(JsonPrimitive(true), refresh["includeTasks"])
+            }
+            assertEquals(known.toString(), "running", repository.state.value.status)
+        }
+    }
+
+    @Test
+    fun aKeptChatResumesOnReselectAndBringsBackItsTasksStaleUntilTheReply() = runTest {
+        val (transport, host) =
+            journalTransport(sessions = listOf(session(), session("other")), capabilities = listOf(SESSION_TASKS_CAPABILITY))
+        host.tasks = resumeTasks
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        assertEquals(TaskFreshness.LIVE, repository.state.value.tasks.freshness)
+
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertTrue(repository.state.value.tasks.items.isEmpty())
+        // The chat left gets events that no Timeline on screen applies.
+        host.live("message.upsert", "message" to journalMessage("m2", "World"))
+        runCurrent()
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && request.text("sessionId") == "session") null else answer(request)
+        }
+        val pages = transport.firstPages().size
+
+        val reselect = backgroundScope.launch { repository.activate(RemoteSelection("host", "project", "session")) }
+        runCurrent()
+
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+        // What the chat showed comes back at once, its tasks marked stale.
+        assertEquals(listOf("m1"), shownIds(repository))
+        assertEquals("Write tests", repository.state.value.tasks.items.single().text)
+        assertEquals(TaskFreshness.STALE, repository.state.value.tasks.freshness)
+
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+
+        assertTrue(reselect.isCompleted)
+        assertEquals("session.events", host.answers.last())
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals(TaskFreshness.LIVE, repository.state.value.tasks.freshness)
+        assertEquals("Write tests", repository.state.value.tasks.items.single().text)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun aStaleCursorTakesOneFreshFirstPageAndRetriesTheOlderPageOnce() = runTest {
+        for (failures in listOf(1, 2)) {
+            val (transport, host) = journalTransport()
+            host.cursor = "first:1"
+            host.record("message.upsert", "message" to journalMessage("m2", "World"))
+            val repository = openedChat(transport, host)
+            host.cursor = "second:1"
+            var left = failures
+            transport.failure = { request -> if ("cursor" in request && left-- > 0) "stale_cursor" else null }
+            val answer = transport.response
+            transport.response = { request ->
+                if ("cursor" in request)
+                    Wire.objectOf(
+                        "kind" to "snapshot", "sessionId" to "session", "revision" to host.revision, "status" to "idle",
+                        "messages" to JsonArray(listOf(journalMessage("m1", "Hello"))), "pendingQuestions" to JsonArray(emptyList()),
+                    )
+                else answer(request)
+            }
+            val before = transport.sent.count { it.text("type") == "session.snapshot" }
+
+            repository.older()
+            runCurrent()
+
+            val reads = transport.sent.filter { it.text("type") == "session.snapshot" }.drop(before)
+            assertEquals(failures.toString(), 3, reads.size)
+            assertEquals("first:1", reads[0].text("cursor"))
+            assertEquals(ResumeBase(null, 0), reads[1].resumeBase())
+            assertEquals("second:1", reads[2].text("cursor"))
+            if (failures == 1) {
+                assertEquals(listOf("m1", "m2"), shownIds(repository))
+                assertNull(repository.state.value.error)
+            } else {
+                assertEquals(listOf("m2"), shownIds(repository))
+                assertEquals(R.string.remote_request_error, repository.state.value.error)
+            }
+        }
+    }
+
+    @Test
+    fun anOlderPageThatFinishesDuringAResumeLeavesTheEventsHeldForIt() = runTest {
+        val (transport, host) = journalTransport()
+        host.cursor = "first:1"
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+        val repository = openedChat(transport, host)
+        val opened = host.revision
+        val pages = transport.firstPages().size
+        val answer = transport.response
+        transport.response = { request ->
+            when {
+                request.text("type") != "session.snapshot" -> answer(request)
+                "cursor" in request ->
+                    Wire.objectOf(
+                        "kind" to "snapshot", "sessionId" to "session", "revision" to opened, "status" to "idle",
+                        "messages" to JsonArray(listOf(journalMessage("m1", "Hello"))), "pendingQuestions" to JsonArray(emptyList()),
+                    )
+                // The resume's reply is slow.
+                else -> null
+            }
+        }
+
+        // A lost event: the gap resume goes out.
+        host.record("session.status", "status" to "running")
+        host.live("message.upsert", "message" to journalMessage("m3", "Again"))
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, opened), resume.resumeBase())
+        host.live("session.status", "status" to "waiting")
+        repository.older()
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+
+        // The older page is in; the events held for the resume still wait, and nothing else was asked.
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals("idle", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+
+        assertEquals(listOf("session.events"), host.answers)
+        assertEquals(listOf("m1", "m2", "m3"), shownIds(repository))
+        assertEquals("waiting", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun anEpochRestartThatDropsEventsHeldForTheResumeFetchesThemWithOneResume() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        repeat(3) { host.record("session.status", "status" to "running") }
+        val repository = openedChat(transport, host)
+        val pages = transport.firstPages().size
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+
+        // A lost event: the gap resume goes out.
+        host.record("session.status", "status" to "idle")
+        host.live("message.upsert", "message" to journalMessage("m2", "World"))
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 4), resume.resumeBase())
+        // The session is reopened in place before the request arrives: a new epoch from revision 0.
+        host.restart()
+        host.record("message.upsert", "message" to journalMessage("m3", "Reopened"))
+        val reply = host.answer(resume)
+        // An event of the new epoch overtakes the reply, and nothing follows it.
+        host.live("session.status", "status" to "waiting")
+        runCurrent()
+        transport.response = answer
+        transport.result(resume, reply)
+        runCurrent()
+
+        assertEquals(listOf("snapshot", "session.events"), host.answers)
+        assertEquals(ResumeBase(host.epoch, 1), transport.firstPages().last().resumeBase())
+        assertEquals(pages + 2, transport.firstPages().size)
+        assertEquals("waiting", repository.state.value.status)
+        assertEquals(listOf("m1", "m2", "m3"), shownIds(repository))
+    }
+
+    /** Answers [request], which is still waiting, with the host error [code]. */
+    private fun Transport.hostError(request: JsonObject, code: String) =
+        deliver(
+            Wire.objectOf(
+                "type" to "result",
+                "requestId" to request.text("requestId"),
+                "ok" to false,
+                "error" to Wire.objectOf("code" to code, "message" to code),
+            )
+        )
+
+    @Test
+    fun aFailedResumeAsksOnceMoreOnlyWhenAnEventThatArrivedMeanwhileWaitsBehindAGap() = runTest {
+        for (arrival in listOf(true, false)) {
+            val (transport, host) = journalTransport()
+            host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+            val repository = openedChat(transport, host)
+            val opened = host.revision
+            val pages = transport.firstPages().size
+            val answer = transport.response
+            transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+
+            // A lost event: the gap resume goes out, and its reply is slow.
+            host.record("session.status", "status" to "running")
+            host.live("message.upsert", "message" to journalMessage("m2", "World"))
+            runCurrent()
+            val resume = transport.firstPages().last()
+            assertEquals(ResumeBase(host.epoch, opened), resume.resumeBase())
+            // This one waits for the reply, behind the same gap.
+            if (arrival) host.live("session.status", "status" to "waiting")
+            runCurrent()
+            transport.response = answer
+            transport.hostError(resume, "internal_error")
+            runCurrent()
+
+            if (arrival) {
+                val retry = transport.firstPages().last()
+                assertEquals(pages + 2, transport.firstPages().size)
+                assertEquals(ResumeBase(host.epoch, opened), retry.resumeBase())
+                assertEquals(listOf("session.events"), host.answers)
+                assertEquals(listOf("m1", "m2"), shownIds(repository))
+                assertEquals("waiting", repository.state.value.status)
+            } else {
+                // The failed request's own gap waits for the next live event, so a host that keeps
+                // failing is not asked again in a loop.
+                assertEquals(pages + 1, transport.firstPages().size)
+                assertEquals(listOf("m1"), shownIds(repository))
+                assertEquals(R.string.remote_request_error, repository.state.value.error)
+            }
+        }
+    }
+
+    @Test
+    fun aLiveEventThatOvertakesTheStaleCursorRecoveryWaitsForItsFirstPage() = runTest {
+        val (transport, host) = journalTransport()
+        host.cursor = "first:1"
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+        val repository = openedChat(transport, host)
+        host.cursor = "second:1"
+        // Another device's first pages retired the first token for good.
+        transport.failure = { request -> if ("cursor" in request && request.text("cursor") == "first:1") "stale_cursor" else null }
+        var firstPage: JsonObject? = null
+        val answer = transport.response
+        transport.response = { request ->
+            when {
+                request.text("type") != "session.snapshot" -> answer(request)
+                // A cursor page counts in its first page's revision.
+                "cursor" in request ->
+                    Wire.objectOf(
+                        "kind" to "snapshot", "sessionId" to "session", "revision" to firstPage!!.long("revision"),
+                        "status" to "idle", "messages" to JsonArray(listOf(journalMessage("m1", "Hello"))),
+                        "pendingQuestions" to JsonArray(emptyList()),
+                    )
+                // The recovery's first page is slow.
+                else -> null
+            }
+        }
+        val before = transport.sent.count { it.text("type") == "session.snapshot" }
+
+        repository.older()
+        runCurrent()
+        val recovery = transport.firstPages().last()
+        assertEquals(ResumeBase(null, 0), recovery.resumeBase())
+        val reply = host.answer(recovery)
+        firstPage = reply
+        // The streaming session's next event overtakes the reply.
+        host.live("message.upsert", "message" to journalMessage("m3", "Again"))
+        advanceTimeBy(TIMELINE_PUBLISH_MILLIS)
+        runCurrent()
+        assertEquals(listOf("m2"), shownIds(repository))
+
+        transport.result(recovery, reply)
+        runCurrent()
+
+        val reads = transport.sent.filter { it.text("type") == "session.snapshot" }.drop(before)
+        assertEquals(3, reads.size)
+        assertEquals("first:1", reads[0].text("cursor"))
+        assertEquals("second:1", reads[2].text("cursor"))
+        assertEquals(listOf("m1", "m2", "m3"), shownIds(repository))
+        assertNull(repository.state.value.error)
     }
 }
