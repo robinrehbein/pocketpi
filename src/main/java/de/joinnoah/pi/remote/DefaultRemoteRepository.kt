@@ -681,6 +681,8 @@ class DefaultRemoteRepository(
     private var pushToken: String? = null
     private var pushTokenKnown = false
     private val drafts = mutableMapOf<DraftKey, StoredDraft>()
+    private val committedGitDrafts = mutableMapOf<DraftKey, GitCommitDraft>()
+    private val gitDraftWrites = Mutex()
     private data class ComposerVersions(val text: Long = 0, val quote: Long = 0, val attachments: Long = 0)
     private val composerVersions = mutableMapOf<DraftKey, ComposerVersions>()
     private fun composerVersion(key: DraftKey) = composerVersions[key] ?: ComposerVersions()
@@ -703,6 +705,7 @@ class DefaultRemoteRepository(
     private data class Write(
         val values: Map<DraftKey, StoredDraft>?,
         val done: CompletableDeferred<Unit>,
+        val gitUpdate: Pair<DraftKey, GitCommitDraft>? = null,
     )
 
     /**
@@ -760,6 +763,7 @@ class DefaultRemoteRepository(
                         if (entry.status in setOf("pending", "accepted")) entry.copy(status = "uncertain") else entry
                     })
                 })
+                committedGitDrafts.putAll(drafts.mapNotNull { (key, value) -> value.gitCommit?.let { key to it } })
                 persistedAttachmentIds = journalAttachmentIds(drafts)
                 journalQueued = drafts.journals()
                 draftsAvailable = true
@@ -805,8 +809,19 @@ class DefaultRemoteRepository(
             for (write in writes) {
                 try {
                     if (write.values != null) {
-                        withContext(io) { draftStorage.save(write.values) }
-                        persistedAttachmentIds = journalAttachmentIds(write.values)
+                        val values = write.values.filterKeys { it.routeId !in removedRoutes }
+                            .mapValues { (key, value) -> value.copy(gitCommit = committedGitDrafts[key]) }.toMutableMap()
+                        for ((key, draft) in committedGitDrafts) {
+                            if (key.routeId !in removedRoutes)
+                                values[key] = (values[key] ?: drafts[key] ?: StoredDraft()).copy(gitCommit = draft)
+                        }
+                        write.gitUpdate?.let { (key, draft) ->
+                            check(key.routeId !in removedRoutes) { "Host was removed" }
+                            values[key] = (values[key] ?: StoredDraft()).copy(gitCommit = draft)
+                        }
+                        withContext(io) { draftStorage.save(values) }
+                        write.gitUpdate?.let { (key, draft) -> if (key.routeId !in removedRoutes) committedGitDrafts[key] = draft }
+                        persistedAttachmentIds = journalAttachmentIds(values)
                         storageFailure = null
                     } else storageFailure?.let { throw it }
                     write.done.complete(Unit)
@@ -948,7 +963,12 @@ class DefaultRemoteRepository(
 
     private fun update(block: (RemoteState) -> RemoteState) {
         checkMainThread()
-        mutable.value = block(mutable.value)
+        val previous = mutable.value
+        val next = block(previous)
+        fun reviewAuthority(value: RemoteState) = listOf(value.selection, value.connected,
+            GIT_CAPABILITY in value.capabilities, GIT_CAPABILITY in value.unavailableCapabilities,
+            GIT_WRITE_CAPABILITY in value.capabilities, GIT_WRITE_CAPABILITY in value.unavailableCapabilities)
+        mutable.value = next.copy(gitReviewGeneration = previous.gitReviewGeneration + if (reviewAuthority(previous) != reviewAuthority(next)) 1 else 0)
     }
 
     /**
@@ -3562,7 +3582,7 @@ class DefaultRemoteRepository(
                 reportError(R.string.remote_connection_error)
             }
             if (epoch == selectionEpoch) {
-                mutable.value =
+                update { current ->
                     previous.copy(
                         connected = state.value.connected,
                         connection = state.value.connection,
@@ -3573,6 +3593,7 @@ class DefaultRemoteRepository(
                         suggestion = null,
                         pullRequest = null,
                     )
+                }
                 if (previous.session != null) {
                     timeline?.beginSnapshotEpoch(previous.status)
                     snapshotAsync()
@@ -3756,6 +3777,7 @@ class DefaultRemoteRepository(
         ArtifactThumbnails.clear()
         followUpsToRecheck.keys.removeAll { it.routeId == routeId }
         removedRoutes += routeId
+        committedGitDrafts.keys.removeAll { it.routeId == routeId }
         parkedFiles.keys.removeAll { it.routeId == routeId }
         savedNavigation.remove(routeId)
         queueNavigationWrite(immediate = true)
@@ -5614,6 +5636,7 @@ class DefaultRemoteRepository(
                 followUps = if (queued) latest.followUps + PendingFollowUp(id, submitted.draft,
                     earlyFollowUpReceipts[receiptKey] ?: "accepted", delivery) else latest.followUps,
                 reviewComments = latest.reviewComments,
+                gitCommit = latest.gitCommit,
             )
         }
         val before = drafts[key] ?: return false
@@ -7198,6 +7221,38 @@ class DefaultRemoteRepository(
     }
 
     // ---- Git changes (session.git.v1) ----------------------------------------------------
+
+    override suspend fun gitCommitStatus(sessionId: String): GitStatus {
+        requireGit(sessionId)
+        val current = state.value
+        if (GIT_WRITE_CAPABILITY !in current.capabilities || GIT_WRITE_CAPABILITY in current.unavailableCapabilities)
+            throw RemoteRequestException.unsupported()
+        require(current.selection.sessionId == sessionId && current.selection.routeId == activeHost?.routeId)
+        val data = request("session.git.status", selectionEpoch, "sessionId" to sessionId, "base" to "head", "forCommit" to true)
+        return parseGitStatus(data, sessionId, GitBase.HEAD)
+    }
+
+    override suspend fun gitCommitDraft(selection: RemoteSelection): GitCommitDraft {
+        initialized.await()
+        check(draftsAvailable)
+        val key = DraftKey(requireNotNull(selection.routeId), requireNotNull(selection.sessionId))
+        return drafts[key]?.gitCommit ?: GitCommitDraft()
+    }
+
+    override suspend fun saveGitCommitDraft(selection: RemoteSelection, draft: GitCommitDraft) {
+        initialized.await()
+        check(draftsAvailable)
+        val key = DraftKey(requireNotNull(selection.routeId), requireNotNull(selection.sessionId))
+        gitDraftWrites.withLock {
+            withContext(NonCancellable) {
+                val done = CompletableDeferred<Unit>()
+                check(writes.trySend(Write(drafts.toMap(), done, key to draft)).isSuccess)
+                done.await()
+                check(key.routeId !in removedRoutes) { "Host was removed" }
+                drafts[key] = (drafts[key] ?: StoredDraft()).copy(gitCommit = draft)
+            }
+        }
+    }
 
     override suspend fun gitCommit(sessionId: String, snapshotId: String, message: String, paths: List<String>, requestId: String, onDispatch: () -> Unit): GitWriteResult.Commit {
         val selectedPaths = paths.toList()

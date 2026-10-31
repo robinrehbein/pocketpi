@@ -136,6 +136,8 @@ internal fun ChangesPane(
     offline: Boolean = false,
     /** The open pull request of the session's branch, when the host reports one. */
     pullRequest: PullRequestStatus? = null,
+    canCommitEntry: Boolean = false,
+    onPrepareCommit: (() -> Unit)? = null,
 ) {
     PaneBackHandler { if (state.file != null) actions.onOpenFile(null) else actions.onClose() }
     // Review mode belongs to the two-pane layout, which gives the pane the window.
@@ -197,7 +199,7 @@ internal fun ChangesPane(
             onDispose { keyTarget.removeReviewHandler(handler) }
         }
     val headerActions =
-        changesHeaderActions(state, codeWrap, twoPane, reviewing, pullRequest != null) { prompt -> checked.onPrefill(prompt) }
+        changesHeaderActions(state, codeWrap, twoPane, reviewing, pullRequest != null, canCommitEntry, onPrepareCommit) { prompt -> checked.onPrefill(prompt) }
     var headerHeight by remember { mutableStateOf(64.dp) }
     Surface(modifier.fillMaxSize().testTag("changesPane")) {
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
@@ -334,6 +336,8 @@ private fun changesHeaderActions(
     twoPane: TwoPaneState?,
     reviewing: Boolean,
     prOpen: Boolean,
+    canCommitEntry: Boolean,
+    onPrepareCommit: (() -> Unit)?,
     onPrefill: (String) -> Unit,
 ): List<PaneAction> {
     val context = LocalContext.current
@@ -345,6 +349,8 @@ private fun changesHeaderActions(
     val devBase = state.devBase?.takeIf { it.ref != null } ?: state.status?.devRef?.let(::GitDevBase)
     val repository = state.status?.available == true
     return buildList {
+        if (canCommitEntry && onPrepareCommit != null)
+            add(PaneAction(stringResource(R.string.remote_commit_prepare), Icons.Default.RateReview, "changesCommitPrepare", onClick = onPrepareCommit))
         if (state.file != null)
             add(PaneAction(wrapLabel, Icons.AutoMirrored.Filled.WrapText, "changesWrap", checked = codeWrap.wrap, onClick = codeWrap::toggle))
         if (twoPane != null)

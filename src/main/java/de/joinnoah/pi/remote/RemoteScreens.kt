@@ -360,6 +360,7 @@ internal fun RemoteScreen(
         }
     val chatKey = key as? RemoteNavKey.Chat
     val chatModel = model as? ChatViewModel
+    val commitReview = chatModel?.commitReview?.state?.collectAsStateWithLifecycle()?.value
     // The composer's text lives here rather than in the state, so typing recomposes only the
     // composer; this screen's own draft changes go through it or flush it first. It belongs to
     // this destination's chat from the start, so text typed before a load or a navigation lands
@@ -1675,16 +1676,39 @@ internal fun RemoteScreen(
     val changesContent: (@Composable () -> Unit)? =
         changesOpen?.let { changes ->
             {
-                ChangesPane(
-                    changes,
-                    remember(chatModel, composerDraft) {
-                        changesActions(checkNotNull(chatModel), { composerDraft?.flush() }) { composerFocusRequest++ }
-                    },
-                    Modifier.fillMaxSize(),
-                    projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
-                    offline = !state.connected,
-                    pullRequest = state.pullRequest,
-                )
+                val controller = checkNotNull(chatModel).commitReview
+                if (commitReview?.open == true) {
+                    GitCommitReviewPane(
+                        commitReview,
+                        remember(controller) {
+                            GitCommitReviewActions(
+                                close = controller::close,
+                                toggle = controller::toggle,
+                                setMessage = controller::setMessage,
+                                review = controller::review,
+                                backToEdit = controller::backToEdit,
+                                confirm = controller::confirm,
+                                acknowledgeUnknown = controller::acknowledgeUnknown,
+                            )
+                        },
+                        Modifier.fillMaxSize(),
+                    )
+                } else {
+                    ChangesPane(
+                        changes,
+                        remember(chatModel, composerDraft) {
+                            changesActions(checkNotNull(chatModel), { composerDraft?.flush() }) { composerFocusRequest++ }
+                        },
+                        Modifier.fillMaxSize(),
+                        projectName = state.project?.optionalText("name")?.takeIf(String::isNotBlank),
+                        offline = !state.connected,
+                        pullRequest = state.pullRequest,
+                        canCommitEntry = state.connected &&
+                            GIT_WRITE_CAPABILITY in state.capabilities &&
+                            GIT_WRITE_CAPABILITY !in state.unavailableCapabilities,
+                        onPrepareCommit = controller::prepare,
+                    )
+                }
             }
         }
     val filesContent: (@Composable () -> Unit)? =

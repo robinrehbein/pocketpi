@@ -325,6 +325,7 @@ internal class ChatViewModel(
     key: RemoteNavKey.Chat,
     private val settings: SettingsRepository,
 ) : DestinationViewModel(repository, key) {
+    val commitReview = GitCommitReviewController(repository, viewModelScope, key.selection())
     val preferences = settings.state
     fun canOpenPreview() = repository.canOpenPreview()
     fun openPreview(port: Int) = repository.openPreview(port)

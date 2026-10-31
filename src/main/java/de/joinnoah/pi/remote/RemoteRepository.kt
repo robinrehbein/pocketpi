@@ -99,6 +99,8 @@ data class PendingSend(
 )
 
 data class RemoteState(
+    /** Changes whenever commit review authority or its selected target changes. */
+    val gitReviewGeneration: Long = 0,
     val browser: BrowserView? = null,
     val emulator: EmulatorView? = null,
     val terminal: TerminalView? = null,
@@ -504,6 +506,13 @@ interface RemoteRepository {
      */
     suspend fun gitCommit(sessionId: String, snapshotId: String, message: String, paths: List<String>, requestId: String, onDispatch: () -> Unit = {}): GitWriteResult.Commit =
         throw UnsupportedOperationException("Git writes are unavailable")
+
+    /** Reads an own-checkout HEAD snapshot specifically authorized for commit review. */
+    suspend fun gitCommitStatus(sessionId: String): GitStatus = throw UnsupportedOperationException("Git writes are unavailable")
+
+    /** Private per-session commit draft and outstanding intent, stored before dispatch. */
+    suspend fun gitCommitDraft(selection: RemoteSelection): GitCommitDraft = throw UnsupportedOperationException("Git drafts are unavailable")
+    suspend fun saveGitCommitDraft(selection: RemoteSelection, draft: GitCommitDraft) { throw UnsupportedOperationException("Git drafts are unavailable") }
 
     /** `session.git.status`; only with [GIT_CAPABILITY]. Throws [RemoteRequestException]. */
     suspend fun gitStatus(sessionId: String, base: GitBase): GitStatus =

@@ -30,6 +30,7 @@ data class StoredDraft(
      * before this was recorded.
      */
     val submittedDelivery: String? = null,
+    val gitCommit: GitCommitDraft? = null,
 )
 
 interface DraftStorage {
@@ -77,6 +78,7 @@ class DraftStore(
                                 value.reviewComments.takeIf { it.isNotEmpty() }
                                     ?.let { comments -> JsonArray(comments.map { it.json() }) },
                             "submittedDelivery" to value.submittedDelivery,
+                            "gitCommit" to value.gitCommit?.json(),
                         )
                     }
                 )
@@ -134,5 +136,6 @@ internal fun parseStoredDrafts(bytes: ByteArray): Map<DraftKey, StoredDraft> =
                     value.optionalText("submittedDelivery")?.also {
                         require(it in setOf("prompt", "command", "follow_up", "steer"))
                     },
+                gitCommit = (value["gitCommit"] as? JsonObject)?.let(::parseGitCommitDraft),
             )
     }

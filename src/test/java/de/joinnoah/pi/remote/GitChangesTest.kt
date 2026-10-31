@@ -1,6 +1,8 @@
 package de.joinnoah.pi.remote
 
 import kotlinx.coroutines.async
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.*
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
@@ -29,10 +31,14 @@ class GitChangesTest {
 
     private class Drafts : DraftStorage {
         var values = emptyMap<DraftKey, StoredDraft>()
+        var failSave = false
+        var onSave: ((Map<DraftKey, StoredDraft>) -> Unit)? = null
 
         override fun load() = values
 
         override fun save(drafts: Map<DraftKey, StoredDraft>) {
+            if (failSave) error("storage failed")
+            onSave?.invoke(drafts)
             values = drafts.toMap()
         }
     }
@@ -198,6 +204,91 @@ class GitChangesTest {
     }
 
     // ---- Repository ---------------------------------------------------------------------
+
+    @Test
+    fun queuedOlderDraftSnapshotCannotEraseNewCommitIntent() = runTest {
+        val storage = Drafts()
+        val transport = Transport().also { it.configure(gitCapabilities + GIT_WRITE_CAPABILITY) { null } }
+        val repository = repository(transport, storage)
+        val selection = RemoteSelection("host", "project", sessionId)
+        repository.activate(selection)
+        val otherSelection = selection.copy(sessionId = "other-session")
+        val otherKey = DraftKey("host", "other-session")
+        val pending = GitCommitConfirmation("feature", listOf("a.kt"), "subject", "request-1", snapshotId)
+        var queued = false
+        storage.onSave = { values ->
+            if (!queued && values[otherKey]?.gitCommit?.pending != null) {
+                queued = true
+                // This captures the ordinary draft before the successful intent write publishes
+                // its new key in memory, but queues behind that write.
+                repository.draft("other edit")
+                backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { repository.flush() }
+            }
+        }
+        repository.saveGitCommitDraft(otherSelection, GitCommitDraft("subject", pending))
+        runCurrent()
+        repository.flush()
+        assertTrue(queued)
+        assertEquals(pending, storage.values[otherKey]?.gitCommit?.pending)
+        val reopened = repository(Transport().also { it.configure(gitCapabilities) { null } }, storage)
+        reopened.activate(selection)
+        assertEquals(pending, reopened.gitCommitDraft(otherSelection).pending)
+        repository.remove("host")
+        runCurrent()
+        repository.flush()
+        assertTrue(storage.values.keys.none { it.routeId == "host" })
+    }
+
+    @Test
+    fun failedCommitIntentClearKeepsPendingAcrossReopenAndUnrelatedSave() = runTest {
+        val storage = Drafts()
+        val transport = Transport()
+        transport.configure(gitCapabilities + GIT_WRITE_CAPABILITY) { null }
+        val repository = repository(transport, storage)
+        val selection = RemoteSelection("host", "project", sessionId)
+        repository.activate(selection)
+        val pending = GitCommitConfirmation("feature", listOf("a.kt"), "subject", "request-1", snapshotId)
+        repository.saveGitCommitDraft(selection, GitCommitDraft("subject", pending))
+        storage.failSave = true
+        assertTrue(runCatching { repository.saveGitCommitDraft(selection, GitCommitDraft("subject")) }.isFailure)
+        assertEquals(pending, repository.gitCommitDraft(selection).pending)
+        storage.failSave = false
+        repository.draft("unrelated chat draft")
+        repository.flush()
+        assertEquals(pending, storage.values[DraftKey("host", sessionId)]?.gitCommit?.pending)
+        val reopened = repository(Transport().also { it.configure(gitCapabilities) { null } }, storage)
+        reopened.activate(selection)
+        assertEquals(pending, reopened.gitCommitDraft(selection).pending)
+    }
+
+    @Test
+    fun commitReviewUsesExplicitHeadSnapshotAndRejectsMissingWriteCapability() = runTest {
+        val transport = Transport()
+        transport.configure(gitCapabilities) { error("must not be sent") }
+        val denied = repository(transport)
+        denied.activate(RemoteSelection("host", "project", sessionId))
+        assertTrue(runCatching { denied.gitCommitStatus(sessionId) }.isFailure)
+        assertTrue(transport.git().isEmpty())
+        transport.configure(gitCapabilities + GIT_WRITE_CAPABILITY) { request ->
+            JsonObject(withRequest(valid("status-head-without-dev-base"), request))
+        }
+        val allowed = repository(transport)
+        allowed.activate(RemoteSelection("host", "project", sessionId))
+        allowed.gitCommitStatus(sessionId)
+        val sent = transport.git().single()
+        assertEquals("head", sent.text("base"))
+        assertEquals(JsonPrimitive(true), sent["forCommit"])
+    }
+
+    @Test
+    fun commitStatusAcceptsOnlyTrueSubmoduleMarker() {
+        val original = valid("status-head-without-dev-base").obj("data")
+        val file = Wire.objectOf("path" to "module", "change" to "modified", "binary" to true, "submodule" to true)
+        val data = JsonObject(original + ("files" to JsonArray(listOf(file))))
+        assertTrue(parseGitStatus(data, sessionId, GitBase.HEAD).files.single().submodule)
+        val invalid = JsonObject(data + ("files" to JsonArray(listOf(JsonObject(file + ("submodule" to JsonPrimitive(false)))))))
+        assertTrue(runCatching { parseGitStatus(invalid, sessionId, GitBase.HEAD) }.isFailure)
+    }
 
     @Test
     fun selectiveCommitRequiresWriteCapabilityAndKeepsTheConfirmedRequest() = runTest {
