@@ -72,3 +72,60 @@ existing Linux image refuses that command. Holding HEAD.lock blocks ordinary upd
 so dropping the lock is not an acceptable substitute. The future commit must gate the required
 capability and qualify a suitable packaged Git runtime; no exact minimum release is assumed.
 Commit, push, PR executors and their confirmation UI remain open.
+
+
+## Next increment: confirmed pull-request creation
+
+The existing PR command/result codec is not an implemented feature. Keep the full remote
+environment scope, and implement this next vertical slice with separate review and recovery.
+No production PR, push, merge or CI change is part of local qualification.
+
+1. Extend the guarded branch authority with an immutable offered-base list. Match the requested
+   base exactly, retaining token/device/session/source/expiry, HEAD/origin/policy and repository
+   reservation fences. Use a fresh read of the exact remote branch to establish the intended
+   HEAD; a local origin-tracking ref alone does not prove the remote state.
+2. Add a provider adapter with an explicit GitHub owner/repository derived only from the bound
+   origin. Keep lookup and creation separate. Prefer the installed public `gh api` interface
+   with explicit host/method/path and JSON on stdin; private title/body and credentials must
+   not enter command arguments or logs. Apply bounded output, process-group cancellation,
+   controlled owner authentication/configuration, strict response identity checks and no
+   automatic mutation retry. Prove the final invocation/authentication boundary locally before
+   daemon enablement. The existing status-only `pr-status/gh.ts` is not a mutation adapter.
+3. Lookup the exact open head-owner/repository/branch/base before creation. Validate repository,
+   base, branch, current head SHA, PR number and URL in all provider results. Incomplete pages,
+   malformed output and ambiguous matches do not establish absence. A complete validated
+   successful response is known; loss after dispatch remains unknown. A PR is a mutable branch
+   relationship, so observations must not imply an atomic lock against other remote writers.
+4. Add V3-only create/status capabilities and an explicit read-only status command backed by
+   a bounded recovery binding without old actor closures. The original write ID carries the
+   bound intended head/base. Reconnect and owner writes-off must permit newly authorized
+   observation; current absence does not prove that creation never happened. Keep status
+   outside the mutation ledger/write budget. Preserve unknown outcomes through delayed
+   delivery and outbox overflow, just as for Push.
+5. Add strict shared Host/Android goldens, capability-gated repository calls and a dedicated
+   controller/pane for base/title/body/draft and immutable confirmation. Persist intent before
+   send, retain it across disconnect/process recreation, require explicit lookup or
+   acknowledgement, and never silently push or create again. Integrate beside Commit/Push.
+   Continue to obtain CI/check state from actual Host/Pi status rather than synthesizing it
+   from a successful create response.
+6. Qualify with isolated fake-provider/process tests, encrypted Host integration and the
+   actual Android transport/panes. Include existing PR, incomplete lookup, changed authority,
+   known success, loss after effect, late source revocation, outbox overflow, device reconnect,
+   owner-off status, durable restart and no duplicate dispatch. Real GitHub authentication,
+   independent Linux and the actual Pi/CI path remain explicit separate runtime gates.
+
+The local `gh 2.98.0` help confirms stdin JSON, explicit host/method and paginated/slurped API
+output; its `pr list --head` does not accept owner-qualified branch syntax. The provider contract
+uses the [official versioned REST pull-request documentation](https://docs.github.com/en/rest/pulls/pulls?apiVersion=2026-03-10):
+list filters include owner-qualified head and base; creation uses head/base plus title and
+optional body/draft. The checked CLI help and documentation are not a live provider test.
+
+
+### Wear interaction check for this increment
+
+Evaluate watch interactions by readable context and practical action, not by copying the phone
+form or imposing a messages-only limit. PR/CI updates, concise actionable agent questions and
+handoff to the relevant phone/tablet view are useful candidates. Full title/body/base editing,
+code/diff review and a confirmation that cannot show sufficient context belong on the larger
+display. Any later watch approval must carry enough fresh, bound context to support the
+decision; do not present a generic approval that conceals its target or uncertain outcome.
