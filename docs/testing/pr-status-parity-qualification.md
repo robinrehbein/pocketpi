@@ -128,3 +128,26 @@ under investigation, not a visually qualified tablet result. The two owned fixtu
 private trees/metadata and temporary credential copies were removed, the owned emulator/ADB
 stopped, and ports 5191/5584/5585 were closed. Type/format checks and Android test APK assembly
 passed. Production app/Host source was unchanged by this fixture increment.
+
+
+### Scroll/IME comparison
+
+A follow-up initially failed its unchanged recovered-card visibility assertion (26.764 s).
+The diagnostic was moved before that assertion to record the original state, without changing
+production code. A fresh German tablet run passed in 15.636 s. It recorded a retained scroll
+value of 142 px: header bottom 314 px, PR card top 204 px. After explicit scroll-to-index-zero,
+the card top was 346 px with IME still visible; hiding IME kept the same card/header bounds.
+The before/top-with-IME/top-without-IME screenshots were retained; the top-with-IME frame was
+inspected and legible. This comparison supports a retained-scroll explanation; it does not
+establish a persistent header-layout defect or qualify MainActivity insets.
+
+The instrumentation now explicitly brings the reinserted card to the top before asserting
+visibility in the default path. Its optional diagnostic records the unscrolled state first and
+then performs that same tested scroll interaction. This changes test preparation only; native
+identity, exact command trace and reconnect-state checks remain in place. The prior failure is
+not reclassified as a pass. The diagnostic's owned fixture/emulator/ADB and temporary credentials
+were cleaned, with ports 5191/5584/5585 closed.
+
+The final test APK compiled successfully after the default-path scroll preparation was added.
+That final default branch was not separately rerun in the emulator; the successful diagnostic
+run exercised the same public scroll interaction before its retained visibility/state assertions.

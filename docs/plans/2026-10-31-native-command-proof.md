@@ -27,3 +27,17 @@ Tablet IME-open recovered screenshot shows a Changes header/card overlap: visual
 pending. See [qualification](../testing/pr-status-parity-qualification.md). No raw PTY or model-turn
 claim is made. The isolated Git PR rerun passed in 134.79 s with its original limit; Git-write
 passed six tests. The earlier loaded PR timeout remains recorded.
+
+## Bounded visual follow-up
+
+Before changing production layout, an optional diagnostic records header/card bounds and scroll
+range in the recovered IME-open state, scrolls to index zero, then captures the same layout after
+hiding IME. This distinguishes a partially scrolled card behind the existing floating header
+from a persistent layout defect. The fixture's functional identity and input checks remain active.
+
+
+Comparison result: initial unscrolled visibility check failed (26.764 s), fresh diagnostic run
+passed (15.636 s). Scroll 142 px placed card top at 204 px behind header bottom 314 px; at scroll
+zero card top was 346 px with and without IME. The explicit scroll interaction restores visibility;
+no production layout fix was justified. Default test preparation now performs that same scroll.
+The failed run is preserved; see scoped record for exact limits and cleanup.

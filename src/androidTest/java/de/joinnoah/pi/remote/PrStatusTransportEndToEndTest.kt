@@ -4,8 +4,13 @@ import android.os.ParcelFileDescriptor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
 import java.io.File
@@ -36,6 +41,7 @@ class PrStatusTransportEndToEndTest {
     private lateinit var fixture: JSONObject
     private var nativeExpected = false
     private var inputExpected = false
+    private var layoutDiagnostics = false
     private lateinit var client: OkHttpClient
     private lateinit var scope: CoroutineScope
     private lateinit var repository: DefaultRemoteRepository
@@ -54,6 +60,10 @@ class PrStatusTransportEndToEndTest {
             require(inputArg == null || inputArg == "true" || inputArg == "false") { "prStatusInputExpected must be true or false" }
             inputExpected = inputArg == "true"
             require(!inputExpected || nativeExpected) { "prStatusInputExpected requires prStatusNativeExpected=true" }
+            val layoutArg = args.getString("prStatusLayoutDiagnostics")
+            require(layoutArg == null || layoutArg == "true" || layoutArg == "false") { "prStatusLayoutDiagnostics must be true or false" }
+            layoutDiagnostics = layoutArg == "true"
+            require(!layoutDiagnostics || inputExpected) { "prStatusLayoutDiagnostics requires prStatusInputExpected=true" }
             val path = args.getString("prStatusFixturePath")
             if (expected) require(!path.isNullOrBlank()) { "prStatusFixturePath is required" }
             assumeTrue("Pass prStatusFixturePath to run the actual Pi PR status integration", !path.isNullOrBlank())
@@ -178,6 +188,13 @@ class PrStatusTransportEndToEndTest {
                 repository.state.value.pullRequest?.checks == PullRequestChecksState.RUNNING
         }
         awaitTag("changesPullRequest")
+        if (layoutDiagnostics) diagnoseRecoveredLayout()
+        else {
+            // Reinserted keyed items preserve the reader's scroll position. Bring the card
+            // into view like a user would before checking its rendering.
+            compose.onNodeWithTag("changesList").performScrollToIndex(0)
+            compose.waitForIdle()
+        }
         compose.onNodeWithTag("changesPullRequest").assertIsDisplayed()
         val recovered = status()
         assertTrue(recovered.getBoolean("ownerPidVerified"))
@@ -185,6 +202,34 @@ class PrStatusTransportEndToEndTest {
         screenshot("recovered")
     }
 
+    private fun diagnoseRecoveredLayout() {
+        screenshot("recovered-unscrolled")
+        logChangesLayout("recovered-unscrolled")
+        compose.onNodeWithTag("changesList").performScrollToIndex(0)
+        compose.waitForIdle()
+        logChangesLayout("recovered-top-ime")
+        screenshot("recovered-top-ime")
+        compose.runOnIdle {
+            WindowCompat.getInsetsController(compose.activity.window, compose.activity.window.decorView)
+                .hide(WindowInsetsCompat.Type.ime())
+        }
+        compose.waitUntil(60_000) {
+            val insets = ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+            insets != null && !insets.isVisible(WindowInsetsCompat.Type.ime())
+        }
+        logChangesLayout("recovered-top-no-ime")
+        screenshot("recovered-top-no-ime")
+    }
+    private fun logChangesLayout(stage: String) {
+        val header = compose.onNodeWithTag("changesHeaderPill", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val card = compose.onNodeWithTag("changesPullRequest", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val cardDisplayed = compose.onNodeWithTag("changesPullRequest").isDisplayed()
+        val range = compose.onNodeWithTag("changesList").fetchSemanticsNode().config.getOrNull(SemanticsProperties.VerticalScrollAxisRange)
+        compose.runOnIdle {
+            val insets = ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+            println("PR_STATUS_LAYOUT stage=$stage header=$header card=$card cardDisplayed=$cardDisplayed scrollValue=${range?.value?.invoke()} scrollMax=${range?.maxValue?.invoke()} imeVisible=${insets?.isVisible(WindowInsetsCompat.Type.ime())}")
+        }
+    }
     private fun activate(target: RemoteSelection) {
         compose.runOnIdle { scope.launch { repository.activate(target, ActivationMode.USER_OPEN) } }
         compose.waitUntil(60_000) { repository.state.value.selection == target && !repository.state.value.loading && repository.state.value.connected }

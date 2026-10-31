@@ -547,5 +547,6 @@ and an independent Linux testhost remain open.
 The native command-delivery fixture subsequently passed on phone/tablet emulator profiles:
 a command sent once through the production composer was verified in the same live Pi TUI
 process/session by a nonce trace. This does not establish raw PTY input or a model turn.
-A tablet IME-open Changes header/card overlap remains under visual investigation; see the
+A tablet IME-open overlap was traced in a bounded comparison to retained scroll; scrolling to
+the top restores readable layout with and without IME. No production layout change was made; see the
 [scoped record](testing/pr-status-parity-qualification.md).
