@@ -1283,4 +1283,28 @@ class TimelineResumeTest {
         assertTrue(timeline.snapshot(snapshot(12, message("b"), epoch = null), older = true))
         assertEquals(listOf("b", "c", "d"), texts(timeline))
     }
+
+    @Test
+    fun afterAnOverlappingResyncTheOlderPageOfTheKeptCursorIsTaken() {
+        val timeline = Timeline("session")
+        timeline.snapshot(snapshot(10, message("b"), message("c"), cursor = "old:2"))
+
+        // A resync of the same epoch overlaps the page on screen: the old token's cursor stays.
+        assertTrue(timeline.snapshot(snapshot(12, message("c"), message("d"), cursor = "new:2")))
+        assertEquals(listOf("b", "c", "d"), texts(timeline))
+        assertEquals("old:2", timeline.nextCursor)
+
+        // The host answers that cursor from the old token, at that token's revision; a continued
+        // Timeline takes it as well.
+        val continued = Timeline("session").apply { continueFrom(timeline) }
+        assertTrue(timeline.snapshot(snapshot(10, message("a"), epoch = null, cursor = "old:3"), older = true))
+        assertEquals(listOf("a", "b", "c", "d"), texts(timeline))
+        assertEquals("old:3", timeline.nextCursor)
+        assertTrue(continued.snapshot(snapshot(10, message("a"), epoch = null), older = true))
+        assertEquals(listOf("a", "b", "c", "d"), texts(continued))
+
+        // A page of the new token's revision does not continue the old token's cursor.
+        assertFalse(timeline.snapshot(snapshot(12, message("z"), epoch = null), older = true))
+        assertEquals(listOf("a", "b", "c", "d"), texts(timeline))
+    }
 }

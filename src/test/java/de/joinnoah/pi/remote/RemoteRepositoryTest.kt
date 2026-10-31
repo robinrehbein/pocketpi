@@ -12452,6 +12452,156 @@ class RemoteRepositoryTest {
         assertEquals(pages + 1, transport.firstPages().size)
     }
 
+    @Test
+    fun aSessionWhoseEpochChangesOnALiveConnectionShowsItsNewStatusAndTitleInTheList() = runTest {
+        val (transport, host) = journalTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        host.live("session.status", "status" to "running")
+        host.live("session.title", "title" to "Before")
+        host.live("session.status", "status" to "idle")
+        host.live("session.title", "title" to "Before again")
+        runCurrent()
+        assertEquals("Before again", repository.state.value.sessions.single().text("title"))
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "session.snapshot") null else answer(request) }
+
+        // A lost event: the gap resume goes out.
+        host.record("session.status", "status" to "running")
+        host.live("message.upsert", "message" to journalMessage("m2", "World"))
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 5), resume.resumeBase())
+        // The session is reopened in place before the request arrives: a new epoch from revision 0.
+        host.restart()
+        host.record("message.upsert", "message" to journalMessage("m3", "Reopened"))
+        transport.response = answer
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+        assertEquals("snapshot", host.answers.last())
+
+        // The new epoch counts from 1 again, below the revisions the list saw before.
+        host.live("session.status", "status" to "waiting")
+        host.live("session.title", "title" to "After")
+        runCurrent()
+        val row = repository.state.value.sessions.single()
+        assertEquals("waiting", row.text("status"))
+        assertEquals("After", row.text("title"))
+        assertEquals("waiting", repository.state.value.status)
+    }
+
+    @Test
+    fun aReplayedCompactionDoneClearsAndRefreshesTheContextUsage() = runTest {
+        val (transport, host) = journalTransport()
+        transport.capabilities = setOf(CONTEXT_CAPABILITY)
+        var usedTokens = 150_000
+        val stream = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.context.get")
+                Wire.objectOf(
+                    "kind" to "context",
+                    "sessionId" to request.text("sessionId"),
+                    "usedTokens" to usedTokens,
+                    "contextWindow" to 200_000,
+                    "percent" to usedTokens / 2_000.0,
+                )
+            else stream(request)
+        }
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        repository.refreshContextUsage()
+        runCurrent()
+        assertEquals(150_000L, repository.state.value.contextUsage?.usedTokens)
+        fun reads() = transport.sent.count { it.text("type") == "session.context.get" }
+        val before = reads()
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") in setOf("session.snapshot", "session.context.get")) null else answer(request)
+        }
+
+        // The compaction's events are lost; a later status leaves a gap that the journal fills.
+        host.record("session.compaction", "state" to "running", "reason" to "manual")
+        host.record("session.compaction", "state" to "done")
+        usedTokens = 20_000
+        host.live("session.status", "status" to "running")
+        runCurrent()
+        val resume = transport.firstPages().last()
+        val reply = host.answer(resume)
+        assertEquals("session.events", host.answers.last())
+        transport.result(resume, reply)
+        runCurrent()
+        // Cleared as the replay applies, and read again.
+        assertNull(repository.state.value.contextUsage)
+        assertEquals(before + 1, reads())
+
+        val read = transport.sent.last { it.text("type") == "session.context.get" }
+        transport.result(read, checkNotNull(answer(read)))
+        runCurrent()
+        assertEquals(20_000L, repository.state.value.contextUsage?.usedTokens)
+    }
+
+    @Test
+    fun aFocusThatLapsedDuringAnActivationReadsTheFirstPageOnceNotTwice() = runTest {
+        // The test scope and the app's immediate one (Dispatchers.Main.immediate) order the
+        // scheduled reread differently against the activation's end.
+        for (immediate in listOf(false, true)) {
+            val (transport, host) = streamTransport()
+            host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+            val repository =
+                DefaultRemoteRepository(
+                    Pairings(listOf(this@RemoteRepositoryTest.host)),
+                    Drafts(),
+                    transport,
+                    if (immediate) CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler))
+                    else backgroundScope,
+                    StandardTestDispatcher(testScheduler),
+                    now = { testScheduler.currentTime },
+                    jitter = { 0.5 },
+                )
+            repository.activate(RemoteSelection("host", "project", "session"))
+            repository.setForeground(true)
+            repository.setValidatedNetwork("wifi")
+            runCurrent()
+            // Left for the list, and the app goes to the background past the grace.
+            repository.activate(RemoteSelection("host", "project"))
+            repository.setForeground(false)
+            advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+            runCurrent()
+            assertEquals(emptyList<String>(), transport.focuses().last())
+            // Filtered by the empty focus.
+            host.record("message.upsert", "message" to journalMessage("m2", "World"))
+            val answer = transport.response
+            transport.response = { request ->
+                if (request.text("type") == "session.snapshot" && "cursor" !in request) null else answer(request)
+            }
+            val pages = transport.firstPages().size
+
+            // An activation in the background reopens the chat out of focus, so its focus lapses.
+            val opening = async { repository.activate(RemoteSelection("host", "project", "session")) }
+            runCurrent()
+            assertTrue(repository.state.value.loading)
+            assertEquals(pages + 1, transport.firstPages().size)
+            val read = transport.firstPages().last()
+            // Back in front before the reply: the activation keeps the focus it sent until it ends.
+            repository.setForeground(true)
+            runCurrent()
+            assertEquals(emptyList<String>(), transport.focuses().last())
+
+            transport.response = answer
+            transport.result(read, host.answer(read))
+            runCurrent()
+            opening.await()
+            assertFalse(repository.state.value.loading)
+            assertEquals(listOf("session"), transport.focuses().last())
+            // One fresh first page, read after the focus that names the chat. The foreground probe
+            // that waited for the activation may resume from it afterwards; that is no reread.
+            val rereads = transport.firstPages().drop(pages + 1).filter { it.resumeBase() == ResumeBase(null, 0) }
+            assertEquals("immediate=$immediate", 1, rereads.size)
+            assertTrue(transport.lastIndexOf("session.focus") < transport.sent.indexOf(rereads.single()))
+            assertEquals(listOf("m1", "m2"), shownIds(repository))
+        }
+    }
+
     private val resumeTasks = JsonArray(listOf(Wire.objectOf("id" to 1, "text" to "Write tests", "status" to "pending")))
 
     @Test
