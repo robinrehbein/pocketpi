@@ -192,3 +192,49 @@ with an appropriate production sandbox. Repeat terminal and browser transport, r
 ownership and process-failure checks on an independent remote Linux host and in a devcontainer.
 Physical Galaxy device acceptance remains open. Local Docker and emulator results do not establish
 those environments or the full remote-development goal.
+
+## Dev Containers CLI lifecycle — 2026-10-31
+
+The local adapter was exercised with the real public `@devcontainers/cli` 0.90.0
+on macOS/Docker Desktop Linux arm64, using an isolated synthetic workspace. Host
+checkout `02a22cc487` includes the detached-host environment fix `d3684a1a7`.
+The tested image ID was
+`sha256:ca5b4cd161806356332b4edcc5116352d9ba2da1ae3587e4667edd9dd5b5e007`.
+
+Observed: CLI `up` starts the nonroot UID-1000 supervisor with read-only root,
+no published ports or Docker socket, and an owner-labelled private state volume.
+Before explicit setup, no host configuration or running host is created. A
+one-shot synthetic setup starts the host and makes its local IPC status available;
+`relay.invalid` deliberately leaves the relay disconnected. Provisioning token
+variables are absent from the host process. Docker stop exits zero; restart and
+container replacement preserve the exact configuration SHA-256. A second guarded
+`up` reuses the same container. An older container missing the expected basis-image
+label is refused, without deletion. Only the root qualification explicitly stopped
+and removed its verified container and labelled test volume afterwards.
+
+All 44 deployment-helper tests pass. Biome from the host repository root reports
+zero errors (two intentional literal devcontainer-placeholder warnings and eight
+style infos). Evidence: `/private/tmp/pocketpi-devcontainer-{real-up,guarded-up,reuse-up}.log`,
+`/private/tmp/pocketpi-devcontainer-runtime-evidence.json`, and
+`/private/tmp/pocketpi-devcontainer-all-unit-final.log`.
+
+This proves a local disconnected lifecycle, not independent Linux-host operation,
+UID-1001 migration, a connected Pi worker turn, Chromium sandboxing, Android SDK
+inside the container, or physical Samsung qualification. Existing incompatible
+state volumes are never silently chowned; Docker administrators remain trusted.
+
+Follow-up checks passed against the same image: the existing core verifier repeats
+all nine lifecycle checks, including duplicate setup/host refusal, TERM/INT shutdown
+and restart (`/private/tmp/pocketpi-devcontainer-core-requalification.log`). The
+packaged detached `start` retains custom HOME, state and Pi directories, strips
+the provisioning token, answers status and stops cleanly
+(`/private/tmp/pocketpi-packaged-background-runtime-final.log`).
+
+The unmodified CLI 0.90.0 `updateUID.Dockerfile` was manually built with UID/GID
+1001. A read-only nonroot runtime check confirms UID/GID 1001, passwd home
+`/var/lib/pocketpi`, and ownership/mode 0700 for all three private state directories.
+This qualifies the recipe on local Docker Desktop, not an independent Linux CLI
+host or migration of existing volumes. Evidence:
+`/private/tmp/pocketpi-devcontainer-uid1001-{build.log,evidence.json}`.
+The merged upstream artifact-notice change also passes all 23 SessionControlsTest
+cases (`/private/tmp/pocketpi-upstream-session-controls-final.log`).
