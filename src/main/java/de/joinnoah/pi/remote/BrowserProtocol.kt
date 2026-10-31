@@ -17,6 +17,7 @@ internal sealed interface BrowserCommand {
     val sessionId: String
     data class Open(override val requestId: String, override val sessionId: String) : BrowserCommand
     data class Tabs(override val requestId: String, override val sessionId: String, val browserId: String) : BrowserCommand
+    data class Participants(override val requestId: String, override val sessionId: String, val browserId: String) : BrowserCommand
     data class Acquire(override val requestId: String, override val sessionId: String, val browserId: String, val expectedGeneration: Long) : BrowserCommand
     data class Handoff(override val requestId: String, override val sessionId: String, val browserId: String, val leaseId: String, val generation: Long, val toOwnerId: String) : BrowserCommand
     data class Navigate(override val requestId: String, override val sessionId: String, val browserId: String, val leaseId: String, val generation: Long, val tabId: String, val url: String) : BrowserCommand
@@ -35,6 +36,7 @@ internal sealed interface BrowserResult {
     data class Lease(override val browserId: String, override val generation: Long, val leaseId: String, val owner: BrowserOwner, val viewportRevision: Long) : BrowserResult
     data class Busy(override val browserId: String, override val generation: Long, val owner: BrowserOwner) : BrowserResult
     data class Tabs(override val browserId: String, override val generation: Long, val tabs: List<BrowserTab>) : BrowserResult
+    data class Participants(override val browserId: String, override val generation: Long, val participants: List<BrowserOwner>) : BrowserResult
     data class Viewport(override val browserId: String, override val generation: Long, val viewportRevision: Long) : BrowserResult
     data class InputAck(override val browserId: String, override val generation: Long, val sequence: Long, val status: String) : BrowserResult
     data class Released(override val browserId: String, override val generation: Long) : BrowserResult
@@ -90,7 +92,7 @@ internal fun parseBrowserCommand(o: JsonObject): BrowserCommand {
     val l = b + setOf("leaseId", "generation")
     val fields = when (type) {
         "browser.open" -> base
-        "browser.tabs" -> b
+        "browser.tabs", "browser.participants" -> b
         "browser.acquire" -> b + "expectedGeneration"
         "browser.handoff" -> l + "toOwnerId"
         "browser.navigate" -> l + setOf("tabId", "url")
@@ -106,6 +108,7 @@ internal fun parseBrowserCommand(o: JsonObject): BrowserCommand {
     if (type == "browser.open") return BrowserCommand.Open(r, s)
     val browser = o.id("browserId")
     if (type == "browser.tabs") return BrowserCommand.Tabs(r, s, browser)
+    if (type == "browser.participants") return BrowserCommand.Participants(r, s, browser)
     if (type == "browser.acquire") return BrowserCommand.Acquire(r, s, browser, o.count("expectedGeneration"))
     val lease = o.id("leaseId"); val generation = o.count("generation")
     return when (type) {
@@ -135,6 +138,7 @@ internal fun encodeBrowserCommand(command: BrowserCommand): JsonObject {
     when (command) {
         is BrowserCommand.Open -> pairs.add("type" to "browser.open")
         is BrowserCommand.Tabs -> browser("browser.tabs", command.browserId)
+        is BrowserCommand.Participants -> browser("browser.participants", command.browserId)
         is BrowserCommand.Acquire -> { browser("browser.acquire", command.browserId); pairs.add("expectedGeneration" to command.expectedGeneration) }
         is BrowserCommand.Handoff -> { lease("browser.handoff", command.browserId, command.leaseId, command.generation); pairs.add("toOwnerId" to command.toOwnerId) }
         is BrowserCommand.Navigate -> { lease("browser.navigate", command.browserId, command.leaseId, command.generation); pairs.add("tabId" to command.tabId); pairs.add("url" to command.url) }
@@ -168,6 +172,7 @@ internal fun parseBrowserResult(o: JsonObject): BrowserResult {
         "browser.lease" -> Wire.keys(o, base + setOf("leaseId", "owner", "viewportRevision"))
         "browser.busy" -> Wire.keys(o, base + "owner")
         "browser.tabs" -> Wire.keys(o, base + "tabs")
+        "browser.participants" -> Wire.keys(o, base + "participants")
         "browser.viewport" -> Wire.keys(o, base + "viewportRevision")
         "browser.input.ack" -> Wire.keys(o, base + setOf("sequence", "status"))
         "browser.released" -> Wire.keys(o, base)
@@ -179,6 +184,11 @@ internal fun parseBrowserResult(o: JsonObject): BrowserResult {
         "browser.lease" -> BrowserResult.Lease(id, generation, o.id("leaseId"), parseBrowserOwner(o.obj("owner")), o.count("viewportRevision"))
         "browser.busy" -> BrowserResult.Busy(id, generation, parseBrowserOwner(o.obj("owner")))
         "browser.tabs" -> BrowserResult.Tabs(id, generation, parseBrowserTabs(o))
+        "browser.participants" -> {
+            val participants = o.getValue("participants").jsonArray
+            require(participants.size <= 64)
+            BrowserResult.Participants(id, generation, participants.map { parseBrowserOwner(it.jsonObject) })
+        }
         "browser.viewport" -> BrowserResult.Viewport(id, generation, o.count("viewportRevision"))
         "browser.input.ack" -> BrowserResult.InputAck(id, generation, o.count("sequence"), o.choice("status", "accepted", "uncertain"))
         else -> BrowserResult.Released(id, generation)

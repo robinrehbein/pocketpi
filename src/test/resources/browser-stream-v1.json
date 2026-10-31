@@ -1,0 +1,197 @@
+{
+  "version": 1,
+  "limits": {
+    "maxPixels": 8388608,
+    "maxJpegBytes": 1048576,
+    "chunkBytes": 49152,
+    "maxChunks": 22,
+    "ackTimeoutMs": 5000,
+    "intervalMs": 250
+  },
+  "valid": [
+    {
+      "name": "watch",
+      "payload": {
+        "type": "browser.watch",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "tabId": "t",
+        "generation": 0,
+        "viewportRevision": 0
+      }
+    },
+    {
+      "name": "frame",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.frame",
+        "browserId": "b",
+        "tabId": "t",
+        "streamId": "i",
+        "generation": 0,
+        "viewportRevision": 0,
+        "frameId": 1,
+        "chunkIndex": 0,
+        "chunkCount": 1,
+        "totalBytes": 1,
+        "width": 80,
+        "height": 80,
+        "cssWidth": 80,
+        "cssHeight": 80,
+        "deviceScale": 1,
+        "scrollX": 0,
+        "scrollY": 0,
+        "data": "AA=="
+      }
+    },
+    {
+      "name": "ack",
+      "payload": {
+        "type": "browser.frame.ack",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "streamId": "i",
+        "frameId": 1,
+        "chunkIndex": 0
+      }
+    },
+    {
+      "name": "unwatch",
+      "payload": {
+        "type": "browser.unwatch",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "streamId": "i"
+      }
+    },
+    {
+      "name": "watching",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "browser.watching",
+          "browserId": "b",
+          "streamId": "i",
+          "generation": 0,
+          "viewportRevision": 0
+        }
+      }
+    },
+    {
+      "name": "unwatched",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "browser.unwatched",
+          "browserId": "b",
+          "streamId": "i"
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "noncanonical base64",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.frame",
+        "browserId": "b",
+        "tabId": "t",
+        "streamId": "i",
+        "generation": 0,
+        "viewportRevision": 0,
+        "frameId": 1,
+        "chunkIndex": 0,
+        "chunkCount": 1,
+        "totalBytes": 1,
+        "width": 80,
+        "height": 80,
+        "cssWidth": 80,
+        "cssHeight": 80,
+        "deviceScale": 1,
+        "scrollX": 0,
+        "scrollY": 0,
+        "data": "AB=="
+      }
+    },
+    {
+      "name": "invalid index",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.frame",
+        "browserId": "b",
+        "tabId": "t",
+        "streamId": "i",
+        "generation": 0,
+        "viewportRevision": 0,
+        "frameId": 1,
+        "chunkIndex": 1,
+        "chunkCount": 1,
+        "totalBytes": 1,
+        "width": 80,
+        "height": 80,
+        "cssWidth": 80,
+        "cssHeight": 80,
+        "deviceScale": 1,
+        "scrollX": 0,
+        "scrollY": 0,
+        "data": "AA=="
+      }
+    },
+    {
+      "name": "invalid size",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.frame",
+        "browserId": "b",
+        "tabId": "t",
+        "streamId": "i",
+        "generation": 0,
+        "viewportRevision": 0,
+        "frameId": 1,
+        "chunkIndex": 0,
+        "chunkCount": 1,
+        "totalBytes": 2,
+        "width": 80,
+        "height": 80,
+        "cssWidth": 80,
+        "cssHeight": 80,
+        "deviceScale": 1,
+        "scrollX": 0,
+        "scrollY": 0,
+        "data": "AA=="
+      }
+    },
+    {
+      "name": "pixel area exceeds limit",
+      "payload": {
+        "type": "host.event",
+        "kind": "browser.frame",
+        "browserId": "b",
+        "tabId": "t",
+        "streamId": "i",
+        "generation": 0,
+        "viewportRevision": 0,
+        "frameId": 1,
+        "chunkIndex": 0,
+        "chunkCount": 1,
+        "totalBytes": 1,
+        "width": 6144,
+        "height": 6144,
+        "cssWidth": 80,
+        "cssHeight": 80,
+        "deviceScale": 1,
+        "scrollX": 0,
+        "scrollY": 0,
+        "data": "AA=="
+      }
+    }
+  ]
+}

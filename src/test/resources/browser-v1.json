@@ -302,6 +302,38 @@
           "generation": 2
         }
       }
+    },
+    {
+      "name": "participants-command",
+      "payload": {
+        "type": "browser.participants",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b"
+      }
+    },
+    {
+      "name": "participants-result",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "browser.participants",
+          "browserId": "b",
+          "generation": 1,
+          "participants": [
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "device",
+              "id": "d"
+            }
+          ]
+        }
+      }
     }
   ],
   "invalid": [
@@ -424,6 +456,311 @@
             }
           ],
           "viewportRevision": 0
+        }
+      }
+    },
+    {
+      "name": "participants-command-extra",
+      "payload": {
+        "type": "browser.participants",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "deviceId": "d"
+      }
+    },
+    {
+      "name": "participants-result-invalid-owner",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "browser.participants",
+          "browserId": "b",
+          "generation": 1,
+          "participants": [
+            {
+              "kind": "agent",
+              "id": "a",
+              "deviceId": "d"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "participants-result-too-many",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "browser.participants",
+          "browserId": "b",
+          "generation": 1,
+          "participants": [
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            },
+            {
+              "kind": "agent",
+              "id": "a"
+            }
+          ]
         }
       }
     }
