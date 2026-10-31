@@ -1,5 +1,34 @@
 # Linux host qualification
 
+## Actual Android phone against the packaged Linux host, 2026-10-31
+
+The API-36 arm64 phone emulator now passes the actual SecureRemoteTransport and BrowserPane
+instrumentation flow against the installed Linux Host, real Pi native worker and private TLS
+relay in both browser and forwarded-preview modes. Each uses a fresh paired device and owner
+grant. The test verifies decoded images, text and Enter effects through actual HTTP requests,
+WebSocket page updates, device-only disconnect while the host stays connected, same-tab
+read-only restoration, an unsent draft, explicit reacquisition and owner grant revocation.
+A transport observer counts real input/acquire send attempts to reject silent replay.
+
+Both JUnit runs passed one test (browser 45.202s; preview 40.999s). Host metrics for each are one
+input POST, one submission, one acknowledged update and one device cut, with revocation true
+and the host still connected. Restored screenshots were inspected. Logs are
+`/private/tmp/pocketpi-linux-browser-phone-instrumentation.log` and
+`/private/tmp/pocketpi-linux-preview-phone-instrumentation.log`; screenshots are under
+`/private/tmp/pocketpi-linux-android-proof/`.
+
+The fixture uses immutable image `sha256:ddc38e6e3003d9bf14b4167fde442ac0b30ab4dd9c5e89ecd81923e848df8864`
+on the previously qualified local Docker Desktop Linux arm64 runtime. The fixture has only an
+internal network; a separate credential-free TCP gateway publishes a loopback TLS port. Its
+maintained start/cleanup helper checks image, runtime and owned resource identities. One preview
+startup hit its readiness deadline and was cleaned up; a fresh diagnostic run reached readiness
+and passed. Phase-only timeout diagnostics were added; startup reliability remains unqualified.
+
+These checks cover the pane and transport, not complete application navigation, a physical
+Galaxy S25, Tab S11, independent remote Linux, hardware input, DeX or full development workflows.
+Tablet runs and broader lifecycle/device-switch scenarios remain open. No Wear emulator is required.
+
+
 ## Persistent core image, 2026-10-31
 
 A repository-maintained multi-stage core image now builds from the locked standalone archive and

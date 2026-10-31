@@ -25,6 +25,7 @@ import java.io.File
 import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.TrustManagerFactory
@@ -42,6 +43,26 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.ExternalResource
 import org.junit.rules.RuleChain
+import kotlinx.serialization.json.JsonObject
+
+/** Counts send attempts without changing the real transport or its listener callbacks. */
+private class BrowserAttemptObserver(private val delegate: RemoteTransport) : RemoteTransport {
+    val inputAttempts = AtomicInteger()
+    val acquireAttempts = AtomicInteger()
+    override var listener: RemoteTransport.Listener
+        get() = delegate.listener
+        set(value) { delegate.listener = value }
+    override fun connect(host: PairedHost) = delegate.connect(host)
+    override fun pair(value: JsonObject) = delegate.pair(value)
+    override fun send(payload: JsonObject) {
+        when (payload.optionalText("type")) {
+            "browser.input" -> inputAttempts.incrementAndGet()
+            "browser.acquire" -> acquireAttempts.incrementAndGet()
+        }
+        delegate.send(payload)
+    }
+    override fun close() = delegate.close()
+}
 
 /** Opt-in integration test against the isolated local peer and real host Chromium fixture. */
 class BrowserTransportEndToEndTest {
@@ -50,6 +71,7 @@ class BrowserTransportEndToEndTest {
     private lateinit var client: OkHttpClient
     private lateinit var scope: CoroutineScope
     private lateinit var repository: DefaultRemoteRepository
+    private lateinit var observedTransport: BrowserAttemptObserver
 
     @get:Rule
     val rules: RuleChain = RuleChain.outerRule(object : ExternalResource() {
@@ -57,10 +79,12 @@ class BrowserTransportEndToEndTest {
             val path = InstrumentationRegistry.getArguments().getString("browserFixturePath")
             if (InstrumentationRegistry.getArguments().getString("browserReconnectExpected") == "true" ||
                 InstrumentationRegistry.getArguments().getString("browserDeviceOnlyExpected") == "true" ||
-                InstrumentationRegistry.getArguments().getString("browserPreviewExpected") == "true")
+                InstrumentationRegistry.getArguments().getString("browserPreviewExpected") == "true" ||
+                InstrumentationRegistry.getArguments().getString("packagedLinuxExpected") == "true")
                 require(!path.isNullOrBlank()) { "The reconnect test requires browserFixturePath" }
             assumeTrue("Pass browserFixturePath to run the isolated browser integration test", !path.isNullOrBlank())
             fixture = JSONObject(readFixtureFile(requireNotNull(path)).toString(Charsets.UTF_8))
+            if (InstrumentationRegistry.getArguments().getString("packagedLinuxExpected") == "true") require(fixture.optBoolean("packagedLinux")) { "The packaged Linux test requires its fixture" }
             if (InstrumentationRegistry.getArguments().getString("browserPreviewExpected") == "true") require(fixture.optBoolean("preview")) { "The preview test requires a preview fixture" }
             val cert = CertificateFactory.getInstance("X.509")
                 .generateCertificate(readFixtureFile(fixture.getString("caCertPath")).inputStream())
@@ -87,7 +111,8 @@ class BrowserTransportEndToEndTest {
                 override fun load() = drafts
                 override fun save(drafts: Map<DraftKey, StoredDraft>) { this.drafts = drafts }
             }
-            repository = DefaultRemoteRepository(pairings, drafts, SecureRemoteTransport(scope, client), scope)
+            observedTransport = BrowserAttemptObserver(SecureRemoteTransport(scope, client))
+            repository = DefaultRemoteRepository(pairings, drafts, observedTransport, scope)
             NavigationTestActivity.contentFactory = {
                 val content: @Composable () -> Unit = {
                     val state by repository.state.collectAsState()
@@ -120,7 +145,7 @@ class BrowserTransportEndToEndTest {
             NavigationTestActivity.contentFactory = { {} }
             if (::repository.isInitialized) {
                 InstrumentationRegistry.getInstrumentation().runOnMainSync {
-                    if (fixture.optBoolean("reconnect") || fixture.optBoolean("preview")) repository.setForeground(false)
+                    if (fixture.optBoolean("reconnect") || fixture.optBoolean("preview") || fixture.optBoolean("packagedLinux")) repository.setForeground(false)
                     repository.disconnect()
                 }
             }
@@ -132,6 +157,98 @@ class BrowserTransportEndToEndTest {
             }
         }
     }).around(compose)
+
+    @Test
+    fun packagedLinuxHostRendersInputsReconnectsAndRevokes() {
+        val expected = InstrumentationRegistry.getArguments().getString("packagedLinuxExpected") == "true"
+        assumeTrue("Select the packaged Linux fixture explicitly", expected)
+        assertTrue(fixture.getBoolean("packagedLinux"))
+        val preview = fixture.optBoolean("preview")
+        val selection = RemoteSelection(fixture.getString("routeId"), fixture.getString("projectId"), fixture.getString("sessionId"))
+        fun view() = if (preview) repository.state.value.previewBrowser else repository.state.value.browser
+        fun input(value: BrowserInput) = if (preview) repository.sendPreviewInput(value) else repository.sendBrowserInput(value)
+        compose.runOnIdle {
+            repository.setForeground(true)
+            repository.setValidatedNetwork("packaged-linux-fixture")
+            scope.launch { repository.activate(selection, ActivationMode.USER_OPEN) }
+        }
+        compose.waitUntil(60_000) { if (preview) repository.canOpenPreview() else repository.canOpenBrowser() }
+        assertFalse(if (preview) repository.canOpenBrowser() else repository.canOpenPreview())
+        compose.runOnIdle { assertTrue(if (preview) repository.openPreview(fixture.getInt("previewPort")) else repository.openBrowser()) }
+        compose.waitUntil(60_000) { view()?.let { !it.opening && it.browserId != null } == true }
+        compose.onNodeWithTag("browserAcquire").performClick()
+        compose.waitUntil(60_000) { view()?.ownsControl == true }
+        if (!preview) {
+            if (view()?.tabs.isNullOrEmpty()) {
+                compose.runOnIdle { assertTrue(repository.newBrowserTab(fixture.getString("pageUrl"))) }
+            } else {
+                compose.runOnIdle { assertTrue(repository.navigateBrowser(fixture.getString("pageUrl"))) }
+            }
+        }
+        compose.waitUntil(60_000) { view()?.let { it.selectedTabId != null && it.tabs.any { tab -> tab.id == it.selectedTabId && (preview || tab.url == fixture.getString("pageUrl").toHttpUrl().toString()) } && it.image != null && it.image.viewportRevision == it.viewportRevision } == true }
+        val initial = requireNotNull(view())
+        val browserId = requireNotNull(initial.browserId)
+        val tabId = requireNotNull(initial.selectedTabId)
+        val initialImage = requireNotNull(initial.image)
+        assertNotNull(BitmapFactory.decodeByteArray(initialImage.jpeg, 0, initialImage.jpeg.size)?.also { it.recycle() })
+        compose.waitUntil(30_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        val value = "Linux fixture ${java.util.UUID.randomUUID()}"
+        val initialPosts = requireNotNull(status()).getInt("inputPosts")
+        compose.onNodeWithTag("browserText").performTextInput(value)
+        compose.runOnIdle {
+            val keyboard = compose.activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            keyboard.hideSoftInputFromWindow(compose.activity.window.decorView.windowToken, 0)
+        }
+        compose.waitUntil(30_000) {
+            val insets = ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+            insets != null && !insets.isVisible(WindowInsetsCompat.Type.ime()) &&
+                runCatching { compose.onNodeWithTag("browserSendText").assertIsEnabled(); true }.getOrDefault(false)
+        }
+        compose.onNodeWithTag("browserSendText").performClick()
+        compose.waitUntil(30_000) { status()?.let { it.optString("lastinput") == value && it.optInt("inputPosts") > initialPosts } == true && view()?.inputPending == false }
+        compose.waitUntil(30_000) { runCatching { compose.onNodeWithText("Enter").assertIsEnabled(); true }.getOrDefault(false) }
+        compose.onNodeWithText("Enter").performClick()
+        compose.waitUntil(30_000) { status()?.optString("submitted") == value }
+        fixtureAction("update")
+        compose.waitUntil(30_000) {
+            val image = view()?.image
+            val bitmap = image?.let { BitmapFactory.decodeByteArray(it.jpeg, 0, it.jpeg.size) }
+            val pixel = bitmap?.getPixel(0, 0)
+            bitmap?.recycle()
+            status()?.optInt("updateAck") == 1 && pixel != null && Color.red(pixel) > 230 && Color.green(pixel) < 30 && Color.blue(pixel) > 230
+        }
+        val unsent = "Unsent Linux ${java.util.UUID.randomUUID()}"
+        compose.onNodeWithTag("browserText").performTextReplacement(unsent)
+        val inputAttempts = observedTransport.inputAttempts.get()
+        val acquireAttempts = observedTransport.acquireAttempts.get()
+        val posts = requireNotNull(status()).getInt("inputPosts")
+        fixtureAction("cut-device")
+        compose.waitUntil(30_000) { !repository.state.value.connected && view()?.ownsControl == false }
+        compose.onNodeWithTag("browserText").assertTextContains(unsent)
+        fixtureAction("allow-device")
+        compose.waitUntil(60_000) { repository.state.value.connected && repository.state.value.selection == selection && view()?.let { it.browserId == browserId && it.selectedTabId == tabId && !it.ownsControl && it.image != null } == true }
+        compose.onNodeWithTag("browserText").assertTextContains(unsent)
+        compose.onNodeWithTag("browserSendText").assertIsNotEnabled()
+        assertEquals(inputAttempts, observedTransport.inputAttempts.get())
+        assertEquals(acquireAttempts, observedTransport.acquireAttempts.get())
+        assertEquals(posts, requireNotNull(status()).getInt("inputPosts"))
+        assertEquals(1, requireNotNull(status()).getInt("cuts"))
+        assertTrue(requireNotNull(status()).getBoolean("hostConnected"))
+        val screenshot = File(compose.activity.getExternalFilesDir(null), if (preview) "linux-preview-restored.png" else "linux-browser-restored.png")
+        assertTrue(UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).takeScreenshot(screenshot))
+        assertTrue(screenshot.length() > 0)
+        compose.onNodeWithTag("browserAcquire").performClick()
+        compose.waitUntil(30_000) { view()?.let { it.ownsControl && it.image?.viewportRevision == it.viewportRevision } == true }
+        assertEquals(acquireAttempts + 1, observedTransport.acquireAttempts.get())
+        assertEquals(inputAttempts, observedTransport.inputAttempts.get())
+        assertEquals(posts, requireNotNull(status()).getInt("inputPosts"))
+        val beforeRevoke = observedTransport.inputAttempts.get()
+        fixtureAction("revoke")
+        compose.runOnIdle { if (preview) repository.refreshPreview() else repository.refreshBrowser() }
+        compose.waitUntil(30_000) { status()?.optBoolean("revoked") == true && (!repository.state.value.connected || view()?.ownsControl == false) }
+        compose.runOnIdle { assertFalse(input(BrowserInput.Text("denied"))) }
+        assertEquals(beforeRevoke, observedTransport.inputAttempts.get())
+    }
 
     @Test
     fun previewOnlyGrantRendersUpdatesReconnectsAndRevokes() {
