@@ -91,6 +91,11 @@ internal object Diagnostics {
         /** Newest first. */
         val entries: List<Entry>,
         val link: Link,
+        /**
+         * The run reached the foreground. A file from before this field counts as one, so it is
+         * kept; see [DiagnosticsStore.saveIfChanged].
+         */
+        val foreground: Boolean = true,
     )
 
     /** One record. [durationMs] and [bytes] are -1 when they do not apply. */

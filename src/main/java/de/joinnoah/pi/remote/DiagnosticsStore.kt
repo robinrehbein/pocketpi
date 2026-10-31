@@ -13,6 +13,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -28,9 +29,11 @@ import kotlinx.serialization.json.put
  * wall-clock time.
  *
  * [start] loads the file into [Diagnostics.previousRun], then saves every [intervalMillis] while
- * something changed; [flush] saves at once, for when the app goes to the background. The file
- * never exceeds [maxBytes], and everything read back passes [Diagnostics.safeToken] again, so it
- * holds nothing [Diagnostics] would not hold.
+ * something changed; [flush] saves at once, for when the app goes to the background. A process
+ * that never reached the foreground (see [onForeground]), such as one FCM started for a push wake,
+ * keeps a saved run that did, so the run Robin wants to look at survives the pushes after it. The
+ * file never exceeds [maxBytes], and everything read back passes [Diagnostics.safeToken] again, so
+ * it holds nothing [Diagnostics] would not hold.
  */
 internal class DiagnosticsStore(
     private val file: File,
@@ -48,11 +51,25 @@ internal class DiagnosticsStore(
     /** The class of the failure last recorded, so a fault that persists is recorded once, not per tick. */
     private var recordedFailure: String? = null
 
+    /** The run [start] loaded, which is what the file holds until this process saves. */
+    private var previous: Diagnostics.PreviousRun? = null
+
+    @Volatile private var reachedForeground = false
+
+    /** The app came to the foreground in this process: its run replaces the saved one from now on. */
+    fun onForeground() {
+        reachedForeground = true
+    }
+
     /** Loads the previous run, then saves periodically. Call once. */
     fun start() {
         scope.launch(io) {
-            Diagnostics.previousRun = load()
-            synchronized(lock) { loaded = true }
+            val run = load()
+            Diagnostics.previousRun = run
+            synchronized(lock) {
+                previous = run
+                loaded = true
+            }
             // The new run's first entry already differs from the file; save it at the next tick.
             while (true) {
                 delay(intervalMillis)
@@ -72,8 +89,12 @@ internal class DiagnosticsStore(
             if (!loaded) return
             val revision = Diagnostics.revision
             if (revision == savedRevision) return
+            val foreground = reachedForeground
+            // A background-only run never replaces a saved run that reached the foreground. A
+            // missing, unreadable or background-only file is replaced as before.
+            if (!foreground && previous?.foreground == true) return
             try {
-                val text = encode(Diagnostics.persistable(wallClock()))
+                val text = encode(Diagnostics.persistable(wallClock()).copy(foreground = foreground))
                 val temporary = File(file.parentFile, file.name + ".tmp")
                 temporary.writeText(text)
                 if (!temporary.renameTo(file)) {
@@ -123,6 +144,7 @@ internal class DiagnosticsStore(
         buildJsonObject {
             put("version", 1)
             put("savedAt", run.savedAt)
+            put("foreground", run.foreground)
             put(
                 "connects",
                 buildJsonArray {
@@ -247,7 +269,9 @@ internal class DiagnosticsStore(
                     item.long("relayMs"),
                 )
             }
-        return Diagnostics.PreviousRun(savedAt, connects, entries, Diagnostics.Link(rtt, counters, closeCodes))
+        // Files from before the field count as a foreground run.
+        val foreground = (root["foreground"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull ?: true
+        return Diagnostics.PreviousRun(savedAt, connects, entries, Diagnostics.Link(rtt, counters, closeCodes), foreground)
     }
 
     private fun JsonElement?.string(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull

@@ -360,6 +360,105 @@ class DiagnosticsTest {
     }
 
     @Test
+    fun aPushWokenProcessKeepsTheSavedForegroundRun() = runTest {
+        recordARun()
+        val foregroundRun = store(this)
+        foregroundRun.start()
+        runCurrent()
+        foregroundRun.onForeground()
+        foregroundRun.flush()
+        runCurrent()
+        Diagnostics.clear()
+
+        // The next process starts for a push and connects in the background only.
+        val woken = store(this)
+        woken.start()
+        runCurrent()
+        Diagnostics.connectStarted("background.push").finish("ok")
+        Diagnostics.record(Diagnostics.Kind.RECOVERY, "push.wake", outcome = "open")
+        // Flushed rather than ticked: both stores share this JVM's Diagnostics, so the first
+        // process's timer would save the second process's records as its own.
+        woken.flush()
+        runCurrent()
+        Diagnostics.clear()
+
+        store(this).start()
+        runCurrent()
+        val previous = checkNotNull(Diagnostics.report().previous)
+        assertEquals(listOf("foreground.device"), previous.connects.map { it.label })
+        assertEquals("connection.lost", previous.entries.last().label)
+        assertTrue(previous.foreground)
+    }
+
+    @Test
+    fun aBackgroundRunReplacesABackgroundRunAndAForegroundRunReplacesEither() = runTest {
+        val file = File(folder.root, "diagnostics-v1.json")
+        Diagnostics.connectStarted("background.push").finish("ok")
+        val first = store(this)
+        first.start()
+        runCurrent()
+        first.flush()
+        runCurrent()
+        assertEquals(false, store(this).load()?.foreground)
+        Diagnostics.clear()
+
+        Diagnostics.connectStarted("background.again").finish("ok")
+        val second = store(this)
+        second.start()
+        runCurrent()
+        second.flush()
+        runCurrent()
+        assertEquals(listOf("background.again"), store(this).load()?.connects?.map { it.label })
+        Diagnostics.clear()
+
+        // Started for a push, then opened: the run counts as a foreground one and replaces the file.
+        val opened = store(this)
+        opened.start()
+        runCurrent()
+        Diagnostics.connectStarted("background.push").finish("ok")
+        opened.flush()
+        runCurrent()
+        assertEquals(false, store(this).load()?.foreground)
+        opened.onForeground()
+        Diagnostics.connectStarted("foreground.device").finish("ok")
+        opened.flush()
+        runCurrent()
+        val saved = checkNotNull(store(this).load())
+        assertTrue(saved.foreground)
+        assertEquals(listOf("foreground.device", "background.push"), saved.connects.map { it.label })
+        assertTrue(file.isFile)
+    }
+
+    @Test
+    fun aCorruptOrMissingPreviousFileDoesNotStopABackgroundRunFromSaving() = runTest {
+        val file = File(folder.root, "diagnostics-v1.json")
+        for (previous in listOf<String?>("{not json", """{"version":2,"savedAt":5}""", null)) {
+            if (previous == null) file.delete() else file.writeText(previous)
+            Diagnostics.clear()
+            val store = store(this)
+            store.start()
+            runCurrent()
+            Diagnostics.connectStarted("background.push").finish("ok")
+            store.flush()
+            runCurrent()
+            assertEquals(previous, listOf("background.push"), store(this).load()?.connects?.map { it.label })
+        }
+    }
+
+    @Test
+    fun aFileFromBeforeTheForegroundFieldCountsAsAForegroundRun() = runTest {
+        val file = File(folder.root, "diagnostics-v1.json")
+        file.writeText("""{"version":1,"savedAt":5000,"connects":[{"at":4000,"label":"foreground.device","phases":[]}]}""")
+        val store = store(this)
+        store.start()
+        runCurrent()
+        Diagnostics.connectStarted("background.push").finish("ok")
+        store.flush()
+        runCurrent()
+        assertEquals(listOf("foreground.device"), store(this).load()?.connects?.map { it.label })
+    }
+
+    @Test
     fun aSaveThatKeepsFailingIsRecordedOnceAndRetriedQuietly() = runTest {
         // The parent folder does not exist, so every write throws the same exception.
         val store = store(this, name = "missing/diagnostics-v1.json")

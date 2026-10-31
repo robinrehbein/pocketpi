@@ -117,11 +117,13 @@ internal fun receivePush(payload: PushPayload, host: PushHost) {
         host.postAttention(payload)
         return
     }
-    // The wake goes first: recording the state enqueues the question upgrade, whose worker uses the
-    // woken connection only if it sees the wake, and opens a socket of its own otherwise.
-    host.wake(payload)
+    // The wake goes first, before anything schedules the upgrade, whose worker uses the woken
+    // connection only if it sees the wake and opens a socket of its own otherwise. With no
+    // notification to show, no upgrade runs, so nothing would use a woken connection.
+    val canPost = host.canPost()
+    if (canPost) host.wake(payload)
     host.recordState(payload)
-    if (!host.canPost()) return
+    if (!canPost) return
     // The open chat already shows the question or the result.
     if (host.isShowing(payload.routeId, payload.sessionId)) return
     if (payload.event == PushEvent.COMPLETE) host.postComplete(payload) else host.postQuestion(payload)
