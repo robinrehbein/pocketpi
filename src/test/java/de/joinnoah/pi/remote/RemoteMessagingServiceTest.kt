@@ -89,6 +89,9 @@ class RemoteMessagingServiceTest {
         val deliveries: PushDeliveries = PushDeliveries(Preferences()),
     ) : PushHost {
         val log = mutableListOf<String>()
+        val wakes = mutableListOf<String>()
+        /** The state records and wakes in the order they ran. */
+        val order = mutableListOf<String>()
 
         override fun paired(routeId: String) = routeId in routes
 
@@ -102,6 +105,12 @@ class RemoteMessagingServiceTest {
 
         override fun recordState(payload: PushPayload) {
             log += "state:${payload.eventId}"
+            order += "state"
+        }
+
+        override fun wake(payload: PushPayload) {
+            wakes += "${payload.routeId}:${payload.eventId}"
+            order += "wake"
         }
 
         override fun postAttention(payload: PushPayload) {
@@ -129,6 +138,40 @@ class RemoteMessagingServiceTest {
         assertEquals(emptyList<String>(), again.log)
         receivePush(question, again)
         assertEquals(listOf("state:e2", "question:e2"), again.log)
+    }
+
+    @Test
+    fun aPushForAPairedHostWithPushOnWakesTheMainConnectionOnceWhateverTheNotificationDoes() {
+        val host = Host(showing = "r" to "s")
+        receivePush(complete, host)
+        assertEquals(listOf("r:e1"), host.wakes)
+        // A duplicate delivery wakes nothing again.
+        receivePush(complete, host)
+        assertEquals(listOf("r:e1"), host.wakes)
+        // The wake does not depend on the notification being posted.
+        val silent = Host(canPost = false)
+        receivePush(question, silent)
+        assertEquals(listOf("r:e2"), silent.wakes)
+    }
+
+    @Test
+    fun theWakeIsAskedForBeforeTheStateRecordStartsTheQuestionUpgrade() {
+        // Recording the state enqueues the question upgrade, whose worker waits for a wake it can
+        // see; asked for later, the worker would open a second socket of its own.
+        for (payload in listOf(question, complete)) {
+            val host = Host()
+            receivePush(payload, host)
+            assertEquals(listOf("wake", "state"), host.order)
+        }
+    }
+
+    @Test
+    fun noWakeForAnUnpairedHostOrWithPushSwitchedOff() {
+        val unpaired = Host(routes = emptySet())
+        receivePush(complete, unpaired)
+        val off = Host(enabled = false)
+        receivePush(complete, off)
+        assertEquals(emptyList<String>(), unpaired.wakes + off.wakes)
     }
 
     @Test

@@ -218,6 +218,25 @@ object Wire {
         )
     }
 
+    /**
+     * The bytes [aad] produces for [context] and [direction] up to the sequence number: the JSON
+     * array without its last element and closing bracket, ending in the comma before it. Validates
+     * the context once; [aadFrom] then completes it per frame.
+     */
+    fun aadPrefix(context: JsonObject, direction: String): ByteArray {
+        context(context)
+        require(direction in listOf("c2h", "h2c"))
+        val full = aad(context, direction, 0)
+        // `aad` ends in `,0]`; the prefix keeps the comma.
+        return full.copyOf(full.size - 2)
+    }
+
+    /** [aad]'s bytes for one frame, from a [prefix] that [aadPrefix] built. */
+    fun aadFrom(prefix: ByteArray, seq: Long): ByteArray {
+        nonce(seq)
+        return prefix + (seq.toString() + "]").toByteArray()
+    }
+
     fun derive(secret: String, context: JsonObject): Pair<ByteArray, ByteArray> {
         context(context)
         fun hmac(key: ByteArray, data: ByteArray): ByteArray =
@@ -257,17 +276,22 @@ object Wire {
 
 /**
  * One encrypted connection. Sending and receiving keep separate state and separate locks, so a
- * [seal] on the main thread never waits for an [open] that is decrypting and parsing a large frame
- * on the decoder. Any failure in either direction closes the channel for both.
+ * [seal] on the sender never waits for an [open] that is decrypting and parsing a large frame on
+ * the reader thread. Each direction keeps one [Cipher], initialised with the next sequence's IV
+ * per frame, and its AAD prefix, built once from the context. Any failure in either direction
+ * closes the channel for both.
  */
 class SecureChannel(secret: String, private val context: JsonObject, client: Boolean = true) {
     private val raw = Wire.derive(secret, context)
     private val sendKey = SecretKeySpec(if (client) raw.first else raw.second, "AES")
     private val receiveKey = SecretKeySpec(if (client) raw.second else raw.first, "AES")
-    private val sendDirection = if (client) "c2h" else "h2c"
-    private val receiveDirection = if (client) "h2c" else "c2h"
+    private val connectionId = context.text("connectionId")
+    private val sendAad = Wire.aadPrefix(context, if (client) "c2h" else "h2c")
+    private val receiveAad = Wire.aadPrefix(context, if (client) "h2c" else "c2h")
     private val sendLock = Any()
     private val receiveLock = Any()
+    private val sendCipher = Cipher.getInstance("AES/GCM/NoPadding")
+    private val receiveCipher = Cipher.getInstance("AES/GCM/NoPadding")
     private var sendSequence = 0L
     private var receiveSequence = 0L
     @Volatile private var closed = false
@@ -300,15 +324,15 @@ class SecureChannel(secret: String, private val context: JsonObject, client: Boo
     private fun sealLocked(payload: JsonObject): JsonObject = guarded {
         val bytes = payload.toString().toByteArray()
         require(bytes.size <= Wire.MAX_PLAINTEXT)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, sendKey, GCMParameterSpec(128, Wire.nonce(sendSequence)))
-        cipher.updateAAD(Wire.aad(context, sendDirection, sendSequence))
+        // A fresh IV per sequence, so re-initialising the same Cipher never reuses a nonce.
+        sendCipher.init(Cipher.ENCRYPT_MODE, sendKey, GCMParameterSpec(128, Wire.nonce(sendSequence)))
+        sendCipher.updateAAD(Wire.aadFrom(sendAad, sendSequence))
         Wire.objectOf(
             "v" to 1,
             "type" to "encrypted",
-            "connectionId" to context.text("connectionId"),
+            "connectionId" to connectionId,
             "seq" to sendSequence++,
-            "ciphertext" to Wire.encode(cipher.doFinal(bytes)),
+            "ciphertext" to Wire.encode(sendCipher.doFinal(bytes)),
         )
     }
 
@@ -320,20 +344,19 @@ class SecureChannel(secret: String, private val context: JsonObject, client: Boo
         require(
             frame.long("v") == 1L &&
                 frame.text("type") == "encrypted" &&
-                frame.text("connectionId") == context.text("connectionId") &&
+                frame.text("connectionId") == connectionId &&
                 frame.long("seq") == receiveSequence
         )
         val bytes = Wire.decode(frame.text("ciphertext"))
         require(bytes.size in 16..Wire.MAX_PLAINTEXT + 16)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(
+        receiveCipher.init(
             Cipher.DECRYPT_MODE,
             receiveKey,
             GCMParameterSpec(128, Wire.nonce(receiveSequence)),
         )
-        cipher.updateAAD(Wire.aad(context, receiveDirection, receiveSequence))
+        receiveCipher.updateAAD(Wire.aadFrom(receiveAad, receiveSequence))
         // The ciphertext's size already bounds the plaintext to MAX_PLAINTEXT bytes.
-        val payload = Wire.json.parseToJsonElement(Wire.utf8(cipher.doFinal(bytes))).jsonObject
+        val payload = Wire.json.parseToJsonElement(Wire.utf8(receiveCipher.doFinal(bytes))).jsonObject
         receiveSequence++
         // The outer frame was parsed by the caller; this times decrypting and parsing the payload.
         Diagnostics.frame(System.nanoTime() - started, bytes.size - 16)

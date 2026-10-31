@@ -6,19 +6,32 @@ import android.os.SystemClock
 import android.os.Trace
 import android.util.Log
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
- * A process-wide, in-memory record of how connections, requests and recoveries went, for the
- * Diagnostics page and macrobenchmark trace sections.
+ * A process-wide record of how connections, requests and recoveries went, for the Diagnostics page
+ * and macrobenchmark trace sections. It lives in memory; a [DiagnosticsStore] saves a summary of
+ * it, so the next run can show what the last one saw.
  *
  * It never holds message text, session, route or device IDs, payloads or secrets: every label and
  * outcome is a code constant or a protocol word, and [safeToken] replaces anything that does not
- * look like one before it is stored. Nothing is written to disk; Logcat gets a copy in debug builds
- * only.
+ * look like one before it is stored. Logcat gets a copy in debug builds only.
  */
 internal object Diagnostics {
     const val CAPACITY = 512
     const val CONNECT_HISTORY = 20
+
+    /** Round trips of `remote.ping` that the summary covers. */
+    const val RTT_SAMPLES = 64
+
+    /** The kinds a [DiagnosticsStore] keeps, newest [STORED_ENTRIES] of them. */
+    const val STORED_ENTRIES = 64
+
+    /** Close codes kept, code 0 (all the others) included. */
+    const val CLOSE_CODES = 16
+
+    /** The relay closes a phone that fell too far behind with this code (`flow.v1`). */
+    const val FLOW_CLOSE_CODE = 1013
     private const val TAG = "PocketPi"
     private const val REDACTED = "redacted"
 
@@ -32,6 +45,54 @@ internal object Diagnostics {
         CAUGHT,
     }
 
+    /** Counters of events that are not worth an entry each. */
+    enum class Counter(val key: String) {
+        /** Connections that came back after a loss. */
+        RECONNECTS("reconnects"),
+
+        /** OkHttp's own ping got no pong, so OkHttp failed the socket. */
+        PING_FAILURES("pingFailures"),
+
+        /** A `remote.ping` got no `pong`; it only measures and ends nothing. */
+        PING_TIMEOUTS("pingTimeouts"),
+        ACKS_SENT("acksSent"),
+
+        /** Resumes the host answered with a `session.events` replay. */
+        RESUMES_REPLAYED("resumesReplayed"),
+
+        /** Resumes the host answered with a full snapshot instead. */
+        RESUMES_SNAPSHOT("resumesSnapshot"),
+    }
+
+    /** Round trips of `remote.ping`: [relayMs] is the host's last ping round trip to the relay. */
+    data class Rtt(val count: Int, val p50: Long, val p95: Long, val last: Long, val relayMs: Long? = null)
+
+    /** How the link behaved: round trips, counters and how often the relay closed the socket with each code. */
+    data class Link(
+        val rtt: Rtt? = null,
+        val counters: Map<Counter, Long> = emptyMap(),
+        val closeCodes: Map<Int, Long> = emptyMap(),
+    ) {
+        fun count(counter: Counter): Long = counters[counter] ?: 0
+
+        /** Closes the relay made because this phone could not keep up. */
+        val flowCloses: Long
+            get() = closeCodes[FLOW_CLOSE_CODE] ?: 0
+    }
+
+    /**
+     * What the run before this one saved. Every time is wall-clock milliseconds, since the monotonic
+     * clock restarts with the process; [savedAt] is when the file was written.
+     */
+    data class PreviousRun(
+        val savedAt: Long,
+        /** Newest first. */
+        val connects: List<Connect>,
+        /** Newest first. */
+        val entries: List<Entry>,
+        val link: Link,
+    )
+
     /** One record. [durationMs] and [bytes] are -1 when they do not apply. */
     data class Entry(
         val at: Long,
@@ -42,13 +103,17 @@ internal object Diagnostics {
         val outcome: String = "",
     )
 
-    /** One connection attempt with the time each handshake phase began, in ms after the start. */
+    /**
+     * One connection attempt with the time each handshake phase began, in ms after the start, and
+     * the WebSocket extensions the relay accepted (such as `permessage-deflate`).
+     */
     data class Connect(
         val at: Long,
         val label: String,
         val phases: List<Pair<HandshakePhase, Long>>,
         val durationMs: Long?,
         val outcome: String?,
+        val extensions: List<String> = emptyList(),
     ) {
         /**
          * How long each waiting phase lasted. The end states take no time, and the last phase of
@@ -97,6 +162,8 @@ internal object Diagnostics {
         val frames: FrameStats?,
         /** Newest first. */
         val entries: List<Entry>,
+        val link: Link = Link(),
+        val previous: PreviousRun? = null,
     )
 
     /**
@@ -121,6 +188,22 @@ internal object Diagnostics {
     private var frameNext = 0
     private var frameCount = 0
     private val cookies = AtomicInteger()
+    private val rttMillis = LongArray(RTT_SAMPLES)
+    private var rttNext = 0
+    private var rttCount = 0
+    private var rttLast = 0L
+    private var relayRtt: Long? = null
+    private val counts = LongArray(Counter.entries.size)
+    private val closeCodeCounts = linkedMapOf<Int, Long>()
+    private val changes = AtomicLong()
+
+    /** The run before this one, set by [DiagnosticsStore.load]. */
+    @Volatile
+    var previousRun: PreviousRun? = null
+
+    /** Grows with every change a [DiagnosticsStore] would save. */
+    val revision: Long
+        get() = changes.get()
 
     fun now(): Long = clock()
 
@@ -137,6 +220,7 @@ internal object Diagnostics {
         entries[next] = entry
         next = (next + 1) % CAPACITY
         if (size < CAPACITY) size++
+        changes.incrementAndGet()
         if (logging) runCatching { Log.d(TAG, describe(entry, entry.at)) }
     }
 
@@ -158,12 +242,48 @@ internal object Diagnostics {
         frameCount++
     }
 
+    /**
+     * One `remote.ping` round trip of [millis], with the host's own round trip to the relay
+     * ([relayMillis]) when it reported one.
+     */
+    @Synchronized
+    fun rtt(millis: Long, relayMillis: Long? = null) {
+        rttMillis[rttNext] = millis.coerceAtLeast(0)
+        rttNext = (rttNext + 1) % RTT_SAMPLES
+        if (rttCount < RTT_SAMPLES) rttCount++
+        rttLast = millis.coerceAtLeast(0)
+        if (relayMillis != null) relayRtt = relayMillis
+        changes.incrementAndGet()
+    }
+
+    @Synchronized
+    fun count(counter: Counter) {
+        counts[counter.ordinal]++
+        changes.incrementAndGet()
+    }
+
+    /** The relay closed the socket with [code]. */
+    @Synchronized
+    fun closeCode(code: Int) {
+        val key = if (code in closeCodeCounts || closeCodeCounts.size < CLOSE_CODES - 1) code else 0
+        closeCodeCounts[key] = (closeCodeCounts[key] ?: 0) + 1
+        changes.incrementAndGet()
+    }
+
+    /**
+     * Whether [error] is OkHttp giving up on a socket whose pong never came, which OkHttp reports
+     * as a `SocketTimeoutException` from its ping task. Other timeouts read or write on the socket.
+     */
+    fun isPingFailure(error: Throwable): Boolean =
+        error is java.net.SocketTimeoutException && error.message.orEmpty().contains("didn't receive pong")
+
     /** Starts a connection attempt; [label] names the connection, such as `foreground.device`. */
     @Synchronized
     fun connectStarted(label: String): ConnectTrace {
         val trace = ConnectTrace(now(), safeToken(label))
         connects.addLast(trace)
         while (connects.size > CONNECT_HISTORY) connects.removeFirst()
+        changes.incrementAndGet()
         return trace
     }
 
@@ -171,13 +291,33 @@ internal object Diagnostics {
         private val phases = mutableListOf<Pair<HandshakePhase, Long>>()
         private var durationMs: Long? = null
         private var outcome: String? = null
+        private var extensions: List<String> = emptyList()
 
         val finished: Boolean
             get() = synchronized(Diagnostics) { outcome != null }
 
         fun phase(phase: HandshakePhase) {
             synchronized(Diagnostics) {
-                if (outcome == null && phases.lastOrNull()?.first != phase) phases += phase to (now() - at)
+                if (outcome == null && phases.lastOrNull()?.first != phase) {
+                    phases += phase to (now() - at)
+                    changes.incrementAndGet()
+                }
+            }
+        }
+
+        /**
+         * Records the upgrade response's `Sec-WebSocket-Extensions` [header]. Only the extension
+         * names are kept, never their parameters, and a name that is not a plain token is
+         * redacted.
+         */
+        fun extensions(header: String?) {
+            val names =
+                header.orEmpty().split(',').map { it.substringBefore(';').trim() }.filter { it.isNotEmpty() }
+                    .take(4)
+                    .map { if (it.length <= 32 && EXTENSION_NAME.matches(it)) it else REDACTED }
+            synchronized(Diagnostics) {
+                extensions = names
+                changes.incrementAndGet()
             }
         }
 
@@ -187,6 +327,7 @@ internal object Diagnostics {
                 synchronized(Diagnostics) {
                     if (outcome != null) return false
                     outcome = safeToken(result)
+                    changes.incrementAndGet()
                     (now() - at).also { durationMs = it }
                 }
             record(Kind.CONNECT, label, duration, outcome = result)
@@ -203,7 +344,7 @@ internal object Diagnostics {
         }
 
         internal fun snapshot() =
-            synchronized(Diagnostics) { Connect(at, label, phases.toList(), durationMs, outcome) }
+            synchronized(Diagnostics) { Connect(at, label, phases.toList(), durationMs, outcome, extensions) }
     }
 
     /** A synchronous trace section on this thread; a no-op where the framework is missing. */
@@ -278,6 +419,43 @@ internal object Diagnostics {
             all.filter { it.kind == Kind.ACTIVATE },
             frames,
             all,
+            link(),
+            previousRun,
+        )
+    }
+
+    /** Round trips, counters and close codes so far. */
+    @Synchronized
+    fun link(): Link {
+        val rtt =
+            if (rttCount == 0) null
+            else {
+                val sorted = rttMillis.copyOf(rttCount).sorted()
+                Rtt(rttCount, percentile(sorted, 50), percentile(sorted, 95), rttLast, relayRtt)
+            }
+        return Link(
+            rtt,
+            Counter.entries.associateWith { counts[it.ordinal] }.filterValues { it > 0 },
+            closeCodeCounts.toMap(),
+        )
+    }
+
+    /**
+     * What a [DiagnosticsStore] saves: the newest connections, failures, recoveries and offline
+     * intervals, and the [link] summary, with wall-clock times computed from [wallNow].
+     */
+    @Synchronized
+    fun persistable(wallNow: Long): PreviousRun {
+        val monotonicNow = now()
+        fun wall(at: Long) = wallNow - (monotonicNow - at).coerceAtLeast(0)
+        val all = (0 until size).map { entries[(next - 1 - it + CAPACITY) % CAPACITY]!! }
+        return PreviousRun(
+            wallNow,
+            connects.reversed().map { it.snapshot().let { connect -> connect.copy(at = wall(connect.at)) } },
+            all.filter { it.kind == Kind.FAILURE || it.kind == Kind.RECOVERY || it.kind == Kind.OFFLINE }
+                .take(STORED_ENTRIES)
+                .map { it.copy(at = wall(it.at)) },
+            link(),
         )
     }
 
@@ -304,20 +482,16 @@ internal object Diagnostics {
             appendLine()
             appendLine("Connections (newest first)")
             if (report.connects.isEmpty()) appendLine("  none")
-            report.connects.forEach { connect ->
-                val phases = connect.breakdown().joinToString(", ") { (phase, ms) -> "${phase.name.lowercase()} ${ms}ms" }
-                appendLine(
-                    "  ${ago(report.now, connect.at)} ${connect.label} ${connect.outcome ?: "pending"}" +
-                        (connect.durationMs?.let { " ${it}ms" } ?: "") +
-                        (if (phases.isEmpty()) "" else ": $phases")
-                )
-            }
+            report.connects.forEach { appendLine("  " + describe(it, report.now)) }
             appendLine()
             appendLine("Offline intervals")
             if (report.offline.isEmpty()) appendLine("  none")
             report.offline.forEach {
                 appendLine("  ${ago(report.now, it.at)} offline ${it.durationMs}ms (until ${it.label})")
             }
+            appendLine()
+            appendLine("Link")
+            appendLink(report.link)
             appendLine()
             report.frames?.let {
                 appendLine(
@@ -328,7 +502,47 @@ internal object Diagnostics {
             }
             appendLine("Events (newest first)")
             report.entries.forEach { appendLine("  " + describe(it, report.now)) }
+            report.previous?.let { previous ->
+                appendLine()
+                appendLine("Before restart (times are seconds before the last save)")
+                appendLink(previous.link)
+                appendLine("  Connections (newest first)")
+                if (previous.connects.isEmpty()) appendLine("    none")
+                previous.connects.forEach { appendLine("    " + describe(it, previous.savedAt)) }
+                appendLine("  Events (newest first)")
+                if (previous.entries.isEmpty()) appendLine("    none")
+                previous.entries.forEach { appendLine("    " + describe(it, previous.savedAt)) }
+            }
         }
+    }
+
+    private fun StringBuilder.appendLink(link: Link) {
+        val rtt = link.rtt
+        if (rtt == null) appendLine("  rtt none")
+        else {
+            appendLine(
+                "  rtt n=${rtt.count} p50=${rtt.p50}ms p95=${rtt.p95}ms last=${rtt.last}ms" +
+                    (rtt.relayMs?.let { " relay=${it}ms" } ?: "")
+            )
+        }
+        appendLine(
+            "  reconnects=${link.count(Counter.RECONNECTS)} okhttpPingFailures=${link.count(Counter.PING_FAILURES)} " +
+                "pingTimeouts=${link.count(Counter.PING_TIMEOUTS)} acksSent=${link.count(Counter.ACKS_SENT)} " +
+                "resumesReplayed=${link.count(Counter.RESUMES_REPLAYED)} resumesSnapshot=${link.count(Counter.RESUMES_SNAPSHOT)}"
+        )
+        appendLine(
+            "  closeCodes " +
+                (link.closeCodes.entries.joinToString(" ") { "${it.key}=${it.value}" }.ifEmpty { "none" }) +
+                " flowCloses=${link.flowCloses}"
+        )
+    }
+
+    private fun describe(connect: Connect, now: Long): String {
+        val phases = connect.breakdown().joinToString(", ") { (phase, ms) -> "${phase.name.lowercase()} ${ms}ms" }
+        return "${ago(now, connect.at)} ${connect.label} ${connect.outcome ?: "pending"}" +
+            (connect.durationMs?.let { " ${it}ms" } ?: "") +
+            (if (connect.extensions.isEmpty()) "" else " ext=" + connect.extensions.joinToString("+")) +
+            (if (phases.isEmpty()) "" else ": $phases")
     }
 
     private fun describe(entry: Entry, now: Long) =
@@ -350,6 +564,14 @@ internal object Diagnostics {
         connects.clear()
         frameNext = 0
         frameCount = 0
+        rttNext = 0
+        rttCount = 0
+        rttLast = 0
+        relayRtt = null
+        counts.fill(0)
+        closeCodeCounts.clear()
+        previousRun = null
+        changes.set(0)
         clock = defaultClock
     }
 
@@ -359,6 +581,9 @@ internal object Diagnostics {
         val rank = Math.ceil(percent / 100.0 * sorted.size).toInt().coerceIn(1, sorted.size)
         return sorted[rank - 1]
     }
+
+    /** A WebSocket extension name as RFC 6455 registers them, such as `permessage-deflate`. */
+    private val EXTENSION_NAME = Regex("[a-z0-9]+(?:[-_][a-z0-9]+)*")
 
     private val TOKEN = Regex("[A-Za-z0-9]+(?:[._:][A-Za-z0-9]+)*")
 

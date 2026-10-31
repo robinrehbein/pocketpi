@@ -314,6 +314,7 @@ class PromptPredictionTest {
         assertNull(hostSuggestion(idle.copy(sending = true)))
         val pending = PendingSend("m1", "Run the tests again", null, emptyList(), PendingSendState.SENDING)
         assertNull(hostSuggestion(idle.copy(pendingSend = pending)))
+        assertNull(hostSuggestion(idle.copy(pendingSend = pending.copy(state = PendingSendState.QUEUED))))
         assertNull(hostSuggestion(idle.copy(pendingSend = pending.copy(state = PendingSendState.CONFIRMED))))
         assertEquals(
             "Run the tests again",

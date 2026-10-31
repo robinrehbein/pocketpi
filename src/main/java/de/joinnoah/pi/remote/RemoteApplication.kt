@@ -27,6 +27,7 @@ class RemoteApplication : Application() {
     internal val stores by lazy { AppStores(this) }
 
     private lateinit var pushRegistration: PushRegistration
+    private lateinit var diagnosticsStore: DiagnosticsStore
     lateinit var repository: RemoteRepository
         private set
 
@@ -76,6 +77,8 @@ class RemoteApplication : Application() {
         appLock = AppLock(AppLockStore(this), deviceSecure = { deviceSecure(this) })
         val attachments = stores.attachments
         val importer = AttachmentImporter(this, attachments)
+        diagnosticsStore =
+            DiagnosticsStore(java.io.File(noBackupFilesDir, "diagnostics-v1.json"), scope).also { it.start() }
         repository =
             DefaultRemoteRepository(
                 stores.pairings,
@@ -91,6 +94,7 @@ class RemoteApplication : Application() {
                 onUnpaired = ::onUnpaired,
                 projectHint = ::sessionProjectHint,
                 media = stores.media,
+                liveRunKept = { LiveRun.service != null },
             )
         observeRecovery()
         predictions = PromptPredictions(this, scope, stores.pairings)
@@ -177,6 +181,11 @@ class RemoteApplication : Application() {
         home.onPush(payload)
     }
 
+    /** A push arrived for a paired host; wakes the main connection. Called on any thread. */
+    internal fun onPushWake(routeId: String) {
+        scope.launch { repository.pushWake(routeId) }
+    }
+
     /** A notification action answered a question; called off the main thread. */
     internal fun onQuestionAnsweredInBackground(
         routeId: String,
@@ -252,6 +261,7 @@ class RemoteApplication : Application() {
 
                 override fun onStop(owner: LifecycleOwner) {
                     foreground = false
+                    diagnosticsStore.flush()
                     repository.setForeground(false)
                 }
             }

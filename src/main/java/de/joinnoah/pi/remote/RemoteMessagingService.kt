@@ -51,6 +51,8 @@ class RemoteMessagingService : FirebaseMessagingService() {
             QuestionUpgrades.onEvent(applicationContext, payload)
         }
 
+        override fun wake(payload: PushPayload) = app.onPushWake(payload.routeId)
+
         override fun postAttention(payload: PushPayload) {
             RemoteNotifications.postAttention(service, payload)
             CompletionUpgrades.schedule(applicationContext, payload)
@@ -90,6 +92,12 @@ internal interface PushHost {
     /** A session's state changed: the home surfaces and the question upgrades learn of it. */
     fun recordState(payload: PushPayload)
 
+    /**
+     * Asks the app to bring its own connection to the Mac up, when this process has one active,
+     * so the upgrade of the notification can use it. Never waits.
+     */
+    fun wake(payload: PushPayload)
+
     fun postAttention(payload: PushPayload)
 
     fun postComplete(payload: PushPayload)
@@ -109,6 +117,9 @@ internal fun receivePush(payload: PushPayload, host: PushHost) {
         host.postAttention(payload)
         return
     }
+    // The wake goes first: recording the state enqueues the question upgrade, whose worker uses the
+    // woken connection only if it sees the wake, and opens a socket of its own otherwise.
+    host.wake(payload)
     host.recordState(payload)
     if (!host.canPost()) return
     // The open chat already shows the question or the result.

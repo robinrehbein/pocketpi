@@ -7,6 +7,8 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -20,15 +22,35 @@ class PendingSendLabelTest {
 
     private val tag = "pendingSendLabel-pending-m1"
 
-    private fun show(item: ConversationItem.Bubble) =
+    private fun show(item: ConversationItem.Bubble, onCancelQueued: (() -> Unit)? = null) =
         compose.setContent {
             MaterialTheme {
-                ConversationMessage(item, ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {})
+                ConversationMessage(
+                    item, ThinkingDisplay.STATUS, thinkingActive = false, onQuote = {}, onCancelQueued = onCancelQueued,
+                )
             }
         }
 
     private fun pending(state: PendingSendState) =
         pendingSendItem(PendingSend("m1", "Hello pi", null, emptyList(), state))
+
+    @Test fun queuedPromptShowsItWaitsForTheConnectionAndCanBeCancelled() {
+        var cancelled = 0
+        show(pending(PendingSendState.QUEUED), onCancelQueued = { cancelled++ })
+        compose.onNodeWithTag(tag).assertIsDisplayed().assertTextEquals("Queued, sends when connected")
+        compose.onNodeWithTag("cancelQueued-pending-m1").assertIsDisplayed().performClick()
+        assertEquals(1, cancelled)
+    }
+
+    @Test fun queuedPromptWithoutACancelActionOffersNone() {
+        show(pending(PendingSendState.QUEUED))
+        compose.onAllNodesWithTag("cancelQueued-pending-m1").assertCountEquals(0)
+    }
+
+    @Test fun sendingPromptOffersNoCancel() {
+        show(pending(PendingSendState.SENDING), onCancelQueued = {})
+        compose.onAllNodesWithTag("cancelQueued-pending-m1").assertCountEquals(0)
+    }
 
     @Test fun promptOnItsWayShowsSending() {
         show(pending(PendingSendState.SENDING))
