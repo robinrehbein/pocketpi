@@ -3561,6 +3561,11 @@ internal fun RemoteScreen(
                          connectionStatusLine(state),
                          draftDeliveryNotice(state.sending, state.uncertain, state.connected),
                      )
+                    ChatCurrentActivity(
+                        remember(chatKey, state, presentation) {
+                            sessionActivityLine(state, presentation.items, chatKey?.selection())
+                        },
+                    )
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,
