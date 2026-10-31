@@ -321,3 +321,19 @@ container and staging removal. All 49 deployment helper tests pass; Biome report
 errors and eight fixture typing warnings. No application runtime changed in this increment.
 Evidence: `/private/tmp/pocketpi-connected-maintained-{final,unit,biome}.log`.
 Independent remote Linux and connected Devcontainer-supervisor qualification remain open.
+
+## Connected supervisor entrypoint — 2026-10-31
+
+The maintained runner now accepts `--supervisor`, combinable with `--reconnect`.
+The actual image entrypoint starts its supervisor before setup and remains alive
+for one second without config, IPC socket or child process. Explicit owner setup
+then causes that supervisor to launch the regular host. The complete connected
+TLS/pairing/native-Pi/snapshot/provider/bash/reconnect flow passes, followed by
+supervisor exit zero, worker exit and verified outer cleanup. Image ID remains
+`sha256:4a46342c19b693c67eda4670c9004a6ff1c13c0296ccc9c90574a588ede14a69`.
+
+All 52 deployment-helper tests pass; Biome has zero errors and eight existing
+fixture typing warnings. Evidence:
+`/private/tmp/pocketpi-connected-supervisor-{reconnect,unit,biome}.log`.
+This exercises the real entrypoint and supervisor in an isolated container, not
+an actual connected Dev Containers CLI `up`; that composition remains open.
