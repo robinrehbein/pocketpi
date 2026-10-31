@@ -313,6 +313,25 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun browserCapabilityOnV3ProjectsRouteEnablesBrowserForSelectedSession() = runTest {
+        val transport = Transport().also(::configure)
+        // The frozen handshake does not advertise browser support; discovery does.
+        advertising(transport, JsonArray(listOf(JsonPrimitive(SESSION_BROWSER_CAPABILITY))))
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", "session"), ActivationMode.USER_OPEN)
+        runCurrent()
+
+        assertTrue(transport.sent.any {
+            it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v3:")
+        })
+        assertTrue(repo.state.value.connected)
+        assertEquals("session", repo.state.value.selection.sessionId)
+        assertTrue(repo.state.value.capabilitiesKnown)
+        assertTrue(SESSION_BROWSER_CAPABILITY in repo.state.value.capabilities)
+        assertTrue(repo.canOpenBrowser())
+    }
+
+    @Test
     fun capabilityDiscoveryFallsBackOnlyWhenListIsAbsent() = runTest {
         for (supported in listOf(1, 2, 3)) {
             val transport = Transport().also(::configure)

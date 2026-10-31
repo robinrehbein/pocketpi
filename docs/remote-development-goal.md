@@ -1,5 +1,23 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Real browser transport checkpoint on 2026-10-31
+
+After integrating current upstream branches, a real Android instrumentation flow now exercises
+TLS/WSS, authenticated encrypted transport, the repository, HostDaemon, actual owned Chromium
+and the native browser pane. It exposed and fixed a missing browser capability whitelist entry;
+the new repository regression failed before that fix and passed afterward. The full Android
+quick-check passed 3,028 app and 34 Wear tests; the final host Remote suite passed 3,004 with
+23 skipped. The stronger phone flow passed, and a tablet diagnostic flow also passed, including
+independent pointer event counters, a unique form value and the visible green submit frame.
+
+Pre-fix phone/tablet runs exposed concurrent screenshot/resize restoring stale viewport metrics.
+Per-tab CDP transactions now serialize that boundary, retain ownership through actual completion
+after abort and recheck authority before queued dispatch. Both final phone/tablet workflows and
+60 targeted host regressions passed. These results do not establish universal stability. The
+session IPC peer remains synthetic, and physical Samsung, real Pi model turns, independent
+Linux/devcontainer, protected preview and emulator qualification remain open. See
+[the transport evidence and reproduction guide](testing/browser-transport-e2e.md).
+
 ## Browser viewer increment in progress on 2026-10-31
 
 The local working trees now contain a native shared-browser pane, bounded JPEG decoding,

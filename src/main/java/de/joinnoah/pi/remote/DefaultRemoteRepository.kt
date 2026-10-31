@@ -279,6 +279,8 @@ class DefaultRemoteRepository(
             // Only on capability routes v2 and later; writes need the project's `writable` flag as well.
             TICKETS_CAPABILITY,
             SESSION_TASKS_CAPABILITY,
+            // Browser commands additionally require a successfully negotiated v3 route.
+            SESSION_BROWSER_CAPABILITY,
         )
     /** The projects.list route falls back through v2 to v1 only when a list is absent. */
     private var terminalRouteOffered = false
