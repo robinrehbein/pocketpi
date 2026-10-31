@@ -20,6 +20,28 @@ class BrowserProtocolTest {
         }
     }
 
+    @Test fun sharedRecoveryFixturesValidateAgainstAndroidProtocol() {
+        val fixture = json(javaClass.getResource("/browser-recovery-v1.json")!!.readText())
+        assertEquals(SESSION_BROWSER_RECOVERY_CAPABILITY, fixture.text("capability"))
+        for (group in listOf("valid", "invalid")) for (entry in fixture.getValue(group).jsonArray) {
+            val item = entry.jsonObject
+            val payload = item.obj("payload")
+            val check = {
+                when (payload.text("type")) {
+                    "browser.open" -> { parseBrowserCommand(payload); Unit }
+                    "browser.watch" -> validateBrowserStreamCommand(payload)
+                    "host.event" -> when (payload.text("kind")) {
+                        "browser.document" -> { parseBrowserDocument(payload); Unit }
+                        "browser.frame.waiting" -> { parseBrowserWaiting(payload); Unit }
+                        else -> error("Unknown event")
+                    }
+                    else -> error("Unknown recovery fixture")
+                }
+            }
+            if (group == "valid") check() else assertThrows(item.text("name"), Exception::class.java) { check() }
+        }
+    }
+
     @Test fun inputBoundsAndUnicodeAreEnforcedBeforeSending() {
         val base = """{"type":"browser.input","requestId":"r","sessionId":"s","browserId":"b","leaseId":"l","generation":1,"tabId":"t","viewportRevision":0,"sequence":0,"input":INPUT}"""
         fun check(input: JsonObject) = parseBrowserCommand(json(base.replace("INPUT", input.toString())))

@@ -97,4 +97,35 @@ class BrowserPaneTest {
         compose.onNodeWithTag("browserViewport").assertIsFocused()
     }
 
+    @Test fun lostFrameAndControlRemovePreviouslyDecodedImage() {
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = image()))
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(), {}) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.runOnIdle { view = view.copy(image = null, ownsControl = false, notice = BrowserNotice.FRAME_FAILED) }
+        compose.onNodeWithContentDescription("Remote browser image").assertDoesNotExist()
+    }
+
+    @Test fun documentResetKeepsUncertainDraftAndDiscardsQueuedInput() {
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = image()))
+        val sent = mutableListOf<BrowserInput>()
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(input = { sent.add(it); view = view.copy(inputPending = true); true }), {}) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("browserText").performTextInput("keep draft")
+        compose.onNodeWithTag("browserSendText").performClick()
+        compose.runOnIdle { view = view.copy(viewportRevision = 2, documentEpoch = 1, inputPending = false, image = null) }
+        compose.onNodeWithTag("browserText").assertTextContains("keep draft")
+        compose.runOnIdle { assertEquals(1, sent.size) }
+    }
+
+    @Test fun movingViewBlocksNewTextUntilStableFrame() {
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = image()))
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(), {}) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("browserText").performTextInput("draft")
+        compose.runOnIdle { view = view.copy(moving = true) }
+        compose.onNodeWithTag("browserSendText").assertIsNotEnabled()
+        compose.runOnIdle { view = view.copy(moving = false) }
+        compose.onNodeWithTag("browserSendText").assertIsEnabled()
+    }
+
 }

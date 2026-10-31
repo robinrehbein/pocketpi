@@ -72,7 +72,8 @@ internal fun validateBrowserStreamCommand(o: JsonObject): Unit = frameValidation
     val base = setOf("type", "requestId", "sessionId", "browserId")
     when (o.frameString("type")) {
         "browser.watch" -> {
-            Wire.keys(o, base + setOf("tabId", "generation", "viewportRevision"))
+            Wire.keys(o, base + setOf("tabId", "generation", "viewportRevision"), setOf("recovery"))
+            if ("recovery" in o) o.flag("recovery")
             o.frameId("tabId"); o.frameCount("generation"); o.frameCount("viewportRevision")
         }
         "browser.frame.ack" -> {
@@ -83,6 +84,12 @@ internal fun validateBrowserStreamCommand(o: JsonObject): Unit = frameValidation
         else -> throw IllegalArgumentException("Unknown browser stream command")
     }
     o.frameId("requestId"); o.frameId("sessionId"); o.frameId("browserId"); Unit
+}
+internal data class BrowserWaiting(val browserId: String, val tabId: String, val streamId: String, val generation: Long, val viewportRevision: Long)
+internal fun parseBrowserWaiting(o: JsonObject): BrowserWaiting = frameValidation {
+    Wire.keys(o, setOf("type", "kind", "browserId", "tabId", "streamId", "generation", "viewportRevision", "reason"))
+    require(o.frameString("type") == "host.event" && o.frameString("kind") == "browser.frame.waiting" && o.frameString("reason") == "moving")
+    BrowserWaiting(o.frameId("browserId"), o.frameId("tabId"), o.frameId("streamId"), o.frameCount("generation"), o.frameCount("viewportRevision"))
 }
 internal fun validateBrowserStreamResult(o: JsonObject): Unit = frameValidation {
     when (o.frameString("kind")) {

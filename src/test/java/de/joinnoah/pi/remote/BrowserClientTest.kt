@@ -14,6 +14,12 @@ class BrowserClientTest {
     private fun opened() = Wire.objectOf("kind" to "browser.opened", "browserId" to "b", "generation" to 1, "incarnation" to "i", "tabs" to JsonArray(listOf(Wire.objectOf("id" to "tab", "title" to "T", "url" to "https://example.com"))), "viewportRevision" to 1)
     private fun lease(owner: String = "device") = Wire.objectOf("kind" to "browser.lease", "browserId" to "b", "generation" to 1, "leaseId" to "private", "owner" to Wire.objectOf("kind" to "device", "id" to owner), "viewportRevision" to 1)
     private fun watching() = Wire.objectOf("kind" to "browser.watching", "browserId" to "b", "streamId" to "stream", "generation" to 1, "viewportRevision" to 1)
+    private fun document(leaseId: String = "private") = Wire.objectOf(
+        "type" to "host.event", "kind" to "browser.document", "sessionId" to "session", "browserId" to "b", "incarnation" to "i", "tabId" to "tab", "generation" to 1,
+        "fromViewportRevision" to 1, "viewportRevision" to 2, "tabs" to opened().getValue("tabs"),
+        "owner" to Wire.objectOf("kind" to "device", "id" to "device"), "control" to Wire.objectOf("leaseId" to leaseId, "nextSequence" to 1),
+    )
+    private fun waiting(streamId: String = "stream") = Wire.objectOf("type" to "host.event", "kind" to "browser.frame.waiting", "browserId" to "b", "tabId" to "tab", "streamId" to streamId, "generation" to 1, "viewportRevision" to 1, "reason" to "moving")
     private fun frame() = buildJsonObject {
         put("type", "host.event"); put("kind", "browser.frame"); put("browserId", "b"); put("tabId", "tab"); put("streamId", "stream")
         put("generation", 1); put("viewportRevision", 1); put("frameId", 1); put("chunkIndex", 0); put("chunkCount", 1); put("totalBytes", 3)
@@ -302,6 +308,172 @@ class BrowserClientTest {
         calls.last { it.first == "browser.open" }.also { calls.remove(it); it.second.complete(opened()) }; runCurrent()
         assertFalse(client.acquire())
         assertEquals(1, calls.count { it.first == "browser.acquire" })
+    }
+
+    @Test fun documentTransitionPreservesConfirmedLeaseAndUsesHostSequenceWithoutReplay() = runTest {
+        data class Call(val type: String, val fields: Array<out Pair<String, Any?>>, val result: CompletableDeferred<JsonObject>)
+        val calls = mutableListOf<Call>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, fields -> CompletableDeferred<JsonObject>().also { calls.add(Call(type, fields, it)) }.await() }, {}, recoveryEnabled = { true })
+        client.open("session", 1); runCurrent(); calls.removeAt(0).result.complete(opened()); runCurrent()
+        calls.first { it.type == "browser.watch" }.also { calls.remove(it); it.result.complete(watching()) }; runCurrent()
+        client.acquire(); runCurrent(); calls.first { it.type == "browser.acquire" }.also { calls.remove(it); it.result.complete(lease()) }; runCurrent()
+        calls.first { it.type == "browser.watch" }.also { calls.remove(it); it.result.complete(watching()) }; runCurrent()
+        assertTrue(client.input(BrowserInput.Text("uncertain"))); runCurrent()
+        val pending = calls.first { it.type == "browser.input" }; calls.remove(pending)
+        client.frame(document()); runCurrent()
+        assertTrue(client.view!!.ownsControl); assertEquals(2L, client.view!!.viewportRevision)
+        assertFalse(client.input(BrowserInput.Text("not while previous command is unresolved")))
+        pending.result.complete(Wire.objectOf("kind" to "browser.input.ack", "browserId" to "b", "generation" to 1, "sequence" to 0, "status" to "accepted")); runCurrent()
+        assertNull(client.view!!.receipt)
+        assertTrue(client.input(BrowserInput.Text("new"))); runCurrent()
+        val next = calls.first { it.type == "browser.input" }
+        assertEquals("1", next.fields.first { it.first == "sequence" }.second.toString())
+        assertEquals(1, calls.count { it.type == "browser.input" }); assertTrue(calls.none { it.type == "browser.acquire" })
+    }
+
+    @Test fun documentWithDifferentLeaseFailsClosed() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ -> CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await() }, {}, recoveryEnabled = { true })
+        client.open("session", 1); runCurrent(); calls.removeAt(0).second.complete(opened()); runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.complete(watching()) }; runCurrent()
+        client.acquire(); runCurrent(); calls.first { it.first == "browser.acquire" }.also { calls.remove(it); it.second.complete(lease()) }; runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.complete(watching()) }; runCurrent()
+        client.frame(document("other")); runCurrent()
+        assertFalse(client.view!!.ownsControl); assertEquals(2L, client.view!!.viewportRevision); assertFalse(client.input(BrowserInput.Text("must not send")))
+        assertTrue(calls.none { it.first == "browser.acquire" })
+    }
+
+    @Test fun waitingHeartbeatExtendsOnlyMatchingStreamDeadline() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ -> CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await() }, {}, recoveryEnabled = { true })
+        client.open("session", 1); runCurrent(); calls.removeAt(0).second.complete(opened()); runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.complete(watching()) }; runCurrent()
+        advanceTimeBy(5000); client.frame(waiting()); runCurrent()
+        advanceTimeBy(1000); runCurrent(); assertNull(client.view!!.notice)
+        client.frame(waiting("old")); runCurrent()
+        advanceTimeBy(5000); runCurrent(); assertEquals(BrowserNotice.FRAME_FAILED, client.view!!.notice)
+    }
+
+    @Test fun documentDuringAcquireKeepsReservationAndReleasesLateGrant() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ -> CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await() }, {}, recoveryEnabled = { true })
+        client.open("session", 1); runCurrent(); calls.removeAt(0).second.complete(opened()); runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.complete(watching()) }; runCurrent()
+        assertTrue(client.acquire()); runCurrent(); val acquire = calls.first { it.first == "browser.acquire" }; calls.remove(acquire)
+        client.frame(JsonObject(document().filterKeys { it != "control" })); runCurrent()
+        assertFalse(client.view!!.ownsControl); assertFalse(client.acquire())
+        acquire.second.complete(lease()); runCurrent()
+        assertFalse(client.view!!.ownsControl); assertTrue(calls.any { it.first == "browser.detach" }); assertFalse(client.acquire())
+    }
+
+    @Test fun documentRequiresCurrentScopeAndAcceptsCoveredRevisionRange() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ -> CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await() }, {}, recoveryEnabled = { true })
+        client.open("session", 1); runCurrent(); calls.removeAt(0).second.complete(opened()); runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.complete(watching()) }; runCurrent()
+        client.frame(JsonObject(document() + ("incarnation" to JsonPrimitive("old")))); runCurrent()
+        assertEquals(1L, client.view!!.viewportRevision)
+        client.frame(JsonObject(document() + mapOf("fromViewportRevision" to JsonPrimitive(0), "viewportRevision" to JsonPrimitive(3)))); runCurrent()
+        assertEquals(3L, client.view!!.viewportRevision); assertFalse(client.view!!.ownsControl)
+        client.frame(document()); runCurrent(); assertEquals(3L, client.view!!.viewportRevision)
+    }
+
+    @Test fun recoveryCapabilityIsOptInForOpenAndWatch() = runTest {
+        data class Call(val type: String, val fields: Array<out Pair<String, Any?>>, val result: CompletableDeferred<JsonObject>)
+        suspend fun check(recovery: Boolean) {
+            val calls = mutableListOf<Call>()
+            val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, fields -> CompletableDeferred<JsonObject>().also { calls.add(Call(type, fields, it)) }.await() }, {}, recoveryEnabled = { recovery })
+            client.open("session", 1); runCurrent()
+            val open = calls.removeAt(0); assertEquals(recovery, open.fields.any { it.first == "recovery" && it.second == JsonPrimitive(true) })
+            open.result.complete(opened()); runCurrent()
+            val watch = calls.first { it.type == "browser.watch" }; assertEquals(recovery, watch.fields.any { it.first == "recovery" && it.second == true })
+            client.close()
+        }
+        check(false); check(true)
+    }
+
+    @Test fun hiddenDocumentUpdatesReadOnlyRevisionWithoutStartingWatch() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ -> CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await() }, {}, recoveryEnabled = { true })
+        client.open("session", 1); runCurrent(); calls.removeAt(0).second.complete(opened()); runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.complete(watching()) }; runCurrent()
+        client.setVisible(false); runCurrent(); calls.clear()
+        client.frame(JsonObject(document().filterKeys { it != "control" })); runCurrent()
+        assertEquals(2L, client.view!!.viewportRevision); assertFalse(client.view!!.ownsControl); assertTrue(calls.none { it.first == "browser.watch" })
+    }
+
+    @Test fun uncoveredDocumentRevisionFailsClosed() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ -> CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await() }, {}, recoveryEnabled = { true })
+        client.open("session", 1); runCurrent(); calls.removeAt(0).second.complete(opened()); runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.complete(watching()) }; runCurrent()
+        client.acquire(); runCurrent(); calls.first { it.first == "browser.acquire" }.also { calls.remove(it); it.second.complete(lease()) }; runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.complete(watching()) }; runCurrent()
+        client.frame(JsonObject(document() + mapOf("fromViewportRevision" to JsonPrimitive(2), "viewportRevision" to JsonPrimitive(3)))); runCurrent()
+        assertFalse(client.view!!.ownsControl); assertTrue(calls.any { it.first == "browser.detach" })
+    }
+
+    @Test fun failedReplacementWatchKeepsPreviousInputReservedUntilItSettles() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ -> CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await() }, {}, recoveryEnabled = { true })
+        client.open("session", 1); runCurrent(); calls.removeAt(0).second.complete(opened()); runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.complete(watching()) }; runCurrent()
+        client.acquire(); runCurrent(); calls.first { it.first == "browser.acquire" }.also { calls.remove(it); it.second.complete(lease()) }; runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.complete(watching()) }; runCurrent()
+        assertTrue(client.input(BrowserInput.Text("pending"))); runCurrent()
+        val input = calls.first { it.first == "browser.input" }; calls.remove(input)
+        client.frame(document()); runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.completeExceptionally(IllegalStateException("watch failed")) }; runCurrent()
+        calls.first { it.first == "browser.detach" }.also { calls.remove(it); it.second.complete(Wire.objectOf("kind" to "browser.released", "browserId" to "b", "generation" to 2)) }; runCurrent()
+        assertFalse(client.acquire())
+        input.second.complete(Wire.objectOf("kind" to "browser.input.ack", "browserId" to "b", "generation" to 1, "sequence" to 0, "status" to "accepted")); runCurrent()
+        assertTrue(client.acquire())
+    }
+
+    @Test fun documentCanReuseSequenceNotYetAdmittedByHostWithoutReplayingInput() = runTest {
+        data class Call(val type: String, val fields: Array<out Pair<String, Any?>>, val result: CompletableDeferred<JsonObject>)
+        val calls = mutableListOf<Call>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, fields -> CompletableDeferred<JsonObject>().also { calls.add(Call(type, fields, it)) }.await() }, {}, recoveryEnabled = { true })
+        client.open("session", 1); runCurrent(); calls.removeAt(0).result.complete(opened()); runCurrent()
+        calls.first { it.type == "browser.watch" }.also { calls.remove(it); it.result.complete(watching()) }; runCurrent()
+        client.acquire(); runCurrent(); calls.first { it.type == "browser.acquire" }.also { calls.remove(it); it.result.complete(lease()) }; runCurrent()
+        calls.first { it.type == "browser.watch" }.also { calls.remove(it); it.result.complete(watching()) }; runCurrent()
+        assertTrue(client.input(BrowserInput.Text("not admitted"))); runCurrent()
+        val old = calls.first { it.type == "browser.input" }; calls.remove(old)
+        val control = Wire.objectOf("leaseId" to "private", "nextSequence" to 0)
+        client.frame(JsonObject(document() + ("control" to control))); runCurrent()
+        assertTrue(client.view!!.ownsControl)
+        old.result.completeExceptionally(IllegalStateException("old viewport rejected")); runCurrent()
+        assertTrue(client.input(BrowserInput.Text("new explicit input"))); runCurrent()
+        val next = calls.first { it.type == "browser.input" }
+        assertEquals("0", next.fields.first { it.first == "sequence" }.second.toString())
+        assertEquals(1, calls.count { it.type == "browser.input" }); assertTrue(calls.none { it.type == "browser.acquire" })
+    }
+
+    @Test fun documentCannotRollBackConfirmedHostSequence() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ -> CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await() }, {}, recoveryEnabled = { true })
+        client.open("session", 1); runCurrent(); calls.removeAt(0).second.complete(opened()); runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.complete(watching()) }; runCurrent()
+        client.acquire(); runCurrent(); calls.first { it.first == "browser.acquire" }.also { calls.remove(it); it.second.complete(lease()) }; runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.complete(watching()) }; runCurrent()
+        assertTrue(client.input(BrowserInput.Text("accepted"))); runCurrent()
+        calls.first { it.first == "browser.input" }.also { calls.remove(it); it.second.complete(Wire.objectOf("kind" to "browser.input.ack", "browserId" to "b", "generation" to 1, "sequence" to 0, "status" to "accepted")) }; runCurrent()
+        client.frame(JsonObject(document() + ("control" to Wire.objectOf("leaseId" to "private", "nextSequence" to 0)))); runCurrent()
+        assertFalse(client.view!!.ownsControl); assertTrue(calls.any { it.first == "browser.detach" })
+    }
+
+    @Test fun documentCannotRollBackPreviousAuthoritativeNextSequence() = runTest {
+        val calls = mutableListOf<Pair<String, CompletableDeferred<JsonObject>>>()
+        val client = BrowserClient(backgroundScope, { _, _ -> true }, { _, type, _ -> CompletableDeferred<JsonObject>().also { calls.add(type to it) }.await() }, {}, recoveryEnabled = { true })
+        client.open("session", 1); runCurrent(); calls.removeAt(0).second.complete(opened()); runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.complete(watching()) }; runCurrent()
+        client.acquire(); runCurrent(); calls.first { it.first == "browser.acquire" }.also { calls.remove(it); it.second.complete(lease()) }; runCurrent()
+        calls.first { it.first == "browser.watch" }.also { calls.remove(it); it.second.complete(watching()) }; runCurrent()
+        client.frame(document()); runCurrent(); assertTrue(client.view!!.ownsControl)
+        val olderSequence = JsonObject(document() + mapOf("fromViewportRevision" to JsonPrimitive(2), "viewportRevision" to JsonPrimitive(3), "control" to Wire.objectOf("leaseId" to "private", "nextSequence" to 0)))
+        client.frame(olderSequence); runCurrent()
+        assertFalse(client.view!!.ownsControl); assertTrue(calls.any { it.first == "browser.detach" })
     }
 
 }

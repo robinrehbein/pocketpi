@@ -4,6 +4,7 @@ import java.net.URI
 import kotlinx.serialization.json.*
 
 internal const val SESSION_BROWSER_CAPABILITY = "session.browser.v1"
+internal const val SESSION_BROWSER_RECOVERY_CAPABILITY = "session.browser.recovery.v1"
 private const val MAX_BROWSER_COUNT = 9_007_199_254_740_991L
 
 public sealed interface BrowserInput {
@@ -15,7 +16,7 @@ public sealed interface BrowserInput {
 internal sealed interface BrowserCommand {
     val requestId: String
     val sessionId: String
-    data class Open(override val requestId: String, override val sessionId: String) : BrowserCommand
+    data class Open(override val requestId: String, override val sessionId: String, val recovery: Boolean = false) : BrowserCommand
     data class Tabs(override val requestId: String, override val sessionId: String, val browserId: String) : BrowserCommand
     data class Participants(override val requestId: String, override val sessionId: String, val browserId: String) : BrowserCommand
     data class Acquire(override val requestId: String, override val sessionId: String, val browserId: String, val expectedGeneration: Long) : BrowserCommand
@@ -104,9 +105,9 @@ internal fun parseBrowserCommand(o: JsonObject): BrowserCommand {
         "browser.detach" -> l
         else -> error("Unknown browser command")
     }
-    Wire.keys(o, fields)
+    Wire.keys(o, fields, if (type == "browser.open") setOf("recovery") else emptySet())
     val r = o.id("requestId"); val s = o.id("sessionId")
-    if (type == "browser.open") return BrowserCommand.Open(r, s)
+    if (type == "browser.open") return BrowserCommand.Open(r, s, if ("recovery" in o) o.flag("recovery") else false)
     val browser = o.id("browserId")
     if (type == "browser.tabs") return BrowserCommand.Tabs(r, s, browser)
     if (type == "browser.participants") return BrowserCommand.Participants(r, s, browser)
@@ -137,7 +138,7 @@ internal fun encodeBrowserCommand(command: BrowserCommand): JsonObject {
     fun browser(type: String, id: String) { pairs.add("type" to type); pairs.add("browserId" to id) }
     fun lease(type: String, id: String, leaseId: String, generation: Long) { browser(type, id); pairs.add("leaseId" to leaseId); pairs.add("generation" to generation) }
     when (command) {
-        is BrowserCommand.Open -> pairs.add("type" to "browser.open")
+        is BrowserCommand.Open -> { pairs.add("type" to "browser.open"); if (command.recovery) pairs.add("recovery" to true) }
         is BrowserCommand.Tabs -> browser("browser.tabs", command.browserId)
         is BrowserCommand.Participants -> browser("browser.participants", command.browserId)
         is BrowserCommand.Acquire -> { browser("browser.acquire", command.browserId); pairs.add("expectedGeneration" to command.expectedGeneration) }
@@ -164,6 +165,15 @@ private fun parseBrowserTabs(o: JsonObject): List<BrowserTab> {
         Wire.keys(t, setOf("id", "title", "url"))
         BrowserTab(t.id("id"), browserString(t.text("title"), 1024, true), browserString(t.text("url"), 4096, true))
     }
+}
+internal data class BrowserDocumentEvent(val sessionId: String, val browserId: String, val incarnation: String, val tabId: String, val generation: Long, val fromRevision: Long, val revision: Long, val tabs: List<BrowserTab>, val owner: BrowserOwner?, val leaseId: String?, val nextSequence: Long?)
+internal fun parseBrowserDocument(o: JsonObject): BrowserDocumentEvent {
+    Wire.keys(o, setOf("type", "kind", "sessionId", "browserId", "incarnation", "tabId", "generation", "fromViewportRevision", "viewportRevision", "tabs"), setOf("owner", "control"))
+    require(o.text("type") == "host.event" && o.text("kind") == "browser.document")
+    val control = if ("control" in o) o.obj("control").also { Wire.keys(it, setOf("leaseId", "nextSequence")) } else null
+    require(control == null || "owner" in o)
+    val from = o.count("fromViewportRevision"); val revision = o.count("viewportRevision"); require(from < revision)
+    return BrowserDocumentEvent(o.id("sessionId"), o.id("browserId"), o.id("incarnation"), o.id("tabId"), o.count("generation"), from, revision, parseBrowserTabs(o), if ("owner" in o) parseBrowserOwner(o.obj("owner")) else null, control?.id("leaseId"), control?.count("nextSequence"))
 }
 internal fun parseBrowserResult(o: JsonObject): BrowserResult {
     val kind = o.text("kind")

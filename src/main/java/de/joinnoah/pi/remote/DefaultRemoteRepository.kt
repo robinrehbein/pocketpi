@@ -281,6 +281,7 @@ class DefaultRemoteRepository(
             SESSION_TASKS_CAPABILITY,
             // Browser commands additionally require a successfully negotiated v3 route.
             SESSION_BROWSER_CAPABILITY,
+            SESSION_BROWSER_RECOVERY_CAPABILITY,
         )
     /** The projects.list route falls back through v2 to v1 only when a list is absent. */
     private var terminalRouteOffered = false
@@ -363,6 +364,7 @@ class DefaultRemoteRepository(
             { state.value.host?.deviceId },
             { connection -> state.value.connected && generation == connection },
             { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
+            { state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_BROWSER_CAPABILITY in state.value.capabilities && SESSION_BROWSER_RECOVERY_CAPABILITY in state.value.capabilities },
         )
     }
     override fun canOpenBrowser(): Boolean = state.value.connected && state.value.selection.sessionId != null && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_BROWSER_CAPABILITY in state.value.capabilities
@@ -2024,7 +2026,7 @@ class DefaultRemoteRepository(
                 "event" -> receiveEvent(payload)
                 "host.event" ->
                     try {
-                        if (payload.optionalText("kind") == "browser.frame") {
+                        if (payload.optionalText("kind") in setOf("browser.frame", "browser.document", "browser.frame.waiting")) {
                             browserClient.frame(payload)
                         } else if (payload.optionalText("kind")?.startsWith("session.terminal.") == true) {
                             receiveTerminalEvent(payload)

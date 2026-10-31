@@ -72,7 +72,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     val density = LocalDensity.current.density
     val selected = view?.tabs?.firstOrNull { it.id == view.selectedTabId }
     LaunchedEffect(selected?.id, selected?.url) { if (!urlDirty) url = selected?.url.orEmpty() }
-    LaunchedEffect(view?.generation, view?.ownsControl, active, view?.sessionId) {
+    LaunchedEffect(view?.generation, view?.ownsControl, active, view?.sessionId, view?.documentEpoch) {
         queue.clear(); flight = null; held.clear(); releasing.clear(); pointerPosition = null; heldRevision = null
     }
     LaunchedEffect(view?.receipt, view?.inputPending, view?.ownsControl, flight, queue.size) {
@@ -125,11 +125,13 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             if (result != null) decoded = image to result
         }
     }
-    val bitmap = decoded?.second
-    val canInput = active && view?.ownsControl == true && image != null && decoded?.first === image && resizeRevision == null
+    val bitmap = decoded?.second?.takeIf { image != null || view?.ownsControl == true }
+    val canWheel = active && view?.ownsControl == true && image != null && decoded?.first === image && resizeRevision == null
+    val canInput = canWheel && view?.moving != true
     val canRelease = active && view?.ownsControl == true && (heldRevision == null || heldRevision == view.viewportRevision)
     val latestCanRelease by rememberUpdatedState(canRelease)
     val latestCanInput by rememberUpdatedState(canInput)
+    val latestCanWheel by rememberUpdatedState(canWheel)
     val latestView by rememberUpdatedState(view)
     val latestImage by rememberUpdatedState(image)
     fun enqueue(item: PendingBrowserInput): Boolean {
@@ -141,7 +143,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         }
         val down = when (input) { is BrowserInput.Pointer -> input.action == "down"; is BrowserInput.Key -> input.action == "down"; else -> false }
         val up = when (input) { is BrowserInput.Pointer -> input.action == "up"; is BrowserInput.Key -> input.action == "up"; else -> false }
-        if ((!up && !latestCanInput) || (up && !latestCanRelease)) return false
+        if ((!up && !latestCanInput && !(input is BrowserInput.Wheel && latestCanWheel)) || (up && !latestCanRelease)) return false
         if (up && (id == null || id !in held || id in releasing)) return false
         if (down && id in held) return false
         if (input is BrowserInput.Pointer && input.action == "move") {

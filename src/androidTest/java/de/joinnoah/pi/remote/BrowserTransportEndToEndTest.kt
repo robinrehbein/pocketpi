@@ -3,16 +3,21 @@ package de.joinnoah.pi.remote
 import android.os.ParcelFileDescriptor
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.content.Context
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import java.io.File
 import java.security.KeyStore
 import java.security.cert.CertificateFactory
@@ -137,6 +142,7 @@ class BrowserTransportEndToEndTest {
                 "capabilitiesKnown=${state.capabilitiesKnown}, browserCapability=$browserCapability, v3=$v3, " +
                 "loading=${state.loading}, errorPresent=${state.error != null}", failure)
         }
+        assertTrue("The v3 recovery capability must be negotiated", SESSION_BROWSER_RECOVERY_CAPABILITY in repository.state.value.capabilities)
         compose.runOnIdle { assertTrue(repository.openBrowser()) }
         compose.waitUntil(60_000) {
             repository.state.value.browser?.let { !it.opening && it.browserId != null } == true
@@ -178,14 +184,23 @@ class BrowserTransportEndToEndTest {
         val viewportBeforeText = repository.state.value.browser?.viewportRevision
         val submitted = "PocketPi browser integration ${java.util.UUID.randomUUID()}"
         compose.onNodeWithTag("browserText").performTextInput(submitted)
+        // This test exercises browser transport, so settle the IME-driven layout change before sending.
+        compose.runOnIdle {
+            val keyboard = compose.activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            keyboard.hideSoftInputFromWindow(compose.activity.window.decorView.windowToken, 0)
+        }
         compose.waitUntil(30_000) {
-            runCatching { compose.onNodeWithTag("browserSendText").assertIsEnabled(); true }.getOrDefault(false)
+            val insets = ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+            val browser = repository.state.value.browser
+            insets != null && !insets.isVisible(WindowInsetsCompat.Type.ime()) && browser?.ownsControl == true &&
+                !browser.inputPending && browser.image?.viewportRevision == browser.viewportRevision &&
+                runCatching { compose.onNodeWithTag("browserSendText").assertIsEnabled(); true }.getOrDefault(false)
         }
         val beforeTextReceipt = repository.state.value.browser?.receipt
         compose.onNodeWithTag("browserSendText").performClick()
-        compose.waitUntil(30_000) { status()?.optString("input") == submitted }
         var beforeSubmit: Long? = null
         try {
+            compose.waitUntil(30_000) { status()?.optString("input") == submitted }
             compose.waitUntil(30_000) {
                 repository.state.value.browser?.let {
                     !it.inputPending && it.receipt != null && it.receipt != beforeTextReceipt && it.receipt.status == "accepted"
@@ -235,6 +250,91 @@ class BrowserTransportEndToEndTest {
             }.getOrDefault(false)
         }
         assertEquals(submitted, status()?.getString("submitted"))
+        // Follow an actual page link while retaining a separate, unsent Android draft.
+        val unsent = "unsent navigation draft ${java.util.UUID.randomUUID()}"
+        compose.onNodeWithTag("browserText").performTextInput(unsent)
+        compose.waitUntil(30_000) {
+            runCatching { compose.onNodeWithTag("browserSendText").assertIsEnabled(); true }.getOrDefault(false)
+        }
+        val beforeNavigation = requireNotNull(repository.state.value.browser)
+        assertTrue(beforeNavigation.ownsControl)
+        val oldImage = requireNotNull(beforeNavigation.image)
+        val beforeLinkStatus = requireNotNull(status())
+        val oldVisits = beforeLinkStatus.getInt("nextVisits")
+        val beforeRecovery = beforeLinkStatus.getJSONObject("recoveryDiagnostics")
+        val acquireRequests = beforeRecovery.getInt("acquireRequests")
+        val sameLeaseEvents = beforeRecovery.getInt("sameLeaseDocumentEvents")
+        val differentLeaseEvents = beforeRecovery.getInt("differentLeaseDocumentEvents")
+        val imageNode = compose.onNodeWithContentDescription("Remote browser image")
+        val bounds = imageNode.fetchSemanticsNode().size
+        val fit = requireNotNull(browserImageFit(bounds.width.toFloat(), bounds.height.toFloat(), oldImage.width, oldImage.height))
+        // Inverse of browserImagePoint: the fixture link covers CSS (8,8)..(168,48).
+        val link = Offset(fit.left + 64f / oldImage.cssWidth * fit.width, fit.top + 28f / oldImage.cssHeight * fit.height)
+        imageNode.performTouchInput { click(link) }
+        compose.waitUntil(60_000) {
+            val browser = repository.state.value.browser
+            browser != null && browser.ownsControl && browser.owner == beforeNavigation.owner &&
+                browser.generation == beforeNavigation.generation && browser.documentEpoch > beforeNavigation.documentEpoch &&
+                browser.viewportRevision > beforeNavigation.viewportRevision && browser.image?.viewportRevision == browser.viewportRevision &&
+                status()?.let { fixtureStatus ->
+                    fixtureStatus.optInt("nextVisits", 0) > oldVisits &&
+                        fixtureStatus.optJSONObject("recoveryDiagnostics")?.optInt("sameLeaseDocumentEvents", 0)?.let { it > sameLeaseEvents } == true
+                } == true
+        }
+        val afterRecovery = requireNotNull(status()).getJSONObject("recoveryDiagnostics")
+        assertEquals("Navigation must not reacquire control", acquireRequests, afterRecovery.getInt("acquireRequests"))
+        assertEquals("Navigation must retain the original lease", differentLeaseEvents, afterRecovery.getInt("differentLeaseDocumentEvents"))
+        compose.onNodeWithTag("browserText").assertTextContains(unsent)
+        assertEquals(submitted, status()?.getString("submitted"))
+        compose.waitUntil(30_000) {
+            val image = repository.state.value.browser?.image
+            if (image == null) false else {
+                val bitmap = BitmapFactory.decodeByteArray(image.jpeg, 0, image.jpeg.size)
+                if (bitmap == null) false else try {
+                    val pixel = bitmap.getPixel(0, 0)
+                    Color.blue(pixel) > 200 && Color.red(pixel) < 80 && Color.green(pixel) < 100
+                } finally { bitmap.recycle() }
+            }
+        }
+        compose.waitUntil(30_000) {
+            runCatching {
+                val pixels = compose.onNodeWithContentDescription("Remote browser image").captureToImage().toPixelMap()
+                var blue = 0
+                for (x in 1..8) for (y in 1..8) {
+                    val pixel = pixels[x * (pixels.width - 1) / 9, y * (pixels.height - 1) / 9]
+                    if (pixel.blue > 0.78f && pixel.red < 0.32f && pixel.green < 0.4f) blue++
+                }
+                blue >= 4
+            }.getOrDefault(false)
+        }
+        compose.onNodeWithTag("browserText").assertTextContains(unsent)
+        val beforeWheel = requireNotNull(repository.state.value.browser)
+        val beforeWheelImage = requireNotNull(beforeWheel.image)
+        val wheelStatus = requireNotNull(status())
+        val scrollEvents = wheelStatus.getInt("scrollEvents")
+        // Each vertical wheel unit is forwarded as 48 CSS pixels; allow one pixel of rounding.
+        // Fixture telemetry survives earlier runs; use this document's current frame as the baseline.
+        val targetScrollY = beforeWheelImage.scrollY + 20 * 0.5 * 48 - 1
+        val wheelAcquireRequests = wheelStatus.getJSONObject("recoveryDiagnostics").getInt("acquireRequests")
+        // Compose emits real Android ACTION_SCROLL events, which the pane forwards as wheel input.
+        compose.onNodeWithContentDescription("Remote browser image").performMouseInput {
+            moveTo(center)
+            repeat(20) { scroll(0.5f); advanceEventTime(16) }
+        }
+        compose.waitUntil(60_000) {
+            val browser = repository.state.value.browser
+            val currentStatus = status()
+            browser != null && browser.ownsControl && browser.owner == beforeWheel.owner &&
+                browser.generation == beforeWheel.generation && browser.documentEpoch == beforeWheel.documentEpoch &&
+                browser.image?.let { it.frameId != beforeWheelImage.frameId && it.scrollY >= targetScrollY } == true &&
+                currentStatus != null && currentStatus.optInt("scrollEvents", 0) > scrollEvents &&
+                currentStatus.optDouble("lastScrollY", 0.0) >= targetScrollY
+        }
+        val afterWheel = requireNotNull(status())
+        assertEquals(wheelAcquireRequests, afterWheel.getJSONObject("recoveryDiagnostics").getInt("acquireRequests"))
+        assertEquals(submitted, afterWheel.getString("input"))
+        assertEquals(submitted, afterWheel.getString("submitted"))
+        compose.onNodeWithTag("browserText").assertTextContains(unsent)
         val screenshot = File(compose.activity.getExternalFilesDir(null), "browser-transport-e2e.png")
         assertTrue(UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).takeScreenshot(screenshot))
         assertTrue(screenshot.length() > 0)

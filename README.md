@@ -321,6 +321,7 @@ an explicitly unsupported chord shows a notice and keeps the attachment open. Th
 `terminal-keys-v1.json` fixture comes from noah-monorepo `6dc453c5995aa65c03eebd819c4111ad993d1441`.
 The `browser-v1.json` fixture comes from noah-monorepo `2440314b3`;
 `browser-stream-v1.json` remains pinned to `11d5a39c4`.
+The shared `browser-recovery-v1.json` fixture comes from noah-monorepo `c14e10248`.
 
 The renderer bundles xterm.js 6.0.0 locally and has no network access. Its license and pinned package
 integrity are in `src/main/assets/terminal/`. Local tests cover an encrypted relay, a macOS PTY and

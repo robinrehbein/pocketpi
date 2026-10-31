@@ -21,12 +21,38 @@ fixture must report that exact input and submitted value. Enter is sent once, af
 receipt is accepted and the control is enabled. The received JPEG and the actually displayed
 Compose image must both show the green submit state before the screenshot is saved.
 
+With `session.browser.recovery.v1` negotiated, the test leaves a unique unsent Android draft,
+clicks an actual link in the displayed browser image, and waits for the new document revision.
+The host's fixture diagnostics confirm delivery of the same lease without another acquire;
+Android retains control and the draft, and both the received JPEG and Compose display show
+the blue destination. The prior submitted value remains unchanged. Twenty Android mouse-wheel
+events then request 480 CSS pixels of scrolling; both the page and a fresh JPEG must report
+the full movement, with the same owner and no automatic acquisition or draft replay.
+
 The first real run exposed a product defect: the repository dropped `session.browser.v1` from
 projects.list discovery because it was absent from `routeCapabilities`. The regression test
 `browserCapabilityOnV3ProjectsRouteEnablesBrowserForSelectedSession` failed at its capability
 assertion before the whitelist fix, then passed. `canOpenBrowser` still requires route v3.
 
 ## Local results on 2026-10-31
+
+For the recovery increment, the required Android quick-check passed 3,044 app and 34 Wear
+unit tests; the host Remote suite passed 3,018 tests with 23 skipped. Encrypted end-to-end
+runs of the full navigation and 480-pixel wheel flow passed on the phone emulator in 11.455 s
+and the tablet emulator in 11.502 s. These runs preceded the final host control-flow refactor. The final-source tablet
+flow with the IME hidden passed in 10.893 s. After correcting the cross-run scroll
+baseline, the final phone flow passed in 12.454 s. The earlier normal wheel runs reported zero waiting events. A later phone attempt emitted
+scoped moving heartbeats, but its final assertion failed because fixture scroll telemetry from
+the previous run was used as the new document baseline. The test now compares against the
+current frame, while still requiring new page scroll events and a fresh frame at the target.
+Heartbeat timing and rejection behavior remain covered deterministically.
+
+A later tablet run observed a text-send click during IME-driven viewport changes for which no
+text request reached the host. The pane can discard a queued send while retaining its draft
+when the client refuses it during another control operation; this is a possible explanation,
+but the exact refusal path was not captured. The silent-refusal UX race remains unresolved.
+The transport test hides the IME and waits for a current frame before its single send; this
+does not qualify sending during that transition.
 
 - Merged current origin/main and origin/dev into the isolated feature branches before testing.
 - Host Remote suite after the runtime fix: 3,004 passed, 23 skipped; extension checking and root formatting passed.
@@ -52,8 +78,9 @@ overlap mechanism; the local browser was Chrome for Testing 156.0.8078.4. Strict
 scale/offset, authority and transport validation remain in place. Diagnostic wrappers can
 change microtask timing, so a passing instrumented rerun alone was not treated as a fix.
 
-Builds/emulators do not establish Galaxy S25/Tab S11, DeX, real Pi turns, reconnect/handoff,
-independent Linux/devcontainer or public-network qualification. Those gates remain open.
+Builds/emulators do not establish physical Galaxy S25/Tab S11, DeX, process-death recovery,
+real Pi turns, reconnect/handoff, independent Linux/devcontainer or public-network
+qualification. Those gates remain open.
 
 ## Running
 

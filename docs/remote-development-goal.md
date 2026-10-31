@@ -1,5 +1,30 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Browser document recovery checkpoint on 2026-10-31
+
+The negotiated `session.browser.recovery.v1` increment keeps the known control lease across
+main-document changes in the configured viewing tab. It fences stale positional input, drains
+admitted operations, resets held input and gives the authenticated owner the host's next input
+sequence. Android replaces old frame subscriptions, preserves unsent drafts and never replays
+uncertain input or automatically acquires control. Background-tab changes do not invalidate the
+current viewing tab. Commands without a document revision do not fence every stale semantic intent.
+
+The Android quick-check passed 3,044 app and 34 Wear unit tests; the final host Remote suite
+passed 3,018 tests with 23 skipped. The encrypted Android fixture proves page-initiated navigation,
+same-lease recovery without another acquire, preserved draft, blue JPEG and Compose output, and
+480 CSS pixels of real wheel scrolling on phone/tablet emulators. A send during IME-driven
+viewport changes can still be refused without a visible notice; the draft remains local. This
+separate UX race is open. Exact runs and limitations are in the
+[transport evidence](testing/browser-transport-e2e.md).
+
+A separate isolated probe now starts the actual Pi 1.4.0 CLI with its public extension API and a
+local offline faux provider. Three real `remote_browser` calls open, acquire and create a tab;
+actual Chromium visits the local fixture, and cleanup succeeds. This proves harness integration
+without a paid model request. It does not combine the Android flow with a real Pi turn or qualify
+a neural provider. Shared login/handoff/reconnect, protected HTTP/WS previews, emulator streams,
+independent Linux/devcontainer and physical Samsung qualification remain open. The overall goal
+is active; no release, deployment or live host activation has occurred.
+
 ## Real browser transport checkpoint on 2026-10-31
 
 After integrating current upstream branches, a real Android instrumentation flow now exercises
@@ -18,7 +43,7 @@ session IPC peer remains synthetic, and physical Samsung, real Pi model turns, i
 Linux/devcontainer, protected preview and emulator qualification remain open. See
 [the transport evidence and reproduction guide](testing/browser-transport-e2e.md).
 
-## Browser viewer increment in progress on 2026-10-31
+## Earlier browser viewer checkpoint on 2026-10-31
 
 The local working trees now contain a native shared-browser pane, bounded JPEG decoding,
 explicit control acquisition/handoff, tab and navigation controls, touch/text/keyboard input,
