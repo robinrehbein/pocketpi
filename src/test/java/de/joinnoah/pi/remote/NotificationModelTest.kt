@@ -348,7 +348,7 @@ class NotificationModelTest {
     }
 
     @Test
-    fun backgroundClientSendsOneCommandAndCloses() = runTest {
+    fun backgroundClientChecksPendingInlineConfirmBeforeAnsweringAndCloses() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val transport = OneShotTransport()
         val client = BackgroundRemoteClient(dispatcher) { transport }
@@ -359,7 +359,18 @@ class NotificationModelTest {
         assertEquals(1, transport.connects)
         transport.listener.ready()
         runCurrent()
-        val sent = transport.sent.single()
+        val snapshot = transport.sent.single()
+        assertEquals("session.snapshot", snapshot.text("type"))
+        assertEquals("s", snapshot.text("sessionId"))
+        transport.listener.message(Wire.objectOf(
+            "type" to "result", "requestId" to snapshot.text("requestId"), "ok" to true,
+            "data" to Wire.objectOf("kind" to "snapshot", "sessionId" to "s", "revision" to 1,
+                "status" to "waiting", "messages" to JsonArray(emptyList()),
+                "pendingQuestions" to JsonArray(listOf(Wire.objectOf("id" to "q", "kind" to "confirm", "title" to "Confirm", "message" to "Continue?")))),
+        ))
+        runCurrent()
+        val sent = transport.sent.last()
+        assertEquals(2, transport.sent.size)
         assertEquals("question.answer", sent.text("type"))
         assertEquals("q", sent.text("questionId"))
         transport.listener.message(

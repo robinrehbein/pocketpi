@@ -60,6 +60,32 @@ class QuestionCardUiTest {
         ), answers)
     }
 
+    @Test fun detailsBlockYesWhileNoAndCancelStayUsable() {
+        render("""{"id":"q","kind":"confirm","message":"Preview","details":{"id":"d","totalBytes":1,"sha256":"${"a".repeat(64)}"}}""")
+        compose.onNodeWithText("Yes").assertIsNotEnabled()
+        compose.onNodeWithText("No").assertIsEnabled().performClick()
+        compose.onNodeWithText("Cancel").assertIsEnabled().performClick()
+        assertEquals(listOf(
+            Wire.objectOf("kind" to "confirm", "value" to false),
+            Wire.objectOf("kind" to "cancel"),
+        ), answers)
+    }
+
+    @Test fun verifiedDetailsDisplayTheFullTextAndEnableYes() {
+        val value = parse("""{"id":"q","kind":"confirm","message":"Preview","details":{"id":"d","totalBytes":5,"sha256":"${"a".repeat(64)}"}}""")
+        val details = mutableStateOf<QuestionDetailsView?>(null)
+        var loads = 0
+        compose.setContent { MaterialTheme {
+            QuestionCard(value, enabled = true, details = details.value, onLoadDetails = { loads++ }) { answers += it }
+        } }
+        compose.onNodeWithText("Load details").performClick()
+        assertEquals(1, loads)
+        compose.runOnIdle { details.value = QuestionDetailsView(text = "Full details") }
+        compose.onNodeWithText("Full details").assertExists()
+        compose.onNodeWithText("Yes").assertIsEnabled().performClick()
+        assertEquals(listOf(Wire.objectOf("kind" to "confirm", "value" to true)), answers)
+    }
+
     @Test fun escalationShowsToolChildAndReasonAndAnswersOnce() {
         render(
             """{"id":"q","kind":"confirm","title":"Auto mode blocked bash from Explore#a1b2c3d4",""" +

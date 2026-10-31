@@ -42,6 +42,7 @@ class PrStatusTransportEndToEndTest {
     private var nativeExpected = false
     private var inputExpected = false
     private var layoutDiagnostics = false
+    private var questionDetailsExpected = false
     private lateinit var client: OkHttpClient
     private lateinit var scope: CoroutineScope
     private lateinit var repository: DefaultRemoteRepository
@@ -64,6 +65,9 @@ class PrStatusTransportEndToEndTest {
             require(layoutArg == null || layoutArg == "true" || layoutArg == "false") { "prStatusLayoutDiagnostics must be true or false" }
             layoutDiagnostics = layoutArg == "true"
             require(!layoutDiagnostics || inputExpected) { "prStatusLayoutDiagnostics requires prStatusInputExpected=true" }
+            val questionArg = args.getString("questionDetailsExpected")
+            require(questionArg == null || questionArg == "true" || questionArg == "false") { "questionDetailsExpected must be true or false" }
+            questionDetailsExpected = questionArg == "true"
             val path = args.getString("prStatusFixturePath")
             if (expected) require(!path.isNullOrBlank()) { "prStatusFixturePath is required" }
             assumeTrue("Pass prStatusFixturePath to run the actual Pi PR status integration", !path.isNullOrBlank())
@@ -71,6 +75,12 @@ class PrStatusTransportEndToEndTest {
             fixture = JSONObject(readFixtureFile(requireNotNull(path)).toString(Charsets.UTF_8))
             require(fixture.optBoolean("prStatusFixture") && fixture.optString("sessionKind") == "actual-pi") { "Wrong PR status fixture" }
             require(fixture.has("nativeWorker") && fixture.getBoolean("nativeWorker") == nativeExpected) { "Wrong native worker fixture mode" }
+            if (questionDetailsExpected) {
+                require(fixture.getBoolean("questionDetailsFixture")) { "Question details fixture is required" }
+                require(fixture.getString("questionDetailsKind") in setOf("confirm", "approval")) { "Wrong question details kind" }
+                require(fixture.getString("questionProbeCommand").isNotBlank() && fixture.getString("questionProbeNonce").isNotBlank())
+                require(fixture.getString("questionExpectedText").toByteArray(Charsets.UTF_8).size > 49_152)
+            }
             println("PR_STATUS_NATIVE_EXPECTED=$nativeExpected")
             val cert = CertificateFactory.getInstance("X.509").generateCertificate(readFixtureFile(fixture.getString("caCertPath")).inputStream())
             val keys = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null); setCertificateEntry("fixture", cert) }
@@ -167,6 +177,7 @@ class PrStatusTransportEndToEndTest {
                 throw failure
             }
         }
+        if (questionDetailsExpected) exerciseQuestionDetails()
         awaitTag("pullRequestChip")
         compose.onNodeWithTag("pullRequestChip").assertIsDisplayed().assertTextContains(compose.activity.getString(R.string.remote_pr_chip_number, 42L), substring = true)
         screenshot("pending")
@@ -222,6 +233,58 @@ class PrStatusTransportEndToEndTest {
         screenshot("recovered")
     }
 
+    private fun exerciseQuestionDetails() {
+        val command = fixture.getString("questionProbeCommand")
+        val nonce = fixture.getString("questionProbeNonce")
+        require(command.startsWith("/") && command.none { it.isWhitespace() } && nonce.none { it.isWhitespace() })
+        compose.waitUntil(60_000) {
+            val state = repository.state.value
+            state.capabilitiesKnown && QUESTION_DETAILS_CAPABILITY in state.capabilities &&
+                QUESTION_DETAILS_CAPABILITY !in state.unavailableCapabilities && !state.commandsLoading &&
+                state.commands.any { it.name == command.removePrefix("/") }
+        }
+        compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput("$command $nonce")
+        compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
+        hideIme()
+        compose.waitUntil(60_000) {
+            repository.state.value.questions.any { it.text("kind") == "confirm" && it.containsKey("details") } &&
+                statusOrNull()?.optBoolean("questionVerified") == true
+        }
+        val question = repository.state.value.questions.single { it.text("kind") == "confirm" && it.containsKey("details") }
+        val questionId = question.text("id")
+        val yesLabel = compose.activity.getString(if (confirmEscalation(question) != null) R.string.remote_escalation_yes else R.string.remote_yes)
+        val noLabel = compose.activity.getString(R.string.remote_no)
+        val loadLabel = compose.activity.getString(R.string.remote_question_details_load)
+        compose.onNodeWithText(yesLabel).performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithText(noLabel).performScrollTo().assertIsEnabled()
+        screenshot("details-before")
+        compose.onNodeWithText(loadLabel).performScrollTo().assertIsEnabled().performClick()
+        compose.waitUntil(60_000) { repository.state.value.questionDetails[questionId]?.text == fixture.getString("questionExpectedText") }
+        assertTrue("Full question must exceed 48 KiB", requireNotNull(repository.state.value.questionDetails[questionId]?.text).toByteArray(Charsets.UTF_8).size > 49_152)
+        assertTrue("Question and selection must remain current", repository.state.value.selection == selection && repository.state.value.questions.any { it === question })
+        compose.onNodeWithText(yesLabel).performScrollTo().assertIsEnabled()
+        screenshot("details-loaded")
+        compose.onNodeWithText(yesLabel).performClick()
+        compose.waitUntil(60_000) {
+            val current = statusOrNull()
+            current?.let { it.optBoolean("questionVerified") && it.optBoolean("questionAnswered") && it.optBoolean("questionAccepted") } == true &&
+                repository.state.value.questions.none { it.text("id") == questionId }
+        }
+        if (fixture.getString("questionDetailsKind") == "approval") {
+            assertEquals("Approval local UI calls", if (nativeExpected) 1 else 0, status().getInt("questionLocalUiCalls"))
+        }
+        screenshot("details-answered")
+    }
+    private fun hideIme() {
+        compose.runOnIdle {
+            WindowCompat.getInsetsController(compose.activity.window, compose.activity.window.decorView)
+                .hide(WindowInsetsCompat.Type.ime())
+        }
+        compose.waitUntil(60_000) {
+            val insets = ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+            insets != null && !insets.isVisible(WindowInsetsCompat.Type.ime())
+        }
+    }
     private fun diagnoseRecoveredLayout() {
         screenshot("recovered-unscrolled")
         logChangesLayout("recovered-unscrolled")

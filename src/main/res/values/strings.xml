@@ -719,4 +719,9 @@
     <string name="emulator_disconnected">Disconnected</string>
     <string name="emulator_uncertain">The last operation may have completed. Reconnect to continue.</string>
     <string name="emulator_failed">Emulator request failed</string>
+    <string name="remote_question_details_needed">Load the complete details before approving.</string>
+    <string name="remote_question_details_failed">Could not verify the details.</string>
+    <string name="remote_question_details_loading">Loading details…</string>
+    <string name="remote_question_details_retry">Retry details</string>
+    <string name="remote_question_details_load">Load details</string>
 </resources>

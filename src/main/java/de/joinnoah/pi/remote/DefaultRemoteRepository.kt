@@ -65,6 +65,7 @@ private const val DRAFT_WRITE_DELAY_MILLIS = 300L
 private const val CAPABILITIES_V1_ROUTE = "capabilities.v1:"
 private const val CAPABILITIES_V2_ROUTE = "capabilities.v2:"
 private const val CAPABILITIES_V3_ROUTE = "capabilities.v3:"
+private const val QUESTION_DETAILS_OPT_IN = "optin=question_details.v1:"
 
 private fun capabilityRevision(route: String): Int = when {
     route.startsWith(CAPABILITIES_V3_ROUTE) -> 3
@@ -298,6 +299,7 @@ class DefaultRemoteRepository(
     private val routeCapabilities =
         setOf(
             STEER_CAPABILITY,
+            QUESTION_DETAILS_CAPABILITY,
             // Compact and session settings, too, arrive only here: the host's handshake list is frozen at eight.
             COMPACT_CAPABILITY,
             SETTINGS_CAPABILITY,
@@ -504,6 +506,15 @@ class DefaultRemoteRepository(
     override fun sendPreviewInput(input: BrowserInput) = previewClient.input(input)
     override fun refreshPreview() = previewClient.refresh()
     override fun setPreviewVisible(visible: Boolean) = previewClient.setVisible(visible)
+    private val detailsAuthority = QuestionDetailsAuthority()
+    private var detailsQuestion: JsonObject? = null
+    private var detailsLoadToken = 0L
+    private fun clearQuestionDetails() {
+        detailsLoadToken++
+        detailsAuthority.clear()
+        detailsQuestion = null
+        update { it.copy(questionDetails = emptyMap()) }
+    }
     private var selectionEpoch = 0L
     private var generation = 0L
     // Connection-scoped attempts and UI owners start at the send tap.
@@ -1130,7 +1141,14 @@ class DefaultRemoteRepository(
             GIT_PUSH_STATUS_CAPABILITY in value.capabilities, GIT_PUSH_STATUS_CAPABILITY in value.unavailableCapabilities,
             SESSION_GIT_PULL_REQUEST_CAPABILITY in value.capabilities, SESSION_GIT_PULL_REQUEST_CAPABILITY in value.unavailableCapabilities,
             SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY in value.capabilities, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY in value.unavailableCapabilities)
-        mutable.value = next.copy(gitReviewGeneration = previous.gitReviewGeneration + if (reviewAuthority(previous) != reviewAuthority(next)) 1 else 0)
+        val invalidateDetails = previous.connected && !next.connected || previous.selection != next.selection ||
+            (QUESTION_DETAILS_CAPABILITY in previous.capabilities && QUESTION_DETAILS_CAPABILITY !in next.capabilities) ||
+            (QUESTION_DETAILS_CAPABILITY !in previous.unavailableCapabilities && QUESTION_DETAILS_CAPABILITY in next.unavailableCapabilities)
+        if (invalidateDetails) { detailsLoadToken++; detailsAuthority.clear(); detailsQuestion = null }
+        mutable.value = next.copy(
+            questionDetails = if (invalidateDetails) emptyMap() else next.questionDetails,
+            gitReviewGeneration = previous.gitReviewGeneration + if (reviewAuthority(previous) != reviewAuthority(next)) 1 else 0,
+        )
     }
 
     /**
@@ -1881,6 +1899,7 @@ class DefaultRemoteRepository(
         if (state.value.attachmentProgress != null) sendJob?.cancel()
         stopToolOutput()
         sessionRefreshJob?.cancel()
+        clearQuestionDetails()
         selectionEpoch++
         taskActivationEpoch = null
         configurationVersion++
@@ -2020,6 +2039,7 @@ class DefaultRemoteRepository(
         emulatorClient.disconnected()
         browserClient.disconnected()
         previewClient.disconnected()
+        clearQuestionDetails()
         generation++
         clearLateAcknowledgements()
         failConnectionRequests()
@@ -2086,7 +2106,7 @@ class DefaultRemoteRepository(
         checkEpoch(epoch)
         check(state.value.connected)
         // Older hosts accept this as an opaque request ID and return ordinary projects.
-        val id = if (type == "projects.list") "$capabilityRoute$requestId" else sessionsListRequestId(type, requestId)
+        val id = if (type == "projects.list") "$capabilityRoute${if (capabilityRevision(capabilityRoute) == 3) QUESTION_DETAILS_OPT_IN else ""}$requestId" else sessionsListRequestId(type, requestId)
         val payload = Wire.objectOf("type" to type, "requestId" to id, *fields)
         recordIssuedRequest(id)
         val completion = CompletableDeferred<JsonObject>()
@@ -2164,7 +2184,7 @@ class DefaultRemoteRepository(
                 }
                 if (revision >= 2 && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
+                    it in advertised && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY, GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY, HOST_WORKER_V2_CAPABILITY, STREAM_CAPABILITY) || revision >= 2)
                 }
                 val hadTasks = canReadTasks()
                 if (revision >= 2 && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
@@ -2174,10 +2194,10 @@ class DefaultRemoteRepository(
                     // lease that only now becomes possible starts leasing at once, not at the next
                     // session change or reconnect.
                     val hadLease = canLeaseJobsList(state.value)
-                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY) else it.capabilities) + merged) }
+                    update { it.copy(capabilities = (if (revision == 3) it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY) else it.capabilities) + merged) }
                     if (!hadLease && canLeaseJobsList(state.value)) jobsController.refresh()
                 }
-                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY)) }
+                if (revision == 3 && merged.isEmpty()) update { it.copy(capabilities = it.capabilities - setOf(GIT_PUSH_CAPABILITY, GIT_PUSH_STATUS_CAPABILITY, SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY, QUESTION_DETAILS_CAPABILITY)) }
                 update { it.copy(capabilitiesKnown = true) }
                 if (!hadTasks && canReadTasks()) {
                     taskRefreshPending = true
@@ -2939,6 +2959,7 @@ class DefaultRemoteRepository(
         val previous = state.value.status
         if (t.status != previous) state.value.selection.sessionId?.let(::dropStaleChildControl)
         val open = t.questions.map { it.text("id") }.toSet()
+        if (detailsQuestion != null && t.questions.none { it === detailsQuestion }) clearQuestionDetails()
         update {
             // Before its first snapshot the Timeline holds no messages yet: what is on screen (a
             // cached or the last-known chat) stays until the snapshot replaces it.
@@ -4351,6 +4372,7 @@ class DefaultRemoteRepository(
         ArtifactThumbnails.clear()
         retry?.cancel()
         connectionEnded()
+        clearQuestionDetails()
         generation++
         clearLateAcknowledgements()
         transport.close()
@@ -4476,6 +4498,7 @@ class DefaultRemoteRepository(
         emulatorClient.disconnected()
         browserClient.disconnected()
         previewClient.disconnected()
+        clearQuestionDetails()
         generation++
         clearLateAcknowledgements()
         folderVersion++
@@ -8013,6 +8036,41 @@ class DefaultRemoteRepository(
         }
     }
 
+    override fun loadQuestionDetails(questionId: String) {
+        val current = state.value
+        val question = current.questions.firstOrNull { it.optionalText("id") == questionId } ?: return
+        val descriptor = runCatching { parseQuestionDetails(question.obj("details")) }.getOrNull() ?: return
+        val sessionId = current.selection.sessionId ?: return
+        if (!current.connected || !current.capabilitiesKnown || QUESTION_DETAILS_CAPABILITY !in current.capabilities || QUESTION_DETAILS_CAPABILITY in current.unavailableCapabilities || current.questionDetails.values.any { it.loading }) return
+        clearQuestionDetails()
+        detailsQuestion = question
+        val selection = current.selection
+        val epoch = selectionEpoch
+        val connection = generation
+        val loadToken = detailsLoadToken
+        update { it.copy(questionDetails = mapOf(questionId to QuestionDetailsView(loading = true))) }
+        scope.launch {
+            fun valid(): Boolean = loadToken == detailsLoadToken && epoch == selectionEpoch && connection == generation && state.value.connected && state.value.selection == selection && state.value.questions.any { it === question } && state.value.capabilitiesKnown && QUESTION_DETAILS_CAPABILITY in state.value.capabilities && QUESTION_DETAILS_CAPABILITY !in state.value.unavailableCapabilities
+            try {
+                val assembler = QuestionDetailsAssembler(sessionId, questionId, descriptor)
+                while (assembler.offset < descriptor.totalBytes) {
+                    check(valid())
+                    val page = request("session.question.details.get", epoch, "sessionId" to sessionId, "questionId" to questionId, "detailsId" to descriptor.id, "offset" to assembler.offset)
+                    check(valid())
+                    assembler.append(page)
+                }
+                val text = assembler.finish()
+                check(valid())
+                detailsAuthority.verify(connection, selection, question, descriptor, text)
+                update { it.copy(questionDetails = mapOf(questionId to QuestionDetailsView(text = text))) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                if (valid()) update { it.copy(questionDetails = mapOf(questionId to QuestionDetailsView(failed = true))) }
+            }
+        }
+    }
+
     override fun answer(questionId: String, answer: JsonObject) {
         val sessionId = state.value.selection.sessionId ?: return
         if (
@@ -8023,10 +8081,30 @@ class DefaultRemoteRepository(
         )
             return
         if (questionId in state.value.questionBlocks) return
+        val positive = answer.optionalText("kind") == "confirm" && runCatching { answer.flag("value") }.getOrDefault(false)
+        val selection = state.value.selection
+        val connection = generation
+        val question = if (positive) state.value.questions.filter { it.optionalText("id") == questionId }.singleOrNull() ?: return else null
+        fun positiveStillAllowed(): Boolean {
+            if (!positive) return true
+            val current = state.value
+            if (!current.connected || current.loading || generation != connection || current.selection != selection ||
+                activeHost?.routeId != selection.routeId || questionId in current.questionBlocks) return false
+            val pending = current.questions.filter { it.optionalText("id") == questionId }.singleOrNull()
+            if (pending == null || pending !== question || pending.optionalText("kind") != "confirm") return false
+            if (!pending.containsKey("details")) return true
+            val descriptor = runCatching { parseQuestionDetails(pending.obj("details")) }.getOrNull() ?: return false
+            return current.capabilitiesKnown && QUESTION_DETAILS_CAPABILITY in current.capabilities &&
+                QUESTION_DETAILS_CAPABILITY !in current.unavailableCapabilities &&
+                detailsAuthority.allows(connection, selection, pending, descriptor, answer)
+        }
+        if (!positiveStillAllowed()) return
         update { it.copy(answering = it.answering + questionId) }
         val epoch = selectionEpoch
+        val answerDetailsToken = detailsLoadToken
         scope.launch {
             try {
+                if (!positiveStillAllowed() || epoch != selectionEpoch) return@launch
                 request(
                     "question.answer",
                     epoch,
@@ -8035,7 +8113,16 @@ class DefaultRemoteRepository(
                     "answer" to answer,
                 )
             } catch (_: CancellationException) {} catch (e: Exception) {
-                if (epoch == selectionEpoch) answerFailed(sessionId, questionId, e)
+                if (epoch == selectionEpoch) {
+                    val rejectedDetails = positive && question?.containsKey("details") == true &&
+                        (e as? RemoteRequestException)?.code == "forbidden" && connection == generation &&
+                        selection == state.value.selection && answerDetailsToken == detailsLoadToken &&
+                        state.value.questions.any { it === question }
+                    if (rejectedDetails) {
+                        clearQuestionDetails()
+                        update { it.copy(questionDetails = mapOf(questionId to QuestionDetailsView(failed = true))) }
+                    } else answerFailed(sessionId, questionId, e)
+                }
             } finally {
                 if (epoch == selectionEpoch)
                     update { it.copy(answering = it.answering - questionId) }

@@ -410,10 +410,11 @@ and scoped qualification. The full acceptance run and its device/host gates rema
 2. **Pull request and CI status.** The app cannot see whether a session's branch has a pull
    request, what its checks say or what reviewers wrote. The ticket hint comes from the Plane state,
    not from GitHub.
-3. **Oversized questions and approvals.** A command, reason or identity beyond the display bounds
-   shows "Phone approval unavailable"; the remote README names the missing piece as "a future
-   details contract and UI change". An oversized standard question also stays on the Mac, and
-   multiline editor dialogs need a protocol change.
+3. **Oversized questions and approvals.** The confirm-details producer, Host and Android paths
+   are implemented and independently reviewed, enabled by default with an explicit disable and
+   per-connection opt-in. Four default native and external RPC end-to-end scenarios passed; broad
+   Host verification and physical-device/Linux qualification remain open; the full Android/Wear suite passed.
+   Multiline editor dialogs require separate work. See [qualification](testing/question-details-delivery-qualification.md).
 4. **Custom dialogs.** A relayed terminal is implemented locally, but the combined custom-dialog
    workflow remains unqualified. The earlier feasibility gate in
    noah-monorepo's `docs/superpowers/plans/2026-10-23-pocketpi-mobile-dialogs.md` failed on pi
@@ -490,7 +491,7 @@ established on `main`. Neither label by itself means the qualifying run has veri
 | 1 | Open a ticket and start a session from it | App, host switch and key | Implemented (`tickets.v1`, needs `config ticket-writes on` and `tickets set-key`) |
 | 2 | Edit and save a file, with a clear conflict when the Mac changed it | App | Implemented (`session.files.write.v1`) |
 | 3 | Run a shell command with live output and stop in the ticket's session | noah-monorepo, then app | Implemented locally for workers; combined ticket workflow and physical-device qualification open (gap 6) |
-| 4a | Answer every forwarded question and approval from the phone, including oversized ones and editors | noah-monorepo, then app | Open (gap 3) |
+| 4a | Answer every forwarded question and approval from the phone, including oversized ones and editors | noah-monorepo, then app | Confirm-details implementation reviewed and enabled by default; native and external RPC scenarios passed, broad Host and hardware/Linux qualification open; editors separate (gap 3) |
 | 4b | Answer custom dialogs from the phone through the relayed terminal | noah-monorepo, then app | Terminal relay implemented locally; combined custom-dialog workflow and physical-device qualification open (gaps 4 and 7) |
 | 5 | Commit, push and open a pull request, confirmed on the phone and logged on the Mac | noah-monorepo, then app | Commit, Push and PR implemented locally; full unattended workflow and physical-device qualification remain open |
 | 6 | See the pull request and its CI status per session | noah-monorepo, then app | Display is wired; actual Pi through a Host-managed native worker to Android navigation passed on four emulator profiles. Live GitHub CI and physical-device qualification remain open. |

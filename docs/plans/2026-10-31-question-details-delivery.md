@@ -4,7 +4,7 @@
 
 **Goal:** Let a phone safely answer an oversized confirm/approval after this exact connection has received the complete immutable document and Android has verified its SHA-256.
 
-**Architecture:** Reuse the existing question_details.v1 contract, with source-owned bounded memory documents and sequential pages. A per-connection delivery tracker advances only after outbox onSent and binds the source incarnation, exact question object and details descriptor. Android verifies and displays the full text before allowing Yes; the Host independently checks delivery before forwarding Yes. No/cancel stay available. No new capability is advertised until the complete path exists.
+**Architecture:** Reuse the existing question_details.v1 contract, with source-owned bounded memory documents and sequential pages. A per-connection delivery tracker advances only after outbox onSent and binds the source incarnation, exact question object and details descriptor. Android verifies and displays the full text before allowing Yes; the Host independently checks delivery before forwarding Yes. No/cancel stay available. The Host enables the completed confirm-details path by default; an explicit false disables it and each connection must opt in.
 
 **Tech stack:** Existing TypeScript Remote/Node crypto, encrypted Host outbox, Kotlin repository/Compose.
 
@@ -32,21 +32,23 @@
    - [x] Implement remote/question-details.ts: immutable per-question document store and per-connection delivery tracker with onSent/onDropped tickets, strict sequential progress, safe retries, stale-callback and invalidation protection.
    - [x] Root runs focused tests/type/format; independent review checks source/connection authority and capacity behavior. Commit the reviewed complete internal component.
 2. Producer integration.
-   - [ ] Source complete immutable masked approval context including command and differing message; native confirm source; RPC sanitized-source gate.
-   - [ ] Terminal paged retrieval and trusted internal exact-question delivery attestation; preserve Mac fallback and No/cancel.
+   - [x] Source complete immutable masked approval context including command and differing message; native confirm source; RPC sanitized-source gate.
+   - [x] Terminal paged retrieval and trusted internal exact-question delivery attestation; preserve Mac fallback and No/cancel.
 3. Host integration.
-   - [ ] Parse/read routing, grants and ledger bypass; bind page tickets to real outbox delivery and exact current source/question; check positive answers immediately before owner write.
-   - [ ] Per-connection opt-in and legacy projection for broadcast, snapshot and replay, with capability route limits tested.
+   - [x] Parse/read routing, grants and ledger bypass; bind page tickets to real outbox delivery and exact current source/question; check positive answers immediately before owner write.
+   - [x] Per-connection opt-in and legacy projection for broadcast, snapshot and replay, with capability route limits tested.
 4. Android integration.
-   - [ ] Strict pointer/page validation, sequential download, full UTF-8 and SHA-256 verification; memory-only state keyed to connection/selection/question.
-   - [ ] Full-text display and explicit retry, Yes gate in repository/UI/background entry points; No/cancel independent. English/German strings and tablet/phone layout.
+   - [x] Strict pointer/page validation, sequential download, full UTF-8 and SHA-256 verification; memory-only state keyed to connection/selection/question.
+   - [x] Full-text display and explicit retry, Yes gate in repository/UI/background entry points; No/cancel independent. English/German strings and tablet/phone layout.
 5. Combined qualification and activation.
-   - [ ] Corruption, dropped/reordered/foreign/revoked/stale-source/race/old-client tests and actual native/RPC producer-to-Android flows.
-   - [ ] Advertise only completed supported capability routes; document exact qualification and remaining hardware/Linux gates.
+   - [x] Implement and exercise corruption, dropped/reordered/foreign/revoked/stale-source/race/old-client protections and actual native/RPC producer-to-Android flows.
+   - [x] Enable the completed confirm-details route by default, preserve explicit disable and connection opt-in, and document remaining hardware/Linux gates.
+   - [x] Complete the full Android/Wear verification.
+   - [ ] Complete the broad final Remote/claude-settings verification.
 
-## Safety gates still requiring code evidence
+## Integration safety boundaries
 
-RPC approvals currently distinguish local message from masked remoteMessage; do not treat generic raw RPC UI text as a verified masked approval source. Terminal owner must require a trusted exact-question Host attestation rather than accepting the unchanged client QuestionAnswer as sufficient. Root keeps the feature unadvertised until both integrations pass.
+RPC approvals currently distinguish local message from masked remoteMessage; do not treat generic raw RPC UI text as a verified masked approval source. Terminal owner must require a trusted exact-question Host attestation rather than accepting the unchanged client QuestionAnswer as sufficient. The Host enables the completed confirm-details path by default; per-connection opt-in remains required and explicit false disables it.
 
 
-Tasks 0 and 1 are saved in Host commits `1f4163144` and `5ea921b60`. The covering run passed 416 tests across 18 files; types and scoped formatting passed. Tasks 2–5 remain open and no details/editor capability is advertised. See [qualification](../testing/question-details-delivery-qualification.md).
+Tasks 0 and 1 are saved in Host commits `1f4163144` and `5ea921b60`; their covering run passed 416 tests across 18 files. Tasks 2–4 are implemented and their independent review fixes approved. Focused producer, protocol, Host and Android checks passed; four default-configured native and RPC producer-to-Android scenarios passed. The broad Host suite and remaining hardware/Linux qualification stay open; editor support is separate. See [qualification](../testing/question-details-delivery-qualification.md).

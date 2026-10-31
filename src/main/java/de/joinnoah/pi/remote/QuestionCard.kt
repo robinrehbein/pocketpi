@@ -1,6 +1,8 @@
 package de.joinnoah.pi.remote
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.toggleable
@@ -20,6 +22,8 @@ internal fun QuestionCard(
     enabled: Boolean,
     pending: Boolean = false,
     block: QuestionBlock? = null,
+    details: QuestionDetailsView? = null,
+    onLoadDetails: () -> Unit = {},
     onAnswer: (JsonObject) -> Unit,
 ) {
     val id = question.text("id")
@@ -87,11 +91,36 @@ internal fun QuestionCard(
                 val escalation = remember(question) { confirmEscalation(question) }
                 if (escalation != null) EscalationDetails(escalation)
                 Text(question.text("message"))
+                val hasDetails = question.containsKey("details")
+                if (hasDetails) {
+                    if (details?.text != null) {
+                        val chunks = remember(details.text) {
+                            val text = details.text
+                            buildList {
+                                var start = 0
+                                while (start < text.length) {
+                                    var end = minOf(start + 4096, text.length)
+                                    if (end < text.length && Character.isHighSurrogate(text[end - 1])) end--
+                                    add(text.substring(start, end))
+                                    start = end
+                                }
+                            }
+                        }
+                        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 240.dp)) {
+                            items(chunks) { Text(it) }
+                        }
+                    } else {
+                        Text(stringResource(if (details?.failed == true) R.string.remote_question_details_failed else R.string.remote_question_details_needed))
+                        OutlinedButton(onClick = onLoadDetails, enabled = controlsEnabled && details?.loading != true) {
+                            Text(stringResource(if (details?.loading == true) R.string.remote_question_details_loading else if (details?.failed == true) R.string.remote_question_details_retry else R.string.remote_question_details_load))
+                        }
+                    }
+                }
                 Row {
                     // An escalation's yes runs the blocked call once; the phone offers no session allow.
                     Button(
                         onClick = { submit(Wire.objectOf("kind" to "confirm", "value" to true)) },
-                        enabled = controlsEnabled,
+                        enabled = controlsEnabled && (!hasDetails || details?.text != null),
                     ) {
                         Text(
                             stringResource(

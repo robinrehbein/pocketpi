@@ -719,4 +719,9 @@
     <string name="emulator_disconnected">Verbindung getrennt</string>
     <string name="emulator_uncertain">Die letzte Aktion wurde möglicherweise ausgeführt. Bitte erneut verbinden.</string>
     <string name="emulator_failed">Emulator-Anfrage fehlgeschlagen</string>
+    <string name="remote_question_details_needed">Lade vor der Zustimmung die vollständigen Details.</string>
+    <string name="remote_question_details_failed">Die Details konnten nicht überprüft werden.</string>
+    <string name="remote_question_details_loading">Details werden geladen…</string>
+    <string name="remote_question_details_retry">Details erneut laden</string>
+    <string name="remote_question_details_load">Details laden</string>
 </resources>

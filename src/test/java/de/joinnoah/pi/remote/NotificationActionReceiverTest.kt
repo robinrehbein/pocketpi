@@ -9,6 +9,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -43,6 +44,57 @@ class NotificationActionReceiverTest {
             listOf(Wire.objectOf("type" to "question.answer", "sessionId" to "s", "questionId" to "q", "answer" to answer)),
             socket.sent,
         )
+    }
+
+    private fun snapshot(question: JsonObject?, session: String = "s") = Wire.objectOf(
+        "kind" to "snapshot", "sessionId" to session, "revision" to 1, "status" to "waiting",
+        "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOfNotNull(question)),
+    )
+
+    @Test
+    fun backgroundInlinePositiveChecksTheCurrentQuestionAndSendsOnSameConnection() = runTest {
+        val question = Wire.objectOf("id" to "q", "kind" to "confirm", "title" to "Confirm", "message" to "Continue?")
+        val own = Recording { type -> if (type == "session.snapshot") snapshot(question) else Wire.objectOf("kind" to "accepted") }
+        val yes = Wire.objectOf("kind" to "confirm", "value" to true)
+        val outcome = answerer(background = { _, block -> block(own.commands) }).answer("r", "s", "q", yes)
+        assertEquals(AnswerOutcome.SENT, outcome)
+        assertEquals(listOf("session.snapshot", "question.answer"), own.sent.map { it.text("type") })
+        assertEquals(yes, own.sent.last()["answer"])
+    }
+
+    @Test
+    fun backgroundPositiveDetailsOrUnverifiableQuestionNeverSendsAnswer() = runTest {
+        val details = Wire.parse("""{"id":"q","kind":"confirm","message":"Preview","details":{"id":"d","totalBytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}""")
+        val cases = listOf(
+            snapshot(details), snapshot(null), snapshot(Wire.objectOf("id" to "other", "kind" to "confirm", "message" to "Continue?")),
+            snapshot(Wire.objectOf("id" to "q", "kind" to "select", "message" to "Continue?")),
+            snapshot(Wire.objectOf("id" to "q", "kind" to "confirm", "message" to "Continue?"), session = "other"),
+            snapshot(Wire.objectOf("id" to "q", "kind" to "confirm", "title" to "Confirm", "message" to "x".repeat(16385))),
+            snapshot(Wire.objectOf("id" to "q", "kind" to "confirm", "title" to "Confirm", "message" to "Go?", "unknown" to true)),
+            snapshot(Wire.objectOf("id" to "q", "kind" to "confirm", "title" to "Confirm", "message" to "Go?", "details" to null)),
+            Wire.objectOf("kind" to "snapshot", "sessionId" to "s", "pendingQuestions" to JsonArray(listOf(
+                Wire.objectOf("id" to "q", "kind" to "confirm", "title" to "Confirm", "message" to "Go?"),
+                Wire.objectOf("id" to "q", "kind" to "confirm", "title" to "Confirm", "message" to "Go?")))),
+            Wire.objectOf("kind" to "unavailable"),
+        )
+        for (data in cases) {
+            val own = Recording { data }
+            val outcome = answerer(background = { _, block -> block(own.commands) })
+                .answer("r", "s", "q", Wire.objectOf("kind" to "confirm", "value" to true))
+            assertEquals(data.toString(), AnswerOutcome.FAILED, outcome)
+            assertTrue(data.toString(), own.sent.none { it.text("type") == "question.answer" })
+        }
+    }
+
+    @Test
+    fun backgroundNoAndCancelDoNotDependOnSnapshot() = runTest {
+        for (answer in listOf(Wire.objectOf("kind" to "confirm", "value" to false), Wire.objectOf("kind" to "cancel"))) {
+            val own = Recording()
+            val outcome = answerer(background = { _, block -> block(own.commands) }).answer("r", "s", "q", answer)
+            assertEquals(AnswerOutcome.SENT, outcome)
+            assertEquals(listOf("question.answer"), own.sent.map { it.text("type") })
+            assertEquals(answer, own.sent.single()["answer"])
+        }
     }
 
     @Test

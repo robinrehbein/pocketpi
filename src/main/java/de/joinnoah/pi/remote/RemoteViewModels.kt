@@ -189,6 +189,8 @@ internal open class DestinationViewModel(
 
     fun abort() = active(repository::abort)
 
+    fun loadQuestionDetails(questionId: String) = active { repository.loadQuestionDetails(questionId) }
+
     fun answer(questionId: String, answer: JsonObject) = active {
         repository.answer(questionId, answer)
     }

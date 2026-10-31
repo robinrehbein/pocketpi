@@ -201,6 +201,7 @@ data class RemoteState(
      */
     val sessionControlUnsupported: Map<String, Set<ExtensionControl>> = emptyMap(),
     val answering: Set<String> = emptySet(),
+    internal val questionDetails: Map<String, QuestionDetailsView> = emptyMap(),
     /** Questions the user cannot answer from here right now, by question ID. */
     val questionBlocks: Map<String, QuestionBlock> = emptyMap(),
     val capabilities: Set<String> = emptySet(),
@@ -538,6 +539,7 @@ interface RemoteRepository {
     /** Dismisses a finished shell command; a running one stays. */
     fun closeBash() {}
 
+    fun loadQuestionDetails(questionId: String) {}
     fun answer(questionId: String, answer: JsonObject)
 
     /**

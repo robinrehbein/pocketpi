@@ -3760,6 +3760,7 @@ internal fun RemoteScreen(
                                 abortTarget = AbortRunTarget(sessionId, questionIds)
                         },
                         onAnswer = model::answer,
+                        onLoadQuestionDetails = model::loadQuestionDetails,
                         suggestions = {
                             val typed = composer.text
                             SessionControls(

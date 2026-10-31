@@ -363,6 +363,7 @@ internal fun ChatComposer(
     onResumeChild: () -> Unit = {},
     onAbort: () -> Unit = onStop,
     onAnswer: (String, kotlinx.serialization.json.JsonObject) -> Unit = { _, _ -> },
+    onLoadQuestionDetails: (String) -> Unit = {},
     leading: @Composable RowScope.() -> Unit = {},
     suggestions: @Composable ColumnScope.() -> Unit = {},
     onRemoveAttachment: (String) -> Unit = {},
@@ -511,7 +512,7 @@ internal fun ChatComposer(
                 keyTarget.type = {}
             }
         QuestionComposer(
-            state, abort, abortBlocked = childControls && childBusy, stopHint = keyTarget?.stopHint == true,
+            state, abort, abortBlocked = childControls && childBusy, stopHint = keyTarget?.stopHint == true, onLoadQuestionDetails = onLoadQuestionDetails,
         ) { questionId, answer ->
             val route = state.selection.routeId
             val session = state.selection.sessionId
@@ -1255,6 +1256,7 @@ private fun QuestionComposer(
     abortBlocked: Boolean = false,
     /** The first Esc asked for a second one to abort ([ChatKeyTarget.stopHint]). */
     stopHint: Boolean = false,
+    onLoadQuestionDetails: (String) -> Unit = {},
     onAnswer: (String, kotlinx.serialization.json.JsonObject) -> Unit,
 ) {
     val abortEnabled = !abortBlocked && questionAbortEnabled(state)
@@ -1274,6 +1276,8 @@ private fun QuestionComposer(
                         enabled = state.connected && questionId !in state.answering,
                         pending = questionId in state.answering,
                         block = state.questionBlocks[questionId],
+                        details = state.questionDetails[questionId],
+                        onLoadDetails = { onLoadQuestionDetails(questionId) },
                         onAnswer = { answer -> onAnswer(questionId, answer) },
                     )
                 }

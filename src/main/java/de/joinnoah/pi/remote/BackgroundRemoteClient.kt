@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import okhttp3.OkHttpClient
 
@@ -299,6 +300,16 @@ internal suspend fun RemoteCommands.answerQuestion(
     questionId: String,
     answer: JsonObject,
 ) {
+    // A fresh snapshot on this connection distinguishes legacy inline approvals from questions
+    // whose complete context must first be delivered and verified in the foreground.
+    if (answer.optionalText("kind") == "confirm" && runCatching { answer.flag("value") }.getOrDefault(false)) {
+        val snapshot = request("session.snapshot", "sessionId" to sessionId)
+        require(snapshot.text("kind") == "snapshot" && snapshot.text("sessionId") == sessionId)
+        val pending = snapshot["pendingQuestions"] as? JsonArray ?: error("Invalid pending questions")
+        require(pending.size <= 64 && pending.all { it is JsonObject })
+        val matches = pending.map { it as JsonObject }.filter { runCatching { it.text("id") == questionId }.getOrDefault(false) }
+        require(matches.size == 1 && validInlineConfirm(matches.single()))
+    }
     request(
         "question.answer",
         "sessionId" to sessionId,
@@ -306,3 +317,29 @@ internal suspend fun RemoteCommands.answerQuestion(
         "answer" to answer,
     )
 }
+
+/** Accept only a complete, bounded legacy confirm; unknown fields fail closed. */
+private fun validInlineConfirm(question: JsonObject): Boolean = runCatching {
+    require(question.keys.containsAll(setOf("id", "kind", "title", "message")))
+    require(question.keys.all { it in setOf("id", "kind", "title", "message", "escalation") })
+    fun bounded(value: String, max: Int, empty: Boolean = false) {
+        val encoder = Charsets.UTF_8.newEncoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+        require((empty || value.isNotEmpty()) && encoder.encode(java.nio.CharBuffer.wrap(value)).remaining() <= max)
+    }
+    val id = question.text("id")
+    bounded(id, 256)
+    require(id.none { it <= ' ' || it == '\u007f' })
+    require(question.text("kind") == "confirm")
+    bounded(question.text("title"), 4096)
+    bounded(question.text("message"), 16384, empty = true)
+    if ("escalation" in question) {
+        val escalation = question.obj("escalation")
+        require(escalation.keys.containsAll(setOf("tool", "reason")) && escalation.keys.all { it in setOf("tool", "reason", "child") })
+        bounded(escalation.text("tool"), 256)
+        bounded(escalation.text("reason"), 4096, empty = true)
+        if ("child" in escalation) bounded(escalation.text("child"), 256)
+    }
+    true
+}.getOrDefault(false)

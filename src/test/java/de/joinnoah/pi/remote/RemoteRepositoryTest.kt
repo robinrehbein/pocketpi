@@ -445,7 +445,8 @@ class RemoteRepositoryTest {
             val repo = repository(transport)
             repo.activate(RemoteSelection("host", "project", "session")); runCurrent()
             val ids = transport.sent.filter { it.text("type") == "projects.list" }.map { it.text("requestId") }
-            assertEquals((3 downTo supported).map { "capabilities.v$it:" }, ids.map { it.substringBeforeLast(':') + ":" })
+            assertEquals((3 downTo supported).map { "capabilities.v$it:" }, ids.map { it.substringBefore(':') + ":" })
+            assertTrue(ids.first().startsWith("capabilities.v3:optin=question_details.v1:"))
             assertEquals(supported >= 2, FILES_SEARCH_CAPABILITY in repo.state.value.capabilities)
         }
     }
@@ -8605,6 +8606,144 @@ class RemoteRepositoryTest {
     }
 
     private val openQuestion = Wire.objectOf("id" to "q", "kind" to "confirm", "message" to "Go?")
+
+    @Test
+    fun repositoryRejectsUnverifiedDetailsYesButStillSendsNo() = runTest {
+        val transport = Transport()
+        configure(transport)
+        val normal = transport.response
+        val question = Wire.parse("""{"id":"q","kind":"confirm","message":"Preview","details":{"id":"d","totalBytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}""")
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot") Wire.objectOf(
+                "kind" to "snapshot", "sessionId" to "session", "revision" to 0, "status" to "waiting",
+                "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question)))
+            else normal(request)
+        }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        repository.answer("q", Wire.objectOf("kind" to "confirm", "value" to true))
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+        repository.answer("q", Wire.objectOf("kind" to "confirm", "value" to false))
+        runCurrent()
+        assertEquals(Wire.objectOf("kind" to "confirm", "value" to false), transport.sent.last { it.text("type") == "question.answer" }["answer"])
+    }
+
+    @Test
+    fun positiveConfirmCannotSendForMissingQuestion() = runTest {
+        val transport = Transport()
+        val repository = answering(transport)
+        repository.answer("missing", Wire.objectOf("kind" to "confirm", "value" to true))
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+    }
+
+    @Test
+    fun queuedPositiveConfirmCannotSendAfterQuestionClosesOrIsReplaced() = runTest {
+        for (replace in listOf(false, true)) {
+            val transport = Transport()
+            val repository = answering(transport)
+            repository.answer("q", Wire.objectOf("kind" to "confirm", "value" to true))
+            val event = if (replace) Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+                "kind" to "question.open", "question" to Wire.objectOf("id" to "q", "kind" to "confirm", "message" to "Different?"))
+            else Wire.objectOf("type" to "event", "sessionId" to "session", "revision" to 1,
+                "kind" to "question.closed", "questionId" to "q")
+            transport.deliver(event)
+            runCurrent()
+            assertEquals("replace=$replace", 0, transport.sent.count { it.text("type") == "question.answer" })
+        }
+    }
+
+    @Test
+    fun revokedThenRegrantedCapabilityCannotResurrectAnOlderDetailsLoad() = runTest {
+        val transport = Transport()
+        configure(transport)
+        val normal = transport.response
+        val question = Wire.parse("""{"id":"q","kind":"confirm","title":"Confirm","message":"Preview","details":{"id":"d","totalBytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}""")
+        var granted = true
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(
+                if (granted) listOf(JsonPrimitive(QUESTION_DETAILS_CAPABILITY)) else emptyList())))
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0,
+                "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question)))
+            "session.question.details.get" -> null
+            else -> normal(request)
+        } }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        repository.loadQuestionDetails("q")
+        runCurrent()
+        val first = transport.sent.last { it.text("type") == "session.question.details.get" }
+        granted = false
+        repository.setForeground(true)
+        repository.setNetwork("wifi", validated = true, path = "first")
+        runCurrent()
+        assertFalse(QUESTION_DETAILS_CAPABILITY in repository.state.value.capabilities)
+        granted = true
+        repository.setNetwork("wifi", validated = true, path = "second")
+        runCurrent()
+        assertTrue(QUESTION_DETAILS_CAPABILITY in repository.state.value.capabilities)
+        repository.loadQuestionDetails("q")
+        runCurrent()
+        val reads = transport.sent.filter { it.text("type") == "session.question.details.get" }
+        assertEquals(2, reads.size)
+        val page = Wire.objectOf("kind" to "question_details", "sessionId" to "session", "questionId" to "q",
+            "detailsId" to "d", "offset" to 0, "totalBytes" to 5, "data" to "aGVsbG8")
+        transport.result(first, page)
+        runCurrent()
+        assertTrue(repository.state.value.questionDetails["q"]?.loading == true)
+        repository.answer("q", Wire.objectOf("kind" to "confirm", "value" to true))
+        runCurrent()
+        assertEquals(0, transport.sent.count { it.text("type") == "question.answer" })
+        transport.result(reads.last(), page)
+        runCurrent()
+        assertEquals("hello", repository.state.value.questionDetails["q"]?.text)
+    }
+
+    @Test
+    fun forbiddenDetailsAnswerRequiresExplicitReloadAndNewApproval() = runTest {
+        val transport = Transport()
+        configure(transport)
+        val normal = transport.response
+        val question = Wire.parse("""{"id":"q","kind":"confirm","title":"Confirm","message":"Preview","details":{"id":"d","totalBytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}}""")
+        transport.response = { request -> when (request.text("type")) {
+            "projects.list" -> JsonObject(checkNotNull(normal(request)) + ("capabilities" to JsonArray(listOf(JsonPrimitive(QUESTION_DETAILS_CAPABILITY)))))
+            "session.snapshot" -> Wire.objectOf("kind" to "snapshot", "sessionId" to "session", "revision" to 0,
+                "status" to "waiting", "messages" to JsonArray(emptyList()), "pendingQuestions" to JsonArray(listOf(question)))
+            "session.question.details.get" -> Wire.objectOf("kind" to "question_details", "sessionId" to "session",
+                "questionId" to "q", "detailsId" to "d", "offset" to 0, "totalBytes" to 5, "data" to "aGVsbG8")
+            else -> normal(request)
+        } }
+        var forbidden = true
+        transport.failure = { if (it.text("type") == "question.answer" && forbidden) "forbidden" else null }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.flush()
+        repository.loadQuestionDetails("q")
+        runCurrent()
+        assertEquals("hello", repository.state.value.questionDetails["q"]?.text)
+        val yes = Wire.objectOf("kind" to "confirm", "value" to true)
+        repository.answer("q", yes)
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "question.answer" })
+        assertNull(repository.state.value.questionDetails["q"]?.text)
+        assertTrue(repository.state.value.questionDetails["q"]?.failed == true)
+        forbidden = false
+        repository.answer("q", yes)
+        runCurrent()
+        assertEquals("no automatic retry or stale approval", 1, transport.sent.count { it.text("type") == "question.answer" })
+        assertEquals(1, transport.sent.count { it.text("type") == "session.question.details.get" })
+        repository.loadQuestionDetails("q")
+        runCurrent()
+        assertEquals("hello", repository.state.value.questionDetails["q"]?.text)
+        assertEquals(2, transport.sent.count { it.text("type") == "session.question.details.get" })
+        assertEquals(1, transport.sent.count { it.text("type") == "question.answer" })
+        repository.answer("q", yes)
+        runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "question.answer" })
+    }
 
     /** A selected session with [openQuestion] pending; `question.answer` fails like [code]. */
     private suspend fun TestScope.answering(
