@@ -99,13 +99,32 @@ and host-side copies were deleted, the owned emulator and ADB server stopped, an
 On App merge `66df8f7`, 3,333 Android and 34 Wear unit tests and Wear debug assembly passed.
 On Host merge `2588516bd`, 72 scoped outbox tests and a regression run with 310 passed and
 five skipped passed; final type checking passed. A Git PR composite hit its 240-second global
-limit under emulator load; the Git-write composite is still running.
+limit under emulator load; the Git-write suite passed all six tests. The isolated PR rerun passed in 134.79 s without emulator load and with the original limit.
 
 ## Remaining gates
 
 The prior fixture product baseline was App `deadfee` and Host `ca38943a5`, with Host fixtures
 saved as `18edf5384`. The new combined native matrix used the merges and regression scope
 recorded above. Earlier whole-suite counts remain historical baselines. Live GitHub CI,
-unmodified native spawn, native input and a model turn, physical Samsung/DeX hardware,
+unmodified native spawn, raw PTY input and a model turn, physical Samsung/DeX hardware,
 an independent Linux host, `MainActivity` and production internet/network behavior remain
 open. No push or release is claimed by this qualification.
+
+
+## Native command delivery from the Android composer
+
+An optional `prStatusInputExpected=true` path passed on the English phone profile (32.610 s)
+and German tablet profile (19.680 s). It types a fresh fixture command/nonce into the production
+composer and clicks send once. A public Pi extension command handler writes a separate private
+trace. `inputVerified` requires exactly one matching nonce, PID, session and TUI mode plus the
+current live Host/PTY/native-worker identity; a transport dispatch ACK is insufficient. Both
+runs also passed pending/failure/pass/clear and offline-produced reconnect restoration, with
+one cut and two upgrades, and retained `inputVerified=true` in the final sanitized proof.
+
+This proves command-handler delivery, not raw terminal bytes, model turns or a Pi completion
+response. The phone pending and tablet recovered screenshots were inspected. With the tablet
+keyboard open, the Changes header visually overlaps the PR card; this is an open visual issue
+under investigation, not a visually qualified tablet result. The two owned fixtures exited,
+private trees/metadata and temporary credential copies were removed, the owned emulator/ADB
+stopped, and ports 5191/5584/5585 were closed. Type/format checks and Android test APK assembly
+passed. Production app/Host source was unchanged by this fixture increment.

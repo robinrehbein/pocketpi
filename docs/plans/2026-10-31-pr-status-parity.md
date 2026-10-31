@@ -84,4 +84,4 @@ a model turn, MainActivity, physical Samsung/DeX, independent Linux and producti
 remain open. App merge `66df8f7` passed 3,333 Android and 34 Wear tests and Wear assembly; Host
 merge `2588516bd` passed 72 scoped outbox tests, 310 regression tests with five skipped, and
 final type checking. The Git PR composite hit its 240-second global limit under emulator load;
-the Git-write composite is still running. Earlier full-suite counts remain historical baselines.
+the Git-write suite passed six tests. The isolated PR rerun passed in 134.79 s without emulator load and with the original limit. Earlier full-suite counts remain historical baselines.

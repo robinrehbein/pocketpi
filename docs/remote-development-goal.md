@@ -542,3 +542,10 @@ It uses an injected spawn wrapper and flags; the external RPC default-mode regre
 and owned fixture/emulator/ADB cleanup was verified. See [the scoped qualification](testing/pr-status-parity-qualification.md).
 Live GitHub CI, native input and model turns, MainActivity and production networking, physical devices
 and an independent Linux testhost remain open.
+
+
+The native command-delivery fixture subsequently passed on phone/tablet emulator profiles:
+a command sent once through the production composer was verified in the same live Pi TUI
+process/session by a nonce trace. This does not establish raw PTY input or a model turn.
+A tablet IME-open Changes header/card overlap remains under visual investigation; see the
+[scoped record](testing/pr-status-parity-qualification.md).

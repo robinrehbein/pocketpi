@@ -35,6 +35,7 @@ class PrStatusTransportEndToEndTest {
     private val compose = createAndroidComposeRule<NavigationTestActivity>()
     private lateinit var fixture: JSONObject
     private var nativeExpected = false
+    private var inputExpected = false
     private lateinit var client: OkHttpClient
     private lateinit var scope: CoroutineScope
     private lateinit var repository: DefaultRemoteRepository
@@ -49,6 +50,10 @@ class PrStatusTransportEndToEndTest {
             val nativeArg = args.getString("prStatusNativeExpected")
             require(nativeArg == null || nativeArg == "true" || nativeArg == "false") { "prStatusNativeExpected must be true or false" }
             nativeExpected = nativeArg == "true"
+            val inputArg = args.getString("prStatusInputExpected")
+            require(inputArg == null || inputArg == "true" || inputArg == "false") { "prStatusInputExpected must be true or false" }
+            inputExpected = inputArg == "true"
+            require(!inputExpected || nativeExpected) { "prStatusInputExpected requires prStatusNativeExpected=true" }
             val path = args.getString("prStatusFixturePath")
             if (expected) require(!path.isNullOrBlank()) { "prStatusFixturePath is required" }
             assumeTrue("Pass prStatusFixturePath to run the actual Pi PR status integration", !path.isNullOrBlank())
@@ -121,6 +126,16 @@ class PrStatusTransportEndToEndTest {
             println("PR_STATUS_NAV routeMatch=${state.selection.routeId == selection.routeId} projectMatch=${state.selection.projectId == selection.projectId} sessionMatch=${state.selection.sessionId == selection.sessionId} connected=${state.connected} loading=${state.loading} sessionsFresh=${state.sessionsFresh} sessionPresent=${state.sessions.any { it.optionalText("id") == selection.sessionId }} prPresent=${state.pullRequest != null} running=${state.pullRequest?.checks == PullRequestChecksState.RUNNING}")
             UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).takeScreenshot(File(compose.activity.getExternalFilesDir(null), "pr-status-navigation-timeout.png"))
             throw failure
+        }
+        if (inputExpected) {
+            assertFalse("Input must not be verified before sending", initial.getBoolean("inputVerified"))
+            val command = fixture.getString("probeCommand")
+            val nonce = fixture.getString("probeNonce")
+            require(command.isNotBlank() && nonce.isNotBlank() && !command.contains('\n') && !command.contains('\r') && nonce.none { it.isWhitespace() })
+            awaitTag("composerField")
+            compose.onNodeWithTag("composerField").assertIsDisplayed().performTextInput("$command $nonce")
+            compose.onNodeWithTag("primaryComposerAction").assertIsEnabled().performClick()
+            compose.waitUntil(60_000) { statusOrNull()?.optBoolean("inputVerified") == true }
         }
         awaitTag("pullRequestChip")
         compose.onNodeWithTag("pullRequestChip").assertIsDisplayed().assertTextContains(compose.activity.getString(R.string.remote_pr_chip_number, 42L), substring = true)
