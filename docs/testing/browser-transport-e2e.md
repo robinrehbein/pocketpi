@@ -50,7 +50,9 @@ Heartbeat timing and rejection behavior remain covered deterministically.
 A later tablet run observed a text-send click during IME-driven viewport changes for which no
 text request reached the host. The pane can discard a queued send while retaining its draft
 when the client refuses it during another control operation; this is a possible explanation,
-but the exact refusal path was not captured. The silent-refusal UX race remains unresolved.
+but the exact refusal path was not captured. The later shared-browser increment adds a local
+refusal notice, preserves the draft and never automatically repeats the send; deterministic
+refusal and explicit-manual-retry tests pass. Physical IME transition qualification remains open.
 The transport test hides the IME and waits for a current frame before its single send; this
 does not qualify sending during that transition.
 

@@ -212,19 +212,24 @@ internal class BrowserClient(
         refreshPending = true
         val t = token; val c = connection; val metadata = metadataEpoch
         scope.launch { try {
-            val tabs = parseBrowserResult(send(c, BrowserCommand.Tabs(Wire.random(),v.sessionId,b))) as BrowserResult.Tabs
+            val opened = parseBrowserResult(send(c, BrowserCommand.Open(Wire.random(),v.sessionId,recovery))) as BrowserResult.Opened
             val participants = parseBrowserResult(send(c, BrowserCommand.Participants(Wire.random(),v.sessionId,b))) as BrowserResult.Participants
-            if (!valid(t,v.sessionId,c) || metadata != metadataEpoch || tabs.browserId != b || participants.browserId != b || tabs.generation != participants.generation || tabs.generation < (view?.generation ?: 0)) return@launch
-            if (tabs.generation != view?.generation) { lease = null; resizeApplied = null; dropStream() }
-            val selected = view?.selectedTabId?.takeIf { id -> tabs.tabs.any { it.id == id } } ?: tabs.tabs.firstOrNull()?.id
-            if (selected != view?.selectedTabId) { resizeApplied = null; dropStream() }
-            set(view?.copy(generation = tabs.generation, tabs = tabs.tabs, participants = participants.participants, selectedTabId = selected, ownsControl = lease != null, image = if (tabs.generation != v.generation || selected != v.selectedTabId) null else view?.image)); watch()
+            if (!valid(t,v.sessionId,c) || metadata != metadataEpoch) return@launch
+            val current = view ?: return@launch
+            if (opened.browserId != b || opened.incarnation != current.incarnation || participants.browserId != b) { frameFailed(); return@launch }
+            if (opened.generation != participants.generation || opened.generation < current.generation || opened.viewportRevision < current.viewportRevision) return@launch
+            if (lease != null && opened.generation == current.generation && opened.viewportRevision > current.viewportRevision) return@launch
+            val selected = current.selectedTabId?.takeIf { id -> opened.tabs.any { it.id == id } } ?: opened.tabs.firstOrNull()?.id
+            val changed = opened.generation != current.generation || opened.viewportRevision != current.viewportRevision || selected != current.selectedTabId
+            if (opened.generation != current.generation) lease = null
+            if (changed) { resizeApplied = null; dropStream() }
+            set(current.copy(generation = opened.generation, viewportRevision = opened.viewportRevision, owner = opened.owner, tabs = opened.tabs, participants = participants.participants, selectedTabId = selected, ownsControl = lease != null, image = if (changed) null else current.image)); watch()
         } catch (_: Exception) { if (valid(t,v.sessionId,c)) set(view?.copy(notice = BrowserNotice.FAILED)) }
           finally { if (t == token) { refreshPending = false; val again = refreshAgain; refreshAgain = false; if (again) refresh() } } }; return true
     }
     private fun watch() {
         val v = view ?: return; val b = v.browserId ?: return; val tab = v.selectedTabId ?: return
-        if (!visible || stream != null || watching || !current(v.sessionId,connection)) return
+        if (v.viewportRevision == 0L || !visible || stream != null || watching || !current(v.sessionId,connection)) return
         watching = true; val w = ++watchToken; val t = token; val c = connection
         scope.launch { try {
             val fields = mutableListOf<Pair<String, Any?>>("sessionId" to v.sessionId,"browserId" to b,"tabId" to tab,"generation" to v.generation,"viewportRevision" to v.viewportRevision)

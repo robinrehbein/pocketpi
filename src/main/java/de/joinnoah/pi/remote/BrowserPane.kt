@@ -64,6 +64,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
     var url by rememberSaveable(view?.sessionId) { mutableStateOf("") }
     var urlDirty by rememberSaveable(view?.sessionId) { mutableStateOf(false) }
     var draft by rememberSaveable(view?.sessionId) { mutableStateOf("") }
+    var textSendRefused by remember(view?.sessionId) { mutableStateOf(false) }
     val queue = remember(view?.sessionId) { mutableStateListOf<PendingBrowserInput>() }
     var flight by remember(view?.sessionId) { mutableStateOf<BrowserFlight?>(null) }
     var size by remember { mutableStateOf(IntSize.Zero) }
@@ -94,6 +95,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             flight = BrowserFlight(next, view.receipt)
             if (!latestActions.input(next.input)) {
                 queue.clear(); flight = null
+                if (next.submittedText != null) textSendRefused = true
                 if (held.isNotEmpty()) { latestActions.visible(false); latestActions.visible(true) }
             }
         }
@@ -182,10 +184,11 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
             }
         }
         if (view.notice != null) Text(stringResource(when (view.notice) {
-            BrowserNotice.BUSY -> R.string.browser_busy; BrowserNotice.UNCERTAIN -> R.string.browser_uncertain
+            BrowserNotice.BUSY -> R.string.browser_busy; BrowserNotice.UNCERTAIN -> if (view.ownsControl) R.string.browser_uncertain_control_retained else R.string.browser_uncertain
             BrowserNotice.DISCONNECTED -> R.string.browser_disconnected; BrowserNotice.FAILED -> R.string.browser_failed
             BrowserNotice.FRAME_FAILED -> R.string.browser_frame_failed
         }), color = MaterialTheme.colorScheme.error)
+        if (textSendRefused) Text(stringResource(R.string.browser_send_refused), Modifier.testTag("browserSendRefused"), color = MaterialTheme.colorScheme.error)
         Row(Modifier.padding(horizontal = 12.dp).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
             view.tabs.forEach { tab ->
                 TextButton(onClick = { latestActions.selectTab(tab.id) }, enabled = held.isEmpty()) { Text(if (tab.title.isBlank()) tab.url else tab.title) }
@@ -228,7 +231,7 @@ internal fun BrowserPane(view: BrowserView?, actions: BrowserPaneActions, onClos
         }
         Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(draft, { draft = it }, Modifier.weight(1f).testTag("browserText"), enabled = view.ownsControl, label = { Text(stringResource(R.string.browser_text)) })
-            TextButton(onClick = { enqueue(PendingBrowserInput(BrowserInput.Text(draft), draft)) }, enabled = canInput && draft.isNotBlank() && flight == null && queue.isEmpty(), modifier = Modifier.testTag("browserSendText")) { Text(stringResource(R.string.browser_send)) }
+            TextButton(onClick = { textSendRefused = !enqueue(PendingBrowserInput(BrowserInput.Text(draft), draft)) }, enabled = canInput && draft.isNotBlank() && flight == null && queue.isEmpty(), modifier = Modifier.testTag("browserSendText")) { Text(stringResource(R.string.browser_send)) }
         }
         Row(Modifier.padding(horizontal = 12.dp)) { listOf("Enter", "Tab", "Escape").forEach { key -> TextButton(onClick = { enqueue(PendingBrowserInput(BrowserInput.Key("down", key, key))); enqueue(PendingBrowserInput(BrowserInput.Key("up", key, key))) }, enabled = canInput) { Text(key) } } }
     }

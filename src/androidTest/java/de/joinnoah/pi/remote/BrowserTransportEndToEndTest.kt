@@ -12,6 +12,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.test.platform.app.InstrumentationRegistry
@@ -30,6 +32,8 @@ import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
@@ -115,6 +119,7 @@ class BrowserTransportEndToEndTest {
 
     @Test
     fun realTransportControlsChromiumAndSubmitsForm() {
+        assumeTrue("Use the synthetic peer fixture for this transport flow", fixture.optString("sessionKind") != "actual-pi")
         val defaultClient = OkHttpClient.Builder().callTimeout(2, TimeUnit.SECONDS).build()
         try {
             val failure = runCatching {
@@ -338,6 +343,89 @@ class BrowserTransportEndToEndTest {
         val screenshot = File(compose.activity.getExternalFilesDir(null), "browser-transport-e2e.png")
         assertTrue(UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).takeScreenshot(screenshot))
         assertTrue(screenshot.length() > 0)
+    }
+
+    @Test
+    fun actualPiAndAndroidShareLoginAcrossExplicitHandoffs() {
+        assumeTrue("Pass an actual Pi shared-browser fixture", fixture.optString("sessionKind") == "actual-pi")
+        val initial = requireNotNull(status()).getJSONObject("combined")
+        assertEquals("agent-ready", initial.getString("stage"))
+        assertEquals("1.4.0", initial.getString("piVersion"))
+        assertTrue("The session must belong to the actual Pi child", initial.getBoolean("ownerPidVerified"))
+        assertEquals(0, initial.getInt("toolErrors"))
+        val browserId = initial.getString("browserId")
+        val tabId = initial.getString("tabId")
+        val selection = RemoteSelection(fixture.getString("routeId"), fixture.getString("projectId"), fixture.getString("sessionId"))
+        compose.runOnIdle { scope.launch { repository.activate(selection, ActivationMode.USER_OPEN) } }
+        compose.waitUntil(60_000) { repository.canOpenBrowser() }
+        compose.runOnIdle { assertTrue(repository.openBrowser()) }
+        compose.waitUntil(30_000) {
+            repository.state.value.browser?.let { !it.opening && it.browserId == browserId && it.selectedTabId == tabId } == true
+        }
+        assertFalse("Pi initially owns the shared browser", repository.state.value.browser?.ownsControl == true)
+        val agentGeneration = requireNotNull(repository.state.value.browser).generation
+        fixtureAction("handoff-to-device")
+        compose.waitUntil(30_000) { status()?.optJSONObject("combined")?.optString("stage") == "handed-to-device" }
+        val agentId = requireNotNull(status()).getJSONObject("combined").getString("agentParticipantId")
+        compose.onNodeWithText(compose.activity.getString(R.string.browser_refresh)).performClick()
+        compose.waitUntil(30_000) { (repository.state.value.browser?.generation ?: 0) > agentGeneration }
+        compose.onNodeWithTag("browserAcquire").performClick()
+        compose.waitUntil(30_000) {
+            repository.state.value.browser?.let { it.ownsControl && it.browserId == browserId && it.selectedTabId == tabId && it.image?.viewportRevision == it.viewportRevision } == true
+        }
+        compose.waitUntil(30_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        val loginValue = fixture.getString("loginValue")
+        compose.onNodeWithTag("browserText").performTextInput(loginValue)
+        compose.runOnIdle {
+            val keyboard = compose.activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            keyboard.hideSoftInputFromWindow(compose.activity.window.decorView.windowToken, 0)
+        }
+        compose.waitUntil(30_000) {
+            val insets = ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+            val browser = repository.state.value.browser
+            insets != null && !insets.isVisible(WindowInsetsCompat.Type.ime()) && browser?.ownsControl == true &&
+                !browser.inputPending && browser.image?.viewportRevision == browser.viewportRevision &&
+                runCatching { compose.onNodeWithTag("browserSendText").assertIsEnabled(); true }.getOrDefault(false)
+        }
+        compose.onNodeWithTag("browserSendText").performClick()
+        compose.waitUntil(30_000) {
+            repository.state.value.browser?.let { !it.inputPending && it.receipt?.status == "accepted" } == true
+        }
+        val beforeLogin = requireNotNull(repository.state.value.browser)
+        compose.onNodeWithTag("browserText").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+        compose.waitUntil(30_000) { runCatching { compose.onNodeWithText("Enter").assertIsEnabled(); true }.getOrDefault(false) }
+        compose.onNodeWithText("Enter").performClick()
+        compose.waitUntil(60_000) {
+            val browser = repository.state.value.browser
+            status()?.optJSONObject("combined")?.optBoolean("loginAccepted") == true &&
+                browser?.ownsControl == true && browser.browserId == browserId && browser.selectedTabId == tabId &&
+                browser.documentEpoch > beforeLogin.documentEpoch && browser.image?.viewportRevision == browser.viewportRevision
+        }
+        compose.waitUntil(30_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        val loginScreenshot = File(compose.activity.getExternalFilesDir(null), "browser-shared-login.png")
+        assertTrue(UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).takeScreenshot(loginScreenshot))
+        assertTrue(loginScreenshot.length() > 0)
+        // Return ownership through the actual pane, then let Pi prove that its same tab has the cookie.
+        compose.onNodeWithText(compose.activity.getString(R.string.browser_refresh)).performClick()
+        compose.waitUntil(30_000) { repository.state.value.browser?.participants?.any { it.kind == "agent" && it.id == agentId } == true }
+        compose.onNodeWithText(compose.activity.getString(R.string.browser_handoff)).performClick()
+        compose.onNodeWithText("agent: $agentId").performClick()
+        compose.waitUntil(30_000) { repository.state.value.browser?.ownsControl == false }
+        fixtureAction("verify-login")
+        compose.waitUntil(30_000) { status()?.optJSONObject("combined")?.optString("stage") == "verified" }
+        val final = requireNotNull(status()).getJSONObject("combined")
+        assertEquals(browserId, final.getString("browserId"))
+        assertEquals(tabId, final.getString("tabId"))
+        assertTrue(final.getBoolean("cookieObserved"))
+        assertEquals(1, final.getInt("verifyCount"))
+        assertEquals(0, final.getInt("toolErrors"))
+    }
+
+    private fun fixtureAction(action: String) {
+        val body = JSONObject().put("action", action).toString().toRequestBody("application/json".toMediaType())
+        client.newCall(Request.Builder().url(fixture.getString("actionUrl")).post(body).build()).execute().use {
+            assertEquals("The fixture trigger is admitted exactly once", 202, it.code)
+        }
     }
 
     private fun status(): JSONObject? = runCatching {

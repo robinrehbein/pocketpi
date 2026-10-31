@@ -1,5 +1,27 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Shared Pi and Android browser checkpoint on 2026-10-31
+
+The local combined fixture now connects the actual Pi 1.4.0 CLI and public remote extension to
+the Android encrypted transport and native browser pane. A phone run passed explicit Pi-to-device
+handoff, exact local form login, Android-to-Pi handoff and a protected request from the original
+Pi browser tab carrying the login cookie. The provider is a deterministic offline fixture; this
+is evidence of harness integration, not a neural model choosing actions or a real website login.
+Final-source phone/tablet flows passed in 8.315 s and 10.898 s; the app quick-check passed
+3,053 app and 34 Wear unit tests. Exact scope and evidence are in
+[shared browser qualification](testing/shared-browser-handoff.md).
+
+The run exposed an initial-viewport ordering defect: a watch at revision zero could release
+newly acquired control before the first resize. The client now waits for viewport configuration.
+Manual reader Refresh obtains authoritative Open metadata, so a viewport configured later by
+Pi can be displayed without acquisition. A held lease still requires its sequence-bearing
+Document event or its own viewport acknowledgment before adopting a newer revision. A locally
+refused text send now shows a translated notice and preserves the draft, with no automatic retry.
+
+[Linux qualification](testing/linux-host-qualification.md) confirms isolated Linux execution and
+Pi CLI startup in existing local containers. Native PTY binaries and browser tooling are absent
+from the inspected environments; complete independent Linux/devcontainer qualification is open.
+
 ## Browser document recovery checkpoint on 2026-10-31
 
 The negotiated `session.browser.recovery.v1` increment keeps the known control lease across
@@ -12,9 +34,9 @@ current viewing tab. Commands without a document revision do not fence every sta
 The Android quick-check passed 3,044 app and 34 Wear unit tests; the final host Remote suite
 passed 3,018 tests with 23 skipped. The encrypted Android fixture proves page-initiated navigation,
 same-lease recovery without another acquire, preserved draft, blue JPEG and Compose output, and
-480 CSS pixels of real wheel scrolling on phone/tablet emulators. A send during IME-driven
-viewport changes can still be refused without a visible notice; the draft remains local. This
-separate UX race is open. Exact runs and limitations are in the
+480 CSS pixels of real wheel scrolling on phone/tablet emulators. At that checkpoint, a send during IME-driven viewport changes could be refused silently while
+preserving its draft. The later increment above adds explicit feedback for local refusal;
+physical-device transition qualification remains open. Exact runs and limitations are in the
 [transport evidence](testing/browser-transport-e2e.md).
 
 A separate isolated probe now starts the actual Pi 1.4.0 CLI with its public extension API and a

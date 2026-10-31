@@ -9,6 +9,7 @@
     <string name="browser_handoff">Kontrolle abgeben</string>
     <string name="browser_busy">Ein anderer Teilnehmer hat die Kontrolle.</string>
     <string name="browser_uncertain">Das Ergebnis der Eingabe ist ungewiss. Übernimm erneut die Kontrolle, bevor du fortfährst.</string>
+    <string name="browser_uncertain_control_retained">Das Ergebnis der Eingabe ist ungewiss. Prüfe die Seite, bevor du erneut sendest.</string>
     <string name="browser_disconnected">Verbindung getrennt.</string>
     <string name="browser_failed">Browseranfrage fehlgeschlagen.</string>
     <string name="browser_frame_failed">Das Browserbild konnte nicht angezeigt werden. Versuche es mit Aktualisieren erneut.</string>
@@ -19,6 +20,7 @@
     <string name="browser_waiting">Warte auf Browserbild…</string>
     <string name="browser_text">Text senden</string>
     <string name="browser_send">Senden</string>
+    <string name="browser_send_refused">Der Text wurde nicht gesendet. Dein Entwurf bleibt erhalten; versuche es erneut, wenn du bereit bist.</string>
     <string name="browser_discard_title">Browsereingabe verwerfen?</string>
     <string name="browser_discard_body">Die noch nicht gesendete Adresse oder Texteingabe wird verworfen.</string>
     <string name="browser_close_tab">Tab %1$s schließen</string>

@@ -43,6 +43,44 @@ class BrowserPaneTest {
         compose.runOnIdle { view = view.copy(inputPending = false, ownsControl = false, receipt = BrowserInputReceipt(0, "uncertain"), notice = BrowserNotice.UNCERTAIN) }
         compose.onNodeWithTag("browserText").assertTextContains("keep this")
     }
+    @Test fun uncertainOutcomeWithRetainedControlAsksToCheckPage() {
+        val view = BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = image(), notice = BrowserNotice.UNCERTAIN)
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(), {}) } }
+        compose.onNodeWithText("Input outcome is uncertain. Check the page before sending again.").assertIsDisplayed()
+        compose.onNodeWithText("Input outcome is uncertain. Take control again before continuing.").assertDoesNotExist()
+    }
+    @Test fun refusedTextSendShowsNoticeAndPreservesDraftWithoutRetry() {
+        val view = BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = image())
+        val attempted = mutableListOf<BrowserInput>()
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(input = { attempted.add(it); false }), {}) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("browserText").performTextInput("keep this")
+        compose.onNodeWithTag("browserSendText").performClick()
+        compose.onNodeWithTag("browserSendRefused").assertIsDisplayed()
+        compose.onNodeWithTag("browserText").assertTextContains("keep this")
+        compose.runOnIdle { assertEquals(listOf(BrowserInput.Text("keep this")), attempted) }
+    }
+    @Test fun manualRetryAfterRefusalClearsNoticeAndAcceptedDraft() {
+        var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = image()))
+        var attempts = 0
+        compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(input = {
+            attempts++
+            if (attempts == 1) false else { view = view.copy(inputPending = true); true }
+        }), {}) } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("Remote browser image").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("browserText").performTextInput("draft")
+        compose.onNodeWithTag("browserSendText").performClick()
+        compose.onNodeWithTag("browserSendRefused").assertIsDisplayed()
+        compose.runOnIdle { view = view.copy(moving = true) }
+        compose.runOnIdle { view = view.copy(moving = false) }
+        compose.runOnIdle { assertEquals(1, attempts) }
+        compose.onNodeWithTag("browserText").assertTextContains("draft")
+        compose.onNodeWithTag("browserSendText").performClick()
+        compose.onNodeWithTag("browserSendRefused").assertDoesNotExist()
+        compose.runOnIdle { view = view.copy(inputPending = false, receipt = BrowserInputReceipt(0, "accepted")) }
+        compose.onNodeWithTag("browserText").assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+        compose.runOnIdle { assertEquals(2, attempts) }
+    }
     @Test fun acceptedReceiptClearsOnlyTheSubmittedText() {
         var view by mutableStateOf(BrowserView("s", opening = false, browserId = "b", ownsControl = true, generation = 1, viewportRevision = 1, image = image()))
         compose.setContent { MaterialTheme { BrowserPane(view, BrowserPaneActions(input = { view = view.copy(inputPending = true); true }), {}) } }

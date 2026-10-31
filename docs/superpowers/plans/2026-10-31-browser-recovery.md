@@ -69,7 +69,9 @@ final host control-flow refactor. Final-source repeats passed on tablet (10.893 
 (12.454 s), with the IME hidden before the single text send. The phone test also corrected a
 cross-run telemetry baseline without relaxing the fresh-frame/480-pixel requirement. A prior
 phone attempt emitted moving heartbeats; deterministic tests establish their scope/deadline
-rules. Sending during IME viewport transitions remains a separate unresolved UX limitation.
+rules. A later increment adds explicit feedback when a text send is locally refused during a
+viewport transition, preserving the draft without retry. It also corrects the retained-control
+uncertainty message. Physical IME transition qualification remains open.
 
 Physical Galaxy devices, process-death recovery, independent Linux/devcontainer, public-network
 and full real-model browser-turn qualification remain untested by these fixtures. The Pi

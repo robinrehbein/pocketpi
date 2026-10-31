@@ -9,6 +9,7 @@
     <string name="browser_handoff">Give control</string>
     <string name="browser_busy">Another participant has control.</string>
     <string name="browser_uncertain">Input outcome is uncertain. Take control again before continuing.</string>
+    <string name="browser_uncertain_control_retained">Input outcome is uncertain. Check the page before sending again.</string>
     <string name="browser_disconnected">Disconnected.</string>
     <string name="browser_failed">Browser request failed.</string>
     <string name="browser_frame_failed">Could not display the browser image. Refresh to try again.</string>
@@ -19,6 +20,7 @@
     <string name="browser_waiting">Waiting for browser image…</string>
     <string name="browser_text">Text to send</string>
     <string name="browser_send">Send</string>
+    <string name="browser_send_refused">Text was not sent. Your draft is preserved; try again when ready.</string>
     <string name="browser_discard_title">Discard browser input?</string>
     <string name="browser_discard_body">The address or text you have not sent will be discarded.</string>
     <string name="browser_close_tab">Close tab %1$s</string>
