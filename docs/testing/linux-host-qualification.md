@@ -238,3 +238,34 @@ host or migration of existing volumes. Evidence:
 `/private/tmp/pocketpi-devcontainer-uid1001-{build.log,evidence.json}`.
 The merged upstream artifact-notice change also passes all 23 SessionControlsTest
 cases (`/private/tmp/pocketpi-upstream-session-controls-final.log`).
+
+## Packaged encrypted worker turn — 2026-10-31
+
+The first standalone-image worker run exposed a real packaging defect: the compiled
+host resolved hosted extensions relative to `dist/sessions`, where their entrypoints
+are absent. Host commit `9c24350b0` resolves the exact installed Atlas package's shipped
+source entries, verifies its package identity and rejects escaping paths. Source-checkout
+and explicit test-override behavior remain covered. The consumer verifier now exercises
+both actual installed extension resolutions; it rejects the old image before worker start.
+Seven path regressions and the root combined 39-test path/background suite pass.
+
+A rebuilt image, `sha256:4a46342c19b693c67eda4670c9004a6ff1c13c0296ccc9c90574a588ede14a69`,
+passes the installed consumer verifier and the complete adapted encrypted worker smoke:
+paired/authenticated device traffic through the real local relay, host-created native PTY
+session, resolved native identity, extension registration, matching worker/PTY/owner PIDs,
+a deterministic offline provider turn, and remote `session.bash` output `LINUX_WORKER_OK`.
+Only the standalone fixture and relay source files were mounted read-only. Production
+HostDaemon/native PTY/protocol/session modules and Pi were loaded from the installed image;
+no checkout, Mac native dependencies, user home or credentials were mounted. Network was
+disabled except container-internal loopback; the nonroot container had read-only root,
+no capabilities, no-new-privileges, private temporary state and automatic removal.
+
+Boundary: this is the production installed HostDaemon driven by a test harness with explicit
+nativeSpawn/provider/connect/secret-store injections, not the packaged CLI or Devcontainer
+entrypoint establishing a real remote connection. The provider is deterministic and offline.
+`daemon.stop()` returned, with the existing control-lost/identity-unresolved shutdown diagnostic;
+no stronger worker-recovery or independent remote-host claim follows.
+
+Reproduction artifacts: `/private/tmp/pocketpi-packaged-worker/smoke.ts`, its `relay/`
+subdirectory, `/private/tmp/pocketpi-packaged-worker-{first,second,build,root-tests}.log`,
+and `/private/tmp/pocketpi-packaged-extension-verifier-red.log`.
