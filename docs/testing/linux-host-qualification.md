@@ -269,3 +269,35 @@ no stronger worker-recovery or independent remote-host claim follows.
 Reproduction artifacts: `/private/tmp/pocketpi-packaged-worker/smoke.ts`, its `relay/`
 subdirectory, `/private/tmp/pocketpi-packaged-worker-{first,second,build,root-tests}.log`,
 and `/private/tmp/pocketpi-packaged-extension-verifier-red.log`.
+
+## Regular packaged CLI connected flow — 2026-10-31
+
+The same corrected image now passes the connected flow through its regular
+`pocketpi-host setup` and `serve` entrypoint. The fixture creates a private CA and
+TLS relay, configures the file secret store with synthetic credentials, installs
+an offline provider through ordinary private Pi settings/extensions, records
+project trust and shares the project through owner IPC. No HostDaemon, nativeSpawn,
+relay-connect, prepare, persistence or trust callback is injected.
+
+Observed through authenticated encrypted device commands: pairing, authentication,
+`sessions.create`, successful `session.snapshot`, a real Pi process attached to a
+PTY, accepted prompt and deterministic provider completion, and `session.bash`
+returning exactly `PACKAGED_CLI_WORKER_OK` with exit zero. Host SIGTERM shutdown
+also exits zero; the fixture verifies worker exit and closes its sockets/servers.
+Both the successful first flow and the strengthened shutdown repetition pass.
+Container restrictions remain nonroot, read-only root, network none with internal
+loopback, capability drop, no-new-privileges, tmpfs state and fixture-only bind.
+The automatically removed container never mounts a checkout or user credentials.
+
+An initial fixture timeout was traced to event observation: Remote can emit its
+bridge event inside its awaited session_start before the global provider's own
+session_start handler runs. The fixture now latches that event and uses successful
+public snapshot as the readiness proof. No product change was needed for this
+fixture correction. The corrected image also passes all nine core lifecycle checks.
+
+Evidence: `/private/tmp/pocketpi-packaged-cli/smoke.ts`, its isolated `relay/`
+sources, `/private/tmp/pocketpi-packaged-cli-{final,shutdown}.log`, and
+`/private/tmp/pocketpi-packaged-worker-core-lifecycle.log`.
+This remains a local Docker Desktop Linux-arm64 proof with an offline provider;
+Devcontainer connected entrypoint, remote network interruption, independent Linux
+host, real provider credentials and physical Samsung devices are not qualified by it.
