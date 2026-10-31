@@ -97,6 +97,7 @@ data class PendingSend(
 
 data class RemoteState(
     val browser: BrowserView? = null,
+    val emulator: EmulatorView? = null,
     val terminal: TerminalView? = null,
     val hosts: List<PairedHost> = emptyList(),
     /**
@@ -248,6 +249,16 @@ interface RemoteRepository {
     fun refreshPreview(): Boolean = false
     fun setPreviewVisible(visible: Boolean) {}
 
+    fun canOpenEmulator(): Boolean = false
+    fun openEmulator(): Boolean = false
+    fun selectEmulatorProfile(id: String): Boolean = false
+    fun closeEmulator() {}
+    fun acquireEmulator(): Boolean = false
+    fun handoffEmulator(id: String): Boolean = false
+    fun stopEmulator(): Boolean = false
+    fun sendEmulatorInput(input: EmulatorInput): Boolean = false
+    fun refreshEmulator(): Boolean = false
+    fun setEmulatorVisible(visible: Boolean) {}
     fun canOpenBrowser(): Boolean = false
     fun openBrowser(): Boolean = false
     fun closeBrowser() {}

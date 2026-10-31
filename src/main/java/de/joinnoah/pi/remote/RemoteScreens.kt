@@ -1332,6 +1332,7 @@ internal fun RemoteScreen(
             ChatAction.CHANGES -> openInspector(InspectorTab.CHANGES)
             ChatAction.FILES -> openInspector(InspectorTab.FILES)
             ChatAction.BROWSER -> openInspector(InspectorTab.BROWSER)
+            ChatAction.EMULATOR -> { if (state.emulator == null) chatModel?.openEmulator() }
             ChatAction.PREVIEW -> { if (state.previewBrowser == null) previewPortDialog = true else previewShown = true }
             ChatAction.JOBS -> openInspector(InspectorTab.JOBS)
             ChatAction.RENAME ->
@@ -1494,6 +1495,7 @@ internal fun RemoteScreen(
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
                         if (browserOpen || chatModel?.canOpenBrowser() == true) add(ChatAction.BROWSER)
                         if (state.previewBrowser != null || chatModel?.canOpenPreview() == true) add(ChatAction.PREVIEW)
+                        if (state.emulator != null || chatModel?.canOpenEmulator() == true) add(ChatAction.EMULATOR)
                         if (statusJobs != null) add(ChatAction.JOBS)
                         if (canRename) add(ChatAction.RENAME)
                         if (state.connected && !state.loading && !navigator.mutating) add(ChatAction.NEW_SESSION)
@@ -3826,6 +3828,13 @@ internal fun RemoteScreen(
         }, enabled = previewPortText.isNotEmpty() && previewPortText.all { it in '0'..'9' } && (previewPortText.toIntOrNull() ?: 0) in 1..65535) { Text(stringResource(R.string.preview_open)) } },
         dismissButton = { TextButton(onClick = { previewPortDialog = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
     )
+    val currentEmulator = state.emulator
+    if (currentEmulator != null && chatModel != null && currentEmulator.sessionId == state.selection.sessionId) androidx.compose.ui.window.Dialog(onDismissRequest = { chatModel.closeEmulator() }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+            val actions = remember(chatModel) { EmulatorPaneActions(chatModel::selectEmulatorProfile, chatModel::acquireEmulator, chatModel::handoffEmulator, chatModel::stopEmulator, chatModel::sendEmulatorInput, chatModel::refreshEmulator, chatModel::setEmulatorVisible) }
+            EmulatorPane(currentEmulator, actions, chatModel::closeEmulator)
+        }
+    }
     if (previewShown && state.previewBrowser != null && chatModel != null) androidx.compose.ui.window.Dialog(onDismissRequest = {
         if (previewHasUnsent) previewCloseConfirm = true else chatModel.closePreview()
     }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {

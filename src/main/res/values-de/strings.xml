@@ -707,4 +707,15 @@
     <string name="preview_open">Öffnen</string>
     <string name="preview_title_port">Vorschau · %1$d</string>
     <string name="preview_hide">Ausblenden</string>
+    <string name="emulator_title">Emulator</string>
+    <string name="emulator_select_profile">Profil auswählen</string>
+    <string name="emulator_acquire">Steuerung übernehmen</string>
+    <string name="emulator_stop">Emulator stoppen</string>
+    <string name="emulator_stop_confirm">Diesen Emulator stoppen?</string>
+    <string name="emulator_handoff">Steuerung an %1$s %2$s übergeben</string>
+    <string name="emulator_screen">Bildschirm</string>
+    <string name="emulator_busy">Ein anderer Teilnehmer steuert den Emulator</string>
+    <string name="emulator_disconnected">Verbindung getrennt</string>
+    <string name="emulator_uncertain">Die letzte Aktion wurde möglicherweise ausgeführt. Bitte erneut verbinden.</string>
+    <string name="emulator_failed">Emulator-Anfrage fehlgeschlagen</string>
 </resources>

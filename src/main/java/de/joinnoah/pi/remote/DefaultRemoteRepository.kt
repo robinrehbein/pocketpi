@@ -281,6 +281,7 @@ class DefaultRemoteRepository(
             SESSION_TASKS_CAPABILITY,
             // Browser commands additionally require a successfully negotiated v3 route.
             SESSION_PREVIEW_CAPABILITY,
+            SESSION_EMULATOR_CAPABILITY,
             SESSION_BROWSER_CAPABILITY,
             SESSION_BROWSER_RECOVERY_CAPABILITY,
         )
@@ -354,6 +355,29 @@ class DefaultRemoteRepository(
      * become uncertain, as a lost connection would have left them.
      */
     private val followUpsToRecheck = mutableMapOf<DraftKey, Set<String>>()
+    private val emulatorClient by lazy {
+        EmulatorClient(scope,
+            { session, connection -> state.value.connected && generation == connection && state.value.selection.sessionId == session },
+            { connection, type, fields ->
+                check(generation == connection && connectionRequestsOpen())
+                connectionRequest(type, *fields)
+            },
+            { emulator -> update { it.copy(emulator = emulator) } },
+            { state.value.host?.deviceId },
+            { connection -> state.value.connected && generation == connection },
+            { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
+        )
+    }
+    override fun canOpenEmulator() = state.value.connected && state.value.selection.sessionId != null && state.value.session?.optionalText("id") == state.value.selection.sessionId && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_EMULATOR_CAPABILITY in state.value.capabilities && SESSION_EMULATOR_CAPABILITY !in state.value.unavailableCapabilities && !state.value.stale
+    override fun openEmulator() = canOpenEmulator() && emulatorClient.open(requireNotNull(state.value.selection.sessionId), generation)
+    override fun selectEmulatorProfile(id: String) = emulatorClient.selectProfile(id)
+    override fun closeEmulator() = emulatorClient.close()
+    override fun acquireEmulator() = emulatorClient.acquire()
+    override fun handoffEmulator(id: String) = emulatorClient.handoff(id)
+    override fun stopEmulator() = emulatorClient.stop()
+    override fun sendEmulatorInput(input: EmulatorInput) = emulatorClient.input(input)
+    override fun refreshEmulator() = emulatorClient.refresh()
+    override fun setEmulatorVisible(visible: Boolean) = emulatorClient.setVisible(visible)
     private val browserClient by lazy {
         BrowserClient(scope,
             { session, connection -> state.value.connected && generation == connection && state.value.selection.sessionId == session },
@@ -1656,7 +1680,8 @@ class DefaultRemoteRepository(
 
     override fun cancelSelection() = cancelSelection(preserveBrowser = false, preservePreview = false)
 
-    private fun cancelSelection(preserveBrowser: Boolean, preservePreview: Boolean = false) {
+    private fun cancelSelection(preserveBrowser: Boolean, preservePreview: Boolean = false, preserveEmulator: Boolean = false) {
+        if (!preserveEmulator) emulatorClient.close()
         if (!preserveBrowser) browserClient.close()
         if (!preservePreview) previewClient.close()
         preparedSource = null
@@ -1805,6 +1830,7 @@ class DefaultRemoteRepository(
         unverifyProjectSessions()
         // A connection replaced on purpose is no failure.
         connectionEnded()
+        emulatorClient.disconnected()
         browserClient.disconnected()
         previewClient.disconnected()
         generation++
@@ -1951,7 +1977,7 @@ class DefaultRemoteRepository(
                 }
                 if (revision >= 2 && SESSION_TERMINAL_CAPABILITY in advertised) terminalRouteOffered = true
                 val merged = routeCapabilities.filter {
-                    it in advertised && (it != SESSION_PREVIEW_CAPABILITY || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY) || revision >= 2)
+                    it in advertised && (it !in setOf(SESSION_PREVIEW_CAPABILITY, SESSION_EMULATOR_CAPABILITY) || revision == 3) && (it !in setOf(SESSION_TERMINAL_CAPABILITY, SESSION_TASKS_CAPABILITY, FILES_SEARCH_CAPABILITY, SESSION_TERMINAL_KEYS_CAPABILITY) || revision >= 2)
                 }
                 val hadTasks = canReadTasks()
                 if (revision >= 2 && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
@@ -2058,7 +2084,9 @@ class DefaultRemoteRepository(
                 "event" -> receiveEvent(payload)
                 "host.event" ->
                     try {
-                        if (payload.optionalText("kind") in setOf("browser.frame", "browser.document", "browser.frame.waiting")) {
+                        if (payload.optionalText("kind") == "emulator.frame") emulatorClient.frame(payload)
+                        else if (payload.optionalText("kind") == "emulator.state") emulatorClient.state(payload)
+                        else if (payload.optionalText("kind") in setOf("browser.frame", "browser.document", "browser.frame.waiting")) {
                             val browserId = payload.optionalText("browserId")
                             if (browserId != null && browserId == browserClient.view?.browserId) browserClient.frame(payload)
                             if (browserId != null && browserId == previewClient.view?.browserId) previewClient.frame(payload)
@@ -2728,6 +2756,7 @@ class DefaultRemoteRepository(
         sessionsFresh: Boolean = false,
     ) {
         val previous = state.value.selection
+        if (selection != previous && emulatorClient.view != null) emulatorClient.close()
         if (selection != previous && browserClient.view != null) browserClient.close()
         if (selection != previous && previewClient.view != null) previewClient.close()
         if (selection.routeId != previous.routeId || selection.sessionId != previous.sessionId) endTerminal("left", sendDetach = true)
@@ -2915,6 +2944,7 @@ class DefaultRemoteRepository(
             return selection
         cacheCurrentScreen()
         if (!force) cancelSelection(
+            preserveEmulator = mode == ActivationMode.RESTORE && selection == previousSelection && emulatorClient.isDisconnectedFor(selection.sessionId),
             preserveBrowser = mode == ActivationMode.RESTORE && selection == previousSelection &&
                 browserClient.isDisconnectedFor(selection.sessionId),
             preservePreview = mode == ActivationMode.RESTORE && selection == previousSelection &&
@@ -3193,6 +3223,7 @@ class DefaultRemoteRepository(
                 state.value.selection == canonical && canOpenPreview()) {
                 previewClient.resumeIfDisconnected(requireNotNull(canonical.sessionId), generation)
             }
+            if (mode == ActivationMode.RESTORE && previousSelection == canonical && state.value.selection == canonical && canOpenEmulator()) emulatorClient.resumeIfDisconnected(requireNotNull(canonical.sessionId), generation)
             refreshPanes()
             outcome = "ok"
             return canonical
@@ -3797,6 +3828,7 @@ class DefaultRemoteRepository(
         }
         cancelHostWaitHint()
         deferredRecovery = null
+        emulatorClient.disconnected()
         browserClient.disconnected()
         previewClient.disconnected()
         generation++
@@ -6263,7 +6295,7 @@ class DefaultRemoteRepository(
      */
     private suspend fun connectionRequest(type: String, vararg fields: Pair<String, Any?>): JsonObject {
         check(connectionRequestsOpen())
-        return awaitConnectionReply(sessionsListRequestId(type, Wire.random()), type, fields, REQUEST_TIMEOUT_MILLIS, record = true)
+        return awaitConnectionReply(sessionsListRequestId(type, Wire.random()), type, fields, if (type == "emulator.open") 180_000L else REQUEST_TIMEOUT_MILLIS, record = true)
     }
 
     /** Thrown inside [withHealthyConnection] when a plain request's connection went or changed: the caller falls back. */

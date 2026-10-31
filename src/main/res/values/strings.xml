@@ -707,4 +707,15 @@
     <string name="preview_open">Open</string>
     <string name="preview_title_port">Preview · %1$d</string>
     <string name="preview_hide">Hide</string>
+    <string name="emulator_title">Emulator</string>
+    <string name="emulator_select_profile">Choose a profile</string>
+    <string name="emulator_acquire">Take control</string>
+    <string name="emulator_stop">Stop emulator</string>
+    <string name="emulator_stop_confirm">Stop this emulator?</string>
+    <string name="emulator_handoff">Give control to %1$s %2$s</string>
+    <string name="emulator_screen">Screen</string>
+    <string name="emulator_busy">Another participant has control</string>
+    <string name="emulator_disconnected">Disconnected</string>
+    <string name="emulator_uncertain">The last operation may have completed. Reconnect to continue.</string>
+    <string name="emulator_failed">Emulator request failed</string>
 </resources>
