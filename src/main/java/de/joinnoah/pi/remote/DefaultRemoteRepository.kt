@@ -2356,16 +2356,6 @@ class DefaultRemoteRepository(
             held.events.addLast(forTimeline)
             while (held.events.size > MAX_HELD_EVENTS) held.events.removeFirst()
         } else timeline?.let { current -> timelineEvent(current, forTimeline) }
-        try {
-            if (payload.optionalText("kind") == "session.compaction" &&
-                payload.optionalText("sessionId") == state.value.selection.sessionId &&
-                payload.optionalText("state") == "done") {
-                update { it.copy(contextUsage = null) }
-                refreshContextUsage()
-            }
-        } catch (dropped: Exception) {
-            Diagnostics.caught("repo.receive.compaction", dropped)
-        }
         // A live run that ends in the background lets the focus narrow.
         if (inBackground && payload.optionalText("kind") == "session.status" && !state.value.loading) syncFocus()
     }
@@ -2432,9 +2422,20 @@ class DefaultRemoteRepository(
         }
     }
 
-    /** The parts of an event outside the timeline: statuses, titles, receipts and notices. */
+    /**
+     * The parts of an event outside the timeline: statuses, titles, receipts, notices and the
+     * context usage a finished compaction changed.
+     */
     private fun eventEffects(payload: JsonObject) {
         if (payload.text("kind") == "session.status") updateSessionStatus(payload)
+        // Live or replayed, a finished compaction of the open chat makes its context usage stale.
+        if (payload.text("kind") == "session.compaction" &&
+            payload.optionalText("sessionId") == state.value.selection.sessionId &&
+            payload.optionalText("state") == "done"
+        ) {
+            update { it.copy(contextUsage = null) }
+            refreshContextUsage()
+        }
         if (payload.text("kind") == "message.upsert" &&
             payload.text("sessionId") == state.value.selection.sessionId &&
             // A held list lease already gets session.jobs.changed for this; older hosts need the hint.
@@ -2650,6 +2651,15 @@ class DefaultRemoteRepository(
         }
     }
 
+    /**
+     * Forgets the revisions of [sessionId]'s last status and title events, so the events of a new
+     * journal epoch, which count from the start again, reach the lists.
+     */
+    private fun forgetListRevisions(sessionId: String) {
+        sessionStatusRevisions.remove(sessionId)
+        sessionTitleRevisions.remove(sessionId)
+    }
+
     private fun updateSessionStatus(event: JsonObject) {
         val id = event.text("sessionId")
         val revision = event.long("revision")
@@ -2789,10 +2799,11 @@ class DefaultRemoteRepository(
     ) {
         val current = timeline ?: return
         val cursor = if (older) current.nextCursor ?: return else null
+        // Cleared before anything else: activation relies on it once the snapshot started.
+        if (snapshotPending === current) snapshotPending = null
         resynchronizing = true
         if (!older) update { it.copy(tasks = staleTasks(it.tasks)) }
         var includedTasks = if (held != null && cursor == null) heldIncludesTasks else !older && canReadTasks()
-        if (snapshotPending === current) snapshotPending = null
         // A Timeline whose focus lapsed takes a fresh first page read with its session in focus
         // again, its events held, in place of what it applied meanwhile; see [syncFocus].
         val reread = !older && held == null && current.focusLapsed && inSentFocus(current.sessionId)
@@ -2880,7 +2891,12 @@ class DefaultRemoteRepository(
             } else {
                 // A resume the host could not serve from its journal comes back as a snapshot.
                 if (!older && base != null) Diagnostics.count(Diagnostics.Counter.RESUMES_SNAPSHOT)
+                val hadSnapshot = current.hasSnapshot
+                val previousEpoch = current.journalEpoch
                 val accepted = current.snapshot(data, older, keepOlder = !dropOlderPages) && !older
+                // A first page of another journal epoch: the session's revisions count from the
+                // start again, so the list's newer-revision-wins guards start over too.
+                if (accepted && hadSnapshot && current.journalEpoch != previousEpoch) forgetListRevisions(current.sessionId)
                 replaced = accepted
                 val sameSession = data.optionalText("sessionId") == current.sessionId
                 // The same epoch's snapshot at a lower revision: one from another epoch starts over.
@@ -3368,6 +3384,8 @@ class DefaultRemoteRepository(
         var held: HeldSnapshot? = null
         var earlySessions: Deferred<Result<List<JsonObject>>>? = null
         var snapshotHeld = false
+        // The chat's first read began: from then on a pending snapshot is another read's, scheduled.
+        var snapshotStarted = false
         // Their coroutines belong to this activation: its cancellation ends them too.
         val beside = CoroutineScope(currentCoroutineContext())
         try {
@@ -3574,6 +3592,7 @@ class DefaultRemoteRepository(
             refreshAdvisor()
             refreshCommands()
             try {
+                snapshotStarted = true
                 snapshot(
                     epoch,
                     held = heldReply,
@@ -3653,8 +3672,10 @@ class DefaultRemoteRepository(
                 activationStartedAt = null
                 taskActivationEpoch = null
                 // A cached chat whose snapshot never started (the activation failed before it)
-                // asks for one itself when its events need it.
-                timeline?.takeIf { snapshotPending === it }?.let { pending ->
+                // asks for one itself when its events need it. Once it started, a pending snapshot
+                // is one already scheduled (the reread of a lapsed focus, a refocus): it stays, or
+                // the focus sync below would read the chat a second time.
+                timeline?.takeIf { !snapshotStarted && snapshotPending === it }?.let { pending ->
                     snapshotPending = null
                     // A held resume whose reply is dropped: the events held for it apply now.
                     pending.endAwaiting()

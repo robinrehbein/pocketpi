@@ -163,8 +163,15 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     /** Pages shown before this epoch began, kept as the prefix of a snapshot that overlaps them. */
     private var retained = listOf<JsonObject>()
     private var retainedCursor: String? = null
+    private var retainedCursorRevision = -1L
     private val pendingEvents = sortedMapOf<Long, JsonObject>()
-    private var snapshotRevision = -1L
+
+    /**
+     * The revision of the first page whose token [nextCursor] names; the host answers an older
+     * page at that revision. A resync that keeps the older pages on screen keeps their cursor, so
+     * this stays at the earlier page's revision while [revision] moves on.
+     */
+    private var cursorRevision = -1L
     /** Buffered events wait for a snapshot; not while a resume reply is awaited, which they wait for. */
     val needsSnapshot: Boolean
         get() = pendingEvents.isNotEmpty() && !awaitingReply
@@ -252,7 +259,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     fun continueFrom(previous: Timeline) {
         require(previous.sessionId == sessionId)
         revision = previous.revision
-        snapshotRevision = previous.snapshotRevision
+        cursorRevision = previous.cursorRevision
         hasSnapshot = previous.hasSnapshot
         showMessages(previous.messages)
         questions = previous.questions
@@ -267,6 +274,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         unknownKindSeen = previous.unknownKindSeen
         retained = emptyList()
         retainedCursor = null
+        retainedCursorRevision = -1L
         pendingEvents.clear()
         heldThrough = -1L
         resumeOwed = false
@@ -302,16 +310,16 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
 
     fun beginSnapshotEpoch(status: String) {
         revision = -1L
-        snapshotRevision = -1L
         hasSnapshot = false
         journalEpoch = null
         tasksKnown = false
         awaitingReply = false
         detached = false
-        if (messages.isNotEmpty()) retain(messages, nextCursor)
+        if (messages.isNotEmpty()) retain(messages, nextCursor, cursorRevision)
         showMessages(emptyList())
         questions = emptyList()
         nextCursor = null
+        cursorRevision = -1L
         pendingEvents.clear()
         heldThrough = -1L
         resumeOwed = false
@@ -323,12 +331,15 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
 
     /**
      * Keeps [messages] (with the cursor before them) that an earlier Timeline of this session
-     * showed, so the first snapshot keeps the older pages it overlaps.
+     * showed, so the first snapshot keeps the older pages it overlaps. [cursorRevision] is the
+     * revision of the page whose token the cursor names, or -1 when unknown; the snapshot that
+     * keeps the messages then takes its own cursor and revision instead.
      */
-    fun retain(messages: List<JsonObject>, nextCursor: String?) {
+    fun retain(messages: List<JsonObject>, nextCursor: String?, cursorRevision: Long = -1L) {
         if (hasSnapshot) return
         retained = messages
         retainedCursor = nextCursor
+        retainedCursorRevision = cursorRevision
     }
 
     /**
@@ -342,7 +353,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         if (data.text("sessionId") != sessionId) return false
         val incomingRevision = data.long("revision")
         if (older) {
-            if (incomingRevision != snapshotRevision || snapshotRevision < 0) return false
+            if (incomingRevision != cursorRevision || cursorRevision < 0) return false
             showMessages((data.array("messages") + messages).associateBy { it.text("id") }.values.toList())
             nextCursor = data.optionalText("nextCursor")
             return true
@@ -367,7 +378,6 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         }
         val incomingStatus = data.text("status")
         require(incomingStatus in SESSION_STATUSES)
-        snapshotRevision = incomingRevision
         revision = incomingRevision
         status = incomingStatus
         journalEpoch = epoch
@@ -377,17 +387,29 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         // new page begins, so the prefix before its oldest message and the cursor before them stay.
         val shown = if (!keepOlder) emptyList() else if (hasSnapshot) messages else retained
         val shownCursor = if (hasSnapshot) nextCursor else retainedCursor
+        val shownCursorRevision = if (hasSnapshot) cursorRevision else retainedCursorRevision
         val oldest = page.firstOrNull()?.optionalText("id")
         val overlap = if (oldest == null) -1 else shown.indexOfFirst { it.optionalText("id") == oldest }
         if (overlap > 0) {
             showMessages((shown.subList(0, overlap) + page).associateBy { it.text("id") }.values.toList())
-            nextCursor = shownCursor
+            // A kept cursor whose revision is unknown cannot load older pages: the host answers it at
+            // a revision `older` would refuse. The page's own cursor reloads part of the kept prefix,
+            // which the prepend dedupes by id.
+            if (shownCursorRevision >= 0) {
+                nextCursor = shownCursor
+                cursorRevision = shownCursorRevision
+            } else {
+                nextCursor = data.optionalText("nextCursor")
+                cursorRevision = incomingRevision
+            }
         } else {
             showMessages(page)
             nextCursor = data.optionalText("nextCursor")
+            cursorRevision = incomingRevision
         }
         retained = emptyList()
         retainedCursor = null
+        retainedCursorRevision = -1L
         hasSnapshot = true
         questions = data.array("pendingQuestions")
         // Absent means none; a malformed value is dropped rather than failing the snapshot.
@@ -412,9 +434,10 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         if (messages.isNotEmpty()) {
             retained = messages
             retainedCursor = nextCursor
+            retainedCursorRevision = cursorRevision
         }
         revision = -1L
-        snapshotRevision = -1L
+        cursorRevision = -1L
         hasSnapshot = false
         tasksKnown = false
         pendingEvents.clear()

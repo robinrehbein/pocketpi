@@ -424,12 +424,45 @@ class SnapshotFencingTest {
         )
         timeline.snapshot(withCursor(snapshot(3, "b", "c", "d"), "before-b"))
         assertEquals(listOf("a", "b", "c", "d"), timeline.messages.map { it.text("id") })
-        assertEquals("before-a", timeline.nextCursor)
+        // The kept cursor's revision is unknown, so the page's own cursor stands in for it.
+        assertEquals("before-b", timeline.nextCursor)
 
         timeline.beginSnapshotEpoch("idle")
         timeline.snapshot(withCursor(snapshot(0, "c", "d"), "before-c"))
         assertEquals(listOf("a", "b", "c", "d"), timeline.messages.map { it.text("id") })
+        assertEquals("before-b", timeline.nextCursor)
+    }
+
+    @Test
+    fun aKeptCursorOfUnknownRevisionGivesWayToThePagesOwnSoOlderPagesStillLoad() {
+        val timeline = Timeline("session")
+        timeline.retain(
+            listOf(Wire.objectOf("id" to "a"), Wire.objectOf("id" to "b"), Wire.objectOf("id" to "c")),
+            "old-token-cursor",
+        )
+        timeline.snapshot(withCursor(snapshot(12, "b", "c", "d"), "before-b"))
+        assertEquals(listOf("a", "b", "c", "d"), timeline.messages.map { it.text("id") })
+        assertEquals("before-b", timeline.nextCursor)
+
+        // The host answers the cursor at the page's revision; the reloaded a dedupes.
+        assertTrue(timeline.snapshot(withCursor(snapshot(12, "z", "a"), "before-z"), older = true))
+        assertEquals(listOf("z", "a", "b", "c", "d"), timeline.messages.map { it.text("id") })
+        assertEquals("before-z", timeline.nextCursor)
+    }
+
+    @Test
+    fun aKeptCursorOfKnownRevisionStays() {
+        val timeline = Timeline("session")
+        timeline.retain(
+            listOf(Wire.objectOf("id" to "a"), Wire.objectOf("id" to "b"), Wire.objectOf("id" to "c")),
+            "before-a",
+            cursorRevision = 7,
+        )
+        timeline.snapshot(withCursor(snapshot(12, "b", "c", "d"), "before-b"))
         assertEquals("before-a", timeline.nextCursor)
+        assertFalse(timeline.snapshot(withCursor(snapshot(12, "y", "z"), "before-y"), older = true))
+        assertTrue(timeline.snapshot(withCursor(snapshot(7, "y", "z"), "before-y"), older = true))
+        assertEquals(listOf("y", "z", "a", "b", "c", "d"), timeline.messages.map { it.text("id") })
     }
 
     @Test
@@ -1282,5 +1315,29 @@ class TimelineResumeTest {
         assertEquals("new:2", timeline.nextCursor)
         assertTrue(timeline.snapshot(snapshot(12, message("b"), epoch = null), older = true))
         assertEquals(listOf("b", "c", "d"), texts(timeline))
+    }
+
+    @Test
+    fun afterAnOverlappingResyncTheOlderPageOfTheKeptCursorIsTaken() {
+        val timeline = Timeline("session")
+        timeline.snapshot(snapshot(10, message("b"), message("c"), cursor = "old:2"))
+
+        // A resync of the same epoch overlaps the page on screen: the old token's cursor stays.
+        assertTrue(timeline.snapshot(snapshot(12, message("c"), message("d"), cursor = "new:2")))
+        assertEquals(listOf("b", "c", "d"), texts(timeline))
+        assertEquals("old:2", timeline.nextCursor)
+
+        // The host answers that cursor from the old token, at that token's revision; a continued
+        // Timeline takes it as well.
+        val continued = Timeline("session").apply { continueFrom(timeline) }
+        assertTrue(timeline.snapshot(snapshot(10, message("a"), epoch = null, cursor = "old:3"), older = true))
+        assertEquals(listOf("a", "b", "c", "d"), texts(timeline))
+        assertEquals("old:3", timeline.nextCursor)
+        assertTrue(continued.snapshot(snapshot(10, message("a"), epoch = null), older = true))
+        assertEquals(listOf("a", "b", "c", "d"), texts(continued))
+
+        // A page of the new token's revision does not continue the old token's cursor.
+        assertFalse(timeline.snapshot(snapshot(12, message("z"), epoch = null), older = true))
+        assertEquals(listOf("a", "b", "c", "d"), texts(timeline))
     }
 }
