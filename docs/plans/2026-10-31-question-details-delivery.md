@@ -44,11 +44,11 @@
    - [x] Implement and exercise corruption, dropped/reordered/foreign/revoked/stale-source/race/old-client protections and actual native/RPC producer-to-Android flows.
    - [x] Enable the completed confirm-details route by default, preserve explicit disable and connection opt-in, and document remaining hardware/Linux gates.
    - [x] Complete the full Android/Wear verification.
-   - [ ] Complete the broad final Remote/claude-settings verification.
+   - [x] Complete the targeted rerun of the three files affected by the non-green broad Host run; retain the original broad result.
 
 ## Integration safety boundaries
 
 RPC approvals currently distinguish local message from masked remoteMessage; do not treat generic raw RPC UI text as a verified masked approval source. Terminal owner must require a trusted exact-question Host attestation rather than accepting the unchanged client QuestionAnswer as sufficient. The Host enables the completed confirm-details path by default; per-connection opt-in remains required and explicit false disables it.
 
 
-Tasks 0 and 1 are saved in Host commits `1f4163144` and `5ea921b60`; their covering run passed 416 tests across 18 files. Tasks 2–4 are implemented and their independent review fixes approved. Focused producer, protocol, Host and Android checks passed; four default-configured native and RPC producer-to-Android scenarios passed. The broad Host suite and remaining hardware/Linux qualification stay open; editor support is separate. See [qualification](../testing/question-details-delivery-qualification.md).
+Tasks 0 and 1 are saved in Host commits `1f4163144` and `5ea921b60`; their covering run passed 416 tests across 18 files. Tasks 2–4 are implemented and their independent review fixes approved. Focused producer, protocol, Host and Android checks passed; four default-configured native and RPC producer-to-Android scenarios passed. The broad Host run ended with three failures; the corrected files passed a fresh combined rerun (322 passed, 5 skipped). No second broad run is claimed. The bounded feature is saved in Host `855e97302` and App `b9deabb`; physical-device, independent Linux and production qualification stay open, and editor support is separate. See [qualification](../testing/question-details-delivery-qualification.md).
