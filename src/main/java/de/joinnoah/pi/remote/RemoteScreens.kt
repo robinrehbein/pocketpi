@@ -1424,8 +1424,7 @@ internal fun RemoteScreen(
                     ?.let { id -> state.sessions.firstOrNull { it.optionalText("id") == id } }
                     ?.let { sessionListItem(it, state.connected, loading = false, state.stale) }
                     ?.takeIf { canCloseSession(it, state.connected, loading = false, state.capabilities) }
-            val hasTuiInfo =
-                state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
+            val hasTuiInfo = showsTuiInfo(state)
             // The ticket this chat belongs to, from the loaded tickets: its chip opens the ticket.
             val chatSessionId = state.session?.optionalText("id")
             val chatTicket = remember(state.tickets, state.connected, state.capabilities, state.unavailableCapabilities, chatSessionId) {

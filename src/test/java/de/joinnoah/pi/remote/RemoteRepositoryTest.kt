@@ -11347,4 +11347,306 @@ class RemoteRepositoryTest {
         val request = transport.sent.last { it.text("type") == "session.prompt" }
         assertEquals("prompt-id", request.text("requestId"))
     }
+
+    private val workerControls by lazy {
+        Wire.json.parseToJsonElement(javaClass.getResource("/session-worker-controls-v1.json")!!.readText()).jsonObject
+            .array("wireValid")
+            .associate { it.text("name") to it.obj("payload") }
+    }
+
+    private fun workerControlSession(): JsonObject =
+        workerControls.getValue("worker-create-result").obj("data").obj("session")
+
+    private fun terminalControlSession(): JsonObject =
+        workerControls.getValue("terminal-session").obj("data").array("items").single()
+
+    private fun controlling(transport: Transport, vararg sessions: JsonObject, v2: Boolean = true) {
+        configure(transport, sessions = sessions.toList(), opened = sessions.first())
+        transport.capabilities = setOf(SESSION_CLOSE_CAPABILITY, COMMANDS_CAPABILITY)
+        advertising(
+            transport,
+            JsonArray(
+                (listOf(FOLLOW_UP_CAPABILITY, STEER_CAPABILITY, RELOAD_CAPABILITY) +
+                    (if (v2) listOf(HOST_WORKER_V2_CAPABILITY) else emptyList())).map(::JsonPrimitive),
+            ),
+        )
+        val original = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.prompt", "session.close" ->
+                    Wire.objectOf("kind" to "accepted", "sessionId" to request.text("sessionId"))
+                "session.reload" -> reloaded(request)
+                "session.commands.get" -> commandData(request.text("sessionId"))
+                "session.snapshot" -> JsonObject(original(request)!! + ("revision" to JsonPrimitive(2)))
+                else -> original(request)
+            }
+        }
+    }
+
+    /** Selects [id] and puts it in the running state, at revision 3, just before the fixture's event. */
+    private suspend fun TestScope.runningRepository(transport: Transport, id: String): DefaultRemoteRepository {
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", id))
+        runCurrent()
+        transport.deliver(Wire.objectOf("type" to "event", "sessionId" to id,
+            "revision" to 3, "kind" to "session.status", "status" to "running"))
+        return repository
+    }
+
+    private fun refuseControls(transport: Transport, vararg types: String) {
+        val refusal = workerControls.getValue("controls-unsupported").obj("error")
+        transport.failure = { if (it.text("type") in types) refusal.text("code") else null }
+        transport.failureMessage = { refusal.text("message") }
+    }
+
+    @Test
+    fun aWorkerAndAnUnmarkedTerminalSessionQueueAFollowUpWithV2() = runTest {
+        for (session in listOf(workerControlSession(), terminalControlSession())) {
+            val id = session.text("id")
+            val transport = Transport().also { controlling(it, session) }
+            val repository = runningRepository(transport, id)
+            assertTrue(canFollowUp(repository.state.value))
+            assertTrue(canSteer(repository.state.value))
+            assertFalse(showsTuiInfo(repository.state.value))
+
+            repository.draft("After this")
+            repository.followUp()
+            runCurrent()
+
+            val sent = transport.sent.single { it.text("type") == "session.prompt" }
+            assertEquals("follow_up", sent.text("delivery"))
+            assertEquals(id, sent.text("sessionId"))
+            assertEquals("accepted", repository.state.value.followUps.single().status)
+            val status = workerControls.getValue("follow-up-status")
+            transport.deliver(
+                JsonObject(status + ("sessionId" to JsonPrimitive(id)) + ("requestId" to JsonPrimitive(sent.text("requestId")))),
+            )
+            assertEquals(status.text("status"), repository.state.value.followUps.single().status)
+        }
+    }
+
+    @Test
+    fun withoutV2ATerminalSessionAndAWorkerStayIdleOnly() = runTest {
+        for (session in listOf(workerControlSession(), terminalControlSession())) {
+            val transport = Transport().also { controlling(it, session, v2 = false) }
+            val repository = runningRepository(transport, session.text("id"))
+            assertFalse(canFollowUp(repository.state.value))
+            assertFalse(canSteer(repository.state.value))
+            assertTrue(showsTuiInfo(repository.state.value))
+            repository.draft("After this")
+            repository.followUp()
+            repository.steer()
+            runCurrent()
+            assertTrue(transport.sent.none { it.text("type") == "session.prompt" })
+        }
+    }
+
+    @Test
+    fun anRpcSessionKeepsItsControlsWithAndWithoutV2() = runTest {
+        for (v2 in listOf(true, false)) {
+            val transport = Transport().also { controlling(it, session(), v2 = v2) }
+            val repository = runningRepository(transport, "session")
+            assertTrue(canFollowUp(repository.state.value))
+            assertTrue(canSteer(repository.state.value))
+            assertFalse(showsTuiInfo(repository.state.value))
+            repository.draft("After this")
+            repository.followUp()
+            runCurrent()
+            assertEquals("follow_up", transport.sent.single { it.text("type") == "session.prompt" }.text("delivery"))
+        }
+    }
+
+    @Test
+    fun v2CountsOnlyFromTheV2Route() = runTest {
+        val v1Only = Transport().also { controlling(it, terminalControlSession()) }
+        val advertised = v1Only.response
+        v1Only.response = { request ->
+            val result = advertised(request)
+            if (request.text("type") == "projects.list" && request.text("requestId").startsWith("capabilities.v2:"))
+                JsonObject(checkNotNull(result) - "capabilities")
+            else result
+        }
+        val repository = runningRepository(v1Only, "terminal-session")
+        assertTrue(v1Only.sent.any { it.text("type") == "projects.list" && it.text("requestId").startsWith("capabilities.v1:") })
+        assertTrue(FOLLOW_UP_CAPABILITY in repository.state.value.capabilities)
+        assertFalse(HOST_WORKER_V2_CAPABILITY in repository.state.value.capabilities)
+        assertFalse(canFollowUp(repository.state.value))
+
+        val handshake = Transport().also {
+            controlling(it, terminalControlSession(), v2 = false)
+            it.capabilities = it.capabilities + HOST_WORKER_V2_CAPABILITY
+        }
+        val authenticated = runningRepository(handshake, "terminal-session")
+        assertFalse(HOST_WORKER_V2_CAPABILITY in authenticated.state.value.capabilities)
+
+        val v2Route = runningRepository(Transport().also { controlling(it, terminalControlSession()) }, "terminal-session")
+        assertTrue(HOST_WORKER_V2_CAPABILITY in v2Route.state.value.capabilities)
+    }
+
+    @Test
+    fun aRefusalMarksOnlyThatControlOfThatSessionAndKeepsTheDraft() = runTest {
+        val other = terminalControlSession().let { JsonObject(it + ("id" to JsonPrimitive("other-session"))) }
+        val transport = Transport().also { controlling(it, terminalControlSession(), other) }
+        val repository = runningRepository(transport, "terminal-session")
+        refuseControls(transport, "session.prompt")
+
+        repository.draft("After this")
+        repository.followUp()
+        runCurrent()
+
+        val state = repository.state.value
+        assertEquals(R.string.remote_session_control_reload_pi, state.error)
+        assertEquals(mapOf("terminal-session" to setOf(ExtensionControl.FOLLOW_UP)), state.sessionControlUnsupported)
+        assertFalse(canFollowUp(state))
+        assertTrue(canSteer(state))
+        assertTrue(showsTuiInfo(state))
+        // The host took nothing: the draft stays and no submission is left to reconcile.
+        assertEquals("After this", state.draft)
+        assertFalse(state.uncertain)
+        assertTrue(state.followUps.isEmpty())
+        // It is hidden now, so tapping does not reach the host again.
+        repository.followUp()
+        runCurrent()
+        assertEquals(1, transport.sent.count { it.text("type") == "session.prompt" })
+
+        repository.activate(RemoteSelection("host", "project", "other-session"))
+        runCurrent()
+        transport.failure = { null }
+        assertEquals("other-session", repository.state.value.selection.sessionId)
+        assertTrue(canFollowUp(repository.state.value))
+    }
+
+    @Test
+    fun anotherUnsupportedRefusalMarksNothing() = runTest {
+        val transport = Transport().also { controlling(it, terminalControlSession()) }
+        val repository = runningRepository(transport, "terminal-session")
+        transport.failure = { if (it.text("type") == "session.prompt") "unsupported" else null }
+        transport.failureMessage = { "Queued input requires something else" }
+        repository.draft("After this")
+        repository.followUp()
+        runCurrent()
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertTrue(repository.state.value.sessionControlUnsupported.isEmpty())
+        assertTrue(canFollowUp(repository.state.value))
+    }
+
+    @Test
+    fun theSameRefusalOfAnRpcSessionMarksNothing() = runTest {
+        val transport = Transport().also { controlling(it, session()) }
+        val repository = runningRepository(transport, "session")
+        refuseControls(transport, "session.prompt")
+        repository.draft("After this")
+        repository.followUp()
+        runCurrent()
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        assertTrue(repository.state.value.sessionControlUnsupported.isEmpty())
+        assertTrue(canFollowUp(repository.state.value))
+    }
+
+    @Test
+    fun reloadRunsForAWorkerAndATerminalSessionWithV2() = runTest {
+        for (session in listOf(workerControlSession(), terminalControlSession())) {
+            val id = session.text("id")
+            val transport = Transport().also { controlling(it, session) }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", id))
+            runCurrent()
+            assertEquals(ReloadAvailability.RUNS, reloadAvailability(repository.state.value))
+            assertEquals(ReloadResult.Done, repository.reloadSession(id))
+            assertEquals(id, transport.sent.single { it.text("type") == "session.reload" }.text("sessionId"))
+        }
+    }
+
+    @Test
+    fun withoutV2ReloadExplainsItselfAndSendsNothing() = runTest {
+        for (session in listOf(workerControlSession(), terminalControlSession())) {
+            val id = session.text("id")
+            val transport = Transport().also { controlling(it, session, v2 = false) }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project", id))
+            runCurrent()
+            assertEquals(ReloadAvailability.TERMINAL_ONLY, reloadAvailability(repository.state.value))
+            assertEquals(ReloadResult.Failed(ReloadFailure.Unsupported), repository.reloadSession(id))
+            assertTrue(transport.sent.none { it.text("type") == "session.reload" })
+        }
+    }
+
+    @Test
+    fun aRefusedReloadMarksThatControlAndSaysToReloadPi() = runTest {
+        val transport = Transport().also { controlling(it, terminalControlSession()) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "terminal-session"))
+        runCurrent()
+        refuseControls(transport, "session.reload")
+
+        assertEquals(ReloadResult.Failed(ReloadFailure.ReloadPi), repository.reloadSession("terminal-session"))
+        assertEquals(R.string.remote_session_control_reload_pi, reloadFailureText(ReloadFailure.ReloadPi))
+
+        val state = repository.state.value
+        assertEquals(mapOf("terminal-session" to setOf(ExtensionControl.RELOAD)), state.sessionControlUnsupported)
+        assertEquals(ReloadAvailability.TERMINAL_ONLY, reloadAvailability(state))
+        assertTrue(canFollowUp(state))
+        // Marked, so the next try stays on the phone.
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unsupported), repository.reloadSession("terminal-session"))
+        assertEquals(1, transport.sent.count { it.text("type") == "session.reload" })
+    }
+
+    @Test
+    fun anRpcReloadWorksWithoutV2AndKeepsItsUnsupportedFailure() = runTest {
+        val transport = Transport().also { controlling(it, session(), v2 = false) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals(ReloadAvailability.RUNS, reloadAvailability(repository.state.value))
+        assertEquals(ReloadResult.Done, repository.reloadSession("session"))
+        refuseControls(transport, "session.reload")
+        assertEquals(ReloadResult.Failed(ReloadFailure.Unsupported), repository.reloadSession("session"))
+        assertTrue(repository.state.value.sessionControlUnsupported.isEmpty())
+    }
+
+    @Test
+    fun onlyAnRpcSessionAndAMarkedWorkerWithV2Close() = runTest {
+        val running = { row: JsonObject -> JsonObject(row + ("status" to JsonPrimitive("running"))) }
+        val worker = running(workerControlSession())
+        val terminal = running(terminalControlSession())
+        val rpc = JsonObject(session() + ("title" to JsonPrimitive("RPC")))
+        for ((row, v2, closes) in
+            listOf(
+                Triple(worker, true, true),
+                Triple(worker, false, false),
+                Triple(terminal, true, false),
+                Triple(rpc, false, true),
+                Triple(rpc, true, true),
+            )) {
+            val id = row.text("id")
+            val transport = Transport().also { controlling(it, row, v2 = v2) }
+            val repository = repository(transport)
+            repository.activate(RemoteSelection("host", "project"))
+            runCurrent()
+            val listed = sessionListItem(repository.state.value.sessions.single(), true, false)
+            assertEquals("$id with v2=$v2", closes, canCloseSession(listed, true, false, repository.state.value.capabilities))
+            repository.closeSession(id)
+            runCurrent()
+            val sent = transport.sent.filter { it.text("type") == "session.close" }
+            assertEquals("$id with v2=$v2", if (closes) 1 else 0, sent.size)
+            if (closes) assertEquals(id, sent.single().text("sessionId"))
+        }
+    }
+
+    @Test
+    fun aWorkerThatExitedAnswersOfflineAndStaysClosableAgain() = runTest {
+        val worker = JsonObject(workerControlSession() + ("status" to JsonPrimitive("running")))
+        val transport = Transport().also { controlling(it, worker) }
+        val repository = repository(transport)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        transport.failure = { if (it.text("type") == "session.close") "offline" else null }
+        repository.closeSession("worker-session")
+        runCurrent()
+        assertEquals(R.string.remote_request_error, repository.state.value.error)
+        transport.failure = { null }
+        repository.closeSession("worker-session")
+        runCurrent()
+        assertEquals(2, transport.sent.count { it.text("type") == "session.close" })
+    }
 }

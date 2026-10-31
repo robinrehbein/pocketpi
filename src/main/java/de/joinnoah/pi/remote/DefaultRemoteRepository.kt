@@ -269,6 +269,8 @@ class DefaultRemoteRepository(
             // Only on the capabilities.v2 route; writes need the project's `writable` flag as well.
             TICKETS_CAPABILITY,
             SESSION_TASKS_CAPABILITY,
+            // Only on the capabilities.v2 route, which gives extension sessions their controls.
+            HOST_WORKER_V2_CAPABILITY,
         )
     /** The request ID prefix of `projects.list`; falls back to v1 once for a host without v2. */
     private var capabilityRoute = CAPABILITIES_V2_ROUTE
@@ -777,7 +779,8 @@ class DefaultRemoteRepository(
                     update {
                         it.copy(
                             connected = true,
-                            capabilities = capabilities,
+                            // Only the capabilities.v2 route may advertise host worker controls.
+                            capabilities = capabilities - HOST_WORKER_V2_CAPABILITY,
                             capabilitiesKnown = false,
                             connection = R.string.remote_connected,
                             error = null,
@@ -907,6 +910,7 @@ class DefaultRemoteRepository(
             tasks = SessionTasks(),
             unavailableCapabilities = emptySet(),
             childControlUnsupported = emptySet(),
+            sessionControlUnsupported = emptyMap(),
             configuration = null,
             contextUsage = null,
             contextLoading = false,
@@ -1413,7 +1417,8 @@ class DefaultRemoteRepository(
             sessionId.isBlank() ||
                 sessionId.length > 256 ||
                 sessionId in closingSessions ||
-                session?.text("origin") != "rpc" ||
+                session == null ||
+                !hostOwned(state.value, session) ||
                 session.text("status") !in setOf("idle", "running", "waiting") ||
                 !state.value.connected ||
                 SESSION_CLOSE_CAPABILITY !in state.value.capabilities
@@ -1863,7 +1868,9 @@ class DefaultRemoteRepository(
                     ?.takeIf { it.size <= MAX_ROUTE_CAPABILITIES }
                     ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
                     .orEmpty()
-                val merged = routeCapabilities.filter { it in advertised && (it != SESSION_TASKS_CAPABILITY || id.startsWith(CAPABILITIES_V2_ROUTE)) }
+                val merged = routeCapabilities.filter {
+                    it in advertised && ((it != SESSION_TASKS_CAPABILITY && it != HOST_WORKER_V2_CAPABILITY) || id.startsWith(CAPABILITIES_V2_ROUTE))
+                }
                 val hadTasks = canReadTasks()
                 if (id.startsWith(CAPABILITIES_V2_ROUTE) && SESSION_TASKS_CAPABILITY in merged) tasksCapabilityKnown = true
                 val hadTickets = TICKETS_CAPABILITY in state.value.capabilities
@@ -2738,6 +2745,7 @@ class DefaultRemoteRepository(
                 // may have been updated meanwhile.
                 unavailableCapabilities = emptySet(),
                 childControlUnsupported = emptySet(),
+                sessionControlUnsupported = emptyMap(),
                 configurationLoading = false,
                 configurationChanging = false,
                 commands = if (sameSession) it.commands else meta?.commands.orEmpty(),
@@ -3757,6 +3765,7 @@ class DefaultRemoteRepository(
                 projectSessions = it.projectSessions.mapValues { (_, entry) -> entry.unverified() },
                 // A verdict on the Mac's version lasts only for the connection that gave it.
                 childControlUnsupported = emptySet(),
+                sessionControlUnsupported = emptyMap(),
                 followUps = currentDraftKey()?.let { key -> drafts[key]?.followUps }.orEmpty(),
                 connection =
                     when {
@@ -5355,12 +5364,15 @@ class DefaultRemoteRepository(
                         }
                     persist()
                 }
+                val refusedControl =
+                    (if (delivery == "steer") ExtensionControl.STEER else ExtensionControl.FOLLOW_UP)
+                        .takeIf { queued && e.isExtensionControlRefusal && extensionControls(current, it) }
                 if (
-                    queued && (e as? RemoteRequestException)?.code == "not_running" &&
+                    (queued && (e as? RemoteRequestException)?.code == "not_running" || refusedControl != null) &&
                         epoch == selectionEpoch
                 ) {
-                    // The child finished: the host did not take the input, so the draft stays
-                    // for a resume and no submission is left to reconcile.
+                    // The child finished or this pi must reload: the host did not take the input,
+                    // so the draft stays for a retry and no submission is left to reconcile.
                     drafts[key]?.takeIf { journalOwners[key] === attempt }?.let {
                         drafts[key] =
                             it.copy(
@@ -5373,7 +5385,10 @@ class DefaultRemoteRepository(
                         if (journalOwners[key] === attempt) journalOwners.remove(key)
                         persist()
                     }
-                    setChildControl(key.sessionId, ChildControl(ChildControlPhase.NOT_RUNNING))
+                    if (refusedControl != null) {
+                        markSessionControlUnsupported(key.sessionId, refusedControl)
+                        if (storageFailure == null) reportError(R.string.remote_session_control_reload_pi)
+                    } else setChildControl(key.sessionId, ChildControl(ChildControlPhase.NOT_RUNNING))
                     update { it.copy(uncertain = false) }
                 } else if (epoch == selectionEpoch && storageFailure == null) {
                     val childError =
@@ -5775,6 +5790,13 @@ class DefaultRemoteRepository(
 
     private fun markChildControlUnsupported(sessionId: String) = update {
         it.copy(childControlUnsupported = it.childControlUnsupported + sessionId)
+    }
+
+    private fun markSessionControlUnsupported(sessionId: String, control: ExtensionControl) = update {
+        it.copy(
+            sessionControlUnsupported =
+                it.sessionControlUnsupported + (sessionId to (it.sessionControlUnsupported[sessionId].orEmpty() + control)),
+        )
     }
 
     private fun childControlError(e: Exception): Int =
@@ -7848,8 +7870,8 @@ class DefaultRemoteRepository(
         if (!opaqueId(sessionId) || sessionId != current.selection.sessionId)
             return ReloadResult.Failed(ReloadFailure.Failed(null))
         if (!current.connected) return ReloadResult.Failed(ReloadFailure.ConnectionFailure)
-        if (current.session?.optionalText("origin") != "rpc" || RELOAD_CAPABILITY !in current.capabilities ||
-            RELOAD_CAPABILITY in current.unavailableCapabilities)
+        val runs = current.session?.optionalText("origin") == "rpc" || extensionControls(current, ExtensionControl.RELOAD)
+        if (!runs || RELOAD_CAPABILITY !in current.capabilities || RELOAD_CAPABILITY in current.unavailableCapabilities)
             return ReloadResult.Failed(ReloadFailure.Unsupported)
         if (reloadingSession != null) return ReloadResult.Failed(ReloadFailure.Busy)
         reloadingSession = sessionId
@@ -7867,7 +7889,9 @@ class DefaultRemoteRepository(
             ReloadResult.Failed(ReloadFailure.Unknown)
         } catch (e: Exception) {
             Diagnostics.caught("repo.reloadSession", e)
-            val failure = reloadFailure(e)
+            val refused = e.isExtensionControlRefusal && extensionControls(current, ExtensionControl.RELOAD)
+            if (refused) markSessionControlUnsupported(sessionId, ExtensionControl.RELOAD)
+            val failure = if (refused) ReloadFailure.ReloadPi else reloadFailure(e)
             if (reloadResultUnknown(failure)) refreshAfterReload(epoch)
             ReloadResult.Failed(failure)
         } finally {

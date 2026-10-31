@@ -235,6 +235,29 @@ class SessionListPresentationTest {
     }
 
     @Test
+    fun onlyAMarkedWorkerWithV2ClosesAmongTerminalSessions() {
+        val close = setOf(SESSION_CLOSE_CAPABILITY)
+        val v2 = close + HOST_WORKER_V2_CAPABILITY
+        val worker =
+            sessionListItem(
+                withHostWorker(Wire.objectOf("id" to "w", "title" to "W", "origin" to "worker", "status" to "idle")),
+                connected = true,
+                loading = false,
+            )
+        assertTrue(canCloseSession(worker, true, false, v2))
+        assertFalse(canCloseSession(worker, true, false, close))
+        assertFalse(canCloseSession(worker, true, false, setOf(HOST_WORKER_V2_CAPABILITY)))
+        assertFalse(canCloseSession(worker.copy(availability = SessionAvailability.OFFLINE), true, false, v2))
+        val terminal =
+            sessionListItem(
+                Wire.objectOf("id" to "t", "title" to "T", "origin" to "tui", "status" to "idle"),
+                connected = true,
+                loading = false,
+            )
+        assertFalse(canCloseSession(terminal, true, false, v2))
+    }
+
+    @Test
     fun closingRequiresAConnectedSupportedAndNonOfflineRpcSession() {
         val rpc =
             sessionListItem(

@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "wireValid": [
+    {
+      "name": "worker-create-result",
+      "payload": {
+        "type": "result",
+        "requestId": "host_worker.v1:create-1",
+        "ok": true,
+        "data": {
+          "kind": "session",
+          "session": {
+            "id": "worker-session",
+            "projectId": "project",
+            "title": "Fix",
+            "origin": "worker",
+            "status": "idle"
+          }
+        }
+      }
+    },
+    {
+      "name": "terminal-session",
+      "payload": {
+        "type": "result",
+        "requestId": "host_worker.v1:list-1",
+        "ok": true,
+        "data": {
+          "kind": "sessions",
+          "items": [
+            {
+              "id": "terminal-session",
+              "projectId": "project",
+              "title": "Fix",
+              "origin": "tui",
+              "status": "idle"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "follow-up-status",
+      "payload": {
+        "type": "event",
+        "sessionId": "worker-session",
+        "revision": 4,
+        "kind": "follow_up.status",
+        "requestId": "follow:1",
+        "status": "delivered"
+      }
+    },
+    {
+      "name": "close-accepted",
+      "payload": {
+        "type": "result",
+        "requestId": "close:1",
+        "ok": true,
+        "data": { "kind": "accepted" }
+      }
+    },
+    {
+      "name": "reloaded",
+      "payload": {
+        "type": "result",
+        "requestId": "reload:1",
+        "ok": true,
+        "data": { "kind": "reloaded", "sessionId": "worker-session" }
+      }
+    },
+    {
+      "name": "controls-unsupported",
+      "payload": {
+        "type": "result",
+        "requestId": "steer:1",
+        "ok": false,
+        "error": {
+          "code": "unsupported",
+          "message": "Reload the pi remote extension to use this control"
+        }
+      }
+    }
+  ],
+  "wireInvalid": [
+    {
+      "name": "follow-up-status-unknown-status",
+      "payload": {
+        "type": "event",
+        "sessionId": "worker-session",
+        "revision": 4,
+        "kind": "follow_up.status",
+        "requestId": "follow:1",
+        "status": "queued"
+      }
+    },
+    {
+      "name": "close-accepted-extra-key",
+      "payload": {
+        "type": "result",
+        "requestId": "close:1",
+        "ok": true,
+        "data": { "kind": "accepted", "closed": true }
+      }
+    },
+    {
+      "name": "reloaded-missing-session",
+      "payload": {
+        "type": "result",
+        "requestId": "reload:1",
+        "ok": true,
+        "data": { "kind": "reloaded" }
+      }
+    }
+  ]
+}
