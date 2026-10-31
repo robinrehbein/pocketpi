@@ -476,7 +476,7 @@ class GitChangesTest {
             listOf(
                 ChatAction.FILES, ChatAction.JOBS, ChatAction.TREE, ChatAction.ARTIFACTS, ChatAction.RENAME,
                 ChatAction.EXPORT, ChatAction.RELOAD, ChatAction.SETTINGS, ChatAction.NEW_SESSION,
-                ChatAction.SESSION_SETTINGS, ChatAction.HISTORY,
+                ChatAction.SESSION_SETTINGS, ChatAction.HISTORY, ChatAction.BROWSER,
             ),
             layout.menu,
         )
@@ -515,7 +515,8 @@ class GitChangesTest {
         )
         val many = chatActionLayout(DEFAULT_CHAT_ACTIONS, ChatAction.entries.toSet() - ChatAction.HISTORY)
         assertEquals(many.shown, many.withHistory().shown)
-        assertEquals(many.menu + ChatAction.HISTORY, many.withHistory().menu)
+        val expected = many.menu.toMutableList().apply { add(indexOf(ChatAction.BROWSER), ChatAction.HISTORY) }
+        assertEquals(expected, many.withHistory().menu)
     }
 
     // ---- Review round 1 -----------------------------------------------------------------

@@ -334,6 +334,18 @@
           ]
         }
       }
+    },
+    {
+      "name": "valid-new-tab-blank",
+      "payload": {
+        "type": "browser.new_tab",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "url": "about:blank"
+      }
     }
   ],
   "invalid": [
@@ -762,6 +774,19 @@
             }
           ]
         }
+      }
+    },
+    {
+      "name": "invalid-navigate-blank",
+      "payload": {
+        "type": "browser.navigate",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "tabId": "t",
+        "url": "about:blank"
       }
     }
   ]

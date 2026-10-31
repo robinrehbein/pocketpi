@@ -722,11 +722,14 @@ internal fun RemoteScreen(
     val filesOpen = state.files?.takeIf { it.sessionId == state.selection.sessionId && chatModel != null }
     val jobsOpen =
         state.jobs?.let { (it.listOpen || it.view != null) && it.sessionId == state.selection.sessionId } == true
+    val browserOpen = state.browser?.sessionId == state.selection.sessionId && state.browser != null
+    var browserHasUnsent by remember(key) { mutableStateOf(false) }
+    var browserCloseConfirm by remember(key) { mutableStateOf(false) }
     var terminalOpen by remember(key) { mutableStateOf(false) }
     var terminalHasUnsent by remember(key) { mutableStateOf(false) }
     var terminalCloseConfirm by remember(key) { mutableStateOf(false) }
     var terminalLeave by remember(key) { mutableStateOf<Pair<() -> Unit, () -> Unit>?>(null) }
-    val unsentNow by rememberUpdatedState(terminalHasUnsent)
+    val unsentNow by rememberUpdatedState(terminalHasUnsent || browserHasUnsent)
     val terminalSelectionNow by rememberUpdatedState(state.selection)
     DisposableEffect(navigator, key) {
         val guard: (() -> Unit, () -> Unit) -> Boolean = { action, cancel ->
@@ -788,6 +791,7 @@ internal fun RemoteScreen(
         val chat = chatModel ?: return
         showTab(tab)
         when (tab) {
+            InspectorTab.BROWSER -> { if (!browserOpen) chat.openBrowser() else { chat.setBrowserVisible(true); chat.refreshBrowser() } }
             InspectorTab.TERMINAL -> {
                 if (!terminalOpen && chat.attachTerminal(80, 24)) terminalOpen = true
             }
@@ -802,12 +806,14 @@ internal fun RemoteScreen(
     }
     /** Closes [tab] and what backs it; the tab before it becomes active. */
     fun closeTab(tab: InspectorTab) {
+        if (tab == InspectorTab.BROWSER && browserHasUnsent) { browserCloseConfirm = true; return }
         if (tab == InspectorTab.TERMINAL && terminalHasUnsent) {
             terminalCloseConfirm = true
             return
         }
         inspectorTabs = inspectorTabs.close(tab)
         when (tab) {
+            InspectorTab.BROWSER -> { browserHasUnsent = false; chatModel?.closeBrowser() }
             InspectorTab.TERMINAL -> { terminalOpen = false; chatModel?.detachTerminal() }
             InspectorTab.CHANGES -> chatModel?.closeChanges()
             InspectorTab.FILES -> chatModel?.closeFiles()
@@ -1306,6 +1312,7 @@ internal fun RemoteScreen(
         when (action) {
             ChatAction.CHANGES -> openInspector(InspectorTab.CHANGES)
             ChatAction.FILES -> openInspector(InspectorTab.FILES)
+            ChatAction.BROWSER -> openInspector(InspectorTab.BROWSER)
             ChatAction.JOBS -> openInspector(InspectorTab.JOBS)
             ChatAction.RENAME ->
                 state.session?.let { session -> startRename(session.text("id"), session.text("title")) }
@@ -1465,6 +1472,7 @@ internal fun RemoteScreen(
                     buildSet {
                         if (canViewChanges(state) && state.connected) add(ChatAction.CHANGES)
                         if (canBrowseFiles(state) && state.connected) add(ChatAction.FILES)
+                        if (browserOpen || chatModel?.canOpenBrowser() == true) add(ChatAction.BROWSER)
                         if (statusJobs != null) add(ChatAction.JOBS)
                         if (canRename) add(ChatAction.RENAME)
                         if (state.connected && !state.loading && !navigator.mutating) add(ChatAction.NEW_SESSION)
@@ -1782,8 +1790,23 @@ internal fun RemoteScreen(
         if (terminalOpen && chatModel != null) ({
             movableTerminal(state.terminal, chatModel, { closeTab(InspectorTab.TERMINAL) }, { terminalHasUnsent = it })
         }) else null
+    val movableBrowser = remember(key) {
+        movableContentOf<BrowserView?, ChatViewModel, () -> Unit, (Boolean) -> Unit> { browser, model, close, unsent ->
+            val actions = remember(model) { BrowserPaneActions(
+                open = model::openBrowser, acquire = model::acquireBrowser, refresh = model::refreshBrowser,
+                newTab = model::newBrowserTab, navigate = model::navigateBrowser, selectTab = model::selectBrowserTab,
+                closeTab = model::closeBrowserTab, handoff = model::handoffBrowser, resize = model::resizeBrowser,
+                input = model::sendBrowserInput, visible = model::setBrowserVisible,
+            ) }
+            BrowserPane(browser, actions, close, unsent)
+        }
+    }
+    val browserContent: (@Composable () -> Unit)? = if (browserOpen && chatModel != null) ({
+        movableBrowser(state.browser, chatModel, { closeTab(InspectorTab.BROWSER) }, { browserHasUnsent = it })
+    }) else null
     fun tabContent(tab: InspectorTab): (@Composable () -> Unit)? =
         when (tab) {
+            InspectorTab.BROWSER -> browserContent
             InspectorTab.TERMINAL -> terminalContent
             InspectorTab.CHANGES -> changesContent
             InspectorTab.FILES -> filesContent
@@ -1798,6 +1821,7 @@ internal fun RemoteScreen(
     // goes, and one that opened elsewhere (a notification, the jobs chip) joins.
     val availableTabs =
         buildList {
+            if (browserContent != null) add(InspectorTab.BROWSER)
             if (terminalContent != null) add(InspectorTab.TERMINAL)
             if (changesContent != null) add(InspectorTab.CHANGES)
             if (filesContent != null) add(InspectorTab.FILES)
@@ -1887,7 +1911,7 @@ internal fun RemoteScreen(
     // does an expanded inspector that leaves the chat only a strip.
     val paneOverChat =
         chatKey != null && chatModel != null && !panesBeside &&
-            (terminalOpen || jobsOpen || changesOpen != null || filesOpen != null || openTool != null)
+            (browserOpen || terminalOpen || jobsOpen || changesOpen != null || filesOpen != null || openTool != null)
     // The strip reports itself a frame late; a pane no longer expanded gives the chat back at once.
     val composerCovered = paneOverChat || (chatKey != null && inspectorShown && chatStripped && twoPane?.inspectorExpanded == true)
     if (chatKey != null)
@@ -3737,6 +3761,13 @@ internal fun RemoteScreen(
             if (!panesBeside) jobsContent?.invoke()
             if (!panesBeside) toolContent?.invoke()
             if (!panesBeside) terminalContent?.invoke()
+            if (!panesBeside && tabs.active == InspectorTab.BROWSER) browserContent?.invoke()
+            if (browserContent != null && ((panesBeside && !inspectorShown) || (!panesBeside && tabs.active != InspectorTab.BROWSER))) {
+                Box(Modifier.fillMaxSize().clearAndSetSemantics {}.layout { measurable, constraints ->
+                    val placeable = measurable.measure(constraints)
+                    layout(placeable.width, placeable.height) { }
+                }) { CompositionLocalProvider(LocalTerminalKeyboardActive provides false) { browserContent() } }
+            }
             // The inspector may be hidden while its tab remains open. Measure the terminal at
             // a real size without placing it, so it receives neither input nor semantics.
             if (panesBeside && !inspectorShown && terminalContent != null) {
@@ -3755,14 +3786,21 @@ internal fun RemoteScreen(
     }
     if (terminalLeave != null) AlertDialog(
         onDismissRequest = { terminalLeave?.second?.invoke(); terminalLeave = null },
-        title = { Text(stringResource(R.string.remote_terminal_discard_title)) },
-        text = { Text(stringResource(R.string.remote_terminal_discard_body)) },
+        title = { Text(stringResource(if (browserHasUnsent) R.string.browser_discard_title else R.string.remote_terminal_discard_title)) },
+        text = { Text(stringResource(if (browserHasUnsent) R.string.browser_discard_body else R.string.remote_terminal_discard_body)) },
         confirmButton = { TextButton(onClick = {
             val action = terminalLeave
             terminalLeave = null
             action?.first?.invoke()
         }) { Text(stringResource(R.string.remote_terminal_close)) } },
         dismissButton = { TextButton(onClick = { terminalLeave?.second?.invoke(); terminalLeave = null }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
+    )
+    if (browserCloseConfirm) AlertDialog(
+        onDismissRequest = { browserCloseConfirm = false },
+        title = { Text(stringResource(R.string.browser_discard_title)) },
+        text = { Text(stringResource(R.string.browser_discard_body)) },
+        confirmButton = { TextButton(onClick = { browserCloseConfirm = false; browserHasUnsent = false; closeTab(InspectorTab.BROWSER) }) { Text(stringResource(R.string.browser_close)) } },
+        dismissButton = { TextButton(onClick = { browserCloseConfirm = false }) { Text(stringResource(R.string.remote_terminal_cancel)) } },
     )
     if (terminalCloseConfirm) AlertDialog(
         onDismissRequest = { terminalCloseConfirm = false },

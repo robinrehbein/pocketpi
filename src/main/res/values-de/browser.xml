@@ -1,0 +1,25 @@
+<resources>
+    <string name="browser_title">Browser</string>
+    <string name="browser_refresh">Aktualisieren</string>
+    <string name="browser_close">Schließen</string>
+    <string name="browser_opening">Browser wird geöffnet…</string>
+    <string name="browser_control_you">Du hast die Kontrolle</string>
+    <string name="browser_control_readonly">Nur ansehen</string>
+    <string name="browser_acquire">Kontrolle übernehmen</string>
+    <string name="browser_handoff">Kontrolle abgeben</string>
+    <string name="browser_busy">Ein anderer Teilnehmer hat die Kontrolle.</string>
+    <string name="browser_uncertain">Das Ergebnis der Eingabe ist ungewiss. Übernimm erneut die Kontrolle, bevor du fortfährst.</string>
+    <string name="browser_disconnected">Verbindung getrennt.</string>
+    <string name="browser_failed">Browseranfrage fehlgeschlagen.</string>
+    <string name="browser_frame_failed">Das Browserbild konnte nicht angezeigt werden. Versuche es mit Aktualisieren erneut.</string>
+    <string name="browser_new_tab">Neuer Tab</string>
+    <string name="browser_address">Adresse</string>
+    <string name="browser_go">Öffnen</string>
+    <string name="browser_image">Entferntes Browserbild</string>
+    <string name="browser_waiting">Warte auf Browserbild…</string>
+    <string name="browser_text">Text senden</string>
+    <string name="browser_send">Senden</string>
+    <string name="browser_discard_title">Browsereingabe verwerfen?</string>
+    <string name="browser_discard_body">Die noch nicht gesendete Adresse oder Texteingabe wird verworfen.</string>
+    <string name="browser_close_tab">Tab %1$s schließen</string>
+</resources>

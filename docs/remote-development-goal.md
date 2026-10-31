@@ -1,5 +1,27 @@
 # Goal: PocketPi as a complete remote development environment
 
+## Browser viewer increment in progress on 2026-10-31
+
+The local working trees now contain a native shared-browser pane, bounded JPEG decoding,
+explicit control acquisition/handoff, tab and navigation controls, touch/text/keyboard input,
+and encrypted frame subscriptions. The host captures its owned Chromium tab and rechecks
+session, grant, lease, viewport and peer identity across capture and delivery. Client tests
+cover delayed replies, uncertain input, hidden panes, session changes and bounded frame state.
+
+The focused Android tests and debug/test APK assembly passed. The native pane component test
+passed on an API 36 emulator at phone dimensions and at 2560x1600, density 320; both renderings
+were inspected. The test displays an actual Chromium capture but simulates control responses.
+This is not an end-to-end Android-to-host result or physical Galaxy qualification.
+
+The host increment is committed locally as `2440314b3`. Its full Remote suite passed 2,952
+tests with 23 skipped; extension checking and root formatting passed, and the frozen diff was
+independently reviewed. Menu order and real Chromium shortcut failures were corrected.
+Android review additionally found held-input/focus and late-acquire races; 40 focused browser
+tests now pass after those fixes. The broader Android gate passed 3,019 app and 34 Wear unit tests and all compiled source
+sets; debug and instrumentation APK assembly passed. The acquire reservation gap across hide/show and close/reopen was subsequently corrected
+and independently re-reviewed. The final required quick-check passed in 90 seconds; both
+APKs were rebuilt successfully for that reviewed source. No Android-to-host end-to-end, Linux/devcontainer, physical device or live activation claim is made.
+
 ## Verified local progress on 2026-10-30
 
 The native terminal increment is implemented in local feature branches: PocketPi `284b5be`

@@ -317,6 +317,19 @@ internal class ChatViewModel(
     private val settings: SettingsRepository,
 ) : DestinationViewModel(repository, key) {
     val preferences = settings.state
+    fun canOpenBrowser() = repository.canOpenBrowser()
+    fun openBrowser() = repository.openBrowser()
+    fun closeBrowser() = repository.closeBrowser()
+    fun acquireBrowser() = repository.acquireBrowser()
+    fun handoffBrowser(ownerId: String) = repository.handoffBrowser(ownerId)
+    fun newBrowserTab(url: String) = repository.newBrowserTab(url)
+    fun navigateBrowser(url: String) = repository.navigateBrowser(url)
+    fun selectBrowserTab(tabId: String) = repository.selectBrowserTab(tabId)
+    fun closeBrowserTab(tabId: String) = repository.closeBrowserTab(tabId)
+    fun resizeBrowser(width: Int, height: Int, deviceScale: Double, orientation: String) = repository.resizeBrowser(width, height, deviceScale, orientation)
+    fun sendBrowserInput(input: BrowserInput) = repository.sendBrowserInput(input)
+    fun refreshBrowser() = repository.refreshBrowser()
+    fun setBrowserVisible(visible: Boolean) = repository.setBrowserVisible(visible)
     fun canAttachTerminal() = repository.canAttachTerminal()
     fun attachTerminal(cols: Int, rows: Int, generation: Long? = null) = repository.attachTerminal(cols, rows, generation)
     fun detachTerminal() = repository.detachTerminal()

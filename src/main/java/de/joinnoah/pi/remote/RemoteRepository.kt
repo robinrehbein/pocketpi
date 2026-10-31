@@ -96,6 +96,7 @@ data class PendingSend(
 )
 
 data class RemoteState(
+    val browser: BrowserView? = null,
     val terminal: TerminalView? = null,
     val hosts: List<PairedHost> = emptyList(),
     /**
@@ -228,6 +229,19 @@ data class Picked(val uri: String, val photo: Boolean)
 
 interface RemoteRepository {
     val state: StateFlow<RemoteState>
+    fun canOpenBrowser(): Boolean = false
+    fun openBrowser(): Boolean = false
+    fun closeBrowser() {}
+    fun acquireBrowser(): Boolean = false
+    fun handoffBrowser(ownerId: String): Boolean = false
+    fun newBrowserTab(url: String): Boolean = false
+    fun navigateBrowser(url: String): Boolean = false
+    fun selectBrowserTab(tabId: String) {}
+    fun closeBrowserTab(tabId: String): Boolean = false
+    fun resizeBrowser(width: Int, height: Int, deviceScale: Double, orientation: String): Boolean = false
+    fun sendBrowserInput(input: BrowserInput): Boolean = false
+    fun refreshBrowser(): Boolean = false
+    fun setBrowserVisible(visible: Boolean) {}
 
     suspend fun activate(
         selection: RemoteSelection,

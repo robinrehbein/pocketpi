@@ -350,6 +350,32 @@ class DefaultRemoteRepository(
      * become uncertain, as a lost connection would have left them.
      */
     private val followUpsToRecheck = mutableMapOf<DraftKey, Set<String>>()
+    private val browserClient by lazy {
+        BrowserClient(scope,
+            { session, connection -> state.value.connected && generation == connection && state.value.selection.sessionId == session },
+            { connection, type, fields ->
+                check(generation == connection && connectionRequestsOpen())
+                connectionRequest(type, *fields)
+            },
+            { browser -> update { it.copy(browser = browser) } },
+            { state.value.host?.deviceId },
+            { connection -> state.value.connected && generation == connection },
+            { connection -> if (generation == connection && state.value.connected) failed(true, R.string.remote_connection_error) },
+        )
+    }
+    override fun canOpenBrowser(): Boolean = state.value.connected && state.value.selection.sessionId != null && state.value.capabilitiesKnown && capabilityRevision(capabilityRoute) == 3 && SESSION_BROWSER_CAPABILITY in state.value.capabilities
+    override fun openBrowser(): Boolean = canOpenBrowser() && browserClient.open(requireNotNull(state.value.selection.sessionId), generation)
+    override fun closeBrowser() = browserClient.close()
+    override fun acquireBrowser() = browserClient.acquire()
+    override fun handoffBrowser(ownerId: String) = browserClient.handoff(ownerId)
+    override fun newBrowserTab(url: String) = browserClient.newTab(url)
+    override fun navigateBrowser(url: String) = browserClient.navigate(url)
+    override fun selectBrowserTab(tabId: String) = browserClient.selectTab(tabId)
+    override fun closeBrowserTab(tabId: String) = browserClient.closeTab(tabId)
+    override fun resizeBrowser(width: Int, height: Int, deviceScale: Double, orientation: String) = browserClient.resize(width, height, deviceScale, orientation)
+    override fun sendBrowserInput(input: BrowserInput) = browserClient.input(input)
+    override fun refreshBrowser() = browserClient.refresh()
+    override fun setBrowserVisible(visible: Boolean) = browserClient.setVisible(visible)
     private var selectionEpoch = 0L
     private var generation = 0L
     // Connection-scoped attempts and UI owners start at the send tap.
@@ -1588,6 +1614,7 @@ class DefaultRemoteRepository(
     }
 
     override fun cancelSelection() {
+        browserClient.close()
         cacheCurrentScreen(immediate = true)
         // The project lists' reads are bound to the connection, not the selection: a project
         // opened from Projects keeps the replies still on their way.
@@ -1732,6 +1759,7 @@ class DefaultRemoteRepository(
         unverifyProjectSessions()
         // A connection replaced on purpose is no failure.
         connectionEnded()
+        browserClient.disconnected()
         generation++
         clearLateAcknowledgements()
         failConnectionRequests()
@@ -1983,7 +2011,9 @@ class DefaultRemoteRepository(
                 "event" -> receiveEvent(payload)
                 "host.event" ->
                     try {
-                        if (payload.optionalText("kind")?.startsWith("session.terminal.") == true) {
+                        if (payload.optionalText("kind") == "browser.frame") {
+                            browserClient.frame(payload)
+                        } else if (payload.optionalText("kind")?.startsWith("session.terminal.") == true) {
                             receiveTerminalEvent(payload)
                         } else if (payload.optionalText("kind")?.startsWith("provider.auth.") == true) {
                             receiveProviderAuthEvent(payload)
@@ -3694,6 +3724,7 @@ class DefaultRemoteRepository(
         }
         cancelHostWaitHint()
         deferredRecovery = null
+        browserClient.disconnected()
         generation++
         clearLateAcknowledgements()
         folderVersion++

@@ -92,3 +92,43 @@
 - [ ] Implement adaptive phone/tablet views using the same owned tabs and explicit handoff. Expose preview separately with the proven isolated origin. Do not enable controls when host capability, grant or lease is absent.
 - [ ] Run focused tests, then each repository's required checks once after integration and an independent security/diff review. Record actual results and unresolved failures.
 - [ ] Qualify agent-to-phone and phone-to-agent handoff, login persistence and controlled reconnect on Mac and independent Linux/devcontainer hosts. Exercise HTTP forms/auth and WebSocket HMR on each supported configuration. Test Galaxy Tab S11 and Galaxy S25 physically, including rotation, touch, keyboard/mouse, DeX, process death and network transition. Record versions, commands and evidence; emulator/build success is not device qualification.
+
+
+## Native viewer implementation checkpoint (2026-10-31)
+
+Implemented locally: native `BrowserPane`, session-bound `BrowserClient`, bounded JPEG decode,
+frame ACK/reassembly, viewport mapping, touch/text/key input and explicit lease controls. The
+host has actual Chromium capture and per-peer bounded watch reservations. Session rebind and
+reconnect invalidate old input authority. Protocol fixtures include a bounded new-tab exception
+for `about:blank`; navigation remains HTTP(S). Browser capability advertisement requires a
+working runtime, the opt-in and an applicable grant.
+
+The focused Android tests and debug/test APK builds passed. An API 36 emulator component test
+passed at phone dimensions and at 2560x1600/density 320. Root inspected both native renderings.
+These tests use an actual host JPEG but simulated control callbacks. They do not close the
+Android-to-host integration gate or qualify Galaxy S25/Tab S11 hardware.
+
+A real Chromium form test exposed missing default key behavior. The runtime now supplies
+virtual key codes and Enter text, and uses CDP's documented `selectAll` editing command for the
+host platform's native shortcut. The actual form, selection, Tab and Enter test subsequently
+passed. Independent Linux behavior remains untested. Full regression/review results must be
+recorded separately once the current gates finish.
+
+Remaining qualification includes a real `DefaultRemoteRepository` + `SecureRemoteTransport`
+instrumentation test against an isolated host and trusted HTTPS/WSS relay. Existing fake
+WebSocket, benchmark and pane callback fixtures cannot substitute for this proof. Browser
+navigation initiated by page interaction may currently require explicit Refresh after the
+frame inactivity timeout; smooth stream recovery remains open. Protected previews and
+emulator streaming remain separate unfinished tasks above.
+
+
+### Review and regression evidence
+
+Host commit `2440314b3` passed 2,952 Remote tests (23 skipped), extension checking and root
+formatting. The immutable local review artifact was independently inspected. App review
+identified frame-loss release/focus problems and overlapping late Acquire cleanup; each was
+reproduced and corrected. The focused browser suite now passes 40 tests. Acquire reservations
+remain bound to the connection until their response and cleanup, including across hide/show
+and close/reopen. Frame errors relinquish the lease through confirmed host input reset;
+failed cleanup closes the captured connection. The reviewer confirmed the previously reported
+paths are addressed. Final broad app gate and APK builds are recorded in the goal document.

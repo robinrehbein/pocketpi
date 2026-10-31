@@ -391,6 +391,7 @@ internal fun chatActionAvailable(action: ChatAction, state: RemoteState, mutatin
     when (action) {
         ChatAction.CHANGES -> canViewChanges(state) && state.connected
         ChatAction.FILES -> canBrowseFiles(state) && state.connected
+        ChatAction.BROWSER -> state.browser?.sessionId == state.selection.sessionId && state.browser != null || (state.connected && !state.stale && state.selection.sessionId != null && SESSION_BROWSER_CAPABILITY in state.capabilities && SESSION_BROWSER_CAPABILITY !in state.unavailableCapabilities)
         ChatAction.JOBS -> visibleJobs(state) != null
         ChatAction.RENAME -> canRenameSession(state)
         ChatAction.NEW_SESSION -> state.connected && !state.loading && !mutating

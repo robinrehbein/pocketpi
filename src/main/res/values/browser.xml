@@ -1,0 +1,25 @@
+<resources>
+    <string name="browser_title">Browser</string>
+    <string name="browser_refresh">Refresh</string>
+    <string name="browser_close">Close</string>
+    <string name="browser_opening">Opening browser…</string>
+    <string name="browser_control_you">You have control</string>
+    <string name="browser_control_readonly">Read-only</string>
+    <string name="browser_acquire">Take control</string>
+    <string name="browser_handoff">Give control</string>
+    <string name="browser_busy">Another participant has control.</string>
+    <string name="browser_uncertain">Input outcome is uncertain. Take control again before continuing.</string>
+    <string name="browser_disconnected">Disconnected.</string>
+    <string name="browser_failed">Browser request failed.</string>
+    <string name="browser_frame_failed">Could not display the browser image. Refresh to try again.</string>
+    <string name="browser_new_tab">New tab</string>
+    <string name="browser_address">Address</string>
+    <string name="browser_go">Go</string>
+    <string name="browser_image">Remote browser image</string>
+    <string name="browser_waiting">Waiting for browser image…</string>
+    <string name="browser_text">Text to send</string>
+    <string name="browser_send">Send</string>
+    <string name="browser_discard_title">Discard browser input?</string>
+    <string name="browser_discard_body">The address or text you have not sent will be discarded.</string>
+    <string name="browser_close_tab">Close tab %1$s</string>
+</resources>

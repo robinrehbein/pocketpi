@@ -29,6 +29,8 @@ enum class ChatAction {
     HISTORY,
     /** The compaction and export banners, in a sheet; offered in the compact header's menu only, see [compact]. */
     STATUS,
+    /** The shared host browser, offered only when the host supports it. */
+    BROWSER,
     /** Closes the session on the Mac after a confirmation; only ever in the menu, see [withClose]. */
     CLOSE,
 }
@@ -48,7 +50,7 @@ internal const val ACTION_USAGE_HALF_LIFE_MILLIS = 14L * 24 * 60 * 60 * 1000
 internal val DEFAULT_CHAT_ACTIONS =
     listOf(ChatAction.CHANGES, ChatAction.REFRESH, ChatAction.FILES, ChatAction.RENAME, ChatAction.NEW_SESSION,
         ChatAction.SESSION_SETTINGS, ChatAction.SETTINGS, ChatAction.JOBS, ChatAction.TREE, ChatAction.ARTIFACTS,
-        ChatAction.EXPORT, ChatAction.RELOAD, ChatAction.HISTORY)
+        ChatAction.EXPORT, ChatAction.RELOAD, ChatAction.HISTORY, ChatAction.BROWSER)
 
 internal fun ActionUsage.decayed(now: Long): Double =
     score * 0.5.pow((now - at).coerceAtLeast(0L) / ACTION_USAGE_HALF_LIFE_MILLIS.toDouble())

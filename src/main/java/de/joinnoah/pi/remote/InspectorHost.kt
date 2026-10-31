@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 /** What the inspector beside a chat can show; each is a tab of its own. */
 internal enum class InspectorTab(@StringRes val labelRes: Int) {
     TERMINAL(R.string.remote_terminal_title),
+    BROWSER(R.string.browser_title),
     CHANGES(R.string.remote_inspector_tab_changes),
     FILES(R.string.remote_inspector_tab_files),
     JOBS(R.string.remote_inspector_tab_jobs),
@@ -199,23 +200,23 @@ internal fun InspectorHost(
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 // Keep the terminal composed while another tab is selected: its connection,
                 // renderer and unsent input belong to the open tab, not just the visible one.
-                if (InspectorTab.TERMINAL in tabs.open) {
-                    val body = content(InspectorTab.TERMINAL)
+                for (retained in listOf(InspectorTab.TERMINAL, InspectorTab.BROWSER).filter { it in tabs.open }) {
+                    val body = content(retained)
                     if (body != null) {
-                        val visible = active == InspectorTab.TERMINAL
+                        val visible = active == retained
                         val hiddenModifier = if (visible) Modifier else Modifier.clearAndSetSemantics {}.layout { measurable, constraints ->
                             val placeable = measurable.measure(constraints)
                             layout(placeable.width, placeable.height) { }
                         }
                         Box(hiddenModifier.fillMaxSize()) {
                             androidx.compose.runtime.CompositionLocalProvider(LocalTerminalKeyboardActive provides visible) {
-                                holder.SaveableStateProvider(InspectorTab.TERMINAL.name) { body() }
+                                holder.SaveableStateProvider(retained.name) { body() }
                             }
                         }
                     }
                 }
                 val tab = active ?: return@Box
-                if (tab != InspectorTab.TERMINAL) {
+                if (tab !in setOf(InspectorTab.TERMINAL, InspectorTab.BROWSER)) {
                     val body = content(tab) ?: return@Box
                     holder.SaveableStateProvider(tab.name) { body() }
                 }

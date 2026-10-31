@@ -6,7 +6,7 @@ import kotlinx.serialization.json.*
 internal const val SESSION_BROWSER_CAPABILITY = "session.browser.v1"
 private const val MAX_BROWSER_COUNT = 9_007_199_254_740_991L
 
-internal sealed interface BrowserInput {
+public sealed interface BrowserInput {
     data class Pointer(val x: Double, val y: Double, val action: String, val button: String) : BrowserInput
     data class Wheel(val x: Double, val y: Double, val deltaX: Double, val deltaY: Double) : BrowserInput
     data class Key(val action: String, val key: String, val code: String, val ctrl: Boolean = false, val alt: Boolean = false, val shift: Boolean = false, val meta: Boolean = false) : BrowserInput
@@ -27,8 +27,8 @@ internal sealed interface BrowserCommand {
     data class Input(override val requestId: String, override val sessionId: String, val browserId: String, val leaseId: String, val generation: Long, val tabId: String, val viewportRevision: Long, val sequence: Long, val input: BrowserInput) : BrowserCommand
     data class Detach(override val requestId: String, override val sessionId: String, val browserId: String, val leaseId: String, val generation: Long) : BrowserCommand
 }
-internal data class BrowserOwner(val kind: String, val id: String)
-internal data class BrowserTab(val id: String, val title: String, val url: String)
+public data class BrowserOwner(val kind: String, val id: String)
+public data class BrowserTab(val id: String, val title: String, val url: String)
 internal sealed interface BrowserResult {
     val browserId: String
     val generation: Long
@@ -67,7 +67,8 @@ private fun JsonObject.number(key: String, min: Double, max: Double): Double {
     return (p.content.toDoubleOrNull() ?: error("Invalid number")).also { require(it.isFinite() && it in min..max) }
 }
 private fun JsonObject.choice(key: String, vararg options: String) = text(key).also { require(it in options) }
-private fun browserUrl(s: String): String {
+private fun browserUrl(s: String, newTab: Boolean = false): String {
+    if (newTab && s == "about:blank") return s
     browserString(s, 4096)
     require(s.none { it.isWhitespace() || Character.isSpaceChar(it) || it.code in 0..31 || it.code in 127..159 || it == '\uFEFF' })
     val uri = URI(s)
@@ -114,7 +115,7 @@ internal fun parseBrowserCommand(o: JsonObject): BrowserCommand {
     return when (type) {
         "browser.handoff" -> BrowserCommand.Handoff(r, s, browser, lease, generation, o.id("toOwnerId"))
         "browser.navigate" -> BrowserCommand.Navigate(r, s, browser, lease, generation, o.id("tabId"), browserUrl(o.text("url")))
-        "browser.new_tab" -> BrowserCommand.NewTab(r, s, browser, lease, generation, browserUrl(o.text("url")))
+        "browser.new_tab" -> BrowserCommand.NewTab(r, s, browser, lease, generation, browserUrl(o.text("url"), newTab = true))
         "browser.close" -> BrowserCommand.Close(r, s, browser, lease, generation, o.id("tabId"))
         "browser.viewport" -> BrowserCommand.Viewport(r, s, browser, lease, generation, o.id("tabId"), o.count("width", 80, 2048), o.count("height", 80, 2048), o.number("deviceScale", 0.5, 3.0), o.choice("orientation", "portrait", "landscape"))
         "browser.input" -> BrowserCommand.Input(r, s, browser, lease, generation, o.id("tabId"), o.count("viewportRevision"), o.count("sequence"), parseBrowserInput(o.obj("input")))
