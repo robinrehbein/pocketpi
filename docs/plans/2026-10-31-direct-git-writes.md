@@ -36,5 +36,7 @@ Host policy and own-checkout capture are implemented. The owner can show, replac
 patterns through CLI/local IPC, with separate persistence groups, rollback, no-op handling and
 pattern-free audit. Twenty focused tests and extension type checking pass. The write-source guard
 refuses finished-worktree comparison fallbacks and checks authorization and folder identity again.
-Snapshot access, atomic worktree mutation reservations and all actual Git-write executors remain
-open; neither these foundations nor the switch makes commit/push/PR available.
+Guarded HEAD-snapshot access now passes the 73-test Git/owner regression group and extension
+type checking. It checks device/session/expiry, own checkout, source guards and repository identity,
+returns independent copies and exposes revalidation. Atomic mutation reservations and actual
+Git-write executors remain open; neither these foundations nor the switch makes commit/push/PR available.
