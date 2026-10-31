@@ -208,7 +208,8 @@ class RemoteTransportTest {
         sender: CoroutineDispatcher = StandardTestDispatcher(testScheduler),
         created: (SecureRemoteTransport) -> Unit = {},
     ): Pair<Listener, SecureChannel> {
-        val transport = SecureRemoteTransport(backgroundScope, socket, sender = sender) { "Test device" }
+        val transport =
+            SecureRemoteTransport(backgroundScope, socket, sender = sender, clock = { testScheduler.currentTime }) { "Test device" }
             .also { it.listener = listener }
             .also(created)
         val deviceKey = Wire.random(32)
@@ -1207,5 +1208,140 @@ class RemoteTransportTest {
         advanceTimeBy(100000)
         runCurrent()
         assertEquals(1, listener.failureCount)
+    }
+
+    /** What the app sent after `device.authenticate`, decrypted in order by the Mac's end. */
+    private class Outbound(private val server: SecureChannel, private val socket: Socket) {
+        private var read = 2
+
+        fun take(): List<JsonObject> {
+            val frames = synchronized(socket.sent) { socket.sent.drop(read).also { read += it.size } }
+            return frames.map { server.open(Wire.parse(it)) }
+        }
+
+        fun acks(): List<Long> = take().filter { it.text("type") == "remote.ack" }.map { it.long("seq") }
+    }
+
+    /** A frame of about 27 000 characters, so two of them pass [ACK_BYTES]. */
+    private fun bigEvent(server: SecureChannel, n: Int) =
+        server.seal(Wire.objectOf("type" to "event", "n" to n, "pad" to "x".repeat(20_000)))
+
+    @Test
+    fun acksStartWithTheFocusAndNameTheHighestDecryptedSequence() = runTest {
+        val socket = Socket()
+        lateinit var transport: SecureRemoteTransport
+        val (_, server) = authenticated(socket = socket, created = { transport = it })
+        val outbound = Outbound(server, socket)
+        // Without the focus the connection is legacy: nothing is acknowledged, however much arrives.
+        repeat(4) { socket.receive(bigEvent(server, it)) }
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertTrue(outbound.take().isEmpty())
+
+        transport.send(sessionFocusPayload("focus-1", listOf("session")))
+        runCurrent()
+        val sent = outbound.take()
+        // ready is 0, device.authenticated 1, then the four events: 2 to 5.
+        assertEquals(listOf("session.focus", "remote.ack"), sent.map { it.text("type") })
+        assertEquals(remoteAckPayload(5), sent[1])
+
+        // A second focus starts nothing new.
+        transport.send(sessionFocusPayload("focus-2", emptyList()))
+        runCurrent()
+        assertEquals(listOf("session.focus"), outbound.take().map { it.text("type") })
+    }
+
+    @Test
+    fun acksFollowTheByteIntervalAndIdleRules() = runTest {
+        val socket = Socket()
+        lateinit var transport: SecureRemoteTransport
+        val (_, server) = authenticated(socket = socket, created = { transport = it })
+        val outbound = Outbound(server, socket)
+        transport.send(sessionFocusPayload("focus", listOf("session")))
+        runCurrent()
+        assertEquals(listOf(1L), outbound.acks())
+
+        // Past ACK_BYTES at once, but the last ack is not ACK_INTERVAL_MILLIS old yet.
+        socket.receive(bigEvent(server, 0))
+        socket.receive(bigEvent(server, 1))
+        runCurrent()
+        assertTrue(outbound.acks().isEmpty())
+        advanceTimeBy(ACK_INTERVAL_MILLIS - 1)
+        runCurrent()
+        socket.receive(bigEvent(server, 2))
+        runCurrent()
+        assertTrue(outbound.acks().isEmpty())
+        advanceTimeBy(1)
+        runCurrent()
+        socket.receive(bigEvent(server, 3))
+        runCurrent()
+        assertEquals(listOf(5L), outbound.acks())
+
+        // A small frame waits for the trailing ack, ACK_IDLE_MILLIS after it.
+        advanceTimeBy(100)
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 4)))
+        advanceTimeBy(ACK_IDLE_MILLIS - 1)
+        runCurrent()
+        assertTrue(outbound.acks().isEmpty())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(6L), outbound.acks())
+
+        // Each frame moves the trailing ack on, so it follows the last one.
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 5)))
+        advanceTimeBy(600)
+        runCurrent()
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 6)))
+        advanceTimeBy(ACK_IDLE_MILLIS - 1)
+        runCurrent()
+        assertTrue(outbound.acks().isEmpty())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(8L), outbound.acks())
+
+        // Nothing unacknowledged: no trailing ack.
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertTrue(outbound.acks().isEmpty())
+    }
+
+    @Test
+    fun aSmallSteadyStreamIsAcknowledgedOnceItPassesTheByteThreshold() = runTest {
+        val socket = Socket()
+        lateinit var transport: SecureRemoteTransport
+        val (_, server) = authenticated(socket = socket, created = { transport = it })
+        val outbound = Outbound(server, socket)
+        transport.send(sessionFocusPayload("focus", listOf("session")))
+        runCurrent()
+        outbound.take()
+        var received = 0L
+        var sequence = 1L
+        // One frame every 100 ms, never quiet for ACK_IDLE_MILLIS: only the byte rule acks.
+        while (received < ACK_BYTES) {
+            advanceTimeBy(100)
+            runCurrent()
+            assertTrue(outbound.acks().isEmpty())
+            val frame = server.seal(Wire.objectOf("type" to "event", "pad" to "y".repeat(2_000)))
+            received += frame.toString().length
+            sequence++
+            socket.receive(frame)
+        }
+        runCurrent()
+        assertEquals(listOf(sequence), outbound.acks())
+    }
+
+    @Test
+    fun noAckLeavesAfterTheConnectionClosed() = runTest {
+        val socket = Socket()
+        lateinit var transport: SecureRemoteTransport
+        val (_, server) = authenticated(socket = socket, created = { transport = it })
+        transport.send(sessionFocusPayload("focus", listOf("session")))
+        runCurrent()
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 1)))
+        val count = socket.sent.size
+        transport.close()
+        advanceTimeBy(ACK_IDLE_MILLIS * 3)
+        runCurrent()
+        assertEquals(count, socket.sent.size)
     }
 }

@@ -18,6 +18,18 @@ internal const val HANDSHAKE_TIMEOUT_MILLIS = 20_000L
  */
 internal const val CHALLENGE_TIMEOUT_MILLIS = 10_000L
 
+/**
+ * A `remote.stream.v1` connection acknowledges what it decrypted with `remote.ack` once this much
+ * frame text arrived since the last ack, and [ACK_INTERVAL_MILLIS] passed since it.
+ */
+internal const val ACK_BYTES = 32 * 1024
+
+/** At most five acks per second. */
+internal const val ACK_INTERVAL_MILLIS = 200L
+
+/** One trailing ack follows the last unacknowledged frame after this long without another frame. */
+internal const val ACK_IDLE_MILLIS = 1_000L
+
 /** A pairing the user has not approved on the Mac this long after it started fails. */
 internal const val PAIRING_TIMEOUT_MILLIS = 120_000L
 
@@ -82,7 +94,9 @@ interface RemoteTransport {
      * Queues [payload] for the active connection and returns; it is sealed and sent off the
      * caller's thread, in call order. Throws only when no connection is active. A payload that cannot
      * be sealed ends the connection through [Listener.broken] and [Listener.failed], one the
-     * socket no longer takes through [Listener.failed].
+     * socket no longer takes through [Listener.failed]. A `session.focus` payload also starts the
+     * connection's `remote.ack`s: the repository sends it only to a host that advertised
+     * `remote.stream.v1`, and the host takes acks only after it.
      */
     fun send(payload: JsonObject)
 
@@ -102,6 +116,12 @@ internal val foregroundHttp: OkHttpClient by lazy {
  * run there. `onClosed` and `onFailure` hand their task to the same lane, so they are handled after
  * every frame already decoded, even when OkHttp calls them from its writer thread. [send] hands
  * payloads to [sender], which seals and sends them in call order.
+ *
+ * Once the app sent `session.focus` on a connection, the reader thread counts the text of every
+ * frame it decrypts and acknowledges the highest sequence with `remote.ack` when [ACK_BYTES]
+ * arrived and [ACK_INTERVAL_MILLIS] passed since the last ack; a timer on [sender] adds one trailing
+ * ack [ACK_IDLE_MILLIS] after the last unacknowledged frame. The first ack follows the focus at once.
+ * Acks never wait for [scope], so a busy main thread does not hold back the Mac's delivery window.
  */
 class SecureRemoteTransport(
     private val scope: CoroutineScope,
@@ -110,6 +130,8 @@ class SecureRemoteTransport(
     private val diagnosticsName: String = "foreground",
     /** Seals and sends an active connection's payloads; it must run one task at a time, in order. */
     private val sender: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1),
+    /** A monotonic clock in milliseconds that paces the acks; injectable for tests. */
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
     private val deviceName: () -> String = { (Build.MANUFACTURER + " " + Build.MODEL).take(100) },
 ) : RemoteTransport {
     override lateinit var listener: RemoteTransport.Listener
@@ -141,6 +163,85 @@ class SecureRemoteTransport(
 
         private val lane = Channel<() -> Unit>(Channel.UNLIMITED)
         private val outgoing = Channel<JsonObject>(Channel.UNLIMITED)
+
+        /** Guards the ack state below, which the reader thread, [send] and the trailing timer share. */
+        private val ackLock = Any()
+        /** Set when the app queued `session.focus` on this connection; acks follow from then on. */
+        private var acking = false
+        /** The sequence of the last frame decrypted, or -1. */
+        private var receivedSequence = -1L
+        /** The sequence the last ack named, or -1. */
+        private var ackedSequence = -1L
+        /** Frame text received since the last ack, in characters. */
+        private var unackedChars = 0L
+        private var lastAckAt = 0L
+        private var lastFrameAt = 0L
+        private var trailingAck: Job? = null
+
+        /**
+         * On the reader thread, after frame [sequence] of [size] characters was decrypted: an ack
+         * goes out when one is due, and otherwise the trailing ack waits for it.
+         */
+        fun received(sequence: Long, size: Int) {
+            synchronized(ackLock) {
+                // end() may have closed the queue since the reader checked.
+                if (closed.get()) return
+                receivedSequence = sequence
+                if (!acking) return
+                unackedChars += size
+                lastFrameAt = clock()
+                if (unackedChars >= ACK_BYTES && lastFrameAt - lastAckAt >= ACK_INTERVAL_MILLIS) ackLocked(lastFrameAt)
+                else scheduleTrailingAckLocked()
+            }
+        }
+
+        /** Starts acking with an ack of what arrived so far; the caller queued `session.focus` first. */
+        fun startAcks() {
+            synchronized(ackLock) {
+                if (acking) return
+                acking = true
+                ackLocked(clock())
+            }
+        }
+
+        /**
+         * Queues the ack of the highest decrypted frame. Under [ackLock], so acks enter the queue in
+         * ascending order, as the host requires.
+         */
+        private fun ackLocked(now: Long) {
+            if (receivedSequence < 0 || receivedSequence <= ackedSequence) return
+            ackedSequence = receivedSequence
+            unackedChars = 0
+            lastAckAt = now
+            queue(remoteAckPayload(receivedSequence))
+        }
+
+        private fun scheduleTrailingAckLocked() {
+            if (trailingAck != null) return
+            trailingAck =
+                scope.launch(sender) {
+                    var wait = ACK_IDLE_MILLIS
+                    while (wait > 0) {
+                        delay(wait)
+                        wait =
+                            synchronized(ackLock) {
+                                val idle = clock() - lastFrameAt
+                                val next =
+                                    when {
+                                        closed.get() || receivedSequence <= ackedSequence -> 0L
+                                        // A frame came meanwhile: the ack waits for the quiet after it.
+                                        idle < ACK_IDLE_MILLIS -> ACK_IDLE_MILLIS - idle
+                                        else -> {
+                                            ackLocked(clock())
+                                            0L
+                                        }
+                                    }
+                                if (next == 0L) trailingAck = null
+                                next
+                            }
+                    }
+                }
+        }
 
         /** Runs [task] on [scope] after every task handed over before it, unless the connection ended. */
         fun post(task: () -> Unit) {
@@ -193,6 +294,7 @@ class SecureRemoteTransport(
 
         fun end() {
             closed.set(true)
+            synchronized(ackLock) { trailingAck?.cancel() }
             channel?.close()
             lane.close()
             outgoing.close()
@@ -239,6 +341,7 @@ class SecureRemoteTransport(
         val current = checkNotNull(connection)
         check(current.active)
         current.queue(payload)
+        if ((payload["type"] as? JsonPrimitive)?.content == "session.focus") current.startAcks()
     }
 
     private fun start(
@@ -497,7 +600,8 @@ class SecureRemoteTransport(
                         connection.post { if (phase == HandshakePhase.ACTIVE) listener.inbound() }
                         val payload =
                             try {
-                                open.open(Wire.parse(text))
+                                val frame = Wire.parse(text)
+                                open.open(frame).also { connection.received(frame.long("seq"), text.length) }
                             } catch (e: Exception) {
                                 connection.unreadable = true
                                 // Only a failure on the live connection is recorded; one racing a

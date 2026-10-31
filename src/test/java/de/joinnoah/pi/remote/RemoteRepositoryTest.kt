@@ -11964,4 +11964,448 @@ class RemoteRepositoryTest {
         assertEquals(listOf("m1", "m2", "m3"), shownIds(repository))
         assertNull(repository.state.value.error)
     }
+
+    /** A host with a phone journal that also advertises `remote.stream.v1` and answers focus and pings. */
+    private fun streamTransport(
+        sessions: List<JsonObject> = listOf(session(), session("other")),
+    ): Pair<Transport, JournalHost> {
+        val (transport, host) = journalTransport(sessions, capabilities = listOf(STREAM_CAPABILITY))
+        val answer = transport.response
+        transport.response = { request ->
+            when (request.text("type")) {
+                "session.focus" -> Wire.objectOf("kind" to "session.focus", "sessionIds" to request.getValue("sessionIds"))
+                "remote.ping" -> Wire.objectOf("kind" to "pong", "relayRttMs" to 40)
+                else -> answer(request)
+            }
+        }
+        return transport to host
+    }
+
+    private fun Transport.focuses() =
+        sent.filter { it.text("type") == "session.focus" }.map { focus -> focus.getValue("sessionIds").jsonArray.map { it.jsonPrimitive.content } }
+
+    private fun Transport.pings() = sent.count { it.text("type") == "remote.ping" }
+
+    private fun Transport.lastIndexOf(type: String) = sent.indexOfLast { it.text("type") == type }
+
+    @Test
+    fun theFocusGoesOnlyToAConnectionThatAdvertisedTheStreamCapability() = runTest {
+        val (legacy, legacyHost) = journalTransport()
+        openedChat(legacy, legacyHost)
+        dropConnection(legacy)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(legacy.focuses().isEmpty())
+        assertEquals(0, legacy.pings())
+
+        val (transport, host) = streamTransport()
+        val repository = openedChat(transport, host)
+        assertEquals(listOf(listOf("session")), transport.focuses())
+        // Sent once the capabilities reply named it, not before.
+        assertTrue(transport.lastIndexOf("session.focus") > transport.sent.indexOfFirst { it.text("type") == "projects.list" })
+
+        // A new connection starts legacy: its focus follows its own capabilities reply.
+        dropConnection(transport)
+        reconnect(repository)
+        assertEquals(listOf(listOf("session"), listOf("session")), transport.focuses())
+        assertTrue(transport.lastIndexOf("session.focus") > transport.lastIndexOf("projects.list"))
+        assertTrue(repository.state.value.connected)
+    }
+
+    @Test
+    fun theFocusFollowsTheSelectionAndNarrowsInTheBackgroundAfterTheGrace() = runTest {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+
+        // The lists at once.
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+
+        // Another chat: its focus goes out before its first page.
+        repository.activate(RemoteSelection("host", "project", "other"))
+        runCurrent()
+        assertEquals(listOf("other"), transport.focuses().last())
+        assertTrue(transport.lastIndexOf("session.focus") < transport.sent.indexOf(transport.firstPages("other").last()))
+
+        // Back to the first chat, kept since it was left: focus, then its resume.
+        repository.activate(RemoteSelection("host", "project", "session"))
+        runCurrent()
+        assertEquals(listOf("session"), transport.focuses().last())
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+        assertTrue(transport.lastIndexOf("session.focus") < transport.sent.indexOf(resume))
+        val count = transport.focuses().size
+
+        // The background keeps the focus for the grace, then narrows it.
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS - 1)
+        runCurrent()
+        assertEquals(count, transport.focuses().size)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+
+        // Back in the foreground the chat is in focus again.
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(listOf("session"), transport.focuses().last())
+    }
+
+    @Test
+    fun aLiveRunKeepsTheFocusInTheBackgroundUntilItEnds() = runTest {
+        val (transport, host) = streamTransport()
+        host.status = "running"
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        assertEquals("running", repository.state.value.status)
+        val count = transport.focuses().size
+
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS * 2)
+        runCurrent()
+        assertEquals(count, transport.focuses().size)
+
+        // The run ends: past the grace, the focus narrows at once.
+        host.live("session.status", "status" to "idle")
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+        val pages = transport.firstPages().size
+        // Detached: what the host still sends of the chat applies nothing and asks for nothing.
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+        host.live("session.status", "status" to "running")
+        runCurrent()
+        assertEquals(pages, transport.firstPages().size)
+        assertEquals("idle", repository.state.value.status)
+        assertEquals(listOf("m1"), shownIds(repository))
+    }
+
+    @Test
+    fun aRefocusedChatAppliesAnEventThatOvertakesItsResumeAfterTheReplay() = runTest {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        val pages = transport.firstPages().size
+
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+        // Out of focus the host still sends this chat's other events; the detached Timeline
+        // ignores them, so a gap asks for nothing.
+        host.live("session.title", "title" to "Renamed")
+        // An upsert the focus filtered.
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+        runCurrent()
+        assertEquals(pages, transport.firstPages().size)
+
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && "cursor" !in request) null else answer(request)
+        }
+        repository.setForeground(true)
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(pages + 1, transport.firstPages().size)
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+        assertEquals(listOf("session"), transport.focuses().last())
+        assertTrue(transport.lastIndexOf("session.focus") < transport.sent.indexOf(resume))
+
+        // Sent before the host took the focus: it carries `after` over the filtered upsert.
+        transport.deliver(JsonObject(host.record("session.status", "status" to "running") + ("after" to JsonPrimitive(2))))
+        runCurrent()
+        // Held for the reply.
+        assertEquals(listOf("m1"), shownIds(repository))
+        assertEquals("idle", repository.state.value.status)
+
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+        assertEquals("session.events", host.answers.last())
+        // The replayed first appearance shows in its place, and the held event once after it.
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals("running", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun pingsGoOncePerConnectionThenEveryThirtySecondsInTheForegroundAndATimeoutEndsNothing() = runTest {
+        val (transport, host) = streamTransport()
+        val repository = openedChat(transport, host)
+        assertEquals(1, transport.pings())
+
+        advanceTimeBy(PING_INTERVAL_MILLIS)
+        runCurrent()
+        assertEquals(2, transport.pings())
+
+        // None in the background.
+        repository.setForeground(false)
+        advanceTimeBy(PING_INTERVAL_MILLIS + 10_000)
+        runCurrent()
+        assertEquals(2, transport.pings())
+
+        repository.setForeground(true)
+        runCurrent()
+        advanceTimeBy(PING_INTERVAL_MILLIS - 10_000)
+        runCurrent()
+        assertEquals(3, transport.pings())
+
+        // A ping without its pong is recorded and ends nothing.
+        val answer = transport.response
+        transport.response = { request -> if (request.text("type") == "remote.ping") null else answer(request) }
+        val connects = transport.connects
+        val closes = transport.closes
+        advanceTimeBy(PING_INTERVAL_MILLIS)
+        runCurrent()
+        assertEquals(4, transport.pings())
+        advanceTimeBy(PING_TIMEOUT_MILLIS + 1)
+        runCurrent()
+        assertTrue(repository.state.value.connected)
+        assertEquals(connects, transport.connects)
+        assertEquals(closes, transport.closes)
+        assertNull(repository.state.value.error)
+    }
+
+    /**
+     * [streamTransport]'s chat at m1 (revision 1) with a resume that stays unanswered, asked for by
+     * a gap (revision 3), and the reply the host made when the request came in. Then the app goes
+     * to the background past the grace, so the focus narrows while the Timeline waits, and the host
+     * records m2 (revision 4), an upsert that focus filtered.
+     */
+    private suspend fun TestScope.lapsedFocus(): LapsedFocus {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && "cursor" !in request) null else answer(request)
+        }
+        host.record("session.title", "title" to "Renamed")
+        host.live("session.status", "status" to "running")
+        runCurrent()
+        val resume = transport.firstPages().last()
+        assertEquals(ResumeBase(host.epoch, 1), resume.resumeBase())
+        val reply = host.answer(resume)
+
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+        return LapsedFocus(transport, host, repository, resume, reply, answer)
+    }
+
+    private class LapsedFocus(
+        val transport: Transport,
+        val host: JournalHost,
+        val repository: DefaultRemoteRepository,
+        val resume: JsonObject,
+        val reply: JsonObject,
+        val answer: (JsonObject) -> JsonObject?,
+    )
+
+    /** A status event the host sent before it took the focus again: `after` spans the filtered m2. */
+    private fun LapsedFocus.statusOverTheFilteredUpsert(status: String) =
+        transport.deliver(JsonObject(host.record("session.status", "status" to status) + ("after" to JsonPrimitive(3))))
+
+    @Test
+    fun aFocusThatLapsedWhileAResumeWasAwaitedReadsTheChatAfreshOnceItsReplyIsIn() = runTest {
+        val lapsed = lapsedFocus()
+        val (transport, host, repository) = Triple(lapsed.transport, lapsed.host, lapsed.repository)
+
+        // Back before the reply: the chat is in focus again, and nothing else goes out for it yet.
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(listOf("session"), transport.focuses().last())
+        val pages = transport.firstPages().size
+        lapsed.statusOverTheFilteredUpsert("idle")
+        runCurrent()
+
+        transport.result(lapsed.resume, lapsed.reply)
+        runCurrent()
+        // The held status moved the Timeline past m2, which the replay did not hold: the chat reads
+        // a fresh first page, after the focus that names it.
+        assertEquals(pages + 1, transport.firstPages().size)
+        val reread = transport.firstPages().last()
+        assertEquals(ResumeBase(null, 0), reread.resumeBase())
+        assertTrue(transport.lastIndexOf("session.focus") < transport.sent.indexOf(reread))
+        assertEquals(listOf("m1"), shownIds(repository))
+
+        transport.result(reread, host.answer(reread))
+        runCurrent()
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals("idle", repository.state.value.status)
+        assertEquals(pages + 1, transport.firstPages().size)
+    }
+
+    @Test
+    fun aFocusThatLapsedDetachesTheChatOnceItsReplyIsInAndTheRefocusReadsItAfresh() = runTest {
+        val lapsed = lapsedFocus()
+        val (transport, host, repository) = Triple(lapsed.transport, lapsed.host, lapsed.repository)
+        lapsed.statusOverTheFilteredUpsert("idle")
+        runCurrent()
+        transport.result(lapsed.resume, lapsed.reply)
+        runCurrent()
+        val pages = transport.firstPages().size
+
+        // Detached once the reply is in: a gap asks for nothing.
+        host.record("session.title", "title" to "Again")
+        host.live("session.status", "status" to "running")
+        runCurrent()
+        assertEquals(pages, transport.firstPages().size)
+        assertEquals("idle", repository.state.value.status)
+
+        // The refocus does not resume from a revision past m2: it reads a fresh first page, once.
+        transport.response = lapsed.answer
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(listOf("session"), transport.focuses().last())
+        assertEquals(pages + 1, transport.firstPages().size)
+        assertEquals(ResumeBase(null, 0), transport.firstPages().last().resumeBase())
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals("running", repository.state.value.status)
+    }
+
+    @Test
+    fun aRefocusAfterTheGraceRefreshesTheConfigurationEvenWhenItsResumeAnswersAfterTheProbe() = runTest {
+        val (transport, host) = streamTransport()
+        transport.capabilities = setOf(CONFIGURATION_CAPABILITY)
+        val stream = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.configuration.get") configurationData(request.text("sessionId"))
+            else stream(request)
+        }
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        fun reads() = transport.sent.count { it.text("type") == "session.configuration.get" }
+
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+
+        // The refocus resume stays unanswered while the probe's list comes back.
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "session.snapshot" && "cursor" !in request) null else answer(request)
+        }
+        val before = reads()
+        val lists = transport.sent.count { it.text("type") == "projects.list" }
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(listOf("session"), transport.focuses().last())
+        assertTrue(transport.sent.count { it.text("type") == "projects.list" } > lists)
+        assertEquals(before + 1, reads())
+
+        // The late reply moves the chat but asks for no second read.
+        val resume = transport.firstPages().last()
+        transport.result(resume, host.answer(resume))
+        runCurrent()
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+        assertEquals(before + 1, reads())
+    }
+
+    @Test
+    fun aRefocusOnAnImmediateScopeSendsTheFocusBeforeExactlyOneResume() = runTest {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        // The app's scope runs on Dispatchers.Main.immediate: a launched probe runs at once.
+        val repository =
+            DefaultRemoteRepository(
+                Pairings(listOf(this@RemoteRepositoryTest.host)),
+                Drafts(),
+                transport,
+                CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler)),
+                StandardTestDispatcher(testScheduler),
+                now = { testScheduler.currentTime },
+                jitter = { 0.5 },
+            )
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        host.answers.clear()
+
+        repository.setForeground(false)
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+        host.record("message.upsert", "message" to journalMessage("m2", "World"))
+
+        val from = transport.sent.size
+        repository.setForeground(true)
+        runCurrent()
+        val order =
+            transport.sent.drop(from).mapNotNull { request ->
+                when {
+                    request.text("type") == "session.focus" -> "focus"
+                    request.text("type") == "session.snapshot" && "cursor" !in request -> "resume"
+                    else -> null
+                }
+            }
+        assertEquals(listOf("focus", "resume"), order)
+        assertTrue(transport.sent.drop(from).any { it.text("type") == "projects.list" })
+        assertEquals(listOf("m1", "m2"), shownIds(repository))
+    }
+
+    @Test
+    fun aForegroundReturnDuringAnOpenKeepsTheFocusTheOpenSent() = runTest {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        val repository = openedChat(transport, host)
+        repository.activate(RemoteSelection("host", "project"))
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+
+        // The open and its first page stay unanswered, so the activation is still in flight.
+        val answer = transport.response
+        transport.response = { request ->
+            if (request.text("type") == "sessions.open" || (request.text("type") == "session.snapshot" && request.text("sessionId") == "other")) null
+            else answer(request)
+        }
+        val opening = async {
+            repository.activate(RemoteSelection("host", "project", "other"), ActivationMode.USER_OPEN)
+        }
+        runCurrent()
+        assertTrue(repository.state.value.loading)
+        assertEquals(listOf("other"), transport.focuses().last())
+        val focuses = transport.focuses().size
+
+        // Home and straight back: the list the open leaves must not take the focus back.
+        repository.setForeground(false)
+        runCurrent()
+        repository.setForeground(true)
+        runCurrent()
+        assertEquals(listOf(listOf("other")), transport.focuses().drop(focuses - 1))
+        opening.cancel()
+    }
+
+    @Test
+    fun theBackgroundGraceEndsOnTheTimerEvenWhenTheWallClockIsSetBack() = runTest {
+        val (transport, host) = streamTransport()
+        host.record("message.upsert", "message" to journalMessage("m1", "Hello"))
+        var offset = 0L
+        val repository =
+            DefaultRemoteRepository(
+                Pairings(listOf(this@RemoteRepositoryTest.host)),
+                Drafts(),
+                transport,
+                backgroundScope,
+                StandardTestDispatcher(testScheduler),
+                now = { testScheduler.currentTime + offset },
+                jitter = { 0.5 },
+            )
+        repository.activate(RemoteSelection("host", "project", "session"))
+        repository.setForeground(true)
+        repository.setValidatedNetwork("wifi")
+        runCurrent()
+        assertEquals(listOf("session"), transport.focuses().last())
+
+        repository.setForeground(false)
+        offset = -60_000
+        advanceTimeBy(BACKGROUND_FOCUS_GRACE_MILLIS)
+        runCurrent()
+        assertEquals(emptyList<String>(), transport.focuses().last())
+    }
 }

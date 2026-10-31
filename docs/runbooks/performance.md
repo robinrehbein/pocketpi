@@ -55,6 +55,30 @@
   on screen, and is asked for once more. That first page holds the session's events as a resume
   does, so a streaming chat cannot make it outdated and its new cursor is always taken. Older hosts
   answer both forms with a snapshot without `epoch`, so no Timeline is continued with them.
+- Ask only for the chat on screen. A connection whose capabilities reply names `remote.stream.v1`
+  gets `session.focus` once, and again whenever the wanted focus changes: the selected chat in the
+  foreground, `[]` on the lists. In the background the chat stays in focus for
+  `BACKGROUND_FOCUS_GRACE_MILLIS` (15 s, the quiet-resume window) or while a live run is kept for
+  it; then the focus narrows to `[]`. The Mac then leaves out the `message.upsert`s of every other
+  session and still sends all other events. A chat that leaves the focus detaches its Timeline,
+  which applies nothing meanwhile, so the gaps never ask for a snapshot. A chat switch sends the
+  new focus before the chat's first page; a refocus clears the detached flag, holds the session's
+  events, and sends the focus and then a resume, so an event that overtakes the reply applies once,
+  after it. A Timeline that waits for a reply when its chat leaves the focus cannot detach; its
+  focus lapses instead. Events it applies after the reply may carry `after` over upserts the focus
+  filtered, so it never resumes from that revision: once the reply is in it detaches, or, back in
+  focus, reads a fresh first page with its events held. The grace ends on a timer, not the wall
+  clock. The focus is a liveness read that the connection-request cap never holds back, and a new
+  connection is legacy (every event) until its own capabilities reply. `BackgroundRemoteClient`
+  never sends it.
+- Acknowledge what arrived. Once a connection sent `session.focus`, the reader thread counts the
+  text of every frame it decrypts and sends `remote.ack` with the highest sequence when
+  `ACK_BYTES` (32 KiB) arrived and `ACK_INTERVAL_MILLIS` (200 ms) passed since the last ack, plus
+  one trailing ack `ACK_IDLE_MILLIS` (1 s) after the last unacknowledged frame; the first ack
+  follows the focus at once. Acks are sealed on the sender thread and never wait for main, so a
+  busy UI does not hold back the Mac's delivery window. `remote.ping` goes once per such connection
+  and then every `PING_INTERVAL_MILLIS` (30 s) in the foreground; its round trip lands in
+  Diagnostics as a request, and a timeout (10 s) ends nothing.
 - While an open runs, the chat destination shows a read-only preview from the chat cache
   (`peekCachedChat`) with its stored draft, never as the repository's selection: the composer
   takes no edits and every action waits for the selection. A history session's preview says it

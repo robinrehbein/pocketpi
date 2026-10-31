@@ -127,6 +127,12 @@ internal const val TIMELINE_PUBLISH_MILLIS = 16L
  */
 internal const val DETACHED_TIMELINES = 4
 
+/** A `remote.stream.v1` connection is pinged this often while the app is in the foreground. */
+internal const val PING_INTERVAL_MILLIS = 30_000L
+
+/** A `remote.ping` without its `pong` after this long is recorded as a timeout, and nothing else. */
+internal const val PING_TIMEOUT_MILLIS = 10_000L
+
 /**
  * The first failure of a streak reconnects quietly; the error card follows only if the Mac is
  * still unreachable this long after it, or at once on the next failure.
@@ -141,6 +147,13 @@ private const val MAX_CONNECTION_REQUESTS = 32
 
 /** Back this soon, on the same screen and with frames flowing, the app resumes without a request. */
 internal const val RESUME_QUIET_AWAY_MILLIS = 15_000L
+
+/**
+ * After the app went to the background, the chat on screen stays in the connection's
+ * `session.focus` this long, so a return within the quiet-resume window needs no catch-up. Later,
+ * without a live run kept for it, the focus narrows to none and the chat's Timeline detaches.
+ */
+internal const val BACKGROUND_FOCUS_GRACE_MILLIS = RESUME_QUIET_AWAY_MILLIS
 
 /** A socket that delivered a frame this recently counts as alive when the app resumes. */
 internal const val RESUME_LIVE_SOCKET_MILLIS = 25_000L
@@ -168,6 +181,8 @@ private val LIVENESS_READS =
         "session.commands.get",
         "session.advisor.get",
         "session.context.get",
+        // Idempotent: a reconnect sends the focus again.
+        "session.focus",
     )
 
 /** Why the connection ended, which decides how soon and how quietly it comes back. */
@@ -610,6 +625,23 @@ class DefaultRemoteRepository(
 
     /** At most [DETACHED_TIMELINES] per Mac, least recently left first. */
     private val detachedTimelines = LinkedHashMap<DraftKey, DetachedTimeline>()
+
+    /** The connection ([generation]) whose `projects.list` advertised `remote.stream.v1`, or -1. */
+    private var streamGeneration = -1L
+    /** The `session.focus` last sent, on the connection [focusSentOn]. */
+    private var focusSent: List<String>? = null
+    private var focusSentOn = -1L
+    /** Set while the app is in the background; see [desiredFocus]. */
+    private var inBackground = false
+    /**
+     * Set by [backgroundFocusTimer] once [BACKGROUND_FOCUS_GRACE_MILLIS] passed in the background,
+     * on the dispatcher's monotonic clock, so a wall clock set back cannot keep the focus.
+     */
+    private var backgroundGraceOver = false
+    /** Narrows the focus once [BACKGROUND_FOCUS_GRACE_MILLIS] passed in the background. */
+    private var backgroundFocusTimer: Job? = null
+    /** Sends `remote.ping` on a `remote.stream.v1` connection; see [startPings]. */
+    private var pingJob: Job? = null
 
     /** Which first-page request a snapshot sends; see [firstPageRequestId]. */
     private enum class SnapshotIntent {
@@ -1910,6 +1942,7 @@ class DefaultRemoteRepository(
                     drainTaskRefresh()
                 }
                 if (PROJECT_OPEN_CAPABILITY in merged) resumeClone()
+                if (STREAM_CAPABILITY in merged && connection == generation && streamGeneration != generation) streamReady()
                 if (PROVIDER_AUTH_CAPABILITY in merged) resumeProviderAuth()
                 if (TICKETS_CAPABILITY in merged && !hadTickets) ticketsLoader.refresh(force = false)
             }
@@ -1965,6 +1998,10 @@ class DefaultRemoteRepository(
      */
     private fun CoroutineScope.holdSnapshot(routeId: String, sessionId: String, epoch: Long): HeldSnapshot {
         val held = HeldSnapshot(sessionId, canReadTasks(), resumeSource(routeId, sessionId)?.resumeBase())
+        // The focus names the chat before its read goes out, so every event of it that the host
+        // emits after the reply's revision reaches this phone. Another chat on screen detaches;
+        // should this activation not select the new one, its end refocuses and resumes it.
+        syncFocus(desiredFocus(routeId, sessionId))
         // Set first: an event that follows the request is kept for the Timeline.
         heldSnapshot = held
         held.reply =
@@ -2009,6 +2046,141 @@ class DefaultRemoteRepository(
         detachedTimelines[key] = DetachedTimeline(leaving, state.value.tasks)
         val ofRoute = detachedTimelines.keys.filter { it.routeId == routeId }
         ofRoute.take(maxOf(0, ofRoute.size - DETACHED_TIMELINES)).forEach { detachedTimelines.remove(it) }
+    }
+
+    /**
+     * The sessions whose upserts this connection should get: [sessionId] on [routeId] (the selected
+     * chat by default) while the app is in the foreground, while a live run is kept for it in the
+     * background, or for [BACKGROUND_FOCUS_GRACE_MILLIS] after the app went to the background;
+     * none on the lists, for another Mac, and in the background otherwise.
+     */
+    private fun desiredFocus(
+        routeId: String? = state.value.selection.routeId,
+        sessionId: String? = state.value.selection.sessionId,
+    ): List<String> {
+        if (routeId == null || sessionId == null || routeId != activeHost?.routeId || !opaqueId(sessionId)) return emptyList()
+        if (!inBackground) return listOf(sessionId)
+        if (liveRunTarget(state.value) == LiveRunTarget(routeId, sessionId)) return listOf(sessionId)
+        return if (backgroundGraceOver) emptyList() else listOf(sessionId)
+    }
+
+    /**
+     * Whether the host sends this connection the upserts of [sessionId]: it took no focus yet (a
+     * legacy connection, or one before its first `session.focus`), or the last one names it.
+     */
+    private fun inSentFocus(sessionId: String) =
+        streamGeneration != generation || focusSentOn != generation || focusSent?.contains(sessionId) == true
+
+    /** The Timeline of the chat on screen, or null on the lists. */
+    private fun shownTimeline(): Timeline? {
+        val selected = state.value.selection
+        return timeline?.takeIf { selected.routeId == activeHost?.routeId && it.sessionId == selected.sessionId }
+    }
+
+    /**
+     * Sends `session.focus` with [target] when this connection advertised `remote.stream.v1` and
+     * did not get that focus last; never to a host without the capability. The focus is not held
+     * back by [MAX_CONNECTION_REQUESTS]: it is one small idempotent command per change, and a
+     * Timeline that the host already filters must not miss it.
+     *
+     * [shown], the Timeline on screen, detaches when the focus stops naming its session, so the gaps
+     * the host leaves in its stream never ask for a snapshot. One that waits for a reply (its first
+     * page or a resume) cannot detach, since a detached Timeline could not take it: its focus lapses
+     * instead ([Timeline.focusLapsed]). The events it applies after the reply may carry `after` over
+     * upserts that focus filtered, so once the reply is in (see [snapshot]) it detaches if the
+     * session is still out of focus, and otherwise, with [readLapsed], reads a fresh first page
+     * with its events held.
+     *
+     * When the focus names a detached [shown] again, it stops being detached and resumes: it holds
+     * its session's events from before the focus goes out, and the resume request follows the
+     * focus, so every event the host emitted meanwhile is applied once, after the reply.
+     */
+    private fun syncFocus(target: List<String> = desiredFocus(), shown: Timeline? = shownTimeline(), readLapsed: Boolean = true) {
+        if (!state.value.connected || streamGeneration != generation) return
+        val refocus = shown?.takeIf { it.detached && it.sessionId in target }
+        if (refocus != null) {
+            refocus.detached = false
+            if (refocus.resumeBase() != null) refocus.awaitReply()
+            // Without a base the fresh snapshot follows; a gap meanwhile does not ask for another.
+            else snapshotPending = refocus
+        }
+        if (focusSentOn != generation || focusSent != target) sendFocus(target)
+        var reread = false
+        if (shown != null && shown.sessionId !in target) {
+            if (!shown.awaitingReply && snapshotPending !== shown) shown.detached = true else shown.focusLapsed = true
+        } else if (
+            readLapsed && shown != null && refocus == null && shown.focusLapsed && !shown.detached && !shown.awaitingReply &&
+                snapshotPending !== shown
+        ) {
+            snapshotPending = shown
+            reread = true
+        }
+        if (refocus != null) snapshotAsync(intent = if (refocus.resumeBase() != null) SnapshotIntent.RESUME else SnapshotIntent.FRESH)
+        // A pending snapshot reads it afresh as well; see [snapshot].
+        else if (reread) snapshotAsync()
+    }
+
+    private fun sendFocus(target: List<String>) {
+        focusSent = target
+        focusSentOn = generation
+        val payload = sessionFocusPayload(Wire.random(), target)
+        // Undispatched, so the focus is on the wire before whatever the caller sends next.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                sessionFocusResult(awaitConnectionReply(payload, REQUEST_TIMEOUT_MILLIS, record = true, liveness = true))
+            } catch (_: CancellationException) {
+            } catch (_: RemoteRequestException) {
+                // A lost connection sends it again on the next one; a stale one already reconnects.
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.focus", swallowed)
+            }
+        }
+    }
+
+    /**
+     * This connection advertised `remote.stream.v1`: it gets its focus, and pings start. During an
+     * activation the focus waits for its select(), which names the chat it opens; until then the
+     * connection gets every event.
+     */
+    private fun streamReady() {
+        streamGeneration = generation
+        if (!state.value.loading) syncFocus()
+        startPings(generation)
+    }
+
+    /**
+     * Sends `remote.ping` once now, then on [connection] every [PING_INTERVAL_MILLIS] while the app
+     * is in the foreground, until the connection ends. Each round trip, from the send to the reply
+     * on the main thread, is recorded in [Diagnostics]; a timeout is recorded and ends nothing,
+     * since a slow link may delay a whole message while the socket is fine (OkHttp's ping and the
+     * liveness reads judge the socket).
+     */
+    private fun startPings(connection: Long) {
+        pingJob?.cancel()
+        ping()
+        pingJob =
+            scope.launch {
+                while (true) {
+                    delay(PING_INTERVAL_MILLIS)
+                    if (connection != generation || !state.value.connected) return@launch
+                    if (!inBackground) ping()
+                }
+            }
+    }
+
+    private fun ping() {
+        if (!connectionRequestsOpen()) return
+        val payload = remotePingPayload(Wire.random())
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                pongResult(awaitConnectionReply(payload, PING_TIMEOUT_MILLIS, record = true))
+            } catch (_: CancellationException) {
+            } catch (_: RemoteRequestException) {
+                // Recorded with its round trip; a ping never ends the connection.
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.ping", swallowed)
+            }
+        }
     }
 
     /** A request's outcome for Diagnostics: the host's error code, or what ended the wait. */
@@ -2128,9 +2300,14 @@ class DefaultRemoteRepository(
         } catch (dropped: Exception) {
             Diagnostics.caught("repo.receive.compaction", dropped)
         }
+        // A live run that ends in the background lets the focus narrow.
+        if (inBackground && payload.optionalText("kind") == "session.status" && !state.value.loading) syncFocus()
     }
 
     private fun timelineEvent(current: Timeline, event: JsonObject) {
+        // Out of focus: the host leaves its upserts out, so its gaps mean nothing until the refocus
+        // resumes it.
+        if (current.detached) return
         try {
             // The snapshot select() set up takes in what this buffered; asking for another
             // one would only be discarded. A gap can be filled from the host's journal;
@@ -2550,9 +2727,13 @@ class DefaultRemoteRepository(
         if (!older) update { it.copy(tasks = staleTasks(it.tasks)) }
         var includedTasks = if (held != null && cursor == null) heldIncludesTasks else !older && canReadTasks()
         if (snapshotPending === current) snapshotPending = null
+        // A Timeline whose focus lapsed takes a fresh first page read with its session in focus
+        // again, its events held, in place of what it applied meanwhile; see [syncFocus].
+        val reread = !older && held == null && current.focusLapsed && inSentFocus(current.sessionId)
         // The resume base the request names; only a request with one may be answered by a replay.
         var base =
             when {
+                reread -> null
                 cursor != null -> null
                 held != null -> heldBase
                 intent == SnapshotIntent.RESUME -> current.resumeBase()
@@ -2566,12 +2747,17 @@ class DefaultRemoteRepository(
         var awaited = false
         // The request was answered and its reply handled; otherwise the exception propagates.
         var answered = false
+        // The first page the reread asked for replaced what the Timeline showed.
+        var replaced = false
         try {
+            // Cleared as the request goes out: a focus that excludes the session again while it is
+            // awaited lapses it again.
+            if (reread) current.focusLapsed = false
             // Live events of the session wait for the reply from here on (a held request's
             // Timeline already waits since select() made it). The `stale_cursor` recovery holds
             // them too: a live event applied before its reply would make the page outdated, so its
             // cursor, which the retry needs, would not be taken.
-            if (base != null || dropOlderPages) {
+            if (base != null || dropOlderPages || reread) {
                 current.awaitReply()
                 awaited = true
             }
@@ -2620,6 +2806,7 @@ class DefaultRemoteRepository(
                 refetch = !applyReplay(current, sessionEventsReply(data))
             } else {
                 val accepted = current.snapshot(data, older, keepOlder = !dropOlderPages) && !older
+                replaced = accepted
                 val sameSession = data.optionalText("sessionId") == current.sessionId
                 // The same epoch's snapshot at a lower revision: one from another epoch starts over.
                 val outdated = !older && sameSession && !accepted
@@ -2654,7 +2841,13 @@ class DefaultRemoteRepository(
             val drained = awaited && current.endAwaiting()
             if (drained && current === timeline) publishTimeline()
             if (epoch == selectionEpoch) resynchronizing = false
+            // A reread that failed leaves the Timeline lapsed for the next focus change or read.
+            val rereadFailed = reread && !replaced
+            if (rereadFailed) current.focusLapsed = true
             if (drained && !answered) afterFailedWait(current, epoch, heldArrivals)
+            // A focus that excluded the chat while this reply was awaited: the Timeline detaches now,
+            // or, back in focus, reads a fresh first page (not again right after a failed one).
+            if (!older && current.focusLapsed && current === timeline) syncFocus(readLapsed = !rereadFailed)
         }
         if (staleCursor) {
             checkEpoch(epoch)
@@ -2993,6 +3186,8 @@ class DefaultRemoteRepository(
             )
         }
         cacheCurrentScreen()
+        // Before the snapshot that follows: the focus names the chat now selected, or none.
+        syncFocus()
     }
 
     override suspend fun activate(
@@ -3377,6 +3572,8 @@ class DefaultRemoteRepository(
                     if (sessionsCached && state.value.selection.sessionId == null) revalidateSessions()
                 }
                 drainTaskRefresh()
+                // A focus sent for a chat this activation then did not select names the selection again.
+                syncFocus()
                 // A foreground or network signal that came in while this loaded runs now.
                 resumeDeferredRecovery()
             }
@@ -4266,7 +4463,18 @@ class DefaultRemoteRepository(
 
     override fun setForeground(foreground: Boolean) {
         val signal = recovery.foreground(foreground)
+        backgroundFocusTimer?.cancel()
+        backgroundFocusTimer = null
+        inBackground = !foreground
+        backgroundGraceOver = false
         if (!foreground) {
+            backgroundFocusTimer = scope.launch {
+                delay(BACKGROUND_FOCUS_GRACE_MILLIS)
+                backgroundFocusTimer = null
+                backgroundGraceOver = true
+                // An activation sends its own focus and syncs again once it selected; see [streamReady].
+                if (!state.value.loading) syncFocus()
+            }
             jobsController.setForeground(false)
             backgroundedAt = now()
             backgrounds++
@@ -4285,6 +4493,11 @@ class DefaultRemoteRepository(
             away?.let { Diagnostics.record(Diagnostics.Kind.RECOVERY, "foreground", it) }
             resume(signal)
         }
+        // After the tier: a reconnect it started leaves this to the next connection's capabilities,
+        // and a probe it started already refocused at its start (see [revalidate]), so this one
+        // finds nothing left to do. An activation in flight still names the screen it leaves, so it
+        // keeps the focus it sent and syncs once it selected.
+        if (!state.value.loading) syncFocus()
         // After the tier: a reconnect it starts lists the jobs once ready, so this one does not.
         jobsController.setForeground(true)
     }
@@ -4476,8 +4689,15 @@ class DefaultRemoteRepository(
     private suspend fun revalidate(selection: RemoteSelection, epoch: Long) {
         val host = activeHost?.takeIf { it.routeId == selection.routeId } ?: return
         val routeId = host.routeId
+        // The refocus goes first, whatever the scope's dispatcher: its session.focus must be on the
+        // wire before any resume, and the resume it sends for a detached chat makes the probe below
+        // use the list instead of a second resume.
+        syncFocus()
         val chat = timeline?.takeIf { selection.sessionId != null && it.sessionId == selection.sessionId }
         val before = chat?.let { it.revision to it.status }
+        // That resume runs on its own, so its reply may land after the probe's: the chat may still
+        // move after the comparison below.
+        val resumeElsewhere = chat != null && (chat.awaitingReply || snapshotPending === chat)
         val hint =
             scope.launch {
                 delay(RESUME_PROBE_HINT_MILLIS)
@@ -4487,7 +4707,10 @@ class DefaultRemoteRepository(
         val started = Diagnostics.now()
         var projects: List<JsonObject>? = null
         try {
-            if (chat != null) snapshot(epoch, timeoutMillis = RESUME_PROBE_TIMEOUT_MILLIS, intent = SnapshotIntent.RESUME)
+            // A chat that already waits for a resume or has a fresh read pending (its refocus sent
+            // or started one) is probed with the list.
+            if (chat != null && !resumeElsewhere)
+                snapshot(epoch, timeoutMillis = RESUME_PROBE_TIMEOUT_MILLIS, intent = SnapshotIntent.RESUME)
             else projects = request("projects.list", epoch, timeoutMillis = RESUME_PROBE_TIMEOUT_MILLIS).array("items")
             Diagnostics.record(Diagnostics.Kind.RECOVERY, "resume.probe", Diagnostics.now() - started, outcome = "ok")
         } catch (e: CancellationException) {
@@ -4502,7 +4725,7 @@ class DefaultRemoteRepository(
             if (state.value.connection == R.string.remote_checking_connection && state.value.connected)
                 update { it.copy(connection = R.string.remote_connected) }
         }
-        if (chat != null && chat === timeline && before != (chat.revision to chat.status)) {
+        if (chat != null && chat === timeline && (resumeElsewhere || before != (chat.revision to chat.status))) {
             refreshConfiguration()
             refreshAdvisor()
             refreshCommands()
@@ -6363,12 +6586,28 @@ class DefaultRemoteRepository(
         fields: Array<out Pair<String, Any?>>,
         timeoutMillis: Long,
         record: Boolean,
+    ): JsonObject =
+        awaitConnectionReply(Wire.objectOf("type" to type, "requestId" to requestId, *fields), timeoutMillis, record)
+
+    /**
+     * Sends [payload], a command with its `requestId`, bound to the connection, and waits for its
+     * result. With [liveness], a type in [LIVENESS_READS] that times out with no frame since it went
+     * out ends the connection as stale, as [request] does.
+     */
+    private suspend fun awaitConnectionReply(
+        payload: JsonObject,
+        timeoutMillis: Long,
+        record: Boolean,
+        liveness: Boolean = false,
     ): JsonObject {
-        val payload = Wire.objectOf("type" to type, "requestId" to requestId, *fields)
+        val requestId = payload.text("requestId")
+        val type = payload.text("type")
         recordIssuedRequest(requestId)
         val completion = CompletableDeferred<JsonObject>()
         connectionCompletions[requestId] = completion
         val started = Diagnostics.now()
+        val connection = generation
+        val inboundAtSend = inboundFrames
         var outcome = "failed"
         try {
             transport.send(payload)
@@ -6376,6 +6615,8 @@ class DefaultRemoteRepository(
                 withTimeoutOrNull(timeoutMillis) { completion.await() }
                     ?: run {
                         outcome = "timeout"
+                        if (liveness && type in LIVENESS_READS && inboundFrames == inboundAtSend && state.value.connected && connection == generation)
+                            connectionStale(type)
                         throw RemoteRequestException.timeout()
                     }
             outcome = "ok"

@@ -191,6 +191,14 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
     var detached = false
 
     /**
+     * The owner sent a focus without this session while the Timeline waited for a reply and so
+     * could not detach. Events it applied since may carry `after` over upserts that focus filtered,
+     * so its revision proves nothing: [resumeBase] is null until a first page read while the
+     * session is in focus again replaces what it shows.
+     */
+    var focusLapsed = false
+
+    /**
      * A resume request for this Timeline (or the first page of a `stale_cursor` recovery) is in
      * flight: events of its session wait in the buffer until the reply is applied, or the request
      * failed, and then apply each exactly once.
@@ -223,9 +231,11 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
 
     /**
      * Where a resume continues: the journal epoch and the last applied revision, or null when this
-     * Timeline has no snapshot or no epoch to name (the request then takes the fresh form).
+     * Timeline has no snapshot or no epoch to name, or its [focusLapsed] (the request then takes
+     * the fresh form).
      */
     internal fun resumeBase(): ResumeBase? {
+        if (focusLapsed) return null
         val epoch = journalEpoch ?: return null
         return if (hasSnapshot && revision >= 0) ResumeBase(epoch, revision) else null
     }
@@ -258,6 +268,7 @@ class Timeline(val sessionId: String, private val now: () -> Long = System::curr
         resumeOwed = false
         awaitingReply = false
         detached = false
+        focusLapsed = false
     }
 
     /** A request this Timeline's events wait for goes out now; see [awaitingReply]. */
