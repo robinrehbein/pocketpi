@@ -3,6 +3,7 @@ package de.joinnoah.pi.remote
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.currentTime
@@ -162,5 +163,135 @@ class QuestionUpgraderTest {
             QuestionUpgrader(state, backgroundAnswers = false, now = { currentTime }) { _, _ -> listOf(confirm) }
                 .run(host, push("e1")) { true }
         assertEquals(listOf(NotificationAction.AnswerInApp), (result as UpgradeResult.Post).content.actions)
+    }
+
+    // ---- The push's read uses the connection the wake started ----
+
+    @Test
+    fun theWakeWaitDoesNotTakeFromTheFallbacksSixSeconds() = runTest {
+        val state = FakeState()
+        recordPushEvent(state, push("e1"))
+        val waited = mutableListOf<Pair<String, Long>>()
+        // The wake never gets ready; the fallback needs 5 s, which fits the old budget only if the
+        // 3 s of waiting are not part of it.
+        val result =
+            QuestionUpgrader(
+                    state,
+                    backgroundAnswers = true,
+                    now = { currentTime },
+                    awaitWake = { route, max -> waited += route to max; delay(max) },
+                ) { _, _ ->
+                    delay(5_000)
+                    listOf(confirm)
+                }
+                .run(host, push("e1")) { true }
+        assertEquals("q", (result as UpgradeResult.Post).content.questionId)
+        assertEquals(listOf("r" to PUSH_WAKE_WAIT_MILLIS), waited)
+        assertEquals(PUSH_WAKE_WAIT_MILLIS + 5_000, currentTime)
+        assertNull(state.unreachable["r"])
+    }
+
+    @Test
+    fun theWakeWaitIsShortAfterAnUnreachableHost() = runTest {
+        val state = FakeState()
+        state.unreachable["r"] = 0
+        recordPushEvent(state, push("e1"))
+        val waited = mutableListOf<Long>()
+        QuestionUpgrader(
+                state,
+                backgroundAnswers = true,
+                now = { currentTime },
+                awaitWake = { _, max -> waited += max },
+            ) { _, _ -> listOf(confirm) }
+            .run(host, push("e1")) { true }
+        assertEquals(listOf(UNREACHABLE_FETCH_TIMEOUT_MILLIS / 2), waited)
+    }
+
+    @Test
+    fun aPushSupersededDuringTheWakeWaitFetchesNothing() = runTest {
+        val state = FakeState()
+        recordPushEvent(state, push("e1"))
+        var fetched = false
+        val result =
+            QuestionUpgrader(
+                    state,
+                    backgroundAnswers = true,
+                    now = { currentTime },
+                    awaitWake = { _, _ -> recordPushEvent(state, push("e2")) },
+                ) { _, _ ->
+                    fetched = true
+                    listOf(confirm)
+                }
+                .run(host, push("e1")) { true }
+        assertEquals(UpgradeResult.Superseded, result)
+        assertFalse(fetched)
+    }
+
+    private val commands =
+        object : MutationCommands {
+            override suspend fun request(type: String, vararg fields: Pair<String, Any?>) = Wire.objectOf()
+
+            override suspend fun mutate(requestId: String, type: String, vararg fields: Pair<String, Any?>) =
+                Wire.objectOf()
+        }
+
+    @Test
+    fun aPushReadWaitsForTheWakeAndUsesTheMainConnection() = runTest {
+        val log = mutableListOf<String>()
+        val result =
+            usingPushConnection<String>(
+                host,
+                awaitWake = { log += "wait:$it" },
+                live = { route, run -> log += "live:$route"; run(commands) },
+                background = { _, _ -> log += "background"; "background" },
+            ) { "main" }
+        assertEquals("main", result)
+        assertEquals(listOf("wait:r", "live:r"), log)
+    }
+
+    @Test
+    fun aPushReadFallsBackToItsOwnConnectionWhenTheMainOneIsNotHealthy() = runTest {
+        // Another Mac, a cold process or a connection that went all end withHealthyConnection in null.
+        val log = mutableListOf<String>()
+        val result =
+            usingPushConnection<String>(
+                host,
+                awaitWake = { log += "wait" },
+                live = { _, _ -> log += "live"; null },
+                background = { pairedHost, run -> log += "background:${pairedHost.routeId}"; run(commands) },
+            ) { "read" }
+        assertEquals("read", result)
+        assertEquals(listOf("wait", "live", "background:r"), log)
+    }
+
+    @Test
+    fun aPushReadWithoutARepositoryUsesItsOwnConnection() = runTest {
+        var background = 0
+        val result =
+            usingPushConnection<String>(
+                host,
+                awaitWake = {},
+                live = { _, _ -> null },
+                background = { _, _ -> background++; "own" },
+            ) { "main" }
+        assertEquals("own", result)
+        assertEquals(1, background)
+    }
+
+    @Test
+    fun aHostErrorOnTheMainConnectionIsNotRetriedOnAnother() = runTest {
+        var background = 0
+        val error =
+            runCatching {
+                    usingPushConnection<String>(
+                        host,
+                        awaitWake = {},
+                        live = { _, _ -> throw RemoteCommandException("not_found") },
+                        background = { _, _ -> background++; "own" },
+                    ) { "main" }
+                }
+                .exceptionOrNull()
+        assertTrue(error is RemoteCommandException)
+        assertEquals(0, background)
     }
 }

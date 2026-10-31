@@ -12,8 +12,15 @@ class RemoteTransportTest {
     private class Socket : WebSocket, WebSocket.Factory {
         lateinit var incoming: WebSocketListener
         lateinit var requestValue: Request
-        val sent = mutableListOf<String>()
+        val sent = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val sendThreads = java.util.Collections.synchronizedSet(mutableSetOf<Thread>())
         var cancelled = false
+
+        /** False once OkHttp would refuse frames: the socket is closing or failed. */
+        @Volatile var accepting = true
+
+        /** Whether [close] answers at once with `onClosed`, as when the relay echoes the close. */
+        var echoClose = true
 
         override fun newWebSocket(request: Request, listener: WebSocketListener): WebSocket {
             requestValue = request
@@ -26,6 +33,8 @@ class RemoteTransportTest {
         override fun queueSize() = 0L
 
         override fun send(text: String): Boolean {
+            if (!accepting) return false
+            sendThreads += Thread.currentThread()
             sent += text
             return true
         }
@@ -33,7 +42,8 @@ class RemoteTransportTest {
         override fun send(bytes: ByteString) = false
 
         override fun close(code: Int, reason: String?): Boolean {
-            incoming.onClosed(this, code, reason.orEmpty())
+            accepting = false
+            if (echoClose) incoming.onClosed(this, code, reason.orEmpty())
             return true
         }
 
@@ -41,7 +51,7 @@ class RemoteTransportTest {
             cancelled = true
         }
 
-        fun open() {
+        fun open(extensions: String? = null) {
             incoming.onOpen(
                 this,
                 Response.Builder()
@@ -49,6 +59,7 @@ class RemoteTransportTest {
                     .protocol(Protocol.HTTP_1_1)
                     .code(101)
                     .message("Switching Protocols")
+                    .apply { if (extensions != null) header("Sec-WebSocket-Extensions", extensions) }
                     .build(),
             )
         }
@@ -91,7 +102,11 @@ class RemoteTransportTest {
             events += "inbound"
         }
 
+        /** Thrown from [message] once set, as a listener with a bug would. */
+        var messageFailure: Exception? = null
+
         override fun message(payload: JsonObject) {
+            messageFailure?.let { throw it }
             events += "message"
             messages += payload
             messageThreads += Thread.currentThread()
@@ -101,6 +116,12 @@ class RemoteTransportTest {
 
         override fun broken() {
             brokenCount++
+        }
+
+        val closedCodes = mutableListOf<Int>()
+
+        override fun closed(code: Int) {
+            closedCodes += code
         }
 
         val reconnects = mutableListOf<Boolean>()
@@ -183,11 +204,12 @@ class RemoteTransportTest {
         capabilities: List<String> = emptyList(),
         socket: Socket = Socket(),
         listener: Listener = Listener { },
-        // Decodes on the test's scheduler, so runCurrent() also runs the decoding.
-        decoder: CoroutineDispatcher = StandardTestDispatcher(testScheduler),
+        // Seals on the test's scheduler, so runCurrent() also sends.
+        sender: CoroutineDispatcher = StandardTestDispatcher(testScheduler),
         created: (SecureRemoteTransport) -> Unit = {},
     ): Pair<Listener, SecureChannel> {
-        val transport = SecureRemoteTransport(backgroundScope, socket, decoder = decoder) { "Test device" }
+        val transport =
+            SecureRemoteTransport(backgroundScope, socket, sender = sender, clock = { testScheduler.currentTime }) { "Test device" }
             .also { it.listener = listener }
             .also(created)
         val deviceKey = Wire.random(32)
@@ -232,8 +254,8 @@ class RemoteTransportTest {
         return listener
     }
 
-    /** A decoder that runs nothing until the test says so, to look between receipt and decoding. */
-    private class HeldDecoder : CoroutineDispatcher() {
+    /** A dispatcher that runs nothing until the test says so, to look between a send and its seal. */
+    private class HeldDispatcher : CoroutineDispatcher() {
         val queued = ArrayDeque<Runnable>()
 
         override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
@@ -245,104 +267,131 @@ class RemoteTransportTest {
         }
     }
 
-    @Test
-    fun activeFramesDecodeOffTheScopeAndArriveInOrder() = runTest {
-        val socket = Socket()
-        val decoded = java.util.concurrent.atomic.AtomicInteger()
-        val decoderThread = java.util.concurrent.atomic.AtomicReference<Thread>()
-        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
-        val random = java.util.Random(7)
-        // One thread, as Dispatchers.Default.limitedParallelism(1), with a random pause per frame.
-        val decoder =
-            object : CoroutineDispatcher() {
-                override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
-                    val pause = synchronized(random) { random.nextInt(3).toLong() }
-                    executor.execute {
-                        Thread.sleep(pause)
-                        decoderThread.set(Thread.currentThread())
-                        decoded.incrementAndGet()
-                        block.run()
-                    }
-                }
-            }
-        try {
-            val (listener, server) = authenticated(socket = socket, decoder = decoder)
-            // The handshake never went through the decoder.
-            assertEquals(0, decoded.get())
-            val count = 200
-            repeat(count) { socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to it))) }
-            val deadline = System.currentTimeMillis() + 10_000
-            while (listener.messages.size < count && System.currentTimeMillis() < deadline) {
-                runCurrent()
-                Thread.sleep(1)
-            }
-
-            assertEquals((0 until count).toList(), listener.messages.map { it.long("n").toInt() })
-            assertEquals(count, decoded.get())
-            // Decoded on the decoder's thread, delivered on the scope's (the test's) thread.
-            assertNotEquals(Thread.currentThread(), decoderThread.get())
-            assertEquals(setOf(Thread.currentThread()), listener.messageThreads)
-            assertFalse(listener.failed)
-        } finally {
-            executor.shutdownNow()
-        }
-    }
-
-    @Test
-    fun inboundIsReportedAtReceiptBeforeTheFrameIsDecoded() = runTest {
-        val socket = Socket()
-        val decoder = HeldDecoder()
-        val (listener, server) = authenticated(socket = socket, decoder = decoder)
-        // Every handshake frame ran on the scope, none on the decoder.
-        assertTrue(decoder.queued.isEmpty())
-        assertEquals(HandshakePhase.ACTIVE, listener.phases.last())
-
-        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 1)))
-        runCurrent()
-        assertEquals(listOf("inbound"), listener.events)
-        assertEquals(1, decoder.queued.size)
-
-        decoder.runAll()
-        runCurrent()
-        assertEquals(listOf("inbound", "message"), listener.events)
-        assertEquals(1L, listener.messages.single().long("n"))
-    }
-
-    @Test
-    fun aCloseWaitsForTheFramesStillBeingDecoded() = runTest {
-        val socket = Socket()
-        val decoder = HeldDecoder()
-        val (listener, server) = authenticated(socket = socket, decoder = decoder)
-        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 1)))
-        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 2)))
-        runCurrent()
-        socket.incoming.onClosed(socket, 1012, "restart")
-        runCurrent()
-        assertFalse(listener.failed)
-
-        decoder.runAll()
-        runCurrent()
-        assertEquals(listOf("inbound", "inbound", "message", "message", "failed"), listener.events)
-        assertEquals(listOf(true), listener.reconnects)
-    }
+    private fun decodedFrames() = Diagnostics.report().frames?.count ?: 0
 
     private fun caughtEntries() = Diagnostics.report().entries.filter { it.kind == Diagnostics.Kind.CAUGHT }
 
     @Test
-    fun anUnreadableActiveFrameDropsTheFramesQueuedBehindIt() = runTest {
+    fun framesDecodeOnTheReaderThreadAndReachTheScopeInOrder() = runTest {
         val socket = Socket()
-        val decoder = HeldDecoder()
-        val (listener, server) = authenticated(socket = socket, decoder = decoder)
-        val broken = server.seal(Wire.objectOf("type" to "event", "n" to 1))
-        socket.receive(JsonObject(broken + ("ciphertext" to JsonPrimitive(Wire.random(48)))))
-        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 2)))
-        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 3)))
-        runCurrent()
+        val (listener, server) = authenticated(socket = socket)
+        val count = 200
+        val frames = (0 until count).map { server.seal(Wire.objectOf("type" to "event", "n" to it)).toString() }
         Diagnostics.clear()
+        try {
+            // OkHttp's reader thread for this socket.
+            val reader = Thread { frames.forEach { socket.incoming.onMessage(socket, it) } }
+            reader.start()
+            reader.join(10_000)
 
-        decoder.runAll()
+            // Every frame was decrypted and parsed on the reader thread; none reached the listener yet.
+            assertEquals(count, decodedFrames())
+            assertTrue(listener.events.isEmpty())
+
+            runCurrent()
+            assertEquals((0 until count).toList(), listener.messages.map { it.long("n").toInt() })
+            assertEquals(List(count) { listOf("inbound", "message") }.flatten(), listener.events)
+            // Delivered on the scope's (the test's) thread.
+            assertEquals(setOf(Thread.currentThread()), listener.messageThreads)
+            assertFalse(listener.failed)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun inboundIsHandedOverBeforeTheFrameIsDecoded() = runTest {
+        val socket = Socket()
+        val (listener, server) = authenticated(socket = socket)
+        assertEquals(HandshakePhase.ACTIVE, listener.phases.last())
+        // The handshake frames themselves never count as inbound.
+        assertTrue(listener.events.isEmpty())
+
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 1)))
         runCurrent()
-        assertEquals(listOf("inbound", "inbound", "inbound", "failed"), listener.events)
+        assertEquals(listOf("inbound", "message"), listener.events)
+
+        // A frame that cannot be decoded still reported its receipt first.
+        val broken = server.seal(Wire.objectOf("type" to "event", "n" to 2))
+        socket.receive(JsonObject(broken + ("ciphertext" to JsonPrimitive(Wire.random(48)))))
+        runCurrent()
+        assertEquals(listOf("inbound", "message", "inbound", "failed"), listener.events)
+        Diagnostics.clear()
+    }
+
+    @Test
+    fun aCloseAfterFramesDeliversTheFramesFirst() = runTest {
+        val socket = Socket()
+        val (listener, server) = authenticated(socket = socket)
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 1)))
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 2)))
+        socket.incoming.onClosed(socket, 1012, "restart")
+        assertFalse(listener.failed)
+
+        runCurrent()
+        assertEquals(listOf("inbound", "message", "inbound", "message", "failed"), listener.events)
+        assertEquals(listOf(1012), listener.closedCodes)
+        assertEquals(listOf(true), listener.reconnects)
+        Diagnostics.clear()
+    }
+
+    @Test
+    fun aFailureFromAnotherThreadIsHandledAfterEveryFrameAlreadyHandedOver() = runTest {
+        val socket = Socket()
+        val (listener, server) = authenticated(socket = socket)
+        val count = 400
+        // Large enough that the reader is usually in the middle of one when the failure arrives.
+        val frames =
+            (0 until count).map {
+                server.seal(Wire.objectOf("type" to "event", "n" to it, "pad" to "x".repeat(8_000))).toString()
+            }
+        val handedOver = java.util.concurrent.atomic.AtomicInteger()
+        val handedOverAtFailure = java.util.concurrent.atomic.AtomicInteger(-1)
+        val reader = Thread {
+            for (frame in frames) {
+                socket.incoming.onMessage(socket, frame)
+                handedOver.incrementAndGet()
+            }
+        }
+        // OkHttp's writer queue fails the socket on a missed pong while the reader still decodes.
+        val writer = Thread {
+            while (handedOver.get() < count / 4) Thread.yield()
+            handedOverAtFailure.set(handedOver.get())
+            socket.incoming.onFailure(socket, java.net.SocketTimeoutException("ping"), null)
+        }
+        reader.start()
+        writer.start()
+        val deadline = System.currentTimeMillis() + 20_000
+        while ((reader.isAlive || writer.isAlive) && System.currentTimeMillis() < deadline) {
+            runCurrent()
+            Thread.sleep(1)
+        }
+        runCurrent()
+
+        val delivered = listener.messages.map { it.long("n").toInt() }
+        // Every frame handed over before the failure arrived, in order, and only then the failure.
+        assertTrue(handedOverAtFailure.get() >= count / 4)
+        assertTrue("${delivered.size} < ${handedOverAtFailure.get()}", delivered.size >= handedOverAtFailure.get())
+        assertEquals((0 until delivered.size).toList(), delivered)
+        assertEquals("failed", listener.events.last())
+        assertEquals(1, listener.failureCount)
+        assertEquals(0, listener.brokenCount)
+        Diagnostics.clear()
+    }
+
+    @Test
+    fun anUnreadableFrameDropsTheFramesBehindItUnparsed() = runTest {
+        val socket = Socket()
+        val (listener, server) = authenticated(socket = socket)
+        val broken = server.seal(Wire.objectOf("type" to "event", "n" to 1))
+        val behind = (2..3).map { server.seal(Wire.objectOf("type" to "event", "n" to it)) }
+        Diagnostics.clear()
+        socket.receive(JsonObject(broken + ("ciphertext" to JsonPrimitive(Wire.random(48)))))
+        behind.forEach(socket::receive)
+        assertEquals(0, decodedFrames())
+
+        runCurrent()
+        assertEquals(listOf("inbound", "failed"), listener.events)
         assertEquals(1, listener.brokenCount)
         assertTrue(listener.messages.isEmpty())
         // The unreadable frame is recorded once; the frames behind it add nothing.
@@ -351,24 +400,372 @@ class RemoteTransportTest {
     }
 
     @Test
-    fun aLocalCloseDropsQueuedFramesWithoutRecordingThem() = runTest {
+    fun aLocalCloseDropsDecodedFramesAndParsesNoMore() = runTest {
         val socket = Socket()
-        val decoder = HeldDecoder()
         var transport: SecureRemoteTransport? = null
-        val (listener, server) = authenticated(socket = socket, decoder = decoder, created = { transport = it })
+        val (listener, server) = authenticated(socket = socket, created = { transport = it })
         repeat(3) { socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to it))) }
-        runCurrent()
+        val late = server.seal(Wire.objectOf("type" to "event", "n" to 3))
         Diagnostics.clear()
 
-        // A host switch or a move to the background closes while frames wait for the decoder.
+        // A host switch or a move to the background closes while decoded frames wait for the scope.
         checkNotNull(transport).close()
-        decoder.runAll()
+        // A frame the reader thread gets after the close is not parsed, valid or not.
+        socket.receive(late)
+        socket.incoming.onMessage(socket, "not json")
         runCurrent()
-        assertEquals(listOf("inbound", "inbound", "inbound"), listener.events)
+        assertEquals(0, decodedFrames())
+        assertTrue(listener.events.isEmpty())
         assertEquals(0, listener.brokenCount)
         assertFalse(listener.failed)
         assertTrue(caughtEntries().isEmpty())
         Diagnostics.clear()
+    }
+
+    @Test
+    fun payloadsAreSealedAndSentOnTheSenderInCallOrder() = runTest {
+        val socket = Socket()
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            var transport: SecureRemoteTransport? = null
+            val (listener, server) =
+                authenticated(socket = socket, sender = executor.asCoroutineDispatcher(), created = { transport = it })
+            val before = socket.sent.size
+            val count = 100
+            repeat(count) { checkNotNull(transport).send(Wire.objectOf("type" to "steer", "n" to it)) }
+            val deadline = System.currentTimeMillis() + 10_000
+            while (socket.sent.size < before + count && System.currentTimeMillis() < deadline) Thread.sleep(1)
+
+            val payloads = socket.sent.drop(before).map { server.open(Wire.parse(it)) }
+            assertEquals((0 until count).toList(), payloads.map { it.long("n").toInt() })
+            // The handshake sealed its own frames on the scope; every payload left from the sender.
+            val senderThreads = socket.sendThreads - Thread.currentThread()
+            assertEquals(1, senderThreads.size)
+            assertFalse(listener.failed)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun sendReturnsBeforeSealingAndQueuedPayloadsDieWithALocalClose() = runTest {
+        val socket = Socket()
+        val sender = HeldDispatcher()
+        var transport: SecureRemoteTransport? = null
+        val (listener, server) = authenticated(socket = socket, sender = sender, created = { transport = it })
+        sender.runAll()
+        val before = socket.sent.size
+
+        checkNotNull(transport).send(Wire.objectOf("type" to "steer", "n" to 1))
+        assertEquals(before, socket.sent.size)
+        sender.runAll()
+        runCurrent()
+        assertEquals(1L, server.open(Wire.parse(socket.sent.last())).long("n"))
+
+        checkNotNull(transport).send(Wire.objectOf("type" to "steer", "n" to 2))
+        checkNotNull(transport).close()
+        sender.runAll()
+        runCurrent()
+        assertEquals(before + 1, socket.sent.size)
+        assertFalse(listener.failed)
+        assertEquals(0, listener.brokenCount)
+    }
+
+    @Test
+    fun sendBeforeTheHandshakeEndsIsRefused() = runTest {
+        val socket = Socket()
+        val listener = Listener { }
+        val transport = SecureRemoteTransport(backgroundScope, socket) { "Test device" }.also { it.listener = listener }
+        transport.connect(PairedHost(Wire.random(), "https://relay.test", Wire.random(), Wire.random(32), "Host"))
+        socket.open()
+        runCurrent()
+        assertThrows(IllegalStateException::class.java) { transport.send(Wire.objectOf("type" to "steer")) }
+    }
+
+    @Test
+    fun aSealFailureBreaksTheConnection() = runTest {
+        val socket = Socket()
+        var transport: SecureRemoteTransport? = null
+        val (listener, _) = authenticated(socket = socket, created = { transport = it })
+        val before = socket.sent.size
+        Diagnostics.clear()
+
+        checkNotNull(transport).send(Wire.objectOf("type" to "steer", "text" to "x".repeat(Wire.MAX_PLAINTEXT)))
+        runCurrent()
+        assertEquals(before, socket.sent.size)
+        assertEquals(1, listener.brokenCount)
+        assertEquals(listOf(true), listener.reconnects)
+        assertEquals(listOf("transport.send"), caughtEntries().map { it.label })
+        assertTrue(socket.cancelled)
+        Diagnostics.clear()
+    }
+
+    @Test
+    fun aRefusedSendIsALostConnectionNotABrokenOne() = runTest {
+        Diagnostics.clear()
+        try {
+            val socket = Socket()
+            var transport: SecureRemoteTransport? = null
+            val (listener, _) = authenticated(socket = socket, created = { transport = it })
+            socket.accepting = false
+
+            checkNotNull(transport).send(Wire.objectOf("type" to "steer"))
+            runCurrent()
+            assertEquals(listOf(true), listener.reconnects)
+            assertEquals(0, listener.brokenCount)
+            assertTrue(listener.closedCodes.isEmpty())
+            assertEquals(
+                listOf("failure.send"),
+                Diagnostics.report().entries.filter { it.kind == Diagnostics.Kind.FAILURE }.map { it.outcome },
+            )
+            assertTrue(caughtEntries().isEmpty())
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun aSendRefusedWhileTheRelayClosesReportsTheRelaysCode() = runTest {
+        val socket = Socket()
+        var transport: SecureRemoteTransport? = null
+        val (listener, _) = authenticated(socket = socket, created = { transport = it })
+        // The relay's close frame arrived; OkHttp answers it and refuses frames until onClosed.
+        socket.echoClose = false
+        socket.incoming.onClosing(socket, 1012, "Relay restart")
+
+        checkNotNull(transport).send(Wire.objectOf("type" to "steer"))
+        runCurrent()
+        assertEquals(listOf(1012), listener.closedCodes)
+        assertEquals(listOf(true), listener.reconnects)
+        assertEquals(0, listener.brokenCount)
+
+        // OkHttp's own onClosed afterwards adds nothing.
+        socket.incoming.onClosed(socket, 1012, "Relay restart")
+        runCurrent()
+        assertEquals(1, listener.failureCount)
+        Diagnostics.clear()
+    }
+
+    /** A device connection that took the challenge; returns the Mac's end of the channel. */
+    private fun TestScope.untilReady(transport: SecureRemoteTransport, socket: Socket): SecureChannel {
+        val deviceKey = Wire.random(32)
+        transport.connect(PairedHost(Wire.random(), "https://relay.test", Wire.random(), deviceKey, "Host"))
+        socket.open()
+        runCurrent()
+        val hello = Wire.parse(socket.sent.single())
+        val nonce = Wire.random(32)
+        socket.receive(Wire.objectOf("v" to 1, "type" to "challenge",
+            "connectionId" to hello.text("connectionId"), "serverNonce" to nonce))
+        runCurrent()
+        return SecureChannel(deviceKey, JsonObject(hello + ("serverNonce" to JsonPrimitive(nonce))), false)
+    }
+
+    @Test
+    fun aRefusedHandshakeFrameIsALostConnectionNotABrokenOne() = runTest {
+        Diagnostics.clear()
+        try {
+            val socket = Socket()
+            val listener = Listener { }
+            val transport = SecureRemoteTransport(backgroundScope, socket) { "Test device" }
+                .also { it.listener = listener }
+            val server = untilReady(transport, socket)
+            socket.accepting = false
+
+            socket.receive(server.seal(Wire.objectOf("type" to "ready", "mode" to "device")))
+            runCurrent()
+            assertEquals(listOf(true), listener.reconnects)
+            assertEquals(0, listener.brokenCount)
+            assertTrue(listener.closedCodes.isEmpty())
+            assertEquals(HandshakePhase.READY, listener.phases.last())
+            assertEquals("failure.send", Diagnostics.report().connects.single().outcome)
+            assertTrue(caughtEntries().isEmpty())
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun aHandshakeFrameRefusedWhileTheRelayClosesReportsTheRelaysCode() = runTest {
+        val socket = Socket()
+        val listener = Listener { }
+        val transport = SecureRemoteTransport(backgroundScope, socket) { "Test device" }
+            .also { it.listener = listener }
+        val server = untilReady(transport, socket)
+        // The relay forwards ready, then restarts; OkHttp refuses device.authenticate.
+        socket.echoClose = false
+        socket.receive(server.seal(Wire.objectOf("type" to "ready", "mode" to "device")))
+        socket.incoming.onClosing(socket, 1012, "Relay restart")
+        runCurrent()
+        assertEquals(listOf(1012), listener.closedCodes)
+        assertEquals(listOf(true), listener.reconnects)
+        assertEquals(0, listener.brokenCount)
+
+        socket.incoming.onClosed(socket, 1012, "Relay restart")
+        runCurrent()
+        assertEquals(1, listener.failureCount)
+        Diagnostics.clear()
+    }
+
+    @Test
+    fun aRefusedPairingAcknowledgementIsNotAStorageError() = runTest {
+        val socket = Socket()
+        val stored = CompletableDeferred<Unit>()
+        val listener = Listener { stored.await() }
+        val transport = SecureRemoteTransport(backgroundScope, socket) { "Test device" }
+            .also { it.listener = listener }
+        approve(transport, socket)
+        socket.echoClose = false
+        socket.incoming.onClosing(socket, 1001, "Going away")
+        stored.complete(Unit)
+        runCurrent()
+        assertEquals(2, socket.sent.size)
+        assertFalse(listener.paired)
+        assertEquals(0, listener.brokenCount)
+        assertEquals(listOf(1001), listener.closedCodes)
+        assertEquals(listOf(R.string.remote_connection_error), listener.errors)
+        assertEquals(listOf(false), listener.reconnects)
+        Diagnostics.clear()
+    }
+
+    @Test
+    fun aListenerThatThrowsBreaksTheConnectionInsteadOfStallingIt() = runTest {
+        Diagnostics.clear()
+        try {
+            val socket = Socket()
+            val (listener, server) = authenticated(socket = socket)
+            listener.messageFailure = IllegalStateException("listener bug")
+            socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 1)))
+            socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 2)))
+            runCurrent()
+            // The exception never reached the scope (runTest would fail); the connection broke once.
+            assertEquals(listOf("inbound", "failed"), listener.events)
+            assertEquals(1, listener.brokenCount)
+            assertEquals(listOf(true), listener.reconnects)
+            assertEquals(listOf("transport.message"), caughtEntries().map { it.label })
+            assertTrue(socket.cancelled)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun noChallengeWithinTenSecondsFailsAsRetryable() = runTest {
+        val socket = Socket()
+        val listener = Listener { }
+        SecureRemoteTransport(backgroundScope, socket) { "Test device" }
+            .also { it.listener = listener }
+            .connect(PairedHost(Wire.random(), "https://relay.test", Wire.random(), Wire.random(32), "Host"))
+        socket.open()
+        runCurrent()
+        advanceTimeBy(CHALLENGE_TIMEOUT_MILLIS - 1)
+        runCurrent()
+        assertFalse(listener.failed)
+
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(true), listener.reconnects)
+        assertEquals(listOf(R.string.remote_connection_error), listener.errors)
+        assertTrue(socket.cancelled)
+        Diagnostics.clear()
+    }
+
+    @Test
+    fun aChallengeInTimeLeavesTheRestToTheHandshakeTimeout() = runTest {
+        Diagnostics.clear()
+        Diagnostics.clock = { testScheduler.currentTime }
+        try {
+            val socket = Socket()
+            val listener = Listener { }
+            SecureRemoteTransport(backgroundScope, socket) { "Test device" }
+                .also { it.listener = listener }
+                .connect(PairedHost(Wire.random(), "https://relay.test", Wire.random(), Wire.random(32), "Host"))
+            socket.open()
+            runCurrent()
+            advanceTimeBy(CHALLENGE_TIMEOUT_MILLIS - 1)
+            val hello = Wire.parse(socket.sent.single())
+            socket.receive(
+                Wire.objectOf(
+                    "v" to 1,
+                    "type" to "challenge",
+                    "connectionId" to hello.text("connectionId"),
+                    "serverNonce" to Wire.random(32),
+                )
+            )
+            runCurrent()
+            advanceTimeBy(HANDSHAKE_TIMEOUT_MILLIS - CHALLENGE_TIMEOUT_MILLIS)
+            runCurrent()
+            assertFalse(listener.failed)
+
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(listOf(true), listener.reconnects)
+            assertEquals("timeout.ready", Diagnostics.report().connects.single().outcome)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun aChallengeTakenByTheReaderBeforeTheDeadlineRunsIsInTime() = runTest {
+        Diagnostics.clear()
+        Diagnostics.clock = { testScheduler.currentTime }
+        try {
+            val socket = Socket()
+            val listener = Listener { }
+            SecureRemoteTransport(backgroundScope, socket) { "Test device" }
+                .also { it.listener = listener }
+                .connect(PairedHost(Wire.random(), "https://relay.test", Wire.random(), Wire.random(32), "Host"))
+            socket.open()
+            runCurrent()
+            // The clock reaches the deadline, but its timer has not run yet: a busy main thread.
+            advanceTimeBy(CHALLENGE_TIMEOUT_MILLIS)
+            val hello = Wire.parse(socket.sent.single())
+            // The reader takes the challenge; its lane task queues behind the due timer.
+            socket.receive(
+                Wire.objectOf(
+                    "v" to 1,
+                    "type" to "challenge",
+                    "connectionId" to hello.text("connectionId"),
+                    "serverNonce" to Wire.random(32),
+                )
+            )
+            runCurrent()
+            assertFalse(listener.failed)
+            assertEquals(HandshakePhase.READY, listener.phases.last())
+
+            advanceTimeBy(HANDSHAKE_TIMEOUT_MILLIS - CHALLENGE_TIMEOUT_MILLIS)
+            runCurrent()
+            assertEquals(listOf(true), listener.reconnects)
+            assertEquals("timeout.ready", Diagnostics.report().connects.single().outcome)
+        } finally {
+            Diagnostics.clear()
+        }
+    }
+
+    @Test
+    fun theNegotiatedExtensionsAreRecorded() = runTest {
+        Diagnostics.clear()
+        try {
+            for (header in listOf("permessage-deflate", "permessage-deflate; server_no_context_takeover, x weird", null)) {
+                val socket = Socket()
+                val listener = Listener { }
+                SecureRemoteTransport(backgroundScope, socket) { "Test device" }
+                    .also { it.listener = listener }
+                    .connect(PairedHost(Wire.random(), "https://relay.test", Wire.random(), Wire.random(32), "Host"))
+                socket.open(header)
+                runCurrent()
+            }
+
+            assertEquals(
+                // Newest first.
+                listOf(emptyList(), listOf("permessage-deflate", "redacted"), listOf("permessage-deflate")),
+                Diagnostics.report().connects.map { it.extensions },
+            )
+            assertTrue(Diagnostics.export().contains("ext=permessage-deflate"))
+            assertFalse(Diagnostics.export().contains("server_no_context_takeover"))
+        } finally {
+            Diagnostics.clear()
+        }
     }
 
     private val deviceAccess =
@@ -453,7 +850,7 @@ class RemoteTransportTest {
     }
 
     @Test
-    fun stalledHandshakeRecordsTheSilentPhaseAsItsCause() = runTest {
+    fun aMissingChallengeRecordsTheSilentPhaseAsItsCause() = runTest {
         Diagnostics.clear()
         Diagnostics.clock = { testScheduler.currentTime }
         try {
@@ -465,15 +862,15 @@ class RemoteTransportTest {
             advanceTimeBy(300)
             socket.open()
             runCurrent()
-            advanceTimeBy(HANDSHAKE_TIMEOUT_MILLIS)
+            advanceTimeBy(CHALLENGE_TIMEOUT_MILLIS)
             runCurrent()
 
             assertEquals(listOf(HandshakePhase.OPENING, HandshakePhase.CHALLENGE), listener.phases)
             val connect = Diagnostics.report().connects.single()
             assertEquals("timeout.challenge", connect.outcome)
-            assertEquals(HANDSHAKE_TIMEOUT_MILLIS, connect.durationMs)
+            assertEquals(300 + CHALLENGE_TIMEOUT_MILLIS, connect.durationMs)
             assertEquals(
-                listOf(HandshakePhase.OPENING to 300L, HandshakePhase.CHALLENGE to HANDSHAKE_TIMEOUT_MILLIS - 300),
+                listOf(HandshakePhase.OPENING to 300L, HandshakePhase.CHALLENGE to CHALLENGE_TIMEOUT_MILLIS),
                 connect.breakdown(),
             )
         } finally {
@@ -811,5 +1208,140 @@ class RemoteTransportTest {
         advanceTimeBy(100000)
         runCurrent()
         assertEquals(1, listener.failureCount)
+    }
+
+    /** What the app sent after `device.authenticate`, decrypted in order by the Mac's end. */
+    private class Outbound(private val server: SecureChannel, private val socket: Socket) {
+        private var read = 2
+
+        fun take(): List<JsonObject> {
+            val frames = synchronized(socket.sent) { socket.sent.drop(read).also { read += it.size } }
+            return frames.map { server.open(Wire.parse(it)) }
+        }
+
+        fun acks(): List<Long> = take().filter { it.text("type") == "remote.ack" }.map { it.long("seq") }
+    }
+
+    /** A frame of about 27 000 characters, so two of them pass [ACK_BYTES]. */
+    private fun bigEvent(server: SecureChannel, n: Int) =
+        server.seal(Wire.objectOf("type" to "event", "n" to n, "pad" to "x".repeat(20_000)))
+
+    @Test
+    fun acksStartWithTheFocusAndNameTheHighestDecryptedSequence() = runTest {
+        val socket = Socket()
+        lateinit var transport: SecureRemoteTransport
+        val (_, server) = authenticated(socket = socket, created = { transport = it })
+        val outbound = Outbound(server, socket)
+        // Without the focus the connection is legacy: nothing is acknowledged, however much arrives.
+        repeat(4) { socket.receive(bigEvent(server, it)) }
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertTrue(outbound.take().isEmpty())
+
+        transport.send(sessionFocusPayload("focus-1", listOf("session")))
+        runCurrent()
+        val sent = outbound.take()
+        // ready is 0, device.authenticated 1, then the four events: 2 to 5.
+        assertEquals(listOf("session.focus", "remote.ack"), sent.map { it.text("type") })
+        assertEquals(remoteAckPayload(5), sent[1])
+
+        // A second focus starts nothing new.
+        transport.send(sessionFocusPayload("focus-2", emptyList()))
+        runCurrent()
+        assertEquals(listOf("session.focus"), outbound.take().map { it.text("type") })
+    }
+
+    @Test
+    fun acksFollowTheByteIntervalAndIdleRules() = runTest {
+        val socket = Socket()
+        lateinit var transport: SecureRemoteTransport
+        val (_, server) = authenticated(socket = socket, created = { transport = it })
+        val outbound = Outbound(server, socket)
+        transport.send(sessionFocusPayload("focus", listOf("session")))
+        runCurrent()
+        assertEquals(listOf(1L), outbound.acks())
+
+        // Past ACK_BYTES at once, but the last ack is not ACK_INTERVAL_MILLIS old yet.
+        socket.receive(bigEvent(server, 0))
+        socket.receive(bigEvent(server, 1))
+        runCurrent()
+        assertTrue(outbound.acks().isEmpty())
+        advanceTimeBy(ACK_INTERVAL_MILLIS - 1)
+        runCurrent()
+        socket.receive(bigEvent(server, 2))
+        runCurrent()
+        assertTrue(outbound.acks().isEmpty())
+        advanceTimeBy(1)
+        runCurrent()
+        socket.receive(bigEvent(server, 3))
+        runCurrent()
+        assertEquals(listOf(5L), outbound.acks())
+
+        // A small frame waits for the trailing ack, ACK_IDLE_MILLIS after it.
+        advanceTimeBy(100)
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 4)))
+        advanceTimeBy(ACK_IDLE_MILLIS - 1)
+        runCurrent()
+        assertTrue(outbound.acks().isEmpty())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(6L), outbound.acks())
+
+        // Each frame moves the trailing ack on, so it follows the last one.
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 5)))
+        advanceTimeBy(600)
+        runCurrent()
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 6)))
+        advanceTimeBy(ACK_IDLE_MILLIS - 1)
+        runCurrent()
+        assertTrue(outbound.acks().isEmpty())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf(8L), outbound.acks())
+
+        // Nothing unacknowledged: no trailing ack.
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertTrue(outbound.acks().isEmpty())
+    }
+
+    @Test
+    fun aSmallSteadyStreamIsAcknowledgedOnceItPassesTheByteThreshold() = runTest {
+        val socket = Socket()
+        lateinit var transport: SecureRemoteTransport
+        val (_, server) = authenticated(socket = socket, created = { transport = it })
+        val outbound = Outbound(server, socket)
+        transport.send(sessionFocusPayload("focus", listOf("session")))
+        runCurrent()
+        outbound.take()
+        var received = 0L
+        var sequence = 1L
+        // One frame every 100 ms, never quiet for ACK_IDLE_MILLIS: only the byte rule acks.
+        while (received < ACK_BYTES) {
+            advanceTimeBy(100)
+            runCurrent()
+            assertTrue(outbound.acks().isEmpty())
+            val frame = server.seal(Wire.objectOf("type" to "event", "pad" to "y".repeat(2_000)))
+            received += frame.toString().length
+            sequence++
+            socket.receive(frame)
+        }
+        runCurrent()
+        assertEquals(listOf(sequence), outbound.acks())
+    }
+
+    @Test
+    fun noAckLeavesAfterTheConnectionClosed() = runTest {
+        val socket = Socket()
+        lateinit var transport: SecureRemoteTransport
+        val (_, server) = authenticated(socket = socket, created = { transport = it })
+        transport.send(sessionFocusPayload("focus", listOf("session")))
+        runCurrent()
+        socket.receive(server.seal(Wire.objectOf("type" to "event", "n" to 1)))
+        val count = socket.sent.size
+        transport.close()
+        advanceTimeBy(ACK_IDLE_MILLIS * 3)
+        runCurrent()
+        assertEquals(count, socket.sent.size)
     }
 }

@@ -296,6 +296,8 @@ internal fun ConversationMessage(
     /** The keyboard asked for this bubble's rewind menu; [onForkMenuRequestHandled] takes the request. */
     forkMenuRequested: Boolean = false,
     onForkMenuRequestHandled: () -> Unit = {},
+    /** Takes back the prompt that waits for the connection; the queued bubble offers it when set. */
+    onCancelQueued: (() -> Unit)? = null,
 ) {
     // A bubble draws the outline along its own shape; other items get it around their box.
     Box(Modifier.jumpHighlight(highlighted && item !is ConversationItem.Bubble)) {
@@ -315,6 +317,7 @@ internal fun ConversationMessage(
             copyButton,
             forkMenuRequested,
             onForkMenuRequestHandled,
+            onCancelQueued,
         )
     }
 }
@@ -337,6 +340,7 @@ private fun ConversationMessageContent(
     copyButton: Boolean,
     forkMenuRequested: Boolean,
     onForkMenuRequestHandled: () -> Unit,
+    onCancelQueued: (() -> Unit)?,
 ) {
     val quoteLabel = stringResource(R.string.remote_quote)
     val forkLabel = stringResource(R.string.remote_fork_action)
@@ -575,7 +579,7 @@ private fun ConversationMessageContent(
                                 }
                             }
                         }
-                        item.pendingState?.let { PendingSendLabel(item.id, it) }
+                        item.pendingState?.let { PendingSendLabel(item.id, it, onCancelQueued) }
                         if (!outgoing && item.role == "assistant") item.usage?.let { UsageCaption(it) }
                     }
                     // Over the bubble's top corner, so showing it never moves the chat.
@@ -983,20 +987,40 @@ private val TRUNCATED_LINK = Regex("\\[([^]\\n]+)]\\(https?://[^)\\s]*$")
 
 internal fun subagentPreviewText(preview: String): String = preview.replace(TRUNCATED_LINK, "$1…")
 
-/** Under a pending prompt: "Sending…" while it is on its way, "Not confirmed" once it may not have left. */
+/**
+ * Under a pending prompt: "Queued, sends when connected" with a cancel action while it waits for the
+ * connection, "Sending…" while it is on its way, "Not confirmed" once it may not have left.
+ */
 @Composable
-private fun PendingSendLabel(id: String, state: PendingSendState) {
+private fun PendingSendLabel(id: String, state: PendingSendState, onCancelQueued: (() -> Unit)?) {
     if (state == PendingSendState.CONFIRMED) return
     val failed = state == PendingSendState.NOT_CONFIRMED
-    Text(
-        stringResource(if (failed) R.string.remote_prompt_not_confirmed else R.string.remote_prompt_sending),
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp).testTag("pendingSendLabel-$id"),
-        style = MaterialTheme.typography.labelSmall,
-        color =
-            if (failed) MaterialTheme.colorScheme.error
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-        textAlign = androidx.compose.ui.text.style.TextAlign.End,
-    )
+    val queued = state == PendingSendState.QUEUED
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.End,
+    ) {
+        Text(
+            stringResource(
+                when {
+                    failed -> R.string.remote_prompt_not_confirmed
+                    queued -> R.string.remote_prompt_queued
+                    else -> R.string.remote_prompt_sending
+                }
+            ),
+            Modifier.testTag("pendingSendLabel-$id"),
+            style = MaterialTheme.typography.labelSmall,
+            color =
+                if (failed) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+        )
+        if (queued && onCancelQueued != null)
+            TextButton(onClick = onCancelQueued, modifier = Modifier.testTag("cancelQueued-$id")) {
+                Text(stringResource(R.string.remote_cancel), style = MaterialTheme.typography.labelSmall)
+            }
+    }
 }
 
 @Composable

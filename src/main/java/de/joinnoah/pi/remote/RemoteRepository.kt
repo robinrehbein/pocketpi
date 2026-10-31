@@ -72,6 +72,12 @@ enum class ActivationMode {
 
 /** Where a plain prompt stands between tapping send and the host's timeline having it. */
 enum class PendingSendState {
+    /**
+     * Typed while the connection was down: journaled and kept here until the reconnect shows that
+     * the chat did not move on, then sent. It has not left the phone.
+     */
+    QUEUED,
+
     /** Journaled and on its way; the host has not answered yet. */
     SENDING,
 
@@ -87,6 +93,7 @@ enum class PendingSendState {
  * for this run only; after a restart the unresolved send is back in the composer instead.
  * [afterMessageId] is the newest message the chat showed when the prompt was sent: only messages
  * after it can be the host's copy of this prompt, so an identical earlier prompt never matches.
+ * [queuedAt] (repository clock) is set for a [PendingSendState.QUEUED] prompt, which expires.
  */
 data class PendingSend(
     val mutationId: String,
@@ -95,6 +102,7 @@ data class PendingSend(
     val attachments: List<LocalAttachment>,
     val state: PendingSendState,
     val afterMessageId: String? = null,
+    val queuedAt: Long? = null,
 )
 
 data class RemoteState(
@@ -233,6 +241,15 @@ internal const val HEALTHY_CONNECTION_MILLIS = 25_000L
 /** How long a notification's request waits on the app's connection before it uses its own. */
 internal const val HEALTHY_REQUEST_TIMEOUT_MILLIS = 3_000L
 
+/**
+ * After an FCM push for the Mac the app is connected to, a backgrounded process may reconnect for
+ * this long, with the focus none; then it closes the socket again unless a live run needs it.
+ */
+internal const val PUSH_WAKE_WINDOW_MILLIS = 60_000L
+
+/** How long a push's upgrade worker waits for the connection the wake started before it opens its own. */
+internal const val PUSH_WAKE_WAIT_MILLIS = 3_000L
+
 /** One content URI to attach; [photo] imports it as an image (scaled JPEG), otherwise as a file. */
 data class Picked(val uri: String, val photo: Boolean)
 
@@ -272,6 +289,21 @@ interface RemoteRepository {
         onSent: () -> Unit = {},
         block: suspend (MutationCommands) -> T,
     ): T? = null
+
+    /**
+     * An FCM push arrived for [routeId]. When this process already has that Mac active, is not
+     * connected, may reconnect and has a network, a reconnect starts in the background and a
+     * window of [PUSH_WAKE_WINDOW_MILLIS] opens, so the push's upgrade can use the main
+     * connection. Does nothing otherwise, on a cold process included. Call it on the main thread.
+     */
+    fun pushWake(routeId: String) {}
+
+    /**
+     * Waits up to [maxMillis] for the connection a [pushWake] for [routeId] started to be usable by
+     * [withHealthyConnection]; returns at once when no wake window is open or it already is. Any thread may
+     * call it.
+     */
+    suspend fun awaitPushWake(routeId: String, maxMillis: Long = PUSH_WAKE_WAIT_MILLIS) {}
 
     /**
      * Starts a new session that continues from just before the user message [messageId] of the
@@ -386,6 +418,12 @@ interface RemoteRepository {
     fun selectCommand(command: RemoteCommand) {}
 
     fun prompt()
+
+    /**
+     * Takes back the plain prompt that waits for the connection ([PendingSendState.QUEUED]): its
+     * text returns to the composer and nothing is sent.
+     */
+    fun cancelQueuedPrompt() {}
 
     fun followUp() {}
 

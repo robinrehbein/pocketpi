@@ -30,6 +30,97 @@ class ProtocolTest {
     }
 
     @Test
+    fun theReusedCipherSealsEveryFrameAsAFreshOneWould() {
+        val f = fixture()
+        val context = f.obj("context")
+        val keys = Wire.derive(f.text("secret"), context)
+        for (direction in listOf("c2h", "h2c")) {
+            val vector = f.obj("vectors").obj(direction)
+            val key = javax.crypto.spec.SecretKeySpec(if (direction == "c2h") keys.first else keys.second, "AES")
+            val sender = SecureChannel(f.text("secret"), context, direction == "c2h")
+            val receiver = SecureChannel(f.text("secret"), context, direction != "c2h")
+            val plain = Wire.json.parseToJsonElement(vector.text("plaintext")).jsonObject
+            for (seq in 0L until 6) {
+                val payload = if (seq == 0L) plain else Wire.objectOf("type" to "event", "n" to seq)
+                val sealed = sender.seal(payload)
+                // The reference: a new Cipher per frame with Wire.aad, as before the reuse.
+                val fresh = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+                fresh.init(javax.crypto.Cipher.ENCRYPT_MODE, key, javax.crypto.spec.GCMParameterSpec(128, Wire.nonce(seq)))
+                fresh.updateAAD(Wire.aad(context, direction, seq))
+                val expected = Wire.encode(fresh.doFinal(payload.toString().toByteArray()))
+                assertEquals(seq, sealed.long("seq"))
+                assertEquals(expected, sealed.text("ciphertext"))
+                if (seq == 0L) assertEquals(vector.text("ciphertext"), sealed.text("ciphertext"))
+                assertEquals(payload, receiver.open(sealed))
+            }
+        }
+    }
+
+    @Test
+    fun theAadPrefixCompletesToWireAad() {
+        val context = fixture().obj("context")
+        for (direction in listOf("c2h", "h2c")) {
+            val prefix = Wire.aadPrefix(context, direction)
+            for (seq in listOf(0L, 1L, 9L, 10L, 255L, 65_536L, 0xffffffffL)) {
+                assertArrayEquals("$direction $seq", Wire.aad(context, direction, seq), Wire.aadFrom(prefix, seq))
+            }
+            assertThrows(Exception::class.java) { Wire.aadFrom(prefix, 0x100000000) }
+            assertThrows(Exception::class.java) { Wire.aadFrom(prefix, -1) }
+        }
+        assertThrows(Exception::class.java) { Wire.aadPrefix(context, "h2h") }
+        assertThrows(Exception::class.java) {
+            Wire.aadPrefix(JsonObject(context + ("serverNonce" to JsonPrimitive("short"))), "c2h")
+        }
+    }
+
+    @Test
+    fun sealAndOpenInterleaveAcrossThreads() {
+        val f = fixture()
+        val c = f.obj("context")
+        val host = SecureChannel(f.text("secret"), c, false)
+        val device = SecureChannel(f.text("secret"), c)
+        val perThread = 50
+        val sealers = 4
+        val fromHost = (0 until sealers * perThread).map { host.seal(Wire.objectOf("type" to "event", "n" to it)) }
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(sealers + 1)
+        try {
+            val start = java.util.concurrent.CountDownLatch(1)
+            // Several threads seal on the device while another opens the host's frames on it.
+            val sealing =
+                (0 until sealers).map { thread ->
+                    executor.submit<List<JsonObject>> {
+                        start.await()
+                        (0 until perThread).map { device.seal(Wire.objectOf("type" to "steer", "t" to thread, "i" to it)) }
+                    }
+                }
+            val opening =
+                executor.submit<List<JsonObject>> {
+                    start.await()
+                    fromHost.map { device.open(it) }
+                }
+            start.countDown()
+            val sealed = sealing.flatMap { it.get(10, java.util.concurrent.TimeUnit.SECONDS) }
+            val opened = opening.get(10, java.util.concurrent.TimeUnit.SECONDS)
+
+            assertEquals((0 until sealers * perThread).toList(), opened.map { it.long("n").toInt() })
+            // Every sequence number once; opened in sequence order, every frame decrypts.
+            val ordered = sealed.sortedBy { it.long("seq") }
+            assertEquals((0L until sealed.size).toList(), ordered.map { it.long("seq") })
+            val received = ordered.map { host.open(it) }
+            for (thread in 0 until sealers) {
+                assertEquals(
+                    (0 until perThread).toList(),
+                    received.filter { it.long("t").toInt() == thread }.map { it.long("i").toInt() },
+                )
+            }
+            assertFalse(device.isClosed)
+            assertFalse(host.isClosed)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
     fun qrAndCanonicalEncoding() {
         val qr = fixture().obj("qr")
         assertEquals(qr.obj("value"), Wire.pairing(qr.text("text")))
@@ -169,5 +260,24 @@ class ProtocolTest {
         val narrow = Wire.objectOf("text" to "\u00e4".repeat(Wire.MAX_FRAME / 2 - 20)).toString()
         assertTrue(narrow.length * 3 > Wire.MAX_FRAME)
         assertEquals("\u00e4".repeat(Wire.MAX_FRAME / 2 - 20), Wire.parse(narrow).text("text"))
+    }
+
+    @Test
+    fun theStreamAndResumeFixturePayloadsSealAndOpenWithinTheFrameLimit() {
+        val f = fixture()
+        val context = f.obj("context")
+        for (name in listOf("stream-v1.json", "resume-v1.json")) {
+            val document = Wire.json.parseToJsonElement(javaClass.getResource("/$name")!!.readText()).jsonObject
+            assertEquals(name, 1L, document.long("version"))
+            val sender = SecureChannel(f.text("secret"), context, true)
+            val receiver = SecureChannel(f.text("secret"), context, false)
+            val payloads = document.array("wireValid").map { it.obj("payload") }
+            assertTrue(name, payloads.isNotEmpty())
+            for (payload in payloads) {
+                val frame = sender.seal(payload)
+                assertTrue(frame.toString().length <= Wire.MAX_FRAME)
+                assertEquals(payload, receiver.open(frame))
+            }
+        }
     }
 }

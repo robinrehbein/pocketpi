@@ -6,6 +6,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -99,6 +100,9 @@ internal const val MAX_BROKEN_CONNECTIONS = 5
 /** At most one snapshot per this interval for events of unknown kinds or malformed ones. */
 internal const val RESYNC_INTERVAL_MILLIS = 10_000L
 private const val SERVICE_RESTART_CLOSE_CODE = 1012
+/** The relay announced a restart: the retry waits 250 to 750 ms, so the Mac can reconnect first. */
+internal const val RESTART_RETRY_MIN_MILLIS = 250L
+internal const val RESTART_RETRY_SPREAD_MILLIS = 500L
 /** connect() outlasts the transport's own handshake timeout, so only one of them fires. */
 internal const val CONNECT_READY_WAIT_MILLIS = HANDSHAKE_TIMEOUT_MILLIS + 2_000L
 /** The relay answered but the Mac has not, after this long: say so instead of "Connecting…". */
@@ -110,6 +114,31 @@ internal const val HOST_WAIT_HINT_MILLIS = 5_000L
  * write at once.
  */
 internal const val NAVIGATION_DIRTY_WRITE_MILLIS = 15_000L
+
+/**
+ * While a message streams, the chat on screen is published at most once per this long: a
+ * `message.upsert` that arrives sooner after a publish waits for one trailing publish. Every other
+ * event, a snapshot and a selection change publish at once.
+ */
+internal const val TIMELINE_PUBLISH_MILLIS = 16L
+
+/**
+ * Chats left for another chat or a list whose Timelines are kept per Mac, newest first: selecting
+ * one again resumes from where it stopped instead of loading it anew.
+ */
+internal const val DETACHED_TIMELINES = 4
+
+/**
+ * A plain prompt typed while the connection is down waits this long for the reconnect; after it
+ * the prompt is marked not confirmed and the user sends it again by hand.
+ */
+internal const val QUEUED_PROMPT_MILLIS = 15 * 60_000L
+
+/** A `remote.stream.v1` connection is pinged this often while the app is in the foreground. */
+internal const val PING_INTERVAL_MILLIS = 30_000L
+
+/** A `remote.ping` without its `pong` after this long is recorded as a timeout, and nothing else. */
+internal const val PING_TIMEOUT_MILLIS = 10_000L
 
 /**
  * The first failure of a streak reconnects quietly; the error card follows only if the Mac is
@@ -125,6 +154,13 @@ private const val MAX_CONNECTION_REQUESTS = 32
 
 /** Back this soon, on the same screen and with frames flowing, the app resumes without a request. */
 internal const val RESUME_QUIET_AWAY_MILLIS = 15_000L
+
+/**
+ * After the app went to the background, the chat on screen stays in the connection's
+ * `session.focus` this long, so a return within the quiet-resume window needs no catch-up. Later,
+ * without a live run kept for it, the focus narrows to none and the chat's Timeline detaches.
+ */
+internal const val BACKGROUND_FOCUS_GRACE_MILLIS = RESUME_QUIET_AWAY_MILLIS
 
 /** A socket that delivered a frame this recently counts as alive when the app resumes. */
 internal const val RESUME_LIVE_SOCKET_MILLIS = 25_000L
@@ -152,6 +188,8 @@ private val LIVENESS_READS =
         "session.commands.get",
         "session.advisor.get",
         "session.context.get",
+        // Idempotent: a reconnect sends the focus again.
+        "session.focus",
     )
 
 /** Why the connection ended, which decides how soon and how quietly it comes back. */
@@ -167,6 +205,9 @@ private enum class FailureCause {
 
     /** The handshake did not finish in time. */
     HANDSHAKE_TIMEOUT,
+
+    /** The push wake window ended in the background: the app closed the socket itself. */
+    WAKE_ENDED,
 }
 
 internal fun opaqueId(value: String): Boolean =
@@ -234,6 +275,11 @@ class DefaultRemoteRepository(
     private val jitter: () -> Double = { Random.nextDouble() },
     /** Sent and project images kept on disk between runs; null keeps them in memory only. */
     private val media: MediaDiskCache? = null,
+    /**
+     * Whether a live run keeps the process in the background (the [LiveRunService] runs), which
+     * is the only case where a push wake leaves its socket open at the window's end.
+     */
+    private val liveRunKept: () -> Boolean = { false },
 ) : RemoteRepository {
     private val routeCapabilities =
         setOf(
@@ -269,6 +315,8 @@ class DefaultRemoteRepository(
             // Only on the capabilities.v2 route; writes need the project's `writable` flag as well.
             TICKETS_CAPABILITY,
             SESSION_TASKS_CAPABILITY,
+            // Only on the capabilities.v2 route: focus, `after`, ping and acks.
+            STREAM_CAPABILITY,
             // Only on the capabilities.v2 route, which gives extension sessions their controls.
             HOST_WORKER_V2_CAPABILITY,
         )
@@ -280,6 +328,16 @@ class DefaultRemoteRepository(
     private val attachmentMutex = Mutex()
     private var importJob: Job? = null
     private var sendJob: Job? = null
+
+    /** The plain prompt that waits for the connection ([PendingSendState.QUEUED]); at most one. */
+    private data class QueuedPrompt(
+        val key: DraftKey,
+        val id: String,
+        val attempt: Any,
+        val cleared: ClearedComposer,
+        val expiry: Job,
+    )
+    private var queuedPrompt: QueuedPrompt? = null
     private val attachmentInFlight = mutableSetOf<String>()
     private var persistedAttachmentIds = emptySet<String>()
 
@@ -548,6 +606,10 @@ class DefaultRemoteRepository(
      */
     private var navDirty = false
     private var navDirtyJob: Job? = null
+
+    /** When [publishTimeline] last ran, and the publish a streaming upsert waits for ([TIMELINE_PUBLISH_MILLIS]). */
+    private var lastTimelinePublishAt = Long.MIN_VALUE
+    private var trailingPublish: Job? = null
     private var navigationLoaded = navigationStorage == null
     private var pairingsLoaded = false
     private val removedRoutes = mutableSetOf<String>()
@@ -578,12 +640,54 @@ class DefaultRemoteRepository(
      * lists, an open of a live chat alongside `sessions.open`. The chat's events that arrive
      * meanwhile wait here for that Timeline, so none is lost before it exists.
      */
-    private class HeldSnapshot(val sessionId: String, val includeTasks: Boolean) {
+    private class HeldSnapshot(val sessionId: String, val includeTasks: Boolean, val base: ResumeBase?) {
         lateinit var reply: Deferred<Result<JsonObject>>
         val events = ArrayDeque<JsonObject>()
     }
 
     private var heldSnapshot: HeldSnapshot? = null
+
+    /** A chat's Timeline kept after the chat was left, with the tasks it showed then. */
+    private class DetachedTimeline(val timeline: Timeline, val tasks: SessionTasks)
+
+    /** At most [DETACHED_TIMELINES] per Mac, least recently left first. */
+    private val detachedTimelines = LinkedHashMap<DraftKey, DetachedTimeline>()
+
+    /** The connection ([generation]) whose `projects.list` advertised `remote.stream.v1`, or -1. */
+    private var streamGeneration = -1L
+    /** The `session.focus` last sent, on the connection [focusSentOn]. */
+    private var focusSent: List<String>? = null
+    private var focusSentOn = -1L
+    /** Set while the app is in the background; see [desiredFocus]. */
+    private var inBackground = false
+    /**
+     * Set by [backgroundFocusTimer] once [BACKGROUND_FOCUS_GRACE_MILLIS] passed in the background,
+     * on the dispatcher's monotonic clock, so a wall clock set back cannot keep the focus.
+     */
+    private var backgroundGraceOver = false
+    /** Narrows the focus once [BACKGROUND_FOCUS_GRACE_MILLIS] passed in the background. */
+    private var backgroundFocusTimer: Job? = null
+    /**
+     * The route of the open push wake window (see [pushWake]), or null. Written on the main
+     * thread, read by [awaitPushWake] from any.
+     */
+    @Volatile private var pushWakeRoute: String? = null
+    /** Ends the push wake window after [PUSH_WAKE_WINDOW_MILLIS]. */
+    private var pushWakeTimer: Job? = null
+    /** Sends `remote.ping` on a `remote.stream.v1` connection; see [startPings]. */
+    private var pingJob: Job? = null
+
+    /** Which first-page request a snapshot sends; see [firstPageRequestId]. */
+    private enum class SnapshotIntent {
+        /**
+         * Continues from the Timeline's journal base when it has one: the reconnect of the same
+         * chat, the reselect of a kept chat, a revision gap, the foreground probe.
+         */
+        RESUME,
+
+        /** Needs state a replay cannot carry, so the host always answers with a snapshot. */
+        FRESH,
+    }
     private var pushToken: String? = null
     private var pushTokenKnown = false
     private val drafts = mutableMapOf<DraftKey, StoredDraft>()
@@ -749,6 +853,7 @@ class DefaultRemoteRepository(
         transport.listener =
             object : RemoteTransport.Listener {
                 override fun closed(code: Int) {
+                    Diagnostics.closeCode(code)
                     serviceRestart = code == SERVICE_RESTART_CLOSE_CODE
                 }
 
@@ -768,6 +873,7 @@ class DefaultRemoteRepository(
                     cancelQuietReconnect()
                     offlineSince?.let {
                         Diagnostics.record(Diagnostics.Kind.OFFLINE, "reconnected", Diagnostics.now() - it)
+                        Diagnostics.count(Diagnostics.Counter.RECONNECTS)
                     }
                     offlineSince = null
                     // The backoff resets only once this connection proves itself, so a host that
@@ -1888,6 +1994,7 @@ class DefaultRemoteRepository(
                     drainTaskRefresh()
                 }
                 if (PROJECT_OPEN_CAPABILITY in merged) resumeClone()
+                if (STREAM_CAPABILITY in merged && connection == generation && streamGeneration != generation) streamReady()
                 if (PROVIDER_AUTH_CAPABILITY in merged) resumeProviderAuth()
                 if (TICKETS_CAPABILITY in merged && !hadTickets) ticketsLoader.refresh(force = false)
             }
@@ -1937,13 +2044,202 @@ class DefaultRemoteRepository(
         if (includeTasks) arrayOf("sessionId" to sessionId, "includeTasks" to true)
         else arrayOf("sessionId" to sessionId)
 
-    /** Asks for the snapshot of [sessionId] before select() makes its Timeline; see [HeldSnapshot]. */
-    private fun CoroutineScope.holdSnapshot(sessionId: String, epoch: Long): HeldSnapshot {
-        val held = HeldSnapshot(sessionId, canReadTasks())
+    /**
+     * Asks for the snapshot of [sessionId] on [routeId] before select() makes its Timeline; see
+     * [HeldSnapshot]. It resumes from the Timeline that select() will continue, when there is one.
+     */
+    private fun CoroutineScope.holdSnapshot(routeId: String, sessionId: String, epoch: Long): HeldSnapshot {
+        val held = HeldSnapshot(sessionId, canReadTasks(), resumeSource(routeId, sessionId)?.resumeBase())
+        // The focus names the chat before its read goes out, so every event of it that the host
+        // emits after the reply's revision reaches this phone. Another chat on screen detaches;
+        // should this activation not select the new one, its end refocuses and resumes it.
+        syncFocus(desiredFocus(routeId, sessionId))
         // Set first: an event that follows the request is kept for the Timeline.
         heldSnapshot = held
-        held.reply = alongside { request("session.snapshot", epoch, *snapshotFields(sessionId, held.includeTasks)) }
+        held.reply =
+            alongside {
+                request(
+                    "session.snapshot",
+                    epoch,
+                    *snapshotFields(sessionId, held.includeTasks),
+                    requestId = firstPageRequestId(held.base),
+                )
+            }
         return held
+    }
+
+    /**
+     * The Timeline select() continues for [sessionId] on [routeId]: the one on screen for a
+     * reconnect of the same chat, or one kept since the chat was left. Null when none can resume.
+     */
+    private fun resumeSource(routeId: String, sessionId: String): Timeline? {
+        val selected = state.value.selection
+        val shown = timeline?.takeIf { selected.routeId == routeId && selected.sessionId == sessionId && it.sessionId == sessionId }
+        val source = shown ?: detachedTimelines[DraftKey(routeId, sessionId)]?.timeline
+        return source?.takeIf { it.sessionId == sessionId && it.resumeBase() != null }
+    }
+
+    /** The request ID of a first-page `session.snapshot`: the resume form with [base], else the fresh form. */
+    private fun firstPageRequestId(base: ResumeBase?): String =
+        if (base == null) freshRequestId() else resumeRequestId(base.epoch, base.revision)
+
+    /**
+     * Keeps [leaving], the Timeline of the chat [previous] that the selection leaves, to resume
+     * from when the chat is selected again, with the tasks on screen. Only a Timeline that can
+     * resume is kept; past [DETACHED_TIMELINES] for its Mac, the one left longest ago goes.
+     */
+    private fun detachTimeline(previous: RemoteSelection, leaving: Timeline?) {
+        val routeId = previous.routeId ?: return
+        val sessionId = previous.sessionId ?: return
+        if (leaving == null || leaving.sessionId != sessionId || leaving.resumeBase() == null) return
+        leaving.detached = true
+        val key = DraftKey(routeId, sessionId)
+        detachedTimelines.remove(key)
+        detachedTimelines[key] = DetachedTimeline(leaving, state.value.tasks)
+        val ofRoute = detachedTimelines.keys.filter { it.routeId == routeId }
+        ofRoute.take(maxOf(0, ofRoute.size - DETACHED_TIMELINES)).forEach { detachedTimelines.remove(it) }
+    }
+
+    /**
+     * The sessions whose upserts this connection should get: [sessionId] on [routeId] (the selected
+     * chat by default) while the app is in the foreground, while a live run is kept for it in the
+     * background, or for [BACKGROUND_FOCUS_GRACE_MILLIS] after the app went to the background;
+     * none on the lists, for another Mac, during a push wake window, and in the background
+     * otherwise.
+     */
+    private fun desiredFocus(
+        routeId: String? = state.value.selection.routeId,
+        sessionId: String? = state.value.selection.sessionId,
+    ): List<String> {
+        if (routeId == null || sessionId == null || routeId != activeHost?.routeId || !opaqueId(sessionId)) return emptyList()
+        if (!inBackground) return listOf(sessionId)
+        // A connection a push woke streams nothing: the push's upgrade needs requests only. Only
+        // a live run the service keeps in the background still follows its chat.
+        if (pushWakeRoute != null && !liveRunKept()) return emptyList()
+        if (liveRunTarget(state.value) == LiveRunTarget(routeId, sessionId)) return listOf(sessionId)
+        return if (backgroundGraceOver) emptyList() else listOf(sessionId)
+    }
+
+    /**
+     * Whether the host sends this connection the upserts of [sessionId]: it took no focus yet (a
+     * legacy connection, or one before its first `session.focus`), or the last one names it.
+     */
+    private fun inSentFocus(sessionId: String) =
+        streamGeneration != generation || focusSentOn != generation || focusSent?.contains(sessionId) == true
+
+    /** The Timeline of the chat on screen, or null on the lists. */
+    private fun shownTimeline(): Timeline? {
+        val selected = state.value.selection
+        return timeline?.takeIf { selected.routeId == activeHost?.routeId && it.sessionId == selected.sessionId }
+    }
+
+    /**
+     * Sends `session.focus` with [target] when this connection advertised `remote.stream.v1` and
+     * did not get that focus last; never to a host without the capability. The focus is not held
+     * back by [MAX_CONNECTION_REQUESTS]: it is one small idempotent command per change, and a
+     * Timeline that the host already filters must not miss it.
+     *
+     * [shown], the Timeline on screen, detaches when the focus stops naming its session, so the gaps
+     * the host leaves in its stream never ask for a snapshot. One that waits for a reply (its first
+     * page or a resume) cannot detach, since a detached Timeline could not take it: its focus lapses
+     * instead ([Timeline.focusLapsed]). The events it applies after the reply may carry `after` over
+     * upserts that focus filtered, so once the reply is in (see [snapshot]) it detaches if the
+     * session is still out of focus, and otherwise, with [readLapsed], reads a fresh first page
+     * with its events held.
+     *
+     * When the focus names a detached [shown] again, it stops being detached and resumes: it holds
+     * its session's events from before the focus goes out, and the resume request follows the
+     * focus, so every event the host emitted meanwhile is applied once, after the reply.
+     */
+    private fun syncFocus(target: List<String> = desiredFocus(), shown: Timeline? = shownTimeline(), readLapsed: Boolean = true) {
+        if (!state.value.connected || streamGeneration != generation) return
+        val refocus = shown?.takeIf { it.detached && it.sessionId in target }
+        if (refocus != null) {
+            refocus.detached = false
+            if (refocus.resumeBase() != null) refocus.awaitReply()
+            // Without a base the fresh snapshot follows; a gap meanwhile does not ask for another.
+            else snapshotPending = refocus
+        }
+        if (focusSentOn != generation || focusSent != target) sendFocus(target)
+        var reread = false
+        if (shown != null && shown.sessionId !in target) {
+            if (!shown.awaitingReply && snapshotPending !== shown) shown.detached = true else shown.focusLapsed = true
+        } else if (
+            readLapsed && shown != null && refocus == null && shown.focusLapsed && !shown.detached && !shown.awaitingReply &&
+                snapshotPending !== shown
+        ) {
+            snapshotPending = shown
+            reread = true
+        }
+        if (refocus != null) snapshotAsync(intent = if (refocus.resumeBase() != null) SnapshotIntent.RESUME else SnapshotIntent.FRESH)
+        // A pending snapshot reads it afresh as well; see [snapshot].
+        else if (reread) snapshotAsync()
+    }
+
+    private fun sendFocus(target: List<String>) {
+        focusSent = target
+        focusSentOn = generation
+        val payload = sessionFocusPayload(Wire.random(), target)
+        // Undispatched, so the focus is on the wire before whatever the caller sends next.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                sessionFocusResult(awaitConnectionReply(payload, REQUEST_TIMEOUT_MILLIS, record = true, liveness = true))
+            } catch (_: CancellationException) {
+            } catch (_: RemoteRequestException) {
+                // A lost connection sends it again on the next one; a stale one already reconnects.
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.focus", swallowed)
+            }
+        }
+    }
+
+    /**
+     * This connection advertised `remote.stream.v1`: it gets its focus, and pings start. During an
+     * activation the focus waits for its select(), which names the chat it opens; until then the
+     * connection gets every event.
+     */
+    private fun streamReady() {
+        streamGeneration = generation
+        if (!state.value.loading) syncFocus()
+        startPings(generation)
+    }
+
+    /**
+     * Sends `remote.ping` once now, then on [connection] every [PING_INTERVAL_MILLIS] while the app
+     * is in the foreground, until the connection ends. Each round trip, from the send to the reply
+     * on the main thread, is recorded in [Diagnostics]; a timeout is recorded and ends nothing,
+     * since a slow link may delay a whole message while the socket is fine (OkHttp's ping and the
+     * liveness reads judge the socket).
+     */
+    private fun startPings(connection: Long) {
+        pingJob?.cancel()
+        ping()
+        pingJob =
+            scope.launch {
+                while (true) {
+                    delay(PING_INTERVAL_MILLIS)
+                    if (connection != generation || !state.value.connected) return@launch
+                    if (!inBackground) ping()
+                }
+            }
+    }
+
+    private fun ping() {
+        if (!connectionRequestsOpen()) return
+        val payload = remotePingPayload(Wire.random())
+        val sent = Diagnostics.now()
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                val relayRtt = pongResult(awaitConnectionReply(payload, PING_TIMEOUT_MILLIS, record = true))
+                Diagnostics.rtt(Diagnostics.now() - sent, relayRtt)
+            } catch (_: CancellationException) {
+            } catch (e: RemoteRequestException) {
+                // Recorded with its round trip; a ping never ends the connection.
+                if (e.kind == RemoteRequestException.Kind.TIMEOUT) Diagnostics.count(Diagnostics.Counter.PING_TIMEOUTS)
+            } catch (swallowed: Exception) {
+                Diagnostics.caught("repo.ping", swallowed)
+            }
+        }
     }
 
     /** A request's outcome for Diagnostics: the host's error code, or what ended the wait. */
@@ -2046,10 +2342,7 @@ class DefaultRemoteRepository(
             // event, so its revision stays in step.
             Diagnostics.caught("repo.receive.event", dropped)
         }
-        val forTimeline =
-            if (payload.optionalText("kind") in setOf("follow_up.status", "steer.status"))
-                JsonObject(payload + ("kind" to JsonPrimitive("command.status")))
-            else payload
+        val forTimeline = timelineForm(payload)
         val held = heldSnapshot
         if (held != null && (payload["sessionId"] as? JsonPrimitive)?.content == held.sessionId) {
             // Kept for the Timeline the held snapshot is for, which select() has not made yet.
@@ -2066,15 +2359,23 @@ class DefaultRemoteRepository(
         } catch (dropped: Exception) {
             Diagnostics.caught("repo.receive.compaction", dropped)
         }
+        // A live run that ends in the background lets the focus narrow.
+        if (inBackground && payload.optionalText("kind") == "session.status" && !state.value.loading) syncFocus()
     }
 
     private fun timelineEvent(current: Timeline, event: JsonObject) {
+        // Out of focus: the host leaves its upserts out, so its gaps mean nothing until the refocus
+        // resumes it.
+        if (current.detached) return
         try {
             // The snapshot select() set up takes in what this buffered; asking for another
-            // one would only be discarded.
-            if (current.event(event)) {
+            // one would only be discarded. A gap can be filled from the host's journal;
+            // snapshot.required needs the fresh state.
+            val need = current.eventNeed(event)
+            if (need != SnapshotNeed.NONE) {
                 update { it.copy(tasks = staleTasks(it.tasks)) }
-                if (!resynchronizing && snapshotPending !== current) snapshotAsync()
+                if (!resynchronizing && snapshotPending !== current)
+                    snapshotAsync(intent = if (need == SnapshotNeed.GAP) SnapshotIntent.RESUME else SnapshotIntent.FRESH)
             }
         } catch (malformed: Exception) {
             Diagnostics.caught("repo.receive.timeline", malformed)
@@ -2082,7 +2383,31 @@ class DefaultRemoteRepository(
         }
         resyncAfterUnknownEvents(current)
         // Another session's event cannot change this chat.
-        if ((event["sessionId"] as? JsonPrimitive)?.content == current.sessionId) publishTimeline()
+        if ((event["sessionId"] as? JsonPrimitive)?.content != current.sessionId) return
+        if ((event["kind"] as? JsonPrimitive)?.content == "message.upsert") publishStreamingTimeline(current)
+        else publishTimeline()
+    }
+
+    /**
+     * Publishes the Timeline for a streaming upsert: at once when the last publish is at least
+     * [TIMELINE_PUBLISH_MILLIS] ago, otherwise one trailing publish [TIMELINE_PUBLISH_MILLIS] after
+     * it. Further upserts meanwhile ride on that one; [publishTimeline] cancels it.
+     */
+    private fun publishStreamingTimeline(current: Timeline) {
+        val since = now() - lastTimelinePublishAt
+        // A clock set back counts as long ago.
+        if (lastTimelinePublishAt == Long.MIN_VALUE || since !in 0 until TIMELINE_PUBLISH_MILLIS) {
+            publishTimeline()
+            return
+        }
+        if (trailingPublish?.isActive == true) return
+        trailingPublish =
+            scope.launch {
+                delay(TIMELINE_PUBLISH_MILLIS - since)
+                trailingPublish = null
+                // A selection change or a disconnect since made this Timeline obsolete.
+                if (timeline === current) publishTimeline()
+            }
     }
 
     /**
@@ -2399,6 +2724,9 @@ class DefaultRemoteRepository(
      * as for a selection change. An event only marks it dirty, unless it starts or ends a run.
      */
     private fun publishTimeline(persist: Boolean = false): Unit = Diagnostics.trace("PocketPi.publishTimeline") {
+        trailingPublish?.cancel()
+        trailingPublish = null
+        lastTimelinePublishAt = now()
         val t = timeline ?: return@trace
         val previous = state.value.status
         if (t.status != previous) state.value.selection.sessionId?.let(::dropStaleChildControl)
@@ -2435,7 +2763,11 @@ class DefaultRemoteRepository(
     /**
      * [timeoutMillis] lets a probe give up sooner; a timeout with no frame meanwhile reconnects.
      * [held] is the reply of a request already sent for this Timeline's session, taken instead of
-     * a new one.
+     * a new one; [heldBase] is the resume base that request named. [intent] picks the request
+     * form of a first page. With [dropOlderPages], the first page replaces the older pages on
+     * screen (the `stale_cursor` recovery); [retryStaleCursor] lets an older page recover once.
+     * A first page that names a resume base, or replaces the older pages, makes the Timeline hold
+     * its session's events until the reply; see [Timeline.awaitingReply].
      */
     private suspend fun snapshot(
         epoch: Long,
@@ -2443,6 +2775,10 @@ class DefaultRemoteRepository(
         timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
         held: Deferred<Result<JsonObject>>? = null,
         heldIncludesTasks: Boolean = false,
+        heldBase: ResumeBase? = null,
+        intent: SnapshotIntent = SnapshotIntent.FRESH,
+        dropOlderPages: Boolean = false,
+        retryStaleCursor: Boolean = true,
     ) {
         val current = timeline ?: return
         val cursor = if (older) current.nextCursor ?: return else null
@@ -2450,7 +2786,40 @@ class DefaultRemoteRepository(
         if (!older) update { it.copy(tasks = staleTasks(it.tasks)) }
         var includedTasks = if (held != null && cursor == null) heldIncludesTasks else !older && canReadTasks()
         if (snapshotPending === current) snapshotPending = null
+        // A Timeline whose focus lapsed takes a fresh first page read with its session in focus
+        // again, its events held, in place of what it applied meanwhile; see [syncFocus].
+        val reread = !older && held == null && current.focusLapsed && inSentFocus(current.sessionId)
+        // The resume base the request names; only a request with one may be answered by a replay.
+        var base =
+            when {
+                reread -> null
+                cursor != null -> null
+                held != null -> heldBase
+                intent == SnapshotIntent.RESUME -> current.resumeBase()
+                else -> null
+            }
+        // The reply did not fit the Timeline, or an older page's cursor expired.
+        var refetch = false
+        var staleCursor = false
+        // This call made the Timeline wait, so only it ends the wait; another read ending meanwhile
+        // without a first page for it (an older page, a failed fresh one) leaves the events held.
+        var awaited = false
+        // The request was answered and its reply handled; otherwise the exception propagates.
+        var answered = false
+        // The first page the reread asked for replaced what the Timeline showed.
+        var replaced = false
         try {
+            // Cleared as the request goes out: a focus that excludes the session again while it is
+            // awaited lapses it again.
+            if (reread) current.focusLapsed = false
+            // Live events of the session wait for the reply from here on (a held request's
+            // Timeline already waits since select() made it). The `stale_cursor` recovery holds
+            // them too: a live event applied before its reply would make the page outdated, so its
+            // cursor, which the retry needs, would not be taken.
+            if (base != null || dropOlderPages || reread) {
+                current.awaitReply()
+                awaited = true
+            }
             val data =
                 if (held != null && cursor == null)
                     held.await().getOrElse { failed ->
@@ -2459,10 +2828,16 @@ class DefaultRemoteRepository(
                         // came fails as any other would.
                         if (failed.requestKind != RemoteRequestException.Kind.HOST_ERROR) throw failed
                         includedTasks = canReadTasks()
+                        base = if (heldBase != null) current.resumeBase() else null
+                        if (base != null) {
+                            current.awaitReply()
+                            awaited = true
+                        }
                         request(
                             "session.snapshot",
                             epoch,
                             *snapshotFields(current.sessionId, includedTasks),
+                            requestId = firstPageRequestId(base),
                             timeoutMillis = timeoutMillis,
                         )
                     }
@@ -2471,6 +2846,7 @@ class DefaultRemoteRepository(
                         "session.snapshot",
                         epoch,
                         *snapshotFields(current.sessionId, includedTasks),
+                        requestId = firstPageRequestId(base),
                         timeoutMillis = timeoutMillis,
                     )
                 else
@@ -2483,48 +2859,147 @@ class DefaultRemoteRepository(
                     )
             checkEpoch(epoch)
             if (current !== timeline) return
-            val sameSession = data.optionalText("sessionId") == current.sessionId
-            val outdated = !older && sameSession && data.long("revision") < current.revision
-            val accepted = !older && sameSession && !outdated
-            current.snapshot(data, older)
-            if (accepted && includedTasks && !current.needsSnapshot) {
-                taskRefreshPending = false
-                update { it.copy(tasks = parseSessionTasks(data["tasks"])) }
-            } else if ((includedTasks && outdated) || (!older && !includedTasks && canReadTasks())) {
-                taskRefreshPending = true
-            }
-            current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
-            if (!older) recheckFollowUps(current.sessionId)
-            publishTimeline(persist = !older)
-            // A fresh snapshot is the host's word on what is still open, so an uncertain answer is
-            // settled either way.
-            if (!older)
-                update {
-                    it.copy(
-                        questionBlocks =
-                            it.questionBlocks.filterValues { block -> block != QuestionBlock.UNCERTAIN }
-                    )
+            if (!older && data.optionalText("kind") == "session.events") {
+                // A host answers a replay only to a request that named a base.
+                checkNotNull(base)
+                Diagnostics.count(Diagnostics.Counter.RESUMES_REPLAYED)
+                refetch = !applyReplay(current, sessionEventsReply(data))
+            } else {
+                // A resume the host could not serve from its journal comes back as a snapshot.
+                if (!older && base != null) Diagnostics.count(Diagnostics.Counter.RESUMES_SNAPSHOT)
+                val accepted = current.snapshot(data, older, keepOlder = !dropOlderPages) && !older
+                replaced = accepted
+                val sameSession = data.optionalText("sessionId") == current.sessionId
+                // The same epoch's snapshot at a lower revision: one from another epoch starts over.
+                val outdated = !older && sameSession && !accepted
+                if (accepted && includedTasks && !current.needsSnapshot) {
+                    taskRefreshPending = false
+                    val tasks = parseSessionTasks(data["tasks"])
+                    current.tasksKnown = tasks.freshness == TaskFreshness.LIVE
+                    update { it.copy(tasks = tasks) }
+                } else if ((includedTasks && outdated) || (!older && !includedTasks && canReadTasks())) {
+                    taskRefreshPending = true
                 }
-            // The chat on screen is read again, also when the activation after a reconnect failed
-            // to read it and a later refresh did.
-            if (!older && state.value.connected) staleReplaced()
-            resyncAfterUnknownEvents(current)
+                current.messages.forEach { messageDeliveryReceipt(current.sessionId, it) }
+                if (!older) recheckFollowUps(current.sessionId)
+                publishTimeline(persist = !older)
+                // A fresh snapshot is the host's word on what is still open, so an uncertain answer is
+                // settled either way.
+                if (!older) settleUncertainQuestions()
+                // The chat on screen is read again, also when the activation after a reconnect failed
+                // to read it and a later refresh did.
+                if (!older && state.value.connected) staleReplaced()
+                resyncAfterUnknownEvents(current)
+            }
+            answered = true
+        } catch (e: RemoteRequestException) {
+            // Another device's first pages retired this page's cursor: recovered below, once.
+            if (!older || !retryStaleCursor || e.kind != RemoteRequestException.Kind.HOST_ERROR || e.code != "stale_cursor") throw e
+            staleCursor = true
+            answered = true
         } finally {
+            // A reply that never came or was not taken: the events held for it apply now.
+            val heldArrivals = awaited && current.heldArrivals
+            val drained = awaited && current.endAwaiting()
+            if (drained && current === timeline) publishTimeline()
             if (epoch == selectionEpoch) resynchronizing = false
+            // A reread that failed leaves the Timeline lapsed for the next focus change or read.
+            val rereadFailed = reread && !replaced
+            if (rereadFailed) current.focusLapsed = true
+            if (drained && !answered) afterFailedWait(current, epoch, heldArrivals)
+            // A focus that excluded the chat while this reply was awaited: the Timeline detaches now,
+            // or, back in focus, reads a fresh first page (not again right after a failed one).
+            if (!older && current.focusLapsed && current === timeline) syncFocus(readLapsed = !rereadFailed)
         }
+        if (staleCursor) {
+            checkEpoch(epoch)
+            if (current !== timeline) return
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "snapshot.stale_cursor")
+            // A fresh first page with its own cursor, without the older pages it cannot continue.
+            snapshot(epoch, intent = SnapshotIntent.FRESH, dropOlderPages = true)
+            if (current === timeline) snapshot(epoch, older = true, retryStaleCursor = false)
+            return
+        }
+        // A prompt typed offline goes out now that the chat is read again (not when another read follows).
+        // Not from a reconnect a push woke in the background: Robin does not see that prompt go out,
+        // so it waits for the foreground, whose read (see [resumeTier]) releases it.
+        if (!older && !refetch && !inBackground && epoch == selectionEpoch && current === timeline)
+            releaseQueuedPrompt(current)
+        // Taken in any case: a fresh snapshot that follows covers what the resume would fetch.
+        val owedResume = current.takeOwedResume()
         if (epoch == selectionEpoch) {
-            if (current.needsSnapshot) {
+            if (refetch || current.needsSnapshot) {
                 taskRefreshPending = false
                 snapshotAsync()
-            } else drainTaskRefresh()
+            } else if (owedResume) snapshotAsync(intent = SnapshotIntent.RESUME)
+            else drainTaskRefresh()
         }
     }
 
-    private fun snapshotAsync(older: Boolean = false) {
+    /**
+     * Runs after a request that made [current] hold its session's events failed and the held events
+     * applied: what they need is asked for as if they had arrived without the hold. An unknown or
+     * malformed one resyncs, and when [heldArrivals] (an event arrived while the Timeline waited)
+     * and the events still wait behind a gap, one resume follows. Without such an arrival the
+     * failed request's own gap is left for the next live event, so a host that keeps failing is
+     * not asked again in a loop. Launched, so the failure still reaches the caller.
+     */
+    private fun afterFailedWait(current: Timeline, epoch: Long, heldArrivals: Boolean) {
+        if (current !== timeline || epoch != selectionEpoch) return
+        resyncAfterUnknownEvents(current)
+        if (heldArrivals && current.needsSnapshot && state.value.connected && snapshotPending !== current) {
+            Diagnostics.record(Diagnostics.Kind.RECOVERY, "snapshot.after_failed_wait")
+            snapshotAsync(intent = SnapshotIntent.RESUME)
+        }
+    }
+
+    /** Settles the question blocks whose answer was uncertain: the host's reply says what is still open. */
+    private fun settleUncertainQuestions() =
+        update {
+            it.copy(questionBlocks = it.questionBlocks.filterValues { block -> block != QuestionBlock.UNCERTAIN })
+        }
+
+    /**
+     * Applies a `session.events` reply to [current] and runs for each event it applied what a live
+     * event runs at receipt ([eventEffects]: list status, titles, receipts, job and Changes hints),
+     * except a notice, which is transient. A reply that fit then counts like an accepted snapshot:
+     * follow-ups are rechecked, uncertain questions settled, the chat persisted and published once,
+     * and the lists read again. Tasks the Timeline knew stay current, since task changes emit
+     * `snapshot.required`, which no replay spans; unknown ones are read with a fresh snapshot.
+     * Returns whether the reply fit; otherwise one fresh snapshot follows.
+     */
+    private fun applyReplay(current: Timeline, reply: SessionEventsReply): Boolean {
+        val result = current.replay(reply)
+        for (event in result.applied) {
+            if (event.optionalText("kind") == "session.notice") continue
+            try {
+                eventEffects(event)
+            } catch (dropped: Exception) {
+                Diagnostics.caught("repo.replay.event", dropped)
+            }
+        }
+        if (result.fits) {
+            recheckFollowUps(current.sessionId)
+            val shown = state.value.tasks.freshness
+            if (current.tasksKnown && (shown == TaskFreshness.LIVE || shown == TaskFreshness.STALE)) {
+                taskRefreshPending = false
+                update { it.copy(tasks = liveTasks(it.tasks)) }
+            } else if (canReadTasks()) taskRefreshPending = true
+        }
+        publishTimeline(persist = true)
+        if (result.fits) {
+            settleUncertainQuestions()
+            if (state.value.connected) staleReplaced()
+        }
+        resyncAfterUnknownEvents(current)
+        return result.fits
+    }
+
+    private fun snapshotAsync(older: Boolean = false, intent: SnapshotIntent = SnapshotIntent.FRESH) {
         val epoch = selectionEpoch
         scope.launch {
             try {
-                snapshot(epoch, older)
+                snapshot(epoch, older, intent = intent)
             } catch (_: CancellationException) {} catch (swallowed: Exception) {
                 Diagnostics.caught("repo.snapshotAsync", swallowed)
                 if (epoch == selectionEpoch) reportReadError(swallowed)
@@ -2643,13 +3118,32 @@ class DefaultRemoteRepository(
         // shows stays until the snapshot and the reads after it replace it.
         val sameSession = selection.sessionId != null && selection.routeId == previous.routeId &&
             selection.sessionId == previous.sessionId
+        // A prompt queued in the chat left behind is given back: the queue is for the chat on screen.
+        if (!sameSession) queuedPrompt?.let { takeBackQueuedPrompt(it, "left_chat") }
+        trailingPublish?.cancel()
+        trailingPublish = null
+        val leaving = timeline
+        // A chat left for another one or for a list is kept, to resume when it is selected again.
+        if (!sameSession) detachTimeline(previous, leaving)
+        val kept =
+            if (sameSession) null
+            else selection.routeId?.let { routeId -> session?.let { detachedTimelines.remove(DraftKey(routeId, it.text("id"))) } }
+        // The reconnect of the same chat continues the Timeline on screen; a kept chat its own.
+        val source = (if (sameSession) leaving else kept?.timeline)?.takeIf { source ->
+            source.sessionId == session?.text("id") && source.resumeBase() != null
+        }
         timeline = session?.let {
             Timeline(it.text("id")).apply {
-                beginSnapshotEpoch(it.text("status"))
-                // Older pages loaded on screen survive the snapshot where it overlaps them.
-                if (sameSession) retain(state.value.messages, state.value.nextCursor)
+                if (source != null) continueFrom(source)
+                else {
+                    beginSnapshotEpoch(it.text("status"))
+                    // Older pages loaded on screen survive the snapshot where it overlaps them.
+                    if (sameSession) retain(state.value.messages, state.value.nextCursor)
+                }
             }
         }
+        // What a kept chat showed comes back with it, its tasks stale until the reply.
+        val resumed = timeline?.takeIf { source != null && !sameSession }
         snapshotPending = timeline
         val stored =
             selection.sessionId?.let { drafts[DraftKey(checkNotNull(selection.routeId), it)] }
@@ -2670,7 +3164,10 @@ class DefaultRemoteRepository(
         update {
             it.copy(
                 selection = selection,
-                tasks = if (sameSession) staleTasks(it.tasks) else SessionTasks(),
+                tasks =
+                    if (sameSession) staleTasks(it.tasks)
+                    else if (resumed != null) staleTasks(checkNotNull(kept).tasks)
+                    else SessionTasks(),
                 compaction = null,
                 suggestion = null,
                 pullRequest = null,
@@ -2715,15 +3212,17 @@ class DefaultRemoteRepository(
                 sessions = sessions.map { withSessionTitle(withSessionStatus(it)) },
                 sessionsFresh = sessionsFresh,
                 session = session?.let(::withSessionTitle),
-                messages = cachedChat?.messages ?: if (sameSession) it.messages else emptyList(),
-                questions = if (sameSession) it.questions else emptyList(),
+                messages = resumed?.messages ?: cachedChat?.messages ?: if (sameSession) it.messages else emptyList(),
+                questions = resumed?.questions ?: if (sameSession) it.questions else emptyList(),
                 draft = stored.text,
                 quote = stored.quote,
                 attachments = stored.attachments,
                 // An import or upload of this chat that still runs keeps its progress.
                 importingAttachments = sameSession && it.importingAttachments && importJob?.isActive == true,
                 attachmentProgress = it.attachmentProgress?.takeIf { sameSession && sendJob?.isActive == true },
-                uncertain = stored.mutationId != null,
+                // A queued prompt is journaled but not unconfirmed: it has not been sent.
+                uncertain = stored.mutationId != null &&
+                    !(sameSession && it.pendingSend?.state == PendingSendState.QUEUED),
                 followUps = stored.followUps,
                 sending = false,
                 answering = emptySet(),
@@ -2733,7 +3232,8 @@ class DefaultRemoteRepository(
                         cachedChat?.status ?: session?.text("status") ?: "offline"
                     else "offline",
                 nextCursor =
-                    if (cachedChat != null) cachedChat.nextCursor else if (sameSession) it.nextCursor else null,
+                    if (resumed != null) resumed.nextCursor
+                    else if (cachedChat != null) cachedChat.nextCursor else if (sameSession) it.nextCursor else null,
                 // Another chat shows what it showed when it was left, until its reads replace it.
                 configuration = if (sameSession) it.configuration else meta?.configuration,
                 contextUsage = if (sameSession) it.contextUsage else null,
@@ -2758,6 +3258,8 @@ class DefaultRemoteRepository(
             )
         }
         cacheCurrentScreen()
+        // Before the snapshot that follows: the focus names the chat now selected, or none.
+        syncFocus()
     }
 
     override suspend fun activate(
@@ -2961,7 +3463,7 @@ class DefaultRemoteRepository(
                             }
                 }
             if (restoredSessionId != null && restoredProjectId != null) {
-                held = beside.holdSnapshot(restoredSessionId, epoch)
+                held = beside.holdSnapshot(host.routeId, restoredSessionId, epoch)
                 if (reusedSessions(restoredProjectId) == null)
                     earlySessions = beside.alongside { listSessions(restoredProjectId, epoch) }
             }
@@ -3009,7 +3511,7 @@ class DefaultRemoteRepository(
                         "sessions.open",
                         epoch,
                         "sessionId" to session.text("id"),
-                        thenSend = { if (live) held = beside.holdSnapshot(session.text("id"), epoch) },
+                        thenSend = { if (live) held = beside.holdSnapshot(host.routeId, session.text("id"), epoch) },
                     ).obj("session").let(::withHostWorker)
                 } else session
             val canonicalProject =
@@ -3038,7 +3540,11 @@ class DefaultRemoteRepository(
             }
             // Only a snapshot of the chat now selected is taken; another one is dropped below. The
             // events that waited for it go to the new Timeline, which buffers them until it is in.
-            val heldReply = held?.takeIf { it.sessionId == canonical.sessionId }?.reply
+            val taken = held?.takeIf { it.sessionId == canonical.sessionId }
+            val heldReply = taken?.reply
+            // A held resume's Timeline waits for its reply from the start: the events held so far
+            // and those that follow apply after it.
+            if (taken?.base != null) timeline?.awaitReply()
             held?.let(::releaseHeldSnapshot)
             snapshotHeld = heldReply != null
             // The controls need only the connection and its capabilities, so they are read while
@@ -3047,7 +3553,13 @@ class DefaultRemoteRepository(
             refreshAdvisor()
             refreshCommands()
             try {
-                snapshot(epoch, held = heldReply, heldIncludesTasks = held?.includeTasks == true)
+                snapshot(
+                    epoch,
+                    held = heldReply,
+                    heldIncludesTasks = held?.includeTasks == true,
+                    heldBase = taken?.base,
+                    intent = SnapshotIntent.RESUME,
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (swallowed: Exception) {
@@ -3123,7 +3635,9 @@ class DefaultRemoteRepository(
                 // asks for one itself when its events need it.
                 timeline?.takeIf { snapshotPending === it }?.let { pending ->
                     snapshotPending = null
-                    if (pending.needsSnapshot && state.value.connected) snapshotAsync()
+                    // A held resume whose reply is dropped: the events held for it apply now.
+                    pending.endAwaiting()
+                    if (pending.needsSnapshot && state.value.connected) snapshotAsync(intent = SnapshotIntent.RESUME)
                 }
                 if (outcome != "ok") refreshPanes(unreadOnly = true)
                 update { it.copy(loading = false) }
@@ -3136,6 +3650,8 @@ class DefaultRemoteRepository(
                     if (sessionsCached && state.value.selection.sessionId == null) revalidateSessions()
                 }
                 drainTaskRefresh()
+                // A focus sent for a chat this activation then did not select names the selection again.
+                syncFocus()
                 // A foreground or network signal that came in while this loaded runs now.
                 resumeDeferredRecovery()
             }
@@ -3562,6 +4078,7 @@ class DefaultRemoteRepository(
 
     override fun disconnect() {
         reconnectEnabled = false
+        endPushWake(close = false)
         offlineSince = null
         cancelHostWaitHint()
         cancelQuietReconnect()
@@ -3583,8 +4100,11 @@ class DefaultRemoteRepository(
         ready?.cancel()
         pairing?.cancel()
         if (markPendingFollowUpsUncertain(activeHost?.routeId)) persist()
+        forgetQueuedPrompt()
         activeHost = null
         timedOutRoute = null
+        trailingPublish?.cancel()
+        trailingPublish = null
         timeline = null
         stopToolOutput()
         update { RemoteState(hosts = it.hosts, hostsLoaded = it.hostsLoaded, hostsUnreadable = it.hostsUnreadable) }
@@ -3599,6 +4119,7 @@ class DefaultRemoteRepository(
         ) clearNavigationCache()
         if (activeHost?.routeId == routeId) reconnectEnabled = false
         if (activeHost?.routeId == routeId) disconnect()
+        if (queuedPrompt?.key?.routeId == routeId) forgetQueuedPrompt()
         if (timedOutRoute == routeId) timedOutRoute = null
         attachmentBytes.clearRoute(routeId)
         SentImageThumbnails.clearRoute(routeId)
@@ -3613,6 +4134,7 @@ class DefaultRemoteRepository(
         followUpsToRecheck.keys.removeAll { it.routeId == routeId }
         removedRoutes += routeId
         parkedFiles.keys.removeAll { it.routeId == routeId }
+        detachedTimelines.keys.removeAll { it.routeId == routeId }
         savedNavigation.remove(routeId)
         queueNavigationWrite(immediate = true)
         update { it.copy(hosts = it.hosts.filterNot { host -> host.routeId == routeId }) }
@@ -3730,7 +4252,7 @@ class DefaultRemoteRepository(
         // The network went away in the foreground: the reconnect waits for its return, which says
         // nothing about the Mac, so it neither counts as a failure nor raises the card.
         val waitingForNetwork = transient && reconnectEnabled && host != null && recovery.waitingForNetwork
-        if (transient && !waitingForNetwork) failureStreak++
+        if (transient && !waitingForNetwork && cause != FailureCause.WAKE_ENDED) failureStreak++
         val retrying = reconnect && reconnectEnabled && recovery.canRecover && host != null
         // The Mac accepts connections and drops them at once, or breaks each one with a frame
         // this app cannot read: stop retrying on a timer. Retry, the next foreground and a
@@ -3799,7 +4321,8 @@ class DefaultRemoteRepository(
         // navigation connects again itself, and a retry now would activate the empty selection
         // from before it.
         val unowned = earlyConnection && restorePending
-        if (quiet && !waitingForNetwork && !unowned) startQuietReconnect() else cancelQuietReconnect()
+        if (quiet && !waitingForNetwork && !unowned && cause != FailureCause.WAKE_ENDED) startQuietReconnect()
+        else cancelQuietReconnect()
         if (stopped) {
             Diagnostics.record(
                 Diagnostics.Kind.RECOVERY,
@@ -3813,16 +4336,21 @@ class DefaultRemoteRepository(
             update { it.copy(reconnectAt = null) }
         } else if (retrying && !unowned) {
             val generationAtFailure = generation
-            // The relay announced a restart, so one retry per failure streak does not wait.
+            // The relay announced a restart, so one retry per failure streak waits only 250 to
+            // 750 ms: the Mac needs a moment to reconnect to the relay too.
             val restartRetry = restart && !restartRetryUsed && !broken
             if (restartRetry) {
                 restartRetryUsed = true
                 reconnectAttempts = 0
             }
             // A dead socket or a replaced network says nothing about the Mac: try again at once.
-            val immediate =
-                restartRetry || cause == FailureCause.STALE || cause == FailureCause.NETWORK_REPLACED
-            val wait = reconnectDelay(reconnectAttempts++, immediate)
+            val immediate = cause == FailureCause.STALE || cause == FailureCause.NETWORK_REPLACED
+            val wait =
+                if (restartRetry && !immediate) {
+                    reconnectAttempts++
+                    RESTART_RETRY_MIN_MILLIS +
+                        (RESTART_RETRY_SPREAD_MILLIS * jitter().coerceIn(0.0, 1.0)).toLong()
+                } else reconnectDelay(reconnectAttempts++, immediate)
             Diagnostics.record(Diagnostics.Kind.RECOVERY, "reconnect.backoff", wait, outcome = "attempt.$reconnectAttempts")
             retry?.cancel()
             update { it.copy(reconnectAt = now() + wait) }
@@ -4017,8 +4545,21 @@ class DefaultRemoteRepository(
     }
 
     override fun setForeground(foreground: Boolean) {
+        // In front, the usual rules hold; the window has nothing left to bound.
+        if (foreground) endPushWake(close = false)
         val signal = recovery.foreground(foreground)
+        backgroundFocusTimer?.cancel()
+        backgroundFocusTimer = null
+        inBackground = !foreground
+        backgroundGraceOver = false
         if (!foreground) {
+            backgroundFocusTimer = scope.launch {
+                delay(BACKGROUND_FOCUS_GRACE_MILLIS)
+                backgroundFocusTimer = null
+                backgroundGraceOver = true
+                // An activation sends its own focus and syncs again once it selected; see [streamReady].
+                if (!state.value.loading) syncFocus()
+            }
             jobsController.setForeground(false)
             backgroundedAt = now()
             backgrounds++
@@ -4037,8 +4578,70 @@ class DefaultRemoteRepository(
             away?.let { Diagnostics.record(Diagnostics.Kind.RECOVERY, "foreground", it) }
             resume(signal)
         }
+        // After the tier: a reconnect it started leaves this to the next connection's capabilities,
+        // and a probe it started already refocused at its start (see [revalidate]), so this one
+        // finds nothing left to do. An activation in flight still names the screen it leaves, so it
+        // keeps the focus it sent and syncs once it selected.
+        if (!state.value.loading) syncFocus()
         // After the tier: a reconnect it starts lists the jobs once ready, so this one does not.
         jobsController.setForeground(true)
+    }
+
+    override fun pushWake(routeId: String) {
+        fun note(outcome: String) = Diagnostics.record(Diagnostics.Kind.RECOVERY, "push.wake", outcome = outcome)
+        when {
+            // A cold process has no active Mac: it keeps BackgroundRemoteClient (R18).
+            activeHost?.routeId != routeId -> return note("other_route")
+            !reconnectEnabled -> return note("disabled")
+            recovery.isForeground -> return note("foreground")
+            !recovery.hasNetwork -> return note("no_network")
+            pairing?.isActive == true -> return note("busy")
+        }
+        val open = pushWakeRoute == routeId
+        // Connected with no window: the connection exists for another reason and needs nothing.
+        if (state.value.connected && !open) return note("connected")
+        pushWakeRoute = routeId
+        recovery.wake(true)
+        pushWakeTimer?.cancel()
+        pushWakeTimer =
+            scope.launch {
+                delay(PUSH_WAKE_WINDOW_MILLIS)
+                pushWakeTimer = null
+                endPushWake(close = true)
+            }
+        note(if (open) "extended" else "open")
+        if (state.value.connected) return
+        // A push says nothing about the Mac being unreachable: try at once, with a fresh backoff.
+        resetBackoff()
+        recover(RemoteRecovery.Signal.FRESH_NETWORK)
+    }
+
+    override suspend fun awaitPushWake(routeId: String, maxMillis: Long) {
+        // Stale until the activation after a reconnect has read the chat again; a healthy
+        // connection (see [withHealthyConnection]) is neither.
+        fun ready(current: RemoteState) = current.connected && !current.stale
+        if (pushWakeRoute != routeId || ready(state.value)) return
+        withTimeoutOrNull(maxMillis) { state.first(::ready) }
+    }
+
+    /**
+     * Closes the push wake window. With [close], a window that ends in the background closes the
+     * socket it opened, unless the live-run service keeps the process anyway ([liveRunKept]; a
+     * running status alone does not, the service only starts when the app goes to the background),
+     * instead of leaving the socket to the freezer.
+     */
+    private fun endPushWake(close: Boolean) {
+        pushWakeTimer?.cancel()
+        pushWakeTimer = null
+        if (pushWakeRoute == null) return
+        pushWakeRoute = null
+        recovery.wake(false)
+        Diagnostics.record(Diagnostics.Kind.RECOVERY, "push.wake", outcome = if (close) "closed" else "ended")
+        if (!close || recovery.isForeground) return
+        if (liveRunKept()) return
+        stopReconnectTimer()
+        if (state.value.connected || state.value.loading)
+            failed(true, R.string.remote_connection_error, cause = FailureCause.WAKE_ENDED)
     }
 
     /** Acts on [signal]; [pathMoved]: the network in use only moved its route. */
@@ -4147,7 +4750,9 @@ class DefaultRemoteRepository(
         if (signal != RemoteRecovery.Signal.FRESH_FOREGROUND) return ResumeTier.PROBE
         val away = resumeAway ?: Long.MAX_VALUE
         return when {
-            alive && away < RESUME_QUIET_AWAY_MILLIS && selection == selectionAtBackground -> ResumeTier.NONE
+            // A prompt a background wake held (see [snapshot]) needs this read to go out.
+            alive && away < RESUME_QUIET_AWAY_MILLIS && selection == selectionAtBackground && queuedPrompt == null ->
+                ResumeTier.NONE
             alive || away < RESUME_PROBE_AWAY_MILLIS -> ResumeTier.PROBE
             else -> ResumeTier.RECONNECT
         }
@@ -4220,15 +4825,23 @@ class DefaultRemoteRepository(
 
     /**
      * Tier 1: probes the socket with a short read instead of reconnecting. In a chat the probe is
-     * a snapshot into the Timeline on screen, elsewhere the project list. The lists are then read
+     * a resume of the Timeline on screen (a replay of what it missed, or a snapshot), elsewhere the
+     * project list. The lists are then read
      * again and applied in place; only a selection they no longer hold is selected anew, on its
      * parent. Configuration, advisor and commands are read again only if the chat moved on.
      */
     private suspend fun revalidate(selection: RemoteSelection, epoch: Long) {
         val host = activeHost?.takeIf { it.routeId == selection.routeId } ?: return
         val routeId = host.routeId
+        // The refocus goes first, whatever the scope's dispatcher: its session.focus must be on the
+        // wire before any resume, and the resume it sends for a detached chat makes the probe below
+        // use the list instead of a second resume.
+        syncFocus()
         val chat = timeline?.takeIf { selection.sessionId != null && it.sessionId == selection.sessionId }
         val before = chat?.let { it.revision to it.status }
+        // That resume runs on its own, so its reply may land after the probe's: the chat may still
+        // move after the comparison below.
+        val resumeElsewhere = chat != null && (chat.awaitingReply || snapshotPending === chat)
         val hint =
             scope.launch {
                 delay(RESUME_PROBE_HINT_MILLIS)
@@ -4238,7 +4851,10 @@ class DefaultRemoteRepository(
         val started = Diagnostics.now()
         var projects: List<JsonObject>? = null
         try {
-            if (chat != null) snapshot(epoch, timeoutMillis = RESUME_PROBE_TIMEOUT_MILLIS)
+            // A chat that already waits for a resume or has a fresh read pending (its refocus sent
+            // or started one) is probed with the list.
+            if (chat != null && !resumeElsewhere)
+                snapshot(epoch, timeoutMillis = RESUME_PROBE_TIMEOUT_MILLIS, intent = SnapshotIntent.RESUME)
             else projects = request("projects.list", epoch, timeoutMillis = RESUME_PROBE_TIMEOUT_MILLIS).array("items")
             Diagnostics.record(Diagnostics.Kind.RECOVERY, "resume.probe", Diagnostics.now() - started, outcome = "ok")
         } catch (e: CancellationException) {
@@ -4253,7 +4869,7 @@ class DefaultRemoteRepository(
             if (state.value.connection == R.string.remote_checking_connection && state.value.connected)
                 update { it.copy(connection = R.string.remote_connected) }
         }
-        if (chat != null && chat === timeline && before != (chat.revision to chat.status)) {
+        if (chat != null && chat === timeline && (resumeElsewhere || before != (chat.revision to chat.status))) {
             refreshConfiguration()
             refreshAdvisor()
             refreshCommands()
@@ -5129,40 +5745,72 @@ class DefaultRemoteRepository(
         }
     }
 
-    override fun prompt() = sendPrompt(null)
+    override fun prompt() {
+        if (takeBackQueuedBeforeSend()) return
+        // A prompt typed while the connection is down waits for it; see [queuePrompt].
+        if (!state.value.connected && queuePrompt()) return
+        sendPrompt(null)
+    }
 
-    override fun followUp() = sendPrompt("follow_up")
+    override fun followUp() {
+        if (takeBackQueuedBeforeSend()) return
+        sendPrompt("follow_up")
+    }
 
-    override fun steer() = sendPrompt("steer")
+    override fun steer() {
+        if (takeBackQueuedBeforeSend()) return
+        sendPrompt("steer")
+    }
 
-    private fun sendPrompt(delivery: String?) {
+    /**
+     * A send of newly typed text while a prompt still waits in the queue would overwrite the queue's
+     * journal. The queued text comes back into the composer ahead of the typed text instead, and
+     * nothing is sent: the user sees what goes out and sends it with the next tap.
+     */
+    private fun takeBackQueuedBeforeSend(): Boolean {
+        val queued = queuedPrompt ?: return false
+        // Offline, nothing else can go out; the queue keeps its place.
+        if (!state.value.connected || state.value.draft.isBlank()) return false
+        takeBackQueuedPrompt(queued, "superseded")
+        return true
+    }
+
+    /**
+     * Sends [delivery]'s prompt from the composer, or, with [resend], the queued prompt it names
+     * (its text and quote, not the composer's; [resendCleared] is what the queue took out of the
+     * composer, so a failed send gives it back). Returns whether a send started.
+     */
+    private fun sendPrompt(delivery: String?, resend: PendingSend? = null, resendCleared: ClearedComposer? = null): Boolean {
         val queued = delivery != null
-        val current = state.value
+        val current =
+            if (resend == null) state.value
+            else state.value.copy(draft = resend.text, quote = resend.quote, attachments = emptyList())
         if (
             !current.connected ||
-                current.loading ||
+                // A queued prompt goes out when the reconnect's snapshot is in, while the activation
+                // that read it still loads.
+                (resend == null && current.loading) ||
                 activeHost?.routeId != current.selection.routeId ||
                 current.status != (if (queued) "running" else "idle") ||
                 (queued && (!(if (delivery == "steer") canSteer(current) else canFollowUp(current)) ||
                     current.questions.isNotEmpty() || current.followUps.size >= 64)) ||
                 current.sending ||
-                current.importingAttachments ||
-                current.configurationChanging ||
+                (resend == null && (current.importingAttachments || current.configurationChanging)) ||
                 (current.draft.isBlank() && current.attachments.isEmpty())
         )
-            return
+            return false
         if (queued && isChildSession(current) && current.attachments.isNotEmpty()) {
             reportError(R.string.remote_child_attachments_unsupported)
-            return
+            return false
         }
-        val key = currentDraftKey() ?: return
-        val projectId = current.selection.projectId ?: return
+        val key = currentDraftKey() ?: return false
+        val projectId = current.selection.projectId ?: return false
         val command = commandName(current.draft)
-        if (queued && (command != null || current.draft.trimStart().startsWith("/"))) return
+        if (queued && (command != null || current.draft.trimStart().startsWith("/"))) return false
         if (command != null) {
             if (current.quote != null || current.attachments.isNotEmpty()) {
                 reportError(R.string.remote_command_remove_context)
-                return
+                return false
             }
             if (
                 COMMANDS_CAPABILITY !in current.capabilities ||
@@ -5171,24 +5819,24 @@ class DefaultRemoteRepository(
                     current.commands.none { it.name == command }
             ) {
                 reportError(R.string.remote_command_unknown)
-                return
+                return false
             }
         }
         if (current.attachments.isNotEmpty()) {
             if (ATTACHMENTS_CAPABILITY !in current.capabilities) {
                 reportError(R.string.remote_attachments_unsupported)
-                return
+                return false
             }
             if (!validAttachmentSet(current.attachments)) {
                 reportError(R.string.remote_attachment_limits)
-                return
+                return false
             }
             if (
                 current.attachments.any { it.kind == "image" } &&
                     current.configuration?.model?.input?.contains("image") != true
             ) {
                 reportError(R.string.remote_attachment_model_error)
-                return
+                return false
             }
         }
         val encoded =
@@ -5197,7 +5845,7 @@ class DefaultRemoteRepository(
             } catch (swallowed: IllegalArgumentException) {
                 Diagnostics.caught("repo.sendPrompt", swallowed)
                 reportError(R.string.remote_prompt_too_long)
-                return
+                return false
             }
         val epoch = selectionEpoch
         // A plain prompt is sent through the composer and shown at the chat's tail; the other two
@@ -5207,7 +5855,7 @@ class DefaultRemoteRepository(
         val submitted = PromptSnapshot(current.draft, current.quote, current.attachments)
         val sentRevision = composerVersion(key)
         val tapped = Diagnostics.now()
-        val id = (if (plain) unconfirmedMutationId(key, current) else null) ?: Wire.random()
+        val id = resend?.mutationId ?: (if (plain) unconfirmedMutationId(key, current) else null) ?: Wire.random()
         attachmentInFlight.addAll(current.attachments.map { it.id })
         update {
             it.copy(
@@ -5226,7 +5874,8 @@ class DefaultRemoteRepository(
         // plain prompt confirmed in the chat.
         var acknowledged = false
         var restoredAfterTimeout: RestoredComposer? = null
-        var clearedComposer: ClearedComposer? = null
+        // A resend starts with what the queue cleared, so a failure before the journal step restores it too.
+        var clearedComposer: ClearedComposer? = resendCleared
         val connection = generation
         val attempt = Any()
         promptAttempts[key] = attempt
@@ -5245,13 +5894,14 @@ class DefaultRemoteRepository(
                 // Text and attachments typed since the send began stay; what was sent leaves the
                 // composer and lives in the journal. Uploads stay, so a resend reuses them.
                 val version = composerVersion(key)
-                val clearTextAndQuote = plain && version.text == sentRevision.text &&
+                // A queued prompt left the composer when it was queued: what is typed there now stays.
+                val clearTextAndQuote = plain && resend == null && version.text == sentRevision.text &&
                     version.quote == sentRevision.quote && stored.text == current.draft && stored.quote == current.quote
                 val clearText = clearTextAndQuote
                 val clearQuote = clearTextAndQuote
-                val clearAttachments = plain && version.attachments == sentRevision.attachments &&
+                val clearAttachments = plain && resend == null && version.attachments == sentRevision.attachments &&
                     stored.attachments == current.attachments
-                clearedComposer = ClearedComposer(version, clearText, clearQuote, clearAttachments)
+                clearedComposer = resendCleared ?: ClearedComposer(version, clearText, clearQuote, clearAttachments)
                 drafts[key] =
                     stored.copy(
                         text = if (clearText) "" else stored.text,
@@ -5281,9 +5931,11 @@ class DefaultRemoteRepository(
                                 current.quote,
                                 current.attachments,
                                 PendingSendState.SENDING,
-                                // The newest message the chat shows now: the host's copy of this
-                                // prompt comes after it, whatever earlier prompt reads the same.
-                                afterMessageId = it.messages.lastOrNull()?.optionalText("id")?.ifEmpty { null },
+                                // The newest message the chat holds now: the host's copy of this
+                                // prompt comes after it, whatever earlier prompt reads the same. The
+                                // Timeline is read, since a streaming upsert may not be published yet.
+                                afterMessageId =
+                                    chatMessages(key.sessionId, it.messages).lastOrNull()?.optionalText("id")?.ifEmpty { null },
                             )
                             else it.pendingSend,
                     )
@@ -5432,10 +6084,202 @@ class DefaultRemoteRepository(
                 withContext(NonCancellable) { runCatching { cleanupAttachments() } }
             }
         }
+        return true
+    }
+
+    /**
+     * A plain prompt typed while the connection is down (R16): it leaves the composer into the send
+     * journal, as a send does, and shows at the chat's tail as [PendingSendState.QUEUED]. It goes
+     * out through the normal send once the reconnect's snapshot or resume shows that the chat did
+     * not move on ([releaseQueuedPrompt]). Returns whether the prompt was taken, also to refuse it.
+     */
+    private fun queuePrompt(): Boolean {
+        val current = state.value
+        if (!canQueuePrompt(current) || queuedPrompt != null || activeHost?.routeId != current.selection.routeId)
+            return false
+        val key = currentDraftKey() ?: return false
+        if (!draftsAvailable || storageFailure != null) return false
+        try {
+            QuoteCodec.encode(current.draft, current.quote)
+        } catch (swallowed: IllegalArgumentException) {
+            Diagnostics.caught("repo.queuePrompt", swallowed)
+            reportError(R.string.remote_prompt_too_long)
+            return true
+        }
+        val id = unconfirmedMutationId(key, current) ?: Wire.random()
+        val stored = drafts[key] ?: StoredDraft()
+        val clear = stored.text == current.draft && stored.quote == current.quote
+        val cleared = ClearedComposer(composerVersion(key), clear, clear, true, queued = true)
+        val attempt = Any()
+        drafts[key] =
+            stored.copy(
+                text = if (clear) "" else stored.text,
+                quote = if (clear) null else stored.quote,
+                mutationId = id,
+                submittedText = current.draft,
+                submittedQuote = current.quote,
+                submittedAttachments = emptyList(),
+                submittedDelivery = "prompt",
+            )
+        journalOwners[key] = attempt
+        promptOwners[key] = attempt
+        persist()
+        val journaled = drafts.getValue(key)
+        val queuedAt = now()
+        update {
+            it.copy(
+                draft = journaled.text,
+                quote = journaled.quote,
+                uncertain = false,
+                pendingSend = PendingSend(
+                    id,
+                    current.draft,
+                    current.quote,
+                    emptyList(),
+                    PendingSendState.QUEUED,
+                    // The newest message the chat shows now: the prompt goes out only if it is still
+                    // the newest after the reconnect.
+                    afterMessageId = chatMessages(key.sessionId, it.messages).lastOrNull()?.optionalText("id")?.ifEmpty { null },
+                    queuedAt = queuedAt,
+                ),
+            )
+        }
+        val expiry = scope.launch {
+            delay(QUEUED_PROMPT_MILLIS)
+            queuedPrompt?.takeIf { it.id == id }?.let { markQueuedNotConfirmed(it, "expired") }
+        }
+        queuedPrompt = QueuedPrompt(key, id, attempt, cleared, expiry)
+        Diagnostics.record(Diagnostics.Kind.OFFLINE, "prompt.queued")
+        return true
+    }
+
+    /**
+     * Called when a first page (a snapshot or a resume) of [source] was applied: sends the queued
+     * prompt if the chat did not move on while the phone was offline, its newest message is still
+     * the one shown when the prompt was queued and pi is idle. Otherwise the prompt is marked not
+     * confirmed, its text back in the composer, for the user to send again.
+     */
+    private fun releaseQueuedPrompt(source: Timeline) {
+        val queued = queuedPrompt ?: return
+        val current = state.value
+        val pending = current.pendingSend?.takeIf { it.mutationId == queued.id && it.state == PendingSendState.QUEUED }
+        if (pending == null) {
+            queued.expiry.cancel()
+            queuedPrompt = null
+            return
+        }
+        // Waits for a reply from this connection to the chat the prompt was typed in.
+        if (
+            !current.connected ||
+                source !== timeline ||
+                source.sessionId != queued.key.sessionId ||
+                currentDraftKey() != queued.key ||
+                activeHost?.routeId != queued.key.routeId ||
+                source.needsSnapshot ||
+                // Events held during the snapshot are still to be fetched by the owed resume, which
+                // reads the chat again and comes back here.
+                source.resumeIsOwed ||
+                // The view may miss the newest message: a focus that lapsed while the reply was
+                // awaited (a push wake's empty focus) schedules a fresh read, a detached chat
+                // applies nothing, and a reply still awaited may move the chat. That read's own
+                // snapshot comes back here.
+                source.focusLapsed ||
+                source.detached ||
+                source.awaitingReply ||
+                snapshotPending === source
+        )
+            return
+        val newest = source.messages.lastOrNull()?.optionalText("id")?.ifEmpty { null }
+        val age = now() - (pending.queuedAt ?: 0L)
+        when {
+            age >= QUEUED_PROMPT_MILLIS -> markQueuedNotConfirmed(queued, "expired")
+            newest != pending.afterMessageId || current.status != "idle" -> markQueuedNotConfirmed(queued, "moved_on")
+            else -> {
+                queued.expiry.cancel()
+                queuedPrompt = null
+                // The send takes the journal and the pending bubble over under the same request ID.
+                if (sendPrompt(null, pending, queued.cleared)) Diagnostics.record(Diagnostics.Kind.OFFLINE, "prompt.queue_sent", age)
+                else markQueuedNotConfirmed(queued, "not_sent")
+            }
+        }
+    }
+
+    /** The queued prompt did not go out: not confirmed, with its text back in the composer. */
+    private fun markQueuedNotConfirmed(queued: QueuedPrompt, reason: String) {
+        if (queuedPrompt === queued) queuedPrompt = null
+        queued.expiry.cancel()
+        // Only a journal that still holds this prompt is uncertain; a newer send owns it otherwise.
+        val journaled = drafts[queued.key]?.mutationId == queued.id && promptOwners[queued.key] === queued.attempt
+        unconfirmPendingSend(queued.key, queued.id, queued.attempt, queued.cleared)
+        if (promptOwners[queued.key] === queued.attempt) promptOwners.remove(queued.key)
+        if (journaled && currentDraftKey() == queued.key) update { it.copy(uncertain = true) }
+        Diagnostics.record(Diagnostics.Kind.OFFLINE, "prompt.queue_dropped", outcome = reason)
+    }
+
+    /**
+     * The screen the queued prompt waits on goes (a disconnect, or its Mac removed): the wait and
+     * its expiry end, and the journal entry stays, so opening the chat again shows the prompt as not
+     * confirmed, as after a process death.
+     */
+    private fun forgetQueuedPrompt() {
+        val queued = queuedPrompt ?: return
+        queuedPrompt = null
+        queued.expiry.cancel()
+        if (promptOwners[queued.key] === queued.attempt) promptOwners.remove(queued.key)
+        Diagnostics.record(Diagnostics.Kind.OFFLINE, "prompt.queue_dropped", outcome = "disconnected")
+    }
+
+    override fun cancelQueuedPrompt() {
+        queuedPrompt?.let { takeBackQueuedPrompt(it, "cancelled") }
+    }
+
+    /**
+     * The queued prompt never left the phone, so taking it back leaves nothing to reconcile: its
+     * text returns to the composer (ahead of what was typed there since) and the journal entry goes.
+     */
+    private fun takeBackQueuedPrompt(queued: QueuedPrompt, reason: String) {
+        queuedPrompt = null
+        queued.expiry.cancel()
+        val key = queued.key
+        if (promptOwners[key] === queued.attempt) promptOwners.remove(key)
+        val journal = drafts[key]?.takeIf { it.mutationId == queued.id && journalOwners[key] === queued.attempt }
+        if (journal != null) {
+            val submitted = journal.submittedText.orEmpty()
+            drafts[key] =
+                journal.copy(
+                    text = if (journal.text.isEmpty()) submitted else submitted + "\n\n" + journal.text,
+                    quote = journal.quote ?: journal.submittedQuote,
+                    mutationId = null,
+                    submittedText = null,
+                    submittedQuote = null,
+                    submittedAttachments = emptyList(),
+                    submittedDelivery = null,
+                )
+            journalOwners.remove(key)
+            persist()
+        }
+        val restored = drafts[key]
+        if (currentDraftKey() == key && restored != null)
+            update {
+                it.copy(
+                    draft = restored.text,
+                    quote = restored.quote,
+                    uncertain = false,
+                    pendingSend = it.pendingSend?.takeIf { pending -> pending.mutationId != queued.id },
+                )
+            }
+        Diagnostics.record(Diagnostics.Kind.OFFLINE, "prompt.queue_taken_back", outcome = reason)
     }
 
     private data class PromptSnapshot(val draft: String, val quote: MessageQuote?, val attachments: List<LocalAttachment>)
-    private data class ClearedComposer(val revision: ComposerVersions, val text: Boolean, val quote: Boolean, val attachments: Boolean)
+    private data class ClearedComposer(
+        val revision: ComposerVersions,
+        val text: Boolean,
+        val quote: Boolean,
+        val attachments: Boolean,
+        /** The queue took the text out: if the composer changed since, the text returns ahead of what was typed. */
+        val queued: Boolean = false,
+    )
     private data class RestoredComposer(val revision: ComposerVersions, val quote: Boolean, val attachments: Boolean)
 
     private suspend fun settlePrompt(
@@ -5506,6 +6350,14 @@ class DefaultRemoteRepository(
     }
 
     /**
+     * The messages the chat holds for [sessionId]: the Timeline's, which may be ahead of the
+     * [published] list while a streaming upsert waits for its trailing publish ([TIMELINE_PUBLISH_MILLIS]).
+     * A send's baseline and its acknowledgement must read the same list.
+     */
+    private fun chatMessages(sessionId: String, published: List<JsonObject>): List<JsonObject> =
+        timeline?.takeIf { it.sessionId == sessionId && it.hasSnapshot }?.messages ?: published
+
+    /**
      * The host acknowledged the plain prompt [id]: the chat keeps it until its timeline has it. The
      * chat shown decides, not the selection epoch: a chat left and opened again keeps its send.
      */
@@ -5514,7 +6366,9 @@ class DefaultRemoteRepository(
         val pending = state.value.pendingSend?.takeIf { it.mutationId == id &&
             (it.state == PendingSendState.SENDING || (late && it.state == PendingSendState.NOT_CONFIRMED)) }
             ?: return
-        update { it.copy(pendingSend = settledSend(pending.copy(state = PendingSendState.CONFIRMED), it.messages)) }
+        update {
+            it.copy(pendingSend = settledSend(pending.copy(state = PendingSendState.CONFIRMED), chatMessages(key.sessionId, it.messages)))
+        }
         Diagnostics.record(Diagnostics.Kind.REQUEST, "send.confirmed", Diagnostics.now() - tapped)
     }
 
@@ -5533,10 +6387,21 @@ class DefaultRemoteRepository(
         val restoreQuote = restoreText && cleared!!.quote && version.quote == cleared.revision.quote && before!!.quote == null
         val restoreAttachments = restoreText && cleared!!.attachments &&
             version.attachments == cleared.revision.attachments && before!!.attachments.isEmpty()
+        // A queued prompt whose composer changed since: its text comes back ahead of what was typed.
+        val mergeQueued = !restoreText && before != null && cleared != null && cleared.queued && cleared.text &&
+            before.submittedText != null
         val restored = if (restoreText) before!!.copy(text = before.submittedText!!,
             quote = if (restoreQuote) before.submittedQuote else before.quote,
-            attachments = if (restoreAttachments) before.submittedAttachments else before.attachments) else before
-        val ownership = if (restoreText) RestoredComposer(version, restoreQuote, restoreAttachments) else null
+            attachments = if (restoreAttachments) before.submittedAttachments else before.attachments)
+        else if (mergeQueued) before!!.copy(
+            text = if (before.text.isEmpty()) before.submittedText!! else before.submittedText!! + "\n\n" + before.text,
+            quote = before.quote ?: if (cleared!!.quote) before.submittedQuote else null,
+        )
+        else before
+        // A merged composer holds typed text too, so a late acknowledgement never clears it.
+        val ownership = if (restoreText) RestoredComposer(version, restoreQuote, restoreAttachments)
+            else if (mergeQueued && before!!.text.isEmpty()) RestoredComposer(version, cleared!!.quote, false)
+            else null
         if (restored != null) {
             drafts[key] = restored
             persist()
@@ -6116,12 +6981,28 @@ class DefaultRemoteRepository(
         fields: Array<out Pair<String, Any?>>,
         timeoutMillis: Long,
         record: Boolean,
+    ): JsonObject =
+        awaitConnectionReply(Wire.objectOf("type" to type, "requestId" to requestId, *fields), timeoutMillis, record)
+
+    /**
+     * Sends [payload], a command with its `requestId`, bound to the connection, and waits for its
+     * result. With [liveness], a type in [LIVENESS_READS] that times out with no frame since it went
+     * out ends the connection as stale, as [request] does.
+     */
+    private suspend fun awaitConnectionReply(
+        payload: JsonObject,
+        timeoutMillis: Long,
+        record: Boolean,
+        liveness: Boolean = false,
     ): JsonObject {
-        val payload = Wire.objectOf("type" to type, "requestId" to requestId, *fields)
+        val requestId = payload.text("requestId")
+        val type = payload.text("type")
         recordIssuedRequest(requestId)
         val completion = CompletableDeferred<JsonObject>()
         connectionCompletions[requestId] = completion
         val started = Diagnostics.now()
+        val connection = generation
+        val inboundAtSend = inboundFrames
         var outcome = "failed"
         try {
             transport.send(payload)
@@ -6129,6 +7010,8 @@ class DefaultRemoteRepository(
                 withTimeoutOrNull(timeoutMillis) { completion.await() }
                     ?: run {
                         outcome = "timeout"
+                        if (liveness && type in LIVENESS_READS && inboundFrames == inboundAtSend && state.value.connected && connection == generation)
+                            connectionStale(type)
                         throw RemoteRequestException.timeout()
                     }
             outcome = "ok"

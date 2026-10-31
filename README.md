@@ -137,7 +137,7 @@ them. The session shows attachment metadata, not embedded file contents.
 Unsubmitted uploads expire after one hour. Submitted files remain on the Mac for seven days. A
 saved session retains the reference after expiry, but the temporary file may no longer exist.
 The phone keeps local copies while an encrypted draft or an uncertain send still references them.
-Disconnecting does not automatically resubmit a prompt.
+Disconnecting does not automatically resubmit a prompt that was already sent.
 
 ## Editing project files
 
@@ -186,10 +186,20 @@ directory, separately from pairing credentials. Writes are serialized, and a pro
 after its unresolved acknowledgment marker has been saved. An acknowledgment clears the submitted
 text only if the user has not edited it since sending. Removing a Mac also removes its drafts.
 
-A reconnect validates the selected project and session and reads a fresh snapshot. PocketPi checks
+A reconnect validates the selected project and session and updates the chat. PocketPi checks
 again when the app returns to the foreground on a validated network, and after the default network
 changes. It keeps the socket while the app is in the background and stops automatic retries there.
-It never opens or forks a historical session, and never retries prompts or answers automatically.
+A Mac that keeps a journal of the session's recent events sends only the events the chat missed;
+any other Mac sends a fresh snapshot.
+It never opens or forks a historical session, and never retries a sent prompt or an answer automatically.
+A plain prompt typed while the connection is down (no attachment, `/` command or `!` shell draft; the chat
+loaded from that Mac and last idle; one at a time) waits in the chat as "Queued, sends when connected" and is
+journaled like a send. After the reconnect it goes out once, under the same request ID, only if the chat did
+not move on: its newest message is still the one shown when the prompt was queued and pi is idle. Otherwise,
+and after 15 minutes, it is marked not confirmed and its text returns to the composer to send by hand, ahead of
+anything typed since. The same holds if the send after the reconnect fails. Cancel on the bubble takes it back, as
+does leaving the chat or sending new text while it still waits. A restart leaves the journal entry, which is shown as not
+confirmed.
 After an uncertain prompt result, check the session before sending the draft again. In a
 running host-owned RPC session, the busy row offers two send modes: Send now (interrupt step) sends
 the draft as a steer, and Send when done submits it to pi's follow-up queue. The journal
@@ -229,7 +239,7 @@ Keystore and encrypted file recreation. With an attached emulator, run
 `./gradlew pixel2Api36DebugAndroidTest`; for CI's tablet subset, run
 `./gradlew pixelTabletApi36DebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.annotation=de.joinnoah.pi.remote.LargeScreen`.
 
-Unit tests consume the twenty JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
+Unit tests consume the twenty-two JSON fixtures in `src/test/resources/`. Five are byte-for-byte copies
 of `packages/pi-remote/protocol/fixtures/` from noah-monorepo commit
 `1550dcc200459913b9b1dc9b16fc3439db341c68`. `provider-auth-v1.json` (provider login) is a
 byte-for-byte copy from noah-monorepo commit `daca1ee562ca661fb76ce2d61a75ca2fc8c8059f`, the
@@ -279,6 +289,11 @@ download, the session reload command and its result, the session artifact list a
 the denied-device message, prompt suggestions, and the ticket commands and results.
 A built APK does not establish Samsung device, TalkBack, mobile-network or real Firebase
 delivery acceptance; those require the configured host, relay and device.
+`stream-v1.json` (the `remote.stream.v1` capability: `session.focus`, `remote.ping` and `pong`,
+`remote.ack`, and the `after` field of session events) and `resume-v1.json` (the `resume.v1:`
+request IDs, the snapshot `epoch` and the `session.events` result) are byte-for-byte copies from
+`packages/pi-atlas/extensions/remote/protocol/fixtures/` from noah-monorepo commit
+`59a1232f8e101d4170891b00db47828405de2784`, the merge of pull request 1314 into `dev`.
 
 ## Appearance
 

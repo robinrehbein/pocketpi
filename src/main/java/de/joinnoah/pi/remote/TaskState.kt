@@ -15,6 +15,10 @@ internal const val SESSION_TASKS_CAPABILITY = "session.tasks.v1"
 internal fun staleTasks(tasks: SessionTasks): SessionTasks =
     if (tasks.freshness == TaskFreshness.LIVE) tasks.copy(freshness = TaskFreshness.STALE) else tasks
 
+/** [tasks] current again: a resume replay showed that nothing changed them. */
+internal fun liveTasks(tasks: SessionTasks): SessionTasks =
+    if (tasks.freshness == TaskFreshness.STALE) tasks.copy(freshness = TaskFreshness.LIVE) else tasks
+
 internal fun parseSessionTasks(value: kotlinx.serialization.json.JsonElement?): SessionTasks {
     val unavailable = SessionTasks(freshness = TaskFreshness.UNAVAILABLE)
     val array = value as? JsonArray ?: return unavailable

@@ -2,7 +2,7 @@
     <!-- English fallback for all unsupported locales. -->
     <string name="remote_waiting_for_mac">Waiting for your Mac…</string>
     <string name="remote_diagnostics_title">Diagnostics</string>
-    <string name="remote_diagnostics_help">Connection and request timings on this phone, kept in memory until the app closes. They contain no messages, IDs or keys.</string>
+    <string name="remote_diagnostics_help">Connection and request timings on this phone, kept in memory while the app runs, with a summary saved on this phone for the next start. They contain no messages, IDs or keys.</string>
     <string name="remote_diagnostics_open">Show diagnostics</string>
     <string name="remote_diagnostics_empty">Nothing recorded yet.</string>
     <string name="remote_diagnostics_requests">Requests</string>
@@ -20,6 +20,13 @@
     <string name="remote_diagnostics_offline">Offline intervals</string>
     <string name="remote_diagnostics_offline_row">Offline for %1$.1f s</string>
     <string name="remote_diagnostics_frames">Received frames: %1$d · decrypt p50 %2$d µs · p95 %3$d µs</string>
+    <string name="remote_diagnostics_link">Link quality</string>
+    <string name="remote_diagnostics_rtt">Round trip: p50 %1$d ms · p95 %2$d ms · last %3$d ms (%4$d pings)</string>
+    <string name="remote_diagnostics_rtt_relay">Mac to relay: %1$d ms</string>
+    <string name="remote_diagnostics_link_counts">Reconnects: %1$d · phone ping failures: %2$d · app ping timeouts: %3$d</string>
+    <string name="remote_diagnostics_resumes">Resumes replayed: %1$d · resumes as snapshot: %2$d · acks sent: %3$d</string>
+    <string name="remote_diagnostics_close_codes">Relay close codes: %1$s · too slow (1013): %2$d</string>
+    <string name="remote_diagnostics_previous">Before the restart (saved %1$s)</string>
     <string name="remote_diagnostics_copy">Copy report</string>
     <string name="remote_diagnostics_close">Close</string>
     <string name="remote_diagnostics_clip_label">PocketPi diagnostics</string>

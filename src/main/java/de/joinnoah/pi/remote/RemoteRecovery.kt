@@ -80,8 +80,28 @@ class RemoteRecovery {
         }
     }
 
+    /** A push wake window is open: the background may reconnect, see [wake]. */
+    private var waking = false
+
+    /**
+     * Opens or closes a push wake window. While it is open a usable network lets the app
+     * reconnect in the background as it would in the foreground; [waitingForNetwork] still means
+     * the foreground only.
+     */
+    fun wake(open: Boolean) {
+        waking = open
+    }
+
+    /** Whether a usable network exists, in the foreground or not. */
+    val hasNetwork: Boolean
+        get() = network != null
+
+    /** Whether the app is in front. */
+    val isForeground: Boolean
+        get() = foreground
+
     val canRecover: Boolean
-        get() = foreground && network != null
+        get() = (foreground || waking) && network != null
 
     /** In the foreground without a usable network: a reconnect waits for one, not for a timer. */
     val waitingForNetwork: Boolean

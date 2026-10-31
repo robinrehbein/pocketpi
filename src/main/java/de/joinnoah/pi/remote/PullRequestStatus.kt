@@ -51,7 +51,7 @@ private val checksKeys = setOf("state", "failed")
 private const val MAX_SAFE_INTEGER = 9007199254740991L
 
 /** [value] as a JSON number holding an exact integer within +-(2^53 - 1), else null. */
-private fun wireInteger(value: JsonElement?): Long? {
+internal fun wireInteger(value: JsonElement?): Long? {
     val primitive = (value as? JsonPrimitive)?.takeIf { it !is JsonNull && !it.isString } ?: return null
     if (primitive.booleanOrNull != null) return null
     primitive.content.toLongOrNull()?.let { return it.takeIf { n -> n in -MAX_SAFE_INTEGER..MAX_SAFE_INTEGER } }
@@ -123,7 +123,7 @@ internal fun pullRequestStatus(value: JsonElement?): PullRequestStatus? {
 
 /** The pull request [event] sets or clears, or null when a field breaks the protocol's rules. */
 internal fun sessionPullRequest(event: JsonObject): SessionPullRequest? {
-    if (event.keys != pullRequestEventKeys) return null
+    if (!hasEventShape(event, pullRequestEventKeys)) return null
     val value = event["pullRequest"]
     if (value is JsonNull) return SessionPullRequest(null)
     return pullRequestStatus(value)?.let(::SessionPullRequest)

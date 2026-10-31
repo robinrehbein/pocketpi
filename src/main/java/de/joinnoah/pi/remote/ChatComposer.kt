@@ -1082,7 +1082,7 @@ private const val COMPOSER_MAX_LINES = 14
  * [shellDraft]) needs a command and no other one running.
  */
 internal fun canSendDraft(state: RemoteState): Boolean =
-    state.connected &&
+    (state.connected &&
         !state.loading &&
         state.status == "idle" &&
         !state.sending &&
@@ -1091,7 +1091,34 @@ internal fun canSendDraft(state: RemoteState): Boolean =
         // Nothing goes out while this phone's shell command runs; the session answers busy.
         state.bash?.running != true &&
         (shellDraft(state)?.let { shellDraftSendable(it, state) }
-            ?: (state.draft.isNotBlank() || state.attachments.isNotEmpty()))
+            ?: (state.draft.isNotBlank() || state.attachments.isNotEmpty()))) ||
+        canQueuePrompt(state)
+
+/**
+ * The draft can wait for the connection: a plain prompt (no attachment, `/` command or `!` shell
+ * draft) typed in a chat that was loaded from this Mac and last reported idle, while the connection
+ * is down or coming back. One prompt waits at a time, and a subagent's chat sends nothing offline.
+ * The repository sends it after the reconnect only if the chat did not move on (R16).
+ */
+internal fun canQueuePrompt(state: RemoteState): Boolean {
+    val text = state.draft.trimStart()
+    return !state.connected &&
+        state.stale &&
+        state.status == "idle" &&
+        state.selection.routeId != null &&
+        state.selection.sessionId != null &&
+        state.pendingSend == null &&
+        !state.sending &&
+        !state.importingAttachments &&
+        !state.configurationChanging &&
+        state.attachments.isEmpty() &&
+        state.bash?.running != true &&
+        state.questions.isEmpty() &&
+        !isChildSession(state) &&
+        text.isNotEmpty() &&
+        !text.startsWith("/") &&
+        !text.startsWith("!")
+}
 
 /**
  * The draft can go out as a steer, a follow-up or a queued prompt: never a `/` command, nor a shell
