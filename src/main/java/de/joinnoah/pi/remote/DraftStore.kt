@@ -32,6 +32,8 @@ data class StoredDraft(
     val submittedDelivery: String? = null,
     val gitCommit: GitCommitDraft? = null,
     val gitPush: GitPushIntent? = null,
+    val gitPullRequest: GitPullRequestIntent? = null,
+    val gitPullRequestDraft: GitPullRequestDraft? = null,
 )
 
 interface DraftStorage {
@@ -81,6 +83,8 @@ class DraftStore(
                             "submittedDelivery" to value.submittedDelivery,
                             "gitCommit" to value.gitCommit?.json(),
                             "gitPush" to value.gitPush?.json(),
+                            "gitPullRequest" to value.gitPullRequest?.json(),
+                            "gitPullRequestDraft" to value.gitPullRequestDraft?.json(),
                         )
                     }
                 )
@@ -140,5 +144,7 @@ internal fun parseStoredDrafts(bytes: ByteArray): Map<DraftKey, StoredDraft> =
                     },
                 gitCommit = (value["gitCommit"] as? JsonObject)?.let(::parseGitCommitDraft),
                 gitPush = (value["gitPush"] as? JsonObject)?.let(::parseGitPushIntent),
+                gitPullRequest = (value["gitPullRequest"] as? JsonObject)?.let(::parseGitPullRequestIntent),
+                gitPullRequestDraft = (value["gitPullRequestDraft"] as? JsonObject)?.let(::parseGitPullRequestDraft),
             )
     }

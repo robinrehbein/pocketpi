@@ -9,6 +9,10 @@ enum class GitPullRequestReason { GIT_UNAVAILABLE, NOT_A_REPOSITORY, SESSION_UNS
 enum class GitWriteHook { PRE_COMMIT, COMMIT_MSG, PRE_PUSH }
 enum class GitRemoteTip { ABSENT, EQUAL, AHEAD, BEHIND, DIVERGED }
 enum class GitPushStatus { MATCHES, ABSENT, DIFFERENT, UNAVAILABLE }
+const val SESSION_GIT_PULL_REQUEST_CAPABILITY = "session.git.pull_request.v1"
+const val SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY = "session.git.pull_request.status.v1"
+enum class GitPullRequestStatus { FOUND, ABSENT, DIFFERENT, UNAVAILABLE }
+data class GitPullRequestIdentity(val number: Long, val url: String, val base: String)
 enum class GitSkippedReason { OMITTED, DENIED, SUBMODULE }
 data class GitWriteUpstream(val remote: String, val branch: String)
 data class GitWriteTarget(val remote: String, val branch: String, val host: String, val repo: String)
@@ -32,7 +36,9 @@ sealed interface GitWriteResult {
     }
     /** Current observed remote state; never proves which attempt produced it. */
     data class PushStatus(val state: GitPushStatus) : GitWriteResult
+    data class PullRequestStatus(val state: GitPullRequestStatus, val pullRequest: GitPullRequestIdentity?) : GitWriteResult
     sealed interface PullRequest : GitWriteResult {
+        data object Unknown : PullRequest
         data class Available(val created: Boolean, val number: Long, val url: String, val base: String) : PullRequest
         data class Unavailable(val reason: GitPullRequestReason) : PullRequest
     }
@@ -120,6 +126,18 @@ internal fun parseGitWriteResult(o: JsonObject, sessionId: String): GitWriteResu
             Wire.keys(o, base + setOf("pushed", "branch", "remoteBranch", "commit", "created", "upstreamSet")); GitWriteResult.Push.Pushed(name(o, "branch"), name(o, "remoteBranch"), sha(o), o.flag("created"), o.flag("upstreamSet"))
         }
         "git.push.status" -> { Wire.keys(o, base + setOf("state")); GitWriteResult.PushStatus(wireEnum(o.text("state"))) }
+        "git.pull_request.status" -> {
+            val state = wireEnum<GitPullRequestStatus>(o.text("state"))
+            val hasIdentity = state == GitPullRequestStatus.FOUND || state == GitPullRequestStatus.DIFFERENT
+            Wire.keys(o, base + if (hasIdentity) setOf("state", "pullRequest") else setOf("state"))
+            val identity = if (hasIdentity) {
+                val pr = o.obj("pullRequest")
+                Wire.keys(pr, setOf("number", "url", "base"))
+                val url = string(pr.text("url"), 2048); require(url.startsWith("https://") && url.length > 8 && url.none { it.isWhitespace() || Character.isSpaceChar(it) || it.code in 0..31 || it.code in 127..159 || it == '\uFEFF' })
+                GitPullRequestIdentity(count(pr, "number", 1), url, branch(pr.text("base")))
+            } else null
+            GitWriteResult.PullRequestStatus(state, identity)
+        }
         "git.pull_request" -> if (!o.flag("available")) {
             Wire.keys(o, base + setOf("available", "reason")); GitWriteResult.PullRequest.Unavailable(wireEnum(o.text("reason")))
         } else {

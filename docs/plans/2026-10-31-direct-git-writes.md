@@ -1,15 +1,14 @@
 # Direct Git actions implementation
 
-Current state: branch preparation and selective Commit are wired and locally qualified. Push
-now has host dispatch, separate capability negotiation, durable Android intent/review, and an
-explicit current-remote-status recovery read. A corrected encrypted Android Push passed against
-an actual disposable local HTTPS remote; further qualification is tracked in
-[push qualification](../testing/push-qualification.md). Pull-request creation is still
-unsupported by the Host dispatcher and has no dedicated Android creation flow. The existing
-Pi `pr-status` read path does not establish PR creation or full actual-worker CI qualification.
-Use the binding Git-writes section of the Host protocol/README.md and protocol/git-write.ts.
-Preserve opt-in, protected branches, same-branch origin, hooks/LFS/signing/config restrictions,
-guarded HEAD snapshots, worktree serialization and the request ledger. No live pushes or PRs.
+Current state: branch preparation, selective Commit, Push and confirmed pull-request creation
+are implemented in the local Host and Android worktrees. PR creation and explicit status use
+separate V3 capabilities, a fresh remote HEAD check, bounded recovery bindings and a durable
+Android intent. A lost result is not retried automatically. The Pi `pr-status` read path remains
+separate and does not establish actual-worker CI qualification. The scoped local results and open
+gates are recorded in [PR qualification](../testing/pull-request-qualification.md) and
+[push qualification](../testing/push-qualification.md). Preserve owner opt-in, protected branches,
+same-branch origin, hook/LFS/signing/config restrictions, guarded HEAD snapshots, worktree
+serialization and the request ledger. No live push or PR was created in this qualification.
 
 1. Android: strict wire models/parser and synchronized canonical fixture. Test results, refusal
    reasons and malformed values. Do not advertise or invoke unimplemented Host writes.
@@ -28,6 +27,7 @@ guarded HEAD snapshots, worktree serialization and the request ledger. No live p
    start, manual conflict recovery, real shell tests, PR/CI display. Label simulated Plane/GitHub/CI.
    Physical Samsung, independent Linux, live external CI and DeX remain separately unqualified.
 
+The sequence below records the original incremental plan; the current checkpoint is above.
 Each increment receives focused tests, independent review and a local commit. Root owns Docker,
 SDK and broad checks. Leaf models and policy helpers can proceed in parallel; avoid shared-file
 edits until their integrations are coordinated. Full environment goal remains active.
@@ -46,7 +46,7 @@ type checking. It checks device/session/expiry, own checkout, source guards and 
 returns independent copies and exposes revalidation. Atomic mutation reservations and actual
 Git-write executors remain open; neither these foundations nor the switch makes commit/push/PR available.
 
-## Branch preparation and host admissions
+## Branch preparation and host admissions (historical checkpoint)
 
 The branch command now reaches the real read-only executor over the encrypted device route.
 It returns a device/session/worktree/branch/HEAD-bound ten-minute token, sanitized single origin
@@ -74,11 +74,11 @@ capability and qualify a suitable packaged Git runtime; no exact minimum release
 Commit, push, PR executors and their confirmation UI remain open.
 
 
-## Next increment: confirmed pull-request creation
+## Confirmed pull-request creation: implementation plan and checkpoint
 
-The existing PR command/result codec is not an implemented feature. Keep the full remote
-environment scope, and implement this next vertical slice with separate review and recovery.
-No production PR, push, merge or CI change is part of local qualification.
+The following design has been implemented locally. Its local qualification and remaining gates
+are recorded separately in [PR qualification](../testing/pull-request-qualification.md). No
+production PR, push, merge or CI change is part of that qualification.
 
 1. Extend the guarded branch authority with an immutable offered-base list. Match the requested
    base exactly, retaining token/device/session/source/expiry, HEAD/origin/policy and repository
@@ -111,14 +111,13 @@ No production PR, push, merge or CI change is part of local qualification.
 6. Qualify with isolated fake-provider/process tests, encrypted Host integration and the
    actual Android transport/panes. Include existing PR, incomplete lookup, changed authority,
    known success, loss after effect, late source revocation, outbox overflow, device reconnect,
-   owner-off status, durable restart and no duplicate dispatch. Real GitHub authentication,
-   independent Linux and the actual Pi/CI path remain explicit separate runtime gates.
+   owner-off status, durable restart and no duplicate dispatch. Real GitHub mutation, independent Linux and the actual Pi/CI path remain explicit separate runtime gates.
 
 The local `gh 2.98.0` help confirms stdin JSON, explicit host/method and paginated/slurped API
 output; its `pr list --head` does not accept owner-qualified branch syntax. The provider contract
 uses the [official versioned REST pull-request documentation](https://docs.github.com/en/rest/pulls/pulls?apiVersion=2026-03-10):
 list filters include owner-qualified head and base; creation uses head/base plus title and
-optional body/draft. The checked CLI help and documentation are not a live provider test.
+optional body/draft. The CLI was additionally exercised against a local HTTP fixture; a separate real GitHub HTTPS/authentication check was read-only. Neither created a real PR.
 
 
 ### Wear interaction check for this increment

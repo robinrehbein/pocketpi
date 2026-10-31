@@ -327,8 +327,10 @@ internal class ChatViewModel(
 ) : DestinationViewModel(repository, key) {
     val commitReview = GitCommitReviewController(repository, viewModelScope, key.selection())
     val pushReview = GitPushReviewController(repository, viewModelScope, key.selection())
-    fun openCommitReview() = active { pushReview.close(); commitReview.prepare() }
-    fun openPushReview() = active { commitReview.close(); pushReview.prepare() }
+    val pullRequestReview = GitPullRequestReviewController(repository, viewModelScope, key.selection())
+    fun openCommitReview() = active { pushReview.close(); pullRequestReview.close(); commitReview.prepare() }
+    fun openPushReview() = active { commitReview.close(); pullRequestReview.close(); pushReview.prepare() }
+    fun openPullRequestReview() = active { commitReview.close(); pushReview.close(); pullRequestReview.prepare() }
     val preferences = settings.state
     fun canOpenPreview() = repository.canOpenPreview()
     fun openPreview(port: Int) = repository.openPreview(port)

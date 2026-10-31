@@ -211,6 +211,110 @@ class GitChangesTest {
     // ---- Repository ---------------------------------------------------------------------
 
     @Test
+    fun pullRequestStatusWorksWithoutCreateAndLateRepliesAreAccepted() = runTest {
+        val transport = Transport().also { it.configure(gitCapabilities + SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY) { null } }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", sessionId))
+        val pending = async { repo.gitPullRequestStatus(sessionId, "d3JpdGUtaWQtdG9rZW4tMQ") }
+        runCurrent()
+        val sent = transport.git().single()
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS + 1); runCurrent()
+        assertFalse(pending.isCompleted)
+        transport.result(sent, Wire.objectOf("kind" to "git.pull_request.status", "sessionId" to sessionId, "state" to "absent"))
+        runCurrent()
+        assertEquals(GitPullRequestStatus.ABSENT, pending.await().state)
+        assertTrue(runCatching { repo.gitPullRequestPrepare(sessionId) }.isFailure)
+        assertEquals(listOf("session.git.pull_request.status"), transport.git().map { it.text("type") })
+    }
+
+    @Test
+    fun pullRequestLateSuccessAndLostReplyKeepExactRequestWithoutRetry() = runTest {
+        val transport = Transport().also { it.configure(gitCapabilities + SESSION_GIT_PULL_REQUEST_CAPABILITY) { null } }
+        val repo = repository(transport)
+        repo.activate(RemoteSelection("host", "project", sessionId))
+        val token = "d3JpdGUtaWQtdG9rZW4tMQ"
+        var sent = false
+        val pending = async { repo.gitPullRequest(sessionId, token, "dev", "Title", "body", false, "fixed-pr") { sent = true } }
+        runCurrent(); assertTrue(sent)
+        val request = transport.git().single()
+        assertEquals("fixed-pr", request.text("requestId"))
+        advanceTimeBy(REQUEST_TIMEOUT_MILLIS + 1); runCurrent(); assertFalse(pending.isCompleted)
+        transport.result(request, Wire.objectOf("kind" to "git.pull_request", "sessionId" to sessionId, "available" to true,
+            "created" to true, "number" to 12, "url" to "https://github.com/a/b/pull/12", "base" to "dev"))
+        runCurrent(); assertTrue(pending.await() is GitWriteResult.PullRequest.Available)
+        val lost = async { repo.gitPullRequest(sessionId, token, "dev", "Title", "", false, "lost-pr") }
+        runCurrent(); advanceTimeBy(GIT_PULL_REQUEST_TIMEOUT_MILLIS + 1); runCurrent()
+        assertEquals(GitWriteResult.PullRequest.Unknown, lost.await())
+        assertEquals(listOf("fixed-pr", "lost-pr"), transport.git().map { it.text("requestId") })
+    }
+
+    @Test
+    fun pullRequestCapabilitiesFromAuthAndV2DoNotAuthorize() = runTest {
+        val caps = setOf(SESSION_GIT_PULL_REQUEST_CAPABILITY, SESSION_GIT_PULL_REQUEST_STATUS_CAPABILITY)
+        val transport = Transport().also { it.authCapabilities = caps; it.configure(gitCapabilities + caps) { error("must not send") } }
+        val response = transport.response
+        transport.response = { request ->
+            val result = response(request)
+            if (request.text("type") == "projects.list" && request.text("requestId").startsWith("capabilities.v3:")) JsonObject(checkNotNull(result) - "capabilities") else result
+        }
+        val repo = repository(transport); repo.activate(RemoteSelection("host", "project", sessionId))
+        assertTrue(caps.intersect(repo.state.value.capabilities).isEmpty())
+        assertTrue(runCatching { repo.gitPullRequestPrepare(sessionId) }.isFailure)
+        assertTrue(runCatching { repo.gitPullRequestStatus(sessionId, "d3JpdGUtaWQtdG9rZW4tMQ") }.isFailure)
+        assertTrue(transport.git().isEmpty())
+    }
+
+    @Test
+    fun queuedComposerSnapshotPreservesPullRequestIntentAndRemoval() = runTest {
+        val storage = Drafts()
+        val transport = Transport().also { it.configure(gitCapabilities) { null } }
+        val repo = repository(transport, storage)
+        val selection = RemoteSelection("host", "project", sessionId); repo.activate(selection)
+        val intent = GitPullRequestIntent("feature", "a".repeat(40), "d3JpdGUtaWQtdG9rZW4tMQ", "fixed-pr", GitWriteTarget("origin", "feature", "github.com", "a/b"), "dev", "Title", "body", false)
+        var queued = false
+        storage.onSave = { values -> if (!queued && values[DraftKey("host", sessionId)]?.gitPullRequest != null) {
+            queued = true; repo.draft("composer"); backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { repo.flush() }
+        } }
+        repo.saveGitPullRequestIntent(selection, intent); runCurrent(); repo.flush()
+        assertTrue(queued); assertEquals(intent, storage.values[DraftKey("host", sessionId)]?.gitPullRequest)
+        val reopened = repository(Transport().also { it.configure(gitCapabilities) { null } }, storage)
+        reopened.activate(selection); assertEquals(intent, reopened.gitPullRequestIntent(selection))
+        storage.onSave = null; repo.remove("host"); runCurrent(); repo.flush()
+        assertTrue(storage.values.keys.none { it.routeId == "host" })
+    }
+
+    @Test
+    fun pullRequestEditDraftQueuePreservesOtherIntentsAndForget() = runTest {
+        val storage = Drafts()
+        val repo = repository(Transport().also { it.configure(gitCapabilities) { null } }, storage)
+        val selection = RemoteSelection("host", "project", sessionId); repo.activate(selection)
+        val intent = GitPullRequestIntent("feature", "a".repeat(40), "d3JpdGUtaWQtdG9rZW4tMQ", "fixed-pr", GitWriteTarget("origin", "feature", "github.com", "a/b"), "dev", "Title", "body", false)
+        repo.saveGitPullRequestIntent(selection, intent)
+        val edit = GitPullRequestDraft("dev", "", "saved body", false)
+        var queued = false
+        storage.onSave = { values -> if (!queued && values[DraftKey("host", sessionId)]?.gitPullRequestDraft != null) {
+            queued = true; repo.draft("composer"); backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { repo.flush() }
+        } }
+        repo.saveGitPullRequestDraft(selection, edit); runCurrent(); repo.flush()
+        val saved = storage.values.getValue(DraftKey("host", sessionId))
+        assertTrue(queued); assertEquals(edit, saved.gitPullRequestDraft); assertEquals(intent, saved.gitPullRequest); assertEquals("composer", saved.text)
+        val reopened = repository(Transport().also { it.configure(gitCapabilities) { null } }, storage); reopened.activate(selection)
+        assertEquals(edit, reopened.gitPullRequestDraft(selection)); assertEquals(intent, reopened.gitPullRequestIntent(selection))
+        storage.onSave = null; repo.remove("host"); runCurrent(); repo.flush(); assertTrue(storage.values.keys.none { it.routeId == "host" })
+    }
+
+    @Test
+    fun pullRequestIntentRoundTripsAndOldDraftsRemainReadable() {
+        val intent = GitPullRequestIntent("feature", "a".repeat(40), "d3JpdGUtaWQtdG9rZW4tMQ", "fixed-pr", GitWriteTarget("origin", "feature", "github.com", "a/b"), "dev", "Title", "body", false)
+        assertEquals(intent, parseGitPullRequestIntent(intent.json()))
+        assertTrue(runCatching { parseGitPullRequestIntent(intent.copy(base = "/bad").json()) }.isFailure)
+        val bytes = JsonArray(listOf(Wire.objectOf("routeId" to "host", "sessionId" to sessionId, "text" to "composer", "gitPullRequest" to intent.json()))).toString().toByteArray()
+        assertEquals(intent, parseStoredDrafts(bytes).getValue(DraftKey("host", sessionId)).gitPullRequest)
+        val old = JsonArray(listOf(Wire.objectOf("routeId" to "host", "sessionId" to sessionId, "text" to "old"))).toString().toByteArray()
+        assertNull(parseStoredDrafts(old).getValue(DraftKey("host", sessionId)).gitPullRequest)
+    }
+
+    @Test
     fun pushStatusWorksWhenWritesAreDisabledAndNeverSendsPush() = runTest {
         val transport = Transport()
         transport.configure(gitCapabilities + GIT_PUSH_STATUS_CAPABILITY) { request ->

@@ -510,6 +510,13 @@ interface RemoteRepository {
         throw UnsupportedOperationException("Git writes are unavailable")
 
     /** Fresh token-bound push preparation, including the exact HEAD to confirm. */
+    suspend fun gitPullRequestPrepare(sessionId: String): GitWriteResult.Branch = throw UnsupportedOperationException("Pull request is unavailable")
+    suspend fun gitPullRequest(sessionId: String, writeId: String, base: String, title: String, body: String, draft: Boolean, requestId: String, onDispatch: () -> Unit = {}): GitWriteResult.PullRequest = throw UnsupportedOperationException("Pull request is unavailable")
+    suspend fun gitPullRequestStatus(sessionId: String, writeId: String): GitWriteResult.PullRequestStatus = throw UnsupportedOperationException("Pull request status is unavailable")
+    suspend fun gitPullRequestDraft(selection: RemoteSelection): GitPullRequestDraft? = throw UnsupportedOperationException("Git drafts are unavailable")
+    suspend fun saveGitPullRequestDraft(selection: RemoteSelection, draft: GitPullRequestDraft) { throw UnsupportedOperationException("Git drafts are unavailable") }
+    suspend fun gitPullRequestIntent(selection: RemoteSelection): GitPullRequestIntent? = throw UnsupportedOperationException("Git drafts are unavailable")
+    suspend fun saveGitPullRequestIntent(selection: RemoteSelection, intent: GitPullRequestIntent?) { throw UnsupportedOperationException("Git drafts are unavailable") }
     suspend fun gitPushPrepare(sessionId: String): GitWriteResult.Branch = throw UnsupportedOperationException("Git push is unavailable")
     /** No automatic retry; cancellation after onDispatch leaves the outcome unknown. */
     suspend fun gitPush(sessionId: String, writeId: String, requestId: String, onDispatch: () -> Unit = {}): GitWriteResult.Push = throw UnsupportedOperationException("Git push is unavailable")

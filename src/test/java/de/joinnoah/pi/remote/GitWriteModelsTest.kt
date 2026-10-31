@@ -14,6 +14,17 @@ class GitWriteModelsTest {
         if (payload.optionalText("type") == "result" && data?.optionalText("kind")?.startsWith("git.") == true) entry.text("name") to data else null
     }
 
+    @Test fun pullRequestStatusRequiresIdentityOnlyForObservedPullRequests() {
+        val fixture = Wire.json.parseToJsonElement(javaClass.getResource("/git-pull-request-v1.json")!!.readText()).jsonObject
+        fun results(group: String) = fixture.array(group).map { it.obj("payload") }.filter { it.optionalText("type") == "result" }.map { it.obj("data") }
+        val parsed = results("valid").map { parseGitWriteResult(it, session) }
+        val statuses = parsed.filterIsInstance<GitWriteResult.PullRequestStatus>()
+        assertEquals(GitPullRequestStatus.entries.toSet(), statuses.map { it.state }.toSet())
+        assertEquals(GitPullRequestIdentity(12, "https://github.com/example/repo/pull/12", "dev"), statuses.single { it.state == GitPullRequestStatus.FOUND }.pullRequest)
+        assertNull(statuses.single { it.state == GitPullRequestStatus.ABSENT }.pullRequest)
+        results("invalid").forEach { assertTrue(it.toString(), runCatching { parseGitWriteResult(it, session) }.isFailure) }
+    }
+
     @Test fun canonicalHostResultsAcceptEverySuccessAndRefusal() {
         val examples = results("valid")
         assertEquals(65, examples.size)

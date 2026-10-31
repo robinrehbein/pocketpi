@@ -141,6 +141,9 @@ internal fun ChangesPane(
     canPushEntry: Boolean = false,
     pushPending: Boolean = false,
     onPreparePush: (() -> Unit)? = null,
+    canPullRequestEntry: Boolean = false,
+    pullRequestPending: Boolean = false,
+    onPreparePullRequest: (() -> Unit)? = null,
 ) {
     PaneBackHandler { if (state.file != null) actions.onOpenFile(null) else actions.onClose() }
     // Review mode belongs to the two-pane layout, which gives the pane the window.
@@ -202,7 +205,7 @@ internal fun ChangesPane(
             onDispose { keyTarget.removeReviewHandler(handler) }
         }
     val headerActions =
-        changesHeaderActions(state, codeWrap, twoPane, reviewing, pullRequest != null, canCommitEntry, onPrepareCommit, canPushEntry, pushPending, onPreparePush) { prompt -> checked.onPrefill(prompt) }
+        changesHeaderActions(state, codeWrap, twoPane, reviewing, pullRequest != null, canCommitEntry, onPrepareCommit, canPushEntry, pushPending, onPreparePush, canPullRequestEntry, pullRequestPending, onPreparePullRequest) { prompt -> checked.onPrefill(prompt) }
     var headerHeight by remember { mutableStateOf(64.dp) }
     Surface(modifier.fillMaxSize().testTag("changesPane")) {
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
@@ -344,6 +347,9 @@ private fun changesHeaderActions(
     canPushEntry: Boolean,
     pushPending: Boolean,
     onPreparePush: (() -> Unit)?,
+    canPullRequestEntry: Boolean,
+    pullRequestPending: Boolean,
+    onPreparePullRequest: (() -> Unit)?,
     onPrefill: (String) -> Unit,
 ): List<PaneAction> {
     val context = LocalContext.current
@@ -359,6 +365,8 @@ private fun changesHeaderActions(
             add(PaneAction(stringResource(R.string.remote_commit_prepare), Icons.Default.RateReview, "changesCommitPrepare", onClick = onPrepareCommit))
         if (canPushEntry && onPreparePush != null)
             add(PaneAction(stringResource(if (pushPending) R.string.remote_push_status_entry else R.string.remote_push_title), Icons.Default.RocketLaunch, "changesPushPrepare", onClick = onPreparePush))
+        if (canPullRequestEntry && onPreparePullRequest != null)
+            add(PaneAction(stringResource(if (pullRequestPending) R.string.pr_status_entry else R.string.pr_heading), Icons.Default.RateReview, "changesPullRequestPrepare", onClick = onPreparePullRequest))
         if (state.file != null)
             add(PaneAction(wrapLabel, Icons.AutoMirrored.Filled.WrapText, "changesWrap", checked = codeWrap.wrap, onClick = codeWrap::toggle))
         if (twoPane != null)

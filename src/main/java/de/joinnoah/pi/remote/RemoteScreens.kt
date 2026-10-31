@@ -362,6 +362,7 @@ internal fun RemoteScreen(
     val chatModel = model as? ChatViewModel
     val commitReview = chatModel?.commitReview?.state?.collectAsStateWithLifecycle()?.value
     val pushReview = chatModel?.pushReview?.state?.collectAsStateWithLifecycle()?.value
+    val pullRequestReview = chatModel?.pullRequestReview?.state?.collectAsStateWithLifecycle()?.value
     // The composer's text lives here rather than in the state, so typing recomposes only the
     // composer; this screen's own draft changes go through it or flush it first. It belongs to
     // this destination's chat from the start, so text typed before a load or a navigation lands
@@ -1679,7 +1680,23 @@ internal fun RemoteScreen(
             {
                 val controller = checkNotNull(chatModel).commitReview
                 val pushController = chatModel.pushReview
-                if (pushReview?.open == true) {
+                val pullRequestController = chatModel.pullRequestReview
+                if (pullRequestReview?.open == true) {
+                    GitPullRequestReviewPane(
+                        pullRequestReview,
+                        remember(pullRequestController) {
+                            GitPullRequestReviewActions(
+                                prepare = pullRequestController::prepare, close = pullRequestController::close,
+                                setBase = pullRequestController::setBase, setTitle = pullRequestController::setTitle,
+                                setBody = pullRequestController::setBody, setDraft = pullRequestController::setDraft,
+                                review = pullRequestController::review, backToEdit = pullRequestController::backToEdit,
+                                confirm = pullRequestController::confirm, checkRemote = pullRequestController::checkRemote,
+                                acknowledgeUnknown = pullRequestController::acknowledgeUnknown,
+                            )
+                        },
+                        Modifier.fillMaxSize(),
+                    )
+                } else if (pushReview?.open == true) {
                     GitPushReviewPane(
                         pushReview,
                         remember(pushController) {
@@ -1730,6 +1747,11 @@ internal fun RemoteScreen(
                             GIT_PUSH_CAPABILITY !in state.unavailableCapabilities) || pushReview?.pending != null,
                         pushPending = pushReview?.pending != null,
                         onPreparePush = chatModel::openPushReview,
+                        canPullRequestEntry = (state.connected && state.capabilitiesKnown &&
+                            SESSION_GIT_PULL_REQUEST_CAPABILITY in state.capabilities &&
+                            SESSION_GIT_PULL_REQUEST_CAPABILITY !in state.unavailableCapabilities) || pullRequestReview?.pending != null,
+                        pullRequestPending = pullRequestReview?.pending != null,
+                        onPreparePullRequest = chatModel::openPullRequestReview,
                     )
                 }
             }

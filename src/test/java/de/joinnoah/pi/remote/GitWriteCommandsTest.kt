@@ -14,6 +14,13 @@ class GitWriteCommandsTest {
     private fun rejected(command: GitWriteCommand) = assertTrue(runCatching { encodeGitWriteCommand(command) }.isFailure)
     private fun pushValid(name: String) = pushFixture.getValue("valid").jsonArray.map { it.jsonObject }.single { it.text("name") == name }.obj("payload")
 
+    @Test fun encodesPullRequestStatusWithCanonicalToken() {
+        val fixture = Wire.json.parseToJsonElement(javaClass.getResource("/git-pull-request-v1.json")!!.readText()).jsonObject
+        val payload = fixture.array("valid").single { it.text("name") == "status-command" }.obj("payload")
+        assertEquals(payload, encodeGitWriteCommand(GitWriteCommand.PullRequestStatus("req-1", session, write)))
+        rejected(GitWriteCommand.PullRequestStatus("req", session, "d3JpdGUtaWQtdG9rZW4tMR"))
+    }
+
     @Test fun encodesCanonicalHostCommandsExactly() {
         assertEquals(valid("branch-command"), encodeGitWriteCommand(GitWriteCommand.Branch("req-1", session)))
         assertEquals(valid("commit-command-all"), encodeGitWriteCommand(GitWriteCommand.Commit("req-1", session, snapshot, "Fix the login redirect")))

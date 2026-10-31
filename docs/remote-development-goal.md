@@ -1,6 +1,20 @@
 <!-- Latest qualification is documented in testing/linux-host-qualification.md. -->
 # Goal: PocketPi as a complete remote development environment
 
+## Confirmed pull-request checkpoint on 2026-10-31
+
+The local Host and Android worktrees now implement explicit PR preparation, confirmation and
+creation, with a separately authorized read-only recovery observation. Android persists the
+edit draft and the confirmed intent independently; an unknown result is never automatically
+created or pushed again. Encrypted Android pane/transport tests passed on phone and tablet
+emulators against a controlled provider, including dropped-response recovery after reconstructing
+the repository and reading the same encrypted draft file. The Pi peer and network signal were
+synthetic, and the pane was hosted by a test harness. This does not establish a full RemoteScreen,
+real Pi worker, OS process death or real GitHub PR creation. Physical Samsung devices and an
+independent Linux host were unavailable; Wear and broad suites are pending. See
+[PR qualification](testing/pull-request-qualification.md).
+
+
 ## Packaged protected-preview checkpoint
 
 The same locked Linux image now passes a combined encrypted synthetic-device browser
@@ -379,7 +393,10 @@ The agent, when asked in chat, can already run `git commit`, `git push`, `gh pr 
 `gh pr checks` and `rg`, so the qualifying run can pass today through the agent. The gaps below are
 about doing these steps as first-class, confirmed and logged actions.
 
-## What is missing
+## What was missing in the original baseline
+
+This gap inventory is historical; the checkpoints above describe subsequent local implementation
+and scoped qualification. The full acceptance run and its device/host gates remain open.
 
 ### Protocol and host (lands in noah-monorepo first)
 
@@ -473,7 +490,7 @@ Each criterion is checked in the qualifying run, on a real phone, with the Mac u
 | 3 | Run a shell command with live output and stop in the ticket's session | noah-monorepo, then app | Open (gap 6); works today only in RPC sessions |
 | 4a | Answer every forwarded question and approval from the phone, including oversized ones and editors | noah-monorepo, then app | Open (gap 3) |
 | 4b | Answer custom dialogs from the phone through the relayed terminal | noah-monorepo, then app | Open (gaps 4 and 7) |
-| 5 | Commit, push and open a pull request, confirmed on the phone and logged on the Mac | noah-monorepo, then app | Selective commit implemented locally; push/PR and complete workflow qualification remain open |
+| 5 | Commit, push and open a pull request, confirmed on the phone and logged on the Mac | noah-monorepo, then app | Commit, Push and PR implemented locally; full unattended workflow and physical-device qualification remain open |
 | 6 | See the pull request and its CI status per session | noah-monorepo, then app | Open (gap 2); possible today through the agent |
 
 ## Order
