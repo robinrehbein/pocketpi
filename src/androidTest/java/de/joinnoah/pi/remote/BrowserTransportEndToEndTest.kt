@@ -208,7 +208,11 @@ class BrowserTransportEndToEndTest {
         compose.waitUntil(30_000) { status()?.let { it.optString("lastinput") == value && it.optInt("inputPosts") > initialPosts } == true && view()?.inputPending == false }
         compose.waitUntil(30_000) { runCatching { compose.onNodeWithText("Enter").assertIsEnabled(); true }.getOrDefault(false) }
         compose.onNodeWithText("Enter").performClick()
-        compose.waitUntil(30_000) { status()?.optString("submitted") == value }
+        try {
+            compose.waitUntil(30_000) { status()?.optString("submitted") == value }
+        } catch (failure: Exception) {
+            throw AssertionError("Linux Enter not observed: attempts=${observedTransport.inputAttempts.get()}, receipt=${view()?.receipt}, pending=${view()?.inputPending}, moving=${view()?.moving}, viewport=${view()?.viewportRevision}, submitCount=${status()?.optInt("submitCount")}", failure)
+        }
         fixtureAction("update")
         compose.waitUntil(30_000) {
             val image = view()?.image

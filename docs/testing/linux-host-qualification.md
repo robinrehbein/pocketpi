@@ -26,7 +26,12 @@ and passed. Phase-only timeout diagnostics were added; startup reliability remai
 
 These checks cover the pane and transport, not complete application navigation, a physical
 Galaxy S25, Tab S11, independent remote Linux, hardware input, DeX or full development workflows.
-Tablet runs and broader lifecycle/device-switch scenarios remain open. No Wear emulator is required.
+The tablet browser instrumentation also passed once (16.84s), including restoration, no input
+replay and revocation, after an initial process-start ANR and a separate Enter-effect timeout.
+Its restored screenshot still contains a System UI ANR modal: this is transport/effect evidence,
+not stable tablet interaction or visual qualification. No product fix for the intermittent Enter
+failure has been established. Preview on tablet and broader lifecycle/device-switch scenarios
+remain open. No Wear emulator is required.
 
 
 ## Persistent core image, 2026-10-31
