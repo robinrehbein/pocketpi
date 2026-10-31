@@ -12,6 +12,30 @@ import org.junit.Test
 
 class RemoteNavigationTest {
     @Test
+    fun `rapid opens keep the latest chat when older replies arrive last`() = runTest {
+        val replies = listOf("a", "b", "c").associateWith { CompletableDeferred<RemoteSelection>() }
+        val repository = NavigationFakeRepository()
+        repository.activation = { selection, _ ->
+            withContext(NonCancellable) { replies.getValue(selection.sessionId!!).await() }
+        }
+        val stack = mutableListOf<NavKey>(RemoteNavKey.Hosts)
+        val navigation = RemoteNavigator(repository, stack, backgroundScope)
+        for (id in listOf("a", "b", "c")) {
+            navigation.open(RemoteNavKey.Chat("host", "project", id))
+            runCurrent()
+        }
+        assertEquals(RemoteNavKey.Chat("host", "project", "c"), stack.last())
+        replies.getValue("c").complete(RemoteSelection("host", "project", "c-live"))
+        runCurrent()
+        assertEquals(RemoteNavKey.Chat("host", "project", "c-live"), stack.last())
+        for (id in listOf("b", "a")) {
+            replies.getValue(id).complete(RemoteSelection("host", "project", "$id-live"))
+            runCurrent()
+            assertEquals(RemoteNavKey.Chat("host", "project", "c-live"), stack.last())
+        }
+    }
+
+    @Test
     fun `explicit open replaces requested history ID with canonical live ID`() = runTest {
         val repository = NavigationFakeRepository()
         repository.activation = { selection, mode ->

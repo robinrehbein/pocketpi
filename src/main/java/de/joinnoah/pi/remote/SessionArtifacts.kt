@@ -66,6 +66,14 @@ internal fun artifactsNeedNewerHost(state: RemoteState): Boolean =
     state.connected && !state.loading && state.selection.sessionId != null && state.capabilitiesKnown &&
         ARTIFACTS_CAPABILITY !in state.capabilities
 
+/**
+ * The notice for `/artifacts` while [canShowArtifacts] is false: the update hint only for a host that
+ * lacks the capability, a plain "not available now" while loading, disconnected or without a session.
+ */
+internal fun artifactsUnavailableNotice(state: RemoteState): Int =
+    if (artifactsNeedNewerHost(state)) R.string.remote_artifacts_host_outdated
+    else R.string.remote_artifacts_not_now
+
 internal fun validArtifactId(value: String): Boolean = ARTIFACT_ID.matches(value)
 
 /** The fields of a `session.artifacts.open`; throws [IllegalArgumentException] when invalid. */

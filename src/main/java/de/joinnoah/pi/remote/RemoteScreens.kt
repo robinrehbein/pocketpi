@@ -40,6 +40,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.annotation.StringRes
@@ -95,6 +96,8 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
@@ -366,7 +369,7 @@ internal fun RemoteScreen(
             rememberComposerDraft(
                 chatKey.selection(),
                 state.draft,
-                editable = state.selection == chatKey.selection(),
+                editable = state.selection == chatKey.selection() || state.previewDraftAvailable,
                 push = model::draft,
             )
         else null
@@ -1230,7 +1233,7 @@ internal fun RemoteScreen(
                 else state.selection.sessionId?.let(::startReload)
             LocalCommand.ARTIFACTS ->
                 if (artifactsAvailable) openGallery()
-                else showFeedback(R.string.remote_artifacts_host_outdated)
+                else showFeedback(artifactsUnavailableNotice(state))
             LocalCommand.NAME -> {
                 val session = state.session ?: return
                 if (argument.isEmpty()) startRename(session.text("id"), session.text("title"))
@@ -1421,8 +1424,7 @@ internal fun RemoteScreen(
                     ?.let { id -> state.sessions.firstOrNull { it.optionalText("id") == id } }
                     ?.let { sessionListItem(it, state.connected, loading = false, state.stale) }
                     ?.takeIf { canCloseSession(it, state.connected, loading = false, state.capabilities) }
-            val hasTuiInfo =
-                state.session?.optionalText("origin") == "tui" && !childControlsAvailable(state)
+            val hasTuiInfo = showsTuiInfo(state)
             // The ticket this chat belongs to, from the loaded tickets: its chip opens the ticket.
             val chatSessionId = state.session?.optionalText("id")
             val chatTicket = remember(state.tickets, state.connected, state.capabilities, state.unavailableCapabilities, chatSessionId) {
@@ -1454,6 +1456,9 @@ internal fun RemoteScreen(
                 if (action == ChatAction.CLOSE) closing = closableSession
                 else runChatAction(action)
             }
+            // Not ::runAction: references to one local function compare equal whatever they captured,
+            // so the pill's remembered row callbacks and rememberUpdatedState would keep the first one.
+            val currentRunAction by rememberUpdatedState { action: ChatAction -> runAction(action) }
             val actionsControl: @Composable (ChatActionLayout, Boolean) -> Unit = { actionLayout, standaloneHistory ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (standaloneHistory) FloatingSurface(shape = CircleShape, color = headerColor) {
@@ -1464,7 +1469,7 @@ internal fun RemoteScreen(
                             Icon(Icons.AutoMirrored.Filled.List, stringResource(R.string.remote_chat_history))
                         }
                     }
-                    ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, onAction = ::runAction)
+                    ChatActionPill(actionLayout, headerColor, badge = compact && bannersShown, onAction = { currentRunAction(it) })
                 }
             }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -2865,7 +2870,7 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_waiting_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_needs_you))
                                 }
-                                projectChatRows(waitingChats, routeMarks, state.connected, !state.loading, homeTicketRef) { chat ->
+                                projectChatRows(waitingChats, routeMarks, state.connected, homeTicketRef) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
                             }
@@ -2873,7 +2878,7 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_running_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_status_working))
                                 }
-                                projectChatRows(runningChats, routeMarks, state.connected, !state.loading, homeTicketRef) { chat ->
+                                projectChatRows(runningChats, routeMarks, state.connected, homeTicketRef) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
                                 // Directly under the group it expands, so it is not far down the page.
@@ -2943,7 +2948,7 @@ internal fun RemoteScreen(
                                 item(key = "project_chats_heading") {
                                     ProjectsSectionHeading(stringResource(R.string.remote_projects_quick_chats))
                                 }
-                                projectChatRows(recentChats, routeMarks, state.connected, !state.loading, homeTicketRef) { chat ->
+                                projectChatRows(recentChats, routeMarks, state.connected, homeTicketRef) { chat ->
                                     navigator.open(RemoteNavKey.Chat(key.routeId, chat.projectId, chat.session.text("id")))
                                 }
                                 if (quick.recentExpandable) item(key = "project_chats_recent_show_all") {
@@ -3038,7 +3043,7 @@ internal fun RemoteScreen(
                                                     sessionMarkStore?.markSeen(key.routeId, session.id, session.updatedAt, System.currentTimeMillis())
                                                 }
                                             },
-                                        enabled = !state.connected || !state.loading,
+                                        enabled = true,
                                         closeAvailable =
                                             canCloseSession(
                                                 session,
@@ -3555,6 +3560,16 @@ internal fun RemoteScreen(
                             busy = navigator.mutating,
                         )
                     ChatPreviewHint(state)
+                    state.preparedText?.takeIf(String::isNotEmpty)?.let { prepared ->
+                        val clipboard = LocalClipboardManager.current
+                        Column(Modifier.fillMaxWidth().padding(8.dp)) {
+                            Text(stringResource(R.string.remote_prepared_text_explanation))
+                            SelectionContainer { Text(prepared, modifier = Modifier.testTag("preparedText")) }
+                            TextButton(onClick = { clipboard.setText(AnnotatedString(prepared)) }) {
+                                Text(stringResource(R.string.remote_prepared_text_copy))
+                            }
+                        }
+                    }
                     val shellRun = state.bash?.takeIf { it.sessionId == state.selection.sessionId }
                     if (shellRun != null && chatModel != null)
                         ShellCommandPanel(shellRun, state.connected, onStop = chatModel::abortBash, onClose = chatModel::closeBash)
@@ -3562,6 +3577,11 @@ internal fun RemoteScreen(
                          connectionStatusLine(state),
                          draftDeliveryNotice(state.sending, state.uncertain, state.connected),
                      )
+                    ChatCurrentActivity(
+                        remember(chatKey, state, presentation) {
+                            sessionActivityLine(state, presentation.items, chatKey?.selection())
+                        },
+                    )
                     val composer = checkNotNull(composerDraft)
                     ChatComposer(
                         state = state,
@@ -3610,7 +3630,7 @@ internal fun RemoteScreen(
                                         if (composer.text.trimStart().startsWith("/")) composer.replace("")
                                         if (command == LocalCommand.TREE) treeSheetRequested = true
                                         else if (artifactsAvailable) openGallery()
-                                        else showFeedback(R.string.remote_artifacts_host_outdated)
+                                        else showFeedback(artifactsUnavailableNotice(state))
                                     }
                                     // A terminal session only explains itself; nothing to send.
                                     else if (command == LocalCommand.RELOAD &&
@@ -3650,11 +3670,12 @@ internal fun RemoteScreen(
                             attachmentSelection = state.selection
                             filePicker.launch(arrayOf("*/*"))
                         },
-                        onPasteAttachments = { items, onDone ->
-                            val selection = chatKey?.selection()
-                            if (selection != null && chatModel != null) chatModel.acceptAttachments(selection, items, onDone)
-                            else onDone()
-                        },
+                        onPasteAttachments =
+                            if (state.selection != chatKey?.selection() || state.loading) null
+                            else { items, onDone ->
+                                if (chatModel != null) chatModel.acceptAttachments(chatKey.selection(), items, onDone)
+                                else onDone()
+                            },
                         onTakePhoto =
                             if (!hasCamera) null
                             else {
@@ -4303,7 +4324,6 @@ private fun LazyListScope.projectChatRows(
     chats: List<ProjectChatSummary>,
     marks: Map<String, SessionMark>,
     connected: Boolean,
-    enabled: Boolean,
     ticketRef: (String) -> String?,
     onOpen: (ProjectChatSummary) -> Unit,
 ) {
@@ -4311,7 +4331,6 @@ private fun LazyListScope.projectChatRows(
         ProjectChatRow(
             chat = chat,
             connected = connected,
-            enabled = enabled,
             mark = chat.session.optionalText("id")?.let(marks::get),
             ticketRef = chat.session.optionalText("id")?.let(ticketRef),
             onClick = { onOpen(chat) },
@@ -4323,7 +4342,6 @@ private fun LazyListScope.projectChatRows(
 private fun ProjectChatRow(
     chat: ProjectChatSummary,
     connected: Boolean,
-    enabled: Boolean,
     mark: SessionMark?,
     ticketRef: String?,
     onClick: () -> Unit,
@@ -4343,7 +4361,7 @@ private fun ProjectChatRow(
                         ticketRef = ticketRef,
                     )
                 },
-            enabled = enabled,
+            enabled = true,
             closeAvailable = false,
             onClick = onClick,
             onClose = {},

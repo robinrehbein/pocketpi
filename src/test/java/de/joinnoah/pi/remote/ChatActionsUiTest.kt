@@ -18,6 +18,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.buildJsonObject
@@ -147,6 +148,47 @@ class ChatActionsUiTest {
         runFromMenu(ChatAction.ARTIFACTS)
         snackbarShows(label(R.string.remote_artifacts_host_outdated)).assertIsDisplayed()
         assertNull(ShadowToast.getTextOfLatestToast())
+    }
+
+    @Test
+    fun theArtifactsRowOpensTheGalleryOnceTheHostOffersArtifacts() {
+        // The chat first composes before the capability arrives, as after a reconnect or a host update.
+        repository.state.value =
+            repository.state.value.copy(capabilities = repository.state.value.capabilities - ARTIFACTS_CAPABILITY)
+        render()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(capabilities = repository.state.value.capabilities + ARTIFACTS_CAPABILITY)
+        }
+        compose.waitForIdle()
+        runFromMenu(ChatAction.ARTIFACTS)
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("artifactsEmpty").fetchSemanticsNodes().isNotEmpty() }
+        snackbarShows(label(R.string.remote_artifacts_not_now)).assertDoesNotExist()
+        snackbarShows(label(R.string.remote_artifacts_host_outdated)).assertDoesNotExist()
+    }
+
+    @Test
+    fun theArtifactsRowExplainsItselfOnceTheHostStopsOfferingArtifacts() {
+        render()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(capabilities = repository.state.value.capabilities - ARTIFACTS_CAPABILITY)
+        }
+        compose.waitForIdle()
+        runFromMenu(ChatAction.ARTIFACTS)
+        snackbarShows(label(R.string.remote_artifacts_host_outdated)).assertIsDisplayed()
+    }
+
+    @Test
+    fun theCloseRowAsksAboutTheSessionItCanCloseNow() {
+        render()
+        compose.runOnIdle {
+            repository.state.value =
+                repository.state.value.copy(capabilities = repository.state.value.capabilities + SESSION_CLOSE_CAPABILITY)
+        }
+        compose.waitForIdle()
+        runFromMenu(ChatAction.CLOSE)
+        compose.onNodeWithText(label(R.string.remote_session_close_confirmation)).assertIsDisplayed()
     }
 
     @Test

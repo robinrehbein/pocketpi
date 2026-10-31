@@ -83,7 +83,7 @@
     <string name="remote_local_command_export">Sitzung als HTML-Datei exportieren</string>
     <string name="remote_export_running">Sitzung wird exportiert …</string>
     <string name="remote_local_command_reload">Extensions, Skills, Prompts und Kontextdateien neu laden</string>
-    <string name="remote_reload_terminal_hint">In Terminal-Sitzungen noch nicht möglich, nur für Sitzungen, die über die App laufen.</string>
+    <string name="remote_reload_terminal_hint">Aktualisiere pi Remote auf dem Mac oder lade pi dort zuerst neu.</string>
     <string name="remote_reload_running">Wird neu geladen …</string>
     <string name="remote_reload_done">Extensions, Skills, Prompts, Themes und Kontextdateien neu geladen</string>
     <string name="remote_reload_busy">Die Sitzung ist beschäftigt. Versuch es noch einmal, wenn sie fertig ist.</string>
@@ -144,7 +144,8 @@
     <string name="remote_draft_confirmation_pending">Warte auf Zustellbestätigung…</string>
     <string name="remote_draft_uncertain">Zustellung nicht bestätigt. Prüfe die Sitzung, bevor du deinen Entwurf erneut sendest.</string>
     <string name="remote_tui_info_title">Mac-Terminalsitzung</string>
-    <string name="remote_tui_info_body">Während diese Sitzung arbeitet, gehen „Jetzt einlenken“ und „Nach Abschluss senden“ nur direkt am Mac. Sende eine Nachricht, sobald die Sitzung bereit ist, oder halte pi an, um sie zu unterbrechen.</string>
+    <string name="remote_tui_info_body">Während diese Sitzung arbeitet, brauchen „Jetzt einlenken“ und „Nach Abschluss senden“ ein aktuelles pi Remote auf dem Mac und ein neu geladenes pi. Bis dahin sende eine Nachricht, sobald die Sitzung bereit ist, oder halte pi an, um sie zu unterbrechen.</string>
+    <string name="remote_session_control_reload_pi">Lade pi auf dem Mac neu, um das hier zu nutzen.</string>
     <string name="remote_tui_info_close">Verstanden</string>
     <string name="remote_steer_accepted">Wird an den laufenden Schritt übergeben: %1$s</string>
     <string name="remote_follow_up_pending">Wird gesendet, wenn pi fertig ist: %1$s</string>
@@ -663,4 +664,6 @@
     <string name="remote_markdown_task_open">Offen</string>
     <string name="remote_new_session_model_failed">Das gewählte Modell konnte nicht eingestellt werden.</string>
     <string name="remote_new_session_model_failed_kept">Das gewählte Modell konnte nicht eingestellt werden, deshalb wurde deine erste Nachricht nicht gesendet. Sie wartet im Eingabefeld.</string>
+    <string name="remote_prepared_text_explanation">Beim Öffnen wurde eine andere Sitzung erstellt. Dein vorbereiteter Text bleibt in der ursprünglichen Sitzung verfügbar. Du kannst ihn bei Bedarf kopieren und hier einfügen.</string>
+    <string name="remote_prepared_text_copy">Vorbereiteten Text kopieren</string>
 </resources>

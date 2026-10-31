@@ -41,11 +41,13 @@ data class ToolOutputDownload(
 
 internal fun canFollowUp(state: RemoteState): Boolean =
     (FOLLOW_UP_CAPABILITY in state.capabilities && state.session != null &&
-        state.session.optionalText("origin") == "rpc") || childControlsAvailable(state)
+        (state.session.optionalText("origin") == "rpc" || extensionControls(state, ExtensionControl.FOLLOW_UP))) ||
+        childControlsAvailable(state)
 
 internal fun canSteer(state: RemoteState): Boolean =
     (STEER_CAPABILITY in state.capabilities && state.session != null &&
-        state.session.optionalText("origin") == "rpc") || childControlsAvailable(state)
+        (state.session.optionalText("origin") == "rpc" || extensionControls(state, ExtensionControl.STEER))) ||
+        childControlsAvailable(state)
 
 data class RemoteSelection(
     val routeId: String? = null,
@@ -121,6 +123,10 @@ data class RemoteState(
      * that destination's own state, never the repository's.
      */
     val preview: Boolean = false,
+    /** Whether the requested chat's stored text is available for editing. */
+    val previewDraftAvailable: Boolean = false,
+    /** Text prepared for a source session that opened as a different session. */
+    val preparedText: String? = null,
     val connection: Int = R.string.remote_offline,
     val connected: Boolean = false,
     /**
@@ -181,6 +187,11 @@ data class RemoteState(
      * changes.
      */
     val childControlUnsupported: Set<String> = emptySet(),
+    /**
+     * Controls the host refused for a session whose pi must reload its Remote extension first, by
+     * session ID. Learned again after the selection or connection changes: pi may have reloaded.
+     */
+    val sessionControlUnsupported: Map<String, Set<ExtensionControl>> = emptyMap(),
     val answering: Set<String> = emptySet(),
     /** Questions the user cannot answer from here right now, by question ID. */
     val questionBlocks: Map<String, QuestionBlock> = emptyMap(),
@@ -315,6 +326,9 @@ interface RemoteRepository {
 
     /** The cached content of the chat [selection] for a preview while it opens, or null. */
     fun peekCachedChat(selection: RemoteSelection): ChatPreview? = null
+
+    /** Local draft text, or null until storage and the paired host are available. */
+    fun peekDraftText(selection: RemoteSelection): String? = peekCachedChat(selection)?.draft
 
     suspend fun pair(text: String): RemoteSelection?
 

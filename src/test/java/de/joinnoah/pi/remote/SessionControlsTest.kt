@@ -308,6 +308,16 @@ class SessionControlsTest {
             localCommandDescription(LocalCommand.RELOAD, terminal),
         )
         assertEquals(ReloadAvailability.NONE, reloadAvailability(terminal.copy(status = "offline")))
+        // v2 lets a terminal session or a worker reload, until this session's pi refuses.
+        val capable = terminal.copy(capabilities = terminal.capabilities + HOST_WORKER_V2_CAPABILITY)
+        assertEquals(ReloadAvailability.RUNS, reloadAvailability(capable))
+        assertEquals(R.string.remote_local_command_reload, localCommandDescription(LocalCommand.RELOAD, capable))
+        val worker = capable.copy(session = withHostWorker(Wire.objectOf("id" to "s1", "title" to "T", "origin" to "worker")))
+        assertEquals(ReloadAvailability.RUNS, reloadAvailability(worker))
+        val marked = capable.copy(sessionControlUnsupported = mapOf("s1" to setOf(ExtensionControl.RELOAD)))
+        assertEquals(ReloadAvailability.TERMINAL_ONLY, reloadAvailability(marked))
+        assertEquals(ReloadAvailability.RUNS, reloadAvailability(marked.copy(sessionControlUnsupported = mapOf("s1" to setOf(ExtensionControl.STEER)))))
+        assertEquals(ReloadAvailability.RUNS, reloadAvailability(reloadable.copy(sessionControlUnsupported = mapOf("s1" to setOf(ExtensionControl.RELOAD)))))
         assertEquals(
             ReloadAvailability.NONE,
             reloadAvailability(reloadable.copy(session = Wire.objectOf("id" to "s1", "origin" to "other"))),
@@ -366,6 +376,17 @@ class SessionControlsTest {
             LocalInvocation(LocalCommand.ARTIFACTS, ""),
             localInvocation(running, availableLocalCommands(running, true, 0)),
         )
+    }
+
+    @Test
+    fun artifactsNoticeNamesTheOutdatedHostOnlyForOne() {
+        val base = chatState.copy(selection = RemoteSelection(sessionId = "s1"), capabilitiesKnown = true)
+        assertEquals(R.string.remote_artifacts_host_outdated, artifactsUnavailableNotice(base))
+        val plain = R.string.remote_artifacts_not_now
+        assertEquals(plain, artifactsUnavailableNotice(base.copy(loading = true)))
+        assertEquals(plain, artifactsUnavailableNotice(base.copy(connected = false)))
+        assertEquals(plain, artifactsUnavailableNotice(base.copy(selection = RemoteSelection())))
+        assertEquals(plain, artifactsUnavailableNotice(base.copy(capabilitiesKnown = false)))
     }
 
     @Test

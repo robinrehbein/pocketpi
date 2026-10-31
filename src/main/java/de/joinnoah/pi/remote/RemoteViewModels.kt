@@ -60,19 +60,20 @@ internal open class DestinationViewModel(
                 )
         }
 
-    // A chat that opens shows its cached content at once, read-only: the selection stays empty, so
-    // the composer takes no edits and every action waits until the chat is selected.
     private val initialState =
         repository.state.value.let { current ->
             if (matches(current)) screenState(current)
             else
-                (key as? RemoteNavKey.Chat)?.let { repository.peekCachedChat(it.selection()) }?.let { cached ->
+                (key as? RemoteNavKey.Chat)?.let { chat ->
+                    val cached = repository.peekCachedChat(chat.selection())
+                    val text = repository.peekDraftText(chat.selection())
                     RemoteState(
                         loading = true,
-                        preview = true,
-                        session = cached.session,
-                        messages = cached.messages,
-                        draft = cached.draft,
+                        preview = cached != null,
+                        previewDraftAvailable = text != null,
+                        session = cached?.session,
+                        messages = cached?.messages.orEmpty(),
+                        draft = text.orEmpty(),
                     )
                 } ?: RemoteState(loading = true)
         }
@@ -81,7 +82,15 @@ internal open class DestinationViewModel(
         repository.state
             .scan(initialState) { previous, current ->
                 if (matches(current)) screenState(current)
-                else previous.copy(loading = true, connected = false)
+                else {
+                    val text = (key as? RemoteNavKey.Chat)?.let { repository.peekDraftText(it.selection()) }
+                    previous.copy(
+                        loading = true, connected = false,
+                        previewDraftAvailable = text != null,
+                        // Offscreen settlement can change the persisted draft; ComposerDraft retains dirty local edits separately.
+                        draft = text ?: previous.draft,
+                    )
+                }
             }
             .stateIn(
                 viewModelScope,

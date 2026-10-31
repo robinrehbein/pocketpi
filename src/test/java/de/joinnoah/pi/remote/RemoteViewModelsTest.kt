@@ -176,6 +176,80 @@ class RemoteViewModelsTest {
     }
 
     @Test
+    fun `stacked parent uses offscreen cleared draft before reactivation without resurrecting sent text`() = runTest {
+        val fake = NavigationFakeRepository()
+        val parent = RemoteSelection("host", "project", "parent")
+        val child = parent.copy(sessionId = "child")
+        val repository = object : RemoteRepository by fake {
+            override fun peekDraftText(selection: RemoteSelection): String? =
+                if (selection == fake.state.value.selection) fake.state.value.draft
+                else fake.filedDrafts[selection]
+        }
+        fake.state.value = RemoteState(selection = parent, connected = true, draft = "Already sent")
+        val model = ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "parent"), FakeSettingsRepository())
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.state.collect() }
+        runCurrent()
+        assertEquals("Already sent", model.state.value.draft)
+        val composer = ComposerDraft(parent, model.state.value.draft, model::draft)
+
+        fake.filedDrafts[parent] = "Already sent"
+        fake.state.value = RemoteState(selection = child, connected = true, draft = "Child draft")
+        runCurrent()
+        assertEquals("Already sent", model.state.value.draft)
+        // The late send acknowledgement settles the parent while its child remains selected.
+        fake.filedDrafts[parent] = ""
+        fake.state.value = fake.state.value.copy(loading = true)
+        runCurrent()
+        assertEquals("", model.state.value.draft)
+        composer.sync(model.state.value.draft)
+        composer.flush(force = true)
+        assertEquals("", fake.filedDrafts[parent])
+        assertEquals("Child draft", fake.state.value.draft)
+
+        // Returning to the stacked parent can accept new text before activation selects it.
+        composer.edit(androidx.compose.ui.text.input.TextFieldValue("New parent text"))
+        composer.pushPending()
+        assertEquals("New parent text", fake.filedDrafts[parent])
+        assertEquals("Child draft", fake.state.value.draft)
+        model.prompt()
+        assertEquals(0, fake.prompts)
+        fake.state.value = RemoteState(selection = parent, connected = true, loading = true, draft = fake.filedDrafts.getValue(parent))
+        runCurrent()
+        model.prompt()
+        assertEquals(0, fake.prompts)
+        fake.state.value = fake.state.value.copy(loading = false)
+        runCurrent()
+        assertEquals("New parent text", model.state.value.draft)
+        model.prompt()
+        assertEquals(1, fake.prompts)
+    }
+
+    @Test
+    fun `destination bound edits during cached preview never overwrite the selected chat`() = runTest {
+        val repository = NavigationFakeRepository()
+        val a = RemoteSelection("host", "project", "a")
+        val b = a.copy(sessionId = "b")
+        repository.state.value = RemoteState(selection = a, connected = true, draft = "A's draft")
+        repository.cachedChats[b] = ChatPreview(null, emptyList(), "B's stored draft")
+        val model = ChatViewModel(repository, RemoteNavKey.Chat("host", "project", "b"), FakeSettingsRepository())
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { model.state.collect() }
+        runCurrent()
+        assertEquals("B's stored draft", model.state.value.draft)
+
+        model.draft(b, "B's new text")
+        model.prompt()
+        assertEquals("A's draft", repository.state.value.draft)
+        assertEquals("B's new text", repository.filedDrafts[b])
+        assertEquals(0, repository.prompts)
+
+        // A failed or cancelled open leaves A selected; B's edit must remain filed for B.
+        repository.state.value = repository.state.value.copy(loading = false)
+        runCurrent()
+        assertEquals("A's draft", repository.state.value.draft)
+        assertEquals("B's new text", repository.filedDrafts[b])
+    }
+
+    @Test
     fun `typing and quoting reach the repository while the chat loads`() = runTest {
         val repository = NavigationFakeRepository()
         val selection = RemoteSelection("host", "project", "first")
