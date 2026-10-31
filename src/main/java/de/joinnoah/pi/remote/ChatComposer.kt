@@ -1098,7 +1098,10 @@ internal fun canSendDraft(state: RemoteState): Boolean =
  * The draft can wait for the connection: a plain prompt (no attachment, `/` command or `!` shell
  * draft) typed in a chat that was loaded from this Mac and last reported idle, while the connection
  * is down or coming back. One prompt waits at a time, and a subagent's chat sends nothing offline.
- * The repository sends it after the reconnect only if the chat did not move on (R16).
+ * A send the drop left not confirmed does not block it: the queued prompt replaces its bubble and
+ * reuses its request ID when the text is the same. One the host acknowledged still does, since
+ * the chat is about to show it. The repository sends it after the reconnect only if the chat did
+ * not move on (R16), which also catches a dropped send that reached the host after all.
  */
 internal fun canQueuePrompt(state: RemoteState): Boolean {
     val text = state.draft.trimStart()
@@ -1107,7 +1110,7 @@ internal fun canQueuePrompt(state: RemoteState): Boolean {
         state.status == "idle" &&
         state.selection.routeId != null &&
         state.selection.sessionId != null &&
-        state.pendingSend == null &&
+        (state.pendingSend == null || state.pendingSend.state == PendingSendState.NOT_CONFIRMED) &&
         !state.sending &&
         !state.importingAttachments &&
         !state.configurationChanging &&

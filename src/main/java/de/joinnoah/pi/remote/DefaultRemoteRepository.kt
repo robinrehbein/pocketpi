@@ -13,6 +13,8 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import kotlin.random.Random
+import kotlin.coroutines.ContinuationInterceptor
+import kotlin.coroutines.EmptyCoroutineContext
 
 internal fun canAbortRemoteRun(state: RemoteState, activeRouteId: String?): Boolean =
     state.connected &&
@@ -674,6 +676,11 @@ class DefaultRemoteRepository(
     @Volatile private var pushWakeRoute: String? = null
     /** Ends the push wake window after [PUSH_WAKE_WINDOW_MILLIS]. */
     private var pushWakeTimer: Job? = null
+    /**
+     * Counts the first-page reads [snapshot] started and [snapshotAsync] scheduled, so a failed read
+     * knows whether a later one will still come back to [releaseQueuedPrompt].
+     */
+    private var firstPageReads = 0L
     /** Sends `remote.ping` on a `remote.stream.v1` connection; see [startPings]. */
     private var pingJob: Job? = null
 
@@ -2808,6 +2815,12 @@ class DefaultRemoteRepository(
         var answered = false
         // The first page the reread asked for replaced what the Timeline showed.
         var replaced = false
+        var cancelled = false
+        // A drop ends this read with the connection already gone, though `connected` turns false
+        // only after the awaiter ran on an immediate dispatcher; see [queuedReadFailed].
+        val connection = generation
+        // Which first page this is; a later one, scheduled or running, owns the queued prompt.
+        val firstPage = if (older) -1L else ++firstPageReads
         try {
             // Cleared as the request goes out: a focus that excludes the session again while it is
             // awaited lapses it again.
@@ -2897,6 +2910,9 @@ class DefaultRemoteRepository(
             if (!older || !retryStaleCursor || e.kind != RemoteRequestException.Kind.HOST_ERROR || e.code != "stale_cursor") throw e
             staleCursor = true
             answered = true
+        } catch (e: CancellationException) {
+            cancelled = true
+            throw e
         } finally {
             // A reply that never came or was not taken: the events held for it apply now.
             val heldArrivals = awaited && current.heldArrivals
@@ -2910,6 +2926,9 @@ class DefaultRemoteRepository(
             // A focus that excluded the chat while this reply was awaited: the Timeline detaches now,
             // or, back in focus, reads a fresh first page (not again right after a failed one).
             if (!older && current.focusLapsed && current === timeline) syncFocus(readLapsed = !rereadFailed)
+            // No read follows that would release a queued prompt waiting on this one.
+            if (!older && !answered && !cancelled && epoch == selectionEpoch && connection == generation && firstPage == firstPageReads)
+                queuedReadFailed(current)
         }
         if (staleCursor) {
             checkEpoch(epoch)
@@ -2997,6 +3016,8 @@ class DefaultRemoteRepository(
 
     private fun snapshotAsync(older: Boolean = false, intent: SnapshotIntent = SnapshotIntent.FRESH) {
         val epoch = selectionEpoch
+        // Counted when scheduled, so a read that fails meanwhile leaves the queued prompt to this one.
+        if (!older) firstPageReads++
         scope.launch {
             try {
                 snapshot(epoch, older, intent = intent)
@@ -4620,8 +4641,15 @@ class DefaultRemoteRepository(
         // Stale until the activation after a reconnect has read the chat again; a healthy
         // connection (see [withHealthyConnection]) is neither.
         fun ready(current: RemoteState) = current.connected && !current.stale
-        if (pushWakeRoute != routeId || ready(state.value)) return
-        withTimeoutOrNull(maxMillis) { state.first(::ready) }
+        withTimeoutOrNull(maxMillis) {
+            // Checked on the repository's own dispatcher, the main thread in the app, so a worker
+            // that starts while the main thread is busy sees a [pushWake] posted before it started.
+            val waiting =
+                withContext(scope.coroutineContext[ContinuationInterceptor] ?: EmptyCoroutineContext) {
+                    pushWakeRoute == routeId && !ready(state.value)
+                }
+            if (waiting) state.first(::ready)
+        }
     }
 
     /**
@@ -6202,6 +6230,31 @@ class DefaultRemoteRepository(
                 else markQueuedNotConfirmed(queued, "not_sent")
             }
         }
+    }
+
+    /**
+     * A first page of [source] failed on a connection that is still up, and no later read is
+     * scheduled or running for it ([snapshot] checks both). [releaseQueuedPrompt] relies on such a
+     * read to come back to it, so the queued prompt turns not confirmed instead of keeping its
+     * queued label until the expiry. A read a drop ended leaves the prompt for the reconnect. In
+     * the background the foreground's read decides, as it does for a release.
+     */
+    private fun queuedReadFailed(source: Timeline) {
+        val queued = queuedPrompt ?: return
+        val current = state.value
+        if (
+            !current.connected ||
+                inBackground ||
+                source !== timeline ||
+                source.sessionId != queued.key.sessionId ||
+                currentDraftKey() != queued.key ||
+                activeHost?.routeId != queued.key.routeId ||
+                // A snapshot still owed for the chat reads it again and comes back to the release.
+                snapshotPending === source ||
+                current.pendingSend?.let { it.mutationId == queued.id && it.state == PendingSendState.QUEUED } != true
+        )
+            return
+        markQueuedNotConfirmed(queued, "read_failed")
     }
 
     /** The queued prompt did not go out: not confirmed, with its text back in the composer. */

@@ -2,6 +2,7 @@ package de.joinnoah.pi.remote
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.SharedPreferences
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
@@ -28,9 +29,21 @@ import org.robolectric.annotation.Config
 class StoreRecoveryTest {
     private val application = ApplicationProvider.getApplicationContext<Context>()
     private val directory = File(application.cacheDir, "store-recovery-${UUID.randomUUID()}")
+    private val preferenceNames = mutableSetOf<String>()
+    /**
+     * Its own files and preferences. Robolectric starts RemoteApplication for every test, whose
+     * repository loads the pairings on Dispatchers.IO and writes the app's route cache meanwhile;
+     * sharing those preferences, a test could read the app's empty route list in place of its own.
+     */
     private val context =
         object : ContextWrapper(application) {
             override fun getNoBackupFilesDir() = directory
+
+            override fun getSharedPreferences(name: String, mode: Int): SharedPreferences {
+                val own = "${directory.name}-$name"
+                preferenceNames += own
+                return application.getSharedPreferences(own, mode)
+            }
         }
     private val alias = "store-recovery-${UUID.randomUUID()}"
     private val originalLoadKey = EncryptedFileStore.loadKey
@@ -47,6 +60,7 @@ class StoreRecoveryTest {
     fun tearDown() {
         EncryptedFileStore.loadKey = originalLoadKey
         directory.deleteRecursively()
+        preferenceNames.forEach { application.deleteSharedPreferences(it) }
         keystore().deleteEntry(alias)
     }
 
@@ -211,6 +225,15 @@ class StoreRecoveryTest {
         corrupt("a.enc")
         assertNull(store.read())
         assertEquals(true, existed)
+    }
+
+    @Test
+    fun theAppsOwnRouteCacheWriteDoesNotReachTheTestsStores() {
+        val stores = AppStores(context)
+        stores.pairings.save(listOf(host))
+        // What RemoteApplication's startup load writes when it lands after the save.
+        PairedRouteCache(application).write(emptyList())
+        assertEquals(setOf("route"), stores.routes.routes())
     }
 
     @Test
