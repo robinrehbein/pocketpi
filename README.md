@@ -319,6 +319,7 @@ Repeated queued navigation keys are grouped, and input shares a paced queue with
 Control chords preserve the local draft. Sending a draft waits until earlier input is settled;
 an explicitly unsupported chord shows a notice and keeps the attachment open. The shared
 `terminal-keys-v1.json` fixture comes from noah-monorepo `6dc453c5995aa65c03eebd819c4111ad993d1441`.
+The `browser-v1.json` fixture comes from noah-monorepo `e72accf46`.
 
 The renderer bundles xterm.js 6.0.0 locally and has no network access. Its license and pinned package
 integrity are in `src/main/assets/terminal/`. Local tests cover an encrypted relay, a macOS PTY and

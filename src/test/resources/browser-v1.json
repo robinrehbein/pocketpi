@@ -1,0 +1,431 @@
+{
+  "version": 1,
+  "valid": [
+    {
+      "name": "valid-0",
+      "payload": {
+        "type": "browser.open",
+        "requestId": "r",
+        "sessionId": "s"
+      }
+    },
+    {
+      "name": "valid-1",
+      "payload": {
+        "type": "browser.tabs",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b"
+      }
+    },
+    {
+      "name": "valid-2",
+      "payload": {
+        "type": "browser.acquire",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "expectedGeneration": 0
+      }
+    },
+    {
+      "name": "valid-3",
+      "payload": {
+        "type": "browser.handoff",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "toOwnerId": "peer"
+      }
+    },
+    {
+      "name": "valid-4",
+      "payload": {
+        "type": "browser.navigate",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "tabId": "t",
+        "url": "https://example.com/"
+      }
+    },
+    {
+      "name": "valid-5",
+      "payload": {
+        "type": "browser.new_tab",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "url": "http://example.com/"
+      }
+    },
+    {
+      "name": "valid-6",
+      "payload": {
+        "type": "browser.close",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "tabId": "t"
+      }
+    },
+    {
+      "name": "valid-7",
+      "payload": {
+        "type": "browser.viewport",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "tabId": "t",
+        "width": 80,
+        "height": 2048,
+        "deviceScale": 1.25,
+        "orientation": "portrait"
+      }
+    },
+    {
+      "name": "valid-8",
+      "payload": {
+        "type": "browser.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "tabId": "t",
+        "viewportRevision": 0,
+        "sequence": 0,
+        "input": {
+          "kind": "pointer",
+          "x": 0,
+          "y": 2048,
+          "action": "down",
+          "button": "left"
+        }
+      }
+    },
+    {
+      "name": "valid-9",
+      "payload": {
+        "type": "browser.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "tabId": "t",
+        "viewportRevision": 0,
+        "sequence": 1,
+        "input": {
+          "kind": "wheel",
+          "x": 1,
+          "y": 2,
+          "deltaX": -4096,
+          "deltaY": 4096
+        }
+      }
+    },
+    {
+      "name": "valid-10",
+      "payload": {
+        "type": "browser.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "tabId": "t",
+        "viewportRevision": 0,
+        "sequence": 2,
+        "input": {
+          "kind": "key",
+          "action": "up",
+          "key": "a",
+          "code": "KeyA",
+          "ctrl": true
+        }
+      }
+    },
+    {
+      "name": "valid-11",
+      "payload": {
+        "type": "browser.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "tabId": "t",
+        "viewportRevision": 0,
+        "sequence": 3,
+        "input": {
+          "kind": "text",
+          "text": "hello"
+        }
+      }
+    },
+    {
+      "name": "valid-12",
+      "payload": {
+        "type": "browser.detach",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1
+      }
+    },
+    {
+      "name": "valid-13",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "browser.opened",
+          "browserId": "b",
+          "incarnation": "i",
+          "generation": 0,
+          "owner": {
+            "kind": "device",
+            "id": "d"
+          },
+          "tabs": [
+            {
+              "id": "t",
+              "title": "",
+              "url": "about:blank"
+            }
+          ],
+          "viewportRevision": 0
+        }
+      }
+    },
+    {
+      "name": "valid-14",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "browser.lease",
+          "browserId": "b",
+          "leaseId": "l",
+          "generation": 1,
+          "owner": {
+            "kind": "device",
+            "id": "d"
+          },
+          "viewportRevision": 0
+        }
+      }
+    },
+    {
+      "name": "valid-15",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "browser.busy",
+          "browserId": "b",
+          "generation": 1,
+          "owner": {
+            "kind": "device",
+            "id": "d"
+          }
+        }
+      }
+    },
+    {
+      "name": "valid-16",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "browser.tabs",
+          "browserId": "b",
+          "generation": 1,
+          "tabs": []
+        }
+      }
+    },
+    {
+      "name": "valid-17",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "browser.viewport",
+          "browserId": "b",
+          "generation": 1,
+          "viewportRevision": 2
+        }
+      }
+    },
+    {
+      "name": "valid-18",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "browser.input.ack",
+          "browserId": "b",
+          "generation": 1,
+          "sequence": 0,
+          "status": "uncertain"
+        }
+      }
+    },
+    {
+      "name": "valid-19",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "browser.released",
+          "browserId": "b",
+          "generation": 2
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "invalid-0",
+      "payload": {
+        "type": "browser.open",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b"
+      }
+    },
+    {
+      "name": "invalid-1",
+      "payload": {
+        "type": "browser.acquire",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "expectedGeneration": -1
+      }
+    },
+    {
+      "name": "invalid-2",
+      "payload": {
+        "type": "browser.acquire",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "expectedGeneration": 0,
+        "owner": {
+          "kind": "device",
+          "id": "d"
+        }
+      }
+    },
+    {
+      "name": "invalid-3",
+      "payload": {
+        "type": "browser.navigate",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "tabId": "t",
+        "url": "https://u:p@example.com/"
+      }
+    },
+    {
+      "name": "invalid-4",
+      "payload": {
+        "type": "browser.new_tab",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "url": "javascript:alert(1)"
+      }
+    },
+    {
+      "name": "invalid-5",
+      "payload": {
+        "type": "browser.viewport",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "tabId": "t",
+        "width": 79,
+        "height": 80,
+        "deviceScale": 1,
+        "orientation": "portrait"
+      }
+    },
+    {
+      "name": "invalid-6",
+      "payload": {
+        "type": "browser.input",
+        "requestId": "r",
+        "sessionId": "s",
+        "browserId": "b",
+        "leaseId": "l",
+        "generation": 1,
+        "tabId": "t",
+        "viewportRevision": 0,
+        "sequence": 0,
+        "input": {
+          "kind": "key",
+          "action": "down",
+          "key": "a",
+          "code": "KeyA",
+          "ctrl": false
+        }
+      }
+    },
+    {
+      "name": "invalid-7",
+      "payload": {
+        "type": "result",
+        "requestId": "r",
+        "ok": true,
+        "data": {
+          "kind": "browser.opened",
+          "browserId": "b",
+          "incarnation": "i",
+          "generation": 0,
+          "owner": {
+            "kind": "device",
+            "id": "d"
+          },
+          "tabs": [
+            {
+              "id": "t",
+              "title": "x",
+              "url": "u",
+              "extra": 1
+            }
+          ],
+          "viewportRevision": 0
+        }
+      }
+    }
+  ]
+}
