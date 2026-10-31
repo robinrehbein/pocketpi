@@ -17,6 +17,7 @@ Status rechecks current authorization and remains usable with the owner write sw
 | Android phone, English, dropped response | Passed in 72.359 s. The test reconstructed the repository, controller and encrypted `DraftStore` from the same file, then explicitly checked the existing PR. |
 | Android tablet, German, dropped response | Passed in 74.515 s with the same reconstruction and explicit recovery. |
 | Provider CLI boundary | Local HTTP fixture passed pagination, create, rate-limit and lost-response cases, including private title/body through stdin. |
+| Host full Remote suite | 3,734 passed, 35 skipped, no failures across 258 passing and seven skipped files (238.03 s). |
 | Android broad unit run | 3,179 passed and one glossary failure; after correcting the new strings, the five glossary/PR-pane tests passed. This is not a fresh all-green broad run. |
 | Wear unit tests | 34 passed, no failures or skips. |
 | Wear debug assembly | `:wear:assembleDebug` completed; no Wear emulator was used. This is a build check, not watch usability qualification. |
@@ -41,7 +42,16 @@ binding does not retain the old actor's authorization closure.
   ticket-to-PR workflow remain unqualified. No real GitHub mutation was performed.
 - Physical Samsung phone/tablet and an independent Linux host were unavailable for this run.
   DeX, device switching and long-session behavior remain separate device gates.
-- The broad Host run passed 3,732 tests with 35 skips and two integration failures still under
-  investigation. Focused passes do not establish a passing broad run or release readiness.
+- Earlier broad Host runs failed: the Push fixture incorrectly required a changed upstream even
+  when configuration already matched; that assertion now checks the actual configuration. An
+  earlier PR first-create failure and a focused overall-test timeout were not conclusively
+  diagnosed. The subsequent focused PR run passed, followed by the all-green full run above.
+  The full-run first create took about 58 seconds; repeated full repository checks remain a
+  performance concern. This does not establish universal timing or release readiness.
 - The provider and Git remote can change concurrently outside the Host; an observation describes
   current state and is not an atomic lock or attribution to a specific create attempt.
+
+Android implementation is saved locally as `fce27cd`, and the Host/protocol implementation as
+`54dc29fd1`. Host extension type checking and changed-file Biome checks passed (13 warnings and
+one informational diagnostic remain). No branch was pushed or released. The tested Host base
+was `cdf45b590`; later upstream commits are not covered by these results.
